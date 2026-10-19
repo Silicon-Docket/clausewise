@@ -20,6 +20,17 @@ independent and not affiliated with any of them.
   comment, never a redline.
 - **Not legal advice.** Findings are suggestions for a lawyer to review.
 
+## What exists today
+
+- `packages/docx`: reads a .docx into addressable paragraphs and writes edits back as real Word
+  tracked changes and comments, leaving everything else in the file untouched. Tested against
+  LibreOffice.
+- `packages/playbook`: the YAML playbook format, with validation that names every problem.
+- `playbooks/`: starter playbooks for a mutual NDA and for a SaaS subscription (customer side).
+- `fixtures/`: three synthetic contracts and the findings a correct review should produce.
+
+There is no model integration, CLI or UI yet.
+
 ## Roadmap
 
 - [ ] v0.1: review a .docx against a YAML playbook from the CLI, web UI, Docker Compose

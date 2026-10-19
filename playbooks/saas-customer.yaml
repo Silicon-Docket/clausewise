@@ -1,0 +1,84 @@
+name: SaaS subscription agreement (customer)
+description: Starter playbook for a business buying a cloud software subscription. Edit it to match your own risk appetite and the size of the deal.
+contractTypes: [saas, subscription]
+perspective: We are the customer. We want our data protected and ours, predictable cost, a service we can rely on, and a way out if the vendor fails us.
+rules:
+  - id: liability-cap
+    title: Limitation of liability
+    severity: high
+    required: true
+    standard: Each party's liability is capped at the greater of twelve months of fees and a fixed sum, applied equally to both sides, with data breach, confidentiality breach and indemnity claims carved out or subject to a higher cap.
+    fallback: A cap of twelve months of fees applied equally, with a super-cap for data breach of at least two times annual fees.
+    unacceptable: A cap that applies only to the vendor, a cap set at the fees paid in the last month, or any cap that also limits the vendor's indemnity for infringement.
+    guidance: Make the cap mutual first. Then add the carve-outs. Do not trade away the indemnity carve-out.
+
+  - id: ip-indemnity
+    title: Vendor indemnity for infringement
+    severity: high
+    required: true
+    standard: The vendor defends and pays for third-party claims that the service infringes intellectual property rights, with a refund and replacement remedy if it cannot be fixed.
+    unacceptable: No indemnity, or an indemnity that covers only patents, or one that is limited to the fees paid.
+    guidance: Ask for patent, copyright, trademark and trade secret coverage. Accept the usual exclusions for our own modifications and combinations.
+
+  - id: data-ownership
+    title: Ownership and use of customer data
+    severity: high
+    required: true
+    standard: We own all customer data. The vendor may use it only to provide the service to us, and may use de-identified, aggregated usage statistics that do not identify us.
+    unacceptable: A licence to use customer data to train models or to sell or share data with third parties, or a transfer of ownership of outputs to the vendor.
+    guidance: Delete training and resale rights. De-identified statistics about service performance are acceptable.
+
+  - id: security-and-breach
+    title: Security and breach notice
+    severity: high
+    required: true
+    standard: The vendor keeps industry-standard security controls, maintains an independent audit report such as SOC 2 Type II, and tells us of a breach affecting our data without undue delay and within 72 hours.
+    fallback: Notice within five business days.
+    unacceptable: No stated security standard, no breach notification, or notice only at the vendor's discretion.
+    guidance: Ask for a named standard and a fixed notice period. Offer the vendor's own audit report in place of our right to audit.
+
+  - id: availability
+    title: Uptime commitment and service credits
+    severity: medium
+    required: true
+    standard: A written availability commitment of at least 99.9 percent per month with service credits, and a right to terminate for repeated or severe failure.
+    unacceptable: Service credits as the only remedy for an outage of any length, or no availability commitment.
+    guidance: Keep credits but add a termination right after repeated misses.
+
+  - id: term-renewal
+    title: Term, renewal and price increases
+    severity: medium
+    required: true
+    standard: A fixed initial term, renewal only if we agree or after a reminder at least 60 days before the renewal date, and any price increase capped at the lesser of 5 percent and inflation.
+    unacceptable: Automatic renewal for a full term with no reminder, with a notice window of 90 days or more, or uncapped price increases.
+    guidance: Prefer a shorter notice window and a price cap. Reminder emails count as the reminder.
+
+  - id: termination-refund
+    title: Termination rights and refund
+    severity: medium
+    required: true
+    standard: We may terminate for uncorrected material breach, and the vendor refunds prepaid fees for the period after termination when we terminate for its breach.
+    unacceptable: Termination only for convenience on the vendor's side, or no refund of prepaid fees in any case.
+    guidance: Add a refund for the unused period on termination for cause and on vendor insolvency.
+
+  - id: suspension
+    title: Vendor's right to suspend
+    severity: medium
+    standard: The vendor may suspend only for a security threat or unpaid undisputed fees after notice, and restores service promptly once the cause is fixed.
+    unacceptable: Suspension at the vendor's sole discretion without notice, or suspension while fees are in good-faith dispute.
+    guidance: Limit suspension to the narrowest part of the service where possible.
+
+  - id: data-return
+    title: Data return on exit
+    severity: medium
+    required: true
+    standard: For at least 30 days after the term ends we may export our data in a common format at no extra charge, after which the vendor deletes it and confirms in writing.
+    unacceptable: No export right, an export fee, or immediate deletion on the termination date.
+    guidance: Ask for a 30-day window and a standard export format.
+
+  - id: governing-law
+    title: Governing law and venue
+    severity: low
+    standard: The law and courts of a US state where we do business, or a neutral and well-developed commercial jurisdiction.
+    unacceptable: Exclusive jurisdiction in a distant or unfamiliar forum chosen only for the vendor's convenience.
+    guidance: Flag the forum but treat it as a business decision.

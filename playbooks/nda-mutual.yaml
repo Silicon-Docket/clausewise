@@ -1,0 +1,84 @@
+name: Mutual NDA (receiving party)
+description: Starter playbook for reviewing a mutual or one-way NDA from the side that expects to receive most of the information. Edit it to match your own positions.
+contractTypes: [nda]
+perspective: We are the party most likely to receive confidential information, so we want obligations that are narrow, time-limited and workable, and we want any obligation on us to bind the other side equally.
+rules:
+  - id: mutuality
+    title: Obligations bind both parties
+    severity: high
+    required: true
+    standard: Each party is both a discloser and a recipient, and every confidentiality obligation applies equally to both.
+    fallback: A one-way NDA is acceptable only if we are the discloser or the other side accepts a short term and the standard exclusions.
+    unacceptable: Obligations that bind only us while the other party owes nothing in return.
+    guidance: Where the draft says "Recipient" and defines it as us only, propose defining both parties as "Receiving Party" and "Disclosing Party".
+
+  - id: definition
+    title: Definition of Confidential Information
+    severity: medium
+    required: true
+    standard: Information that is marked confidential, or that a reasonable person would understand to be confidential from its nature or the circumstances of disclosure.
+    fallback: Information disclosed in writing and marked, or identified as confidential within 30 days of oral disclosure.
+    unacceptable: All information of any kind disclosed in any form whether or not marked or identified as confidential, including the existence of discussions.
+    guidance: Narrow the definition rather than deleting it. Keep the reasonable-person test as the minimum.
+
+  - id: exclusions
+    title: Standard exclusions
+    severity: high
+    required: true
+    standard: Information is excluded if it is or becomes public through no fault of the recipient, was already known to the recipient, was independently developed without use of the discloser's information, or was received from a third party without a duty of confidence.
+    unacceptable: Missing any of the four exclusions, or an exclusion that requires the recipient to prove the point by written records only.
+    guidance: Name which of the four exclusions is missing, and propose the full list as replacement text.
+
+  - id: term
+    title: Duration of confidentiality obligations
+    severity: high
+    required: true
+    standard: Obligations end no more than three years after the disclosure, or after the agreement ends, with trade secrets protected for as long as they remain trade secrets.
+    fallback: Up to five years from the end of the agreement.
+    unacceptable: Obligations that last forever or with no stated end for all information, including information that is not a trade secret.
+    guidance: Replace "perpetual" or "indefinite" wording with a fixed number of years and keep a trade secret carve-out if the other side insists.
+
+  - id: permitted-use
+    title: Permitted use and disclosure to representatives
+    severity: medium
+    required: true
+    standard: Information may be used to evaluate or carry out the stated purpose, and shared with employees, contractors, affiliates and professional advisers who need it and are bound by confidentiality duties no less protective.
+    unacceptable: A ban on sharing with any adviser or affiliate, or a requirement for the discloser's prior written consent for each person.
+    guidance: Add the "need to know" test and the "bound by duties no less protective" test instead of consent requirements.
+
+  - id: compelled-disclosure
+    title: Disclosure required by law
+    severity: medium
+    required: true
+    standard: The recipient may disclose what a court, regulator or law requires, giving prompt notice where legally allowed so the discloser can seek protection.
+    unacceptable: No exception for legal compulsion, or an obligation to resist disclosure at our own cost.
+    guidance: Require notice only "to the extent legally permitted" and "where reasonably practicable".
+
+  - id: return-or-destroy
+    title: Return or destruction of information
+    severity: low
+    standard: On request the recipient returns or destroys the information within a reasonable time, and may keep copies required by law or held in routine backups, which stay confidential.
+    unacceptable: A duty to purge every copy including automatic backups, with a certificate signed by an officer, within a short fixed period.
+    guidance: Add the legal-hold and backup carve-outs.
+
+  - id: remedies
+    title: Remedies
+    severity: medium
+    standard: Either party may seek injunctive relief for a breach. Damages are as the law provides.
+    unacceptable: Liquidated damages or penalties, a waiver of any bond for an injunction, an agreement that damages are inadequate, or payment of the other side's legal costs whatever the outcome.
+    guidance: Delete stipulated sums and one-sided fee shifting. Fee shifting to the prevailing party is acceptable.
+
+  - id: restrictive-covenants
+    title: No hidden restrictive covenants
+    severity: high
+    standard: The NDA contains no non-solicitation, non-compete, exclusivity or standstill terms.
+    fallback: A narrow non-solicit of employees, limited to 12 months and excluding general advertising, is acceptable.
+    unacceptable: Any non-compete or exclusivity term, or a non-solicit of customers.
+    guidance: These do not belong in an NDA. Propose deleting them and, if the business needs one, a separate agreement.
+
+  - id: governing-law
+    title: Governing law and venue
+    severity: low
+    standard: The law and courts of a US state where we do business, or a neutral and well-developed commercial jurisdiction.
+    unacceptable: Exclusive jurisdiction in a distant or unfamiliar forum chosen only for the other side's convenience.
+    guidance: Flag the forum but treat it as a business decision.

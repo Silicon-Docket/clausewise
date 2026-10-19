@@ -1,0 +1,47 @@
+{
+  "nda-aggressive.docx": {
+    "playbook": "playbooks/nda-mutual.yaml",
+    "rules": {
+      "mutuality": "deviation",
+      "definition": "deviation",
+      "exclusions": "deviation",
+      "term": "deviation",
+      "permitted-use": "deviation",
+      "compelled-disclosure": "missing",
+      "return-or-destroy": "deviation",
+      "remedies": "deviation",
+      "restrictive-covenants": "deviation",
+      "governing-law": "deviation"
+    }
+  },
+  "nda-balanced.docx": {
+    "playbook": "playbooks/nda-mutual.yaml",
+    "rules": {
+      "mutuality": "compliant",
+      "definition": "compliant",
+      "exclusions": "compliant",
+      "term": "compliant",
+      "permitted-use": "compliant",
+      "compelled-disclosure": "compliant",
+      "return-or-destroy": "n/a",
+      "remedies": "compliant",
+      "restrictive-covenants": "compliant",
+      "governing-law": "compliant"
+    }
+  },
+  "saas-vendor-friendly.docx": {
+    "playbook": "playbooks/saas-customer.yaml",
+    "rules": {
+      "liability-cap": "deviation",
+      "ip-indemnity": "deviation",
+      "data-ownership": "deviation",
+      "security-and-breach": "deviation",
+      "availability": "compliant",
+      "term-renewal": "deviation",
+      "termination-refund": "deviation",
+      "suspension": "compliant",
+      "data-return": "missing",
+      "governing-law": "deviation"
+    }
+  }
+}

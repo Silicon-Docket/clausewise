@@ -1,0 +1,17 @@
+{
+  "name": "@clausewise/docx",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@xmldom/xmldom": "^0.9.12",
+    "jszip": "^3.10.2"
+  }
+}
