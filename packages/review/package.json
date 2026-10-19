@@ -1,0 +1,22 @@
+{
+  "name": "@clausewise/review",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@clausewise/docx": "workspace:*",
+    "@clausewise/llm": "workspace:*",
+    "@clausewise/playbook": "workspace:*",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "jszip": "^3.10.2"
+  }
+}

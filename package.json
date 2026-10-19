@@ -15,7 +15,8 @@
     "lint": "prettier --check .",
     "format": "prettier --write .",
     "test": "vitest run",
-    "fixtures": "tsx tools/make-fixtures.ts"
+    "fixtures": "tsx tools/make-fixtures.ts",
+    "clausewise": "tsx apps/cli/src/bin.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
