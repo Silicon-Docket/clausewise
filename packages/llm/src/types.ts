@@ -23,6 +23,11 @@ export interface LlmConfig {
   maxContextTokens: number | undefined;
   /** Retries for transport errors and for output that fails the schema. Default 2. */
   maxRetries: number;
+  /**
+   * Anthropic only, and only against the Anthropic API itself. "default" asks the API to rerun a
+   * request on its default fallback model when the requested model declines it. Unset means off.
+   */
+  fallback?: "default" | undefined;
 }
 
 export interface GenerateObjectRequest<T> {

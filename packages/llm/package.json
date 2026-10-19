@@ -12,9 +12,9 @@
     "typecheck": "tsc -p ."
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^4.0.83",
     "@ai-sdk/openai": "^4.0.97",
     "@ai-sdk/openai-compatible": "^3.0.73",
+    "@anthropic-ai/sdk": "^0.135.0",
     "ai": "^7.0.145",
     "zod": "^4.6.7"
   }

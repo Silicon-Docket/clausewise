@@ -1,3 +1,8 @@
+export {
+  createAnthropicGenerator,
+  type AnthropicOverrides,
+  type AnthropicUsage,
+} from "./anthropic.js";
 export { loadLlmConfig } from "./config.js";
 export { ModelRequestError, createObjectGenerator } from "./generator.js";
 export {

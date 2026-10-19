@@ -1,4 +1,5 @@
 export { anchorEdit, type AnchorResult } from "./anchor.js";
+export { ReviewError } from "./errors.js";
 export { reviewContract } from "./pipeline.js";
 export {
   buildRulePrompt,

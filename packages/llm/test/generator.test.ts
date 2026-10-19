@@ -50,8 +50,8 @@ function sequence(...steps: Step[]): () => Promise<GenerateResult> {
 
 function makeConfig(overrides: Partial<LlmConfig> = {}): LlmConfig {
   return {
-    provider: "anthropic",
-    model: "claude-sonnet-5-5",
+    provider: "openai",
+    model: "test-model",
     apiKey: API_KEY,
     baseUrl: undefined,
     maxOutputTokens: 12345,
@@ -82,8 +82,8 @@ describe("generate", () => {
     const generator = createObjectGenerator(makeConfig(), { model });
 
     await expect(generator.generate(request)).resolves.toEqual({ verdict: "ok" });
-    expect(generator.provider).toBe("anthropic");
-    expect(generator.model).toBe("claude-sonnet-5-5");
+    expect(generator.provider).toBe("openai");
+    expect(generator.model).toBe("test-model");
     expect(model.doGenerateCalls).toHaveLength(1);
   });
 
@@ -129,22 +129,8 @@ describe("call settings per provider", () => {
     return model.doGenerateCalls[0];
   }
 
-  it("leaves sampling and thinking alone for anthropic", async () => {
-    const call = await firstCall(makeConfig());
-    expect(call?.temperature).toBeUndefined();
-    expect(call?.topP).toBeUndefined();
-    expect(call?.topK).toBeUndefined();
-    expect(call?.providerOptions).toBeUndefined();
-  });
-
-  it("passes effort to anthropic only when configured", async () => {
-    const call = await firstCall(makeConfig({ effort: "max" }));
-    expect(call?.providerOptions).toEqual({ anthropic: { effort: "max" } });
-    expect(call?.temperature).toBeUndefined();
-  });
-
   it("leaves sampling alone for openai and asks it not to keep the response", async () => {
-    const call = await firstCall(makeConfig({ provider: "openai", model: "m" }));
+    const call = await firstCall(makeConfig());
     expect(call?.temperature).toBeUndefined();
     expect(call?.topP).toBeUndefined();
     expect(call?.providerOptions).toEqual({ openai: { store: false } });
@@ -194,8 +180,8 @@ describe("output that fails the schema", () => {
     expect(error).toBeInstanceOf(ModelOutputError);
     expect(model.doGenerateCalls).toHaveLength(3);
     const message = (error as Error).message;
-    expect(message).toContain("anthropic");
-    expect(message).toContain("claude-sonnet-5-5");
+    expect(message).toContain("openai");
+    expect(message).toContain("test-model");
     expect(message).toContain("rule_check");
     expect(message).toContain("3 attempts");
   });
@@ -260,8 +246,8 @@ describe("refusals", () => {
 
       expect(error).toBeInstanceOf(ModelRefusalError);
       expect(error).not.toBeInstanceOf(ModelOutputError);
-      expect((error as Error).message).toContain("anthropic");
-      expect((error as Error).message).toContain("claude-sonnet-5-5");
+      expect((error as Error).message).toContain("openai");
+      expect((error as Error).message).toContain("test-model");
       expect(model.doGenerateCalls).toHaveLength(1);
     },
   );
@@ -395,7 +381,7 @@ describe("transport failures", () => {
   function apiError(overrides: Partial<ConstructorParameters<typeof APICallError>[0]> = {}) {
     return new APICallError({
       message: "credit balance is too low",
-      url: "https://api.anthropic.com/v1/messages",
+      url: "https://api.openai.com/v1/responses",
       requestBodyValues: { messages: [{ content: PROMPT_TEXT }] },
       statusCode: 400,
       isRetryable: false,
@@ -418,7 +404,7 @@ describe("transport failures", () => {
     expect(error.statusCode).toBe(400);
     expect(error.message).toContain("HTTP 400");
     expect(error.message).toContain("credit balance is too low");
-    expect(error.message).toContain("claude-sonnet-5-5");
+    expect(error.message).toContain("test-model");
     expect(model.doGenerateCalls).toHaveLength(1);
   });
 
@@ -511,5 +497,31 @@ describe("createObjectGenerator", () => {
     expect(() => createObjectGenerator(makeConfig(), { model: "openai/some-model" })).toThrow(
       TypeError,
     );
+  });
+
+  it("serves anthropic through its own adapter and the other providers through the AI SDK", () => {
+    const model = new MockLanguageModelV4({ doGenerate: sequence(valid) });
+    expect(createObjectGenerator(makeConfig({ provider: "anthropic" })).cachesSharedPrefix).toBe(
+      true,
+    );
+    expect(createObjectGenerator(makeConfig(), { model }).cachesSharedPrefix).toBeUndefined();
+  });
+
+  it("refuses a model stand-in for anthropic rather than ignore it and call the real API", () => {
+    const model = new MockLanguageModelV4({ doGenerate: sequence(valid) });
+    expect(() => createObjectGenerator(makeConfig({ provider: "anthropic" }), { model })).toThrow(
+      TypeError,
+    );
+    expect(model.doGenerateCalls).toHaveLength(0);
+  });
+
+  it("sends the whole prompt on the AI SDK path, which does not use sharedPrefix", async () => {
+    const model = new MockLanguageModelV4({ doGenerate: sequence(valid) });
+    await createObjectGenerator(makeConfig(), { model }).generate({
+      ...request,
+      prompt: "PREFIX rest",
+      sharedPrefix: "PREFIX ",
+    });
+    expect(JSON.stringify(model.doGenerateCalls[0]?.prompt)).toContain("PREFIX rest");
   });
 });

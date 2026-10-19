@@ -1,0 +1,111 @@
+import type { GenerateObjectRequest, ObjectGenerator } from "@clausewise/llm";
+import { createScriptedGenerator } from "@clausewise/llm/testing";
+import type { RuleCheck } from "./types.js";
+
+/** What the oracle says about one rule. Only the status is required. */
+export interface OracleRule {
+  status: RuleCheck["status"];
+  /** Numbers as written in the contract, such as "3.1". Default: none. */
+  clauseNumbers?: string[];
+  /** Default: an empty string. */
+  explanation?: string;
+  /** Default: an empty string. */
+  comment?: string;
+  /** The clause is named by its number. The edit is dropped in a window that lacks that clause. */
+  edit?: { clauseNumber: string; quote: string; replacement: string } | null;
+  /** Default: null. */
+  suggestedClause?: string | null;
+}
+
+const CONTRACT_OPEN = "<contract>\n";
+const CONTRACT_CLOSE = "</contract>";
+const HEADER = /^\[(c\d+)\](?: (.*))?$/;
+const RULE_ID = /^Rule ID: (.+)$/m;
+
+const ABSENT: RuleCheck = {
+  status: "not_applicable",
+  clauseIds: [],
+  explanation: "None of the clauses this rule refers to are in this part of the contract.",
+  comment: "",
+  edit: null,
+  suggestedClause: null,
+};
+
+// Maps each clause number in the contract block to the id of the first clause that has it.
+function clauseIdsByNumber(prompt: string, close: number): Map<string, string> {
+  const open = prompt.indexOf(CONTRACT_OPEN);
+  const byNumber = new Map<string, string>();
+  if (open === -1 || open > close) return byNumber;
+  const contract = prompt.slice(open + CONTRACT_OPEN.length, close);
+  // Clauses are separated by a blank line and each starts with its header, so a line inside a
+  // paragraph cannot be mistaken for one.
+  for (const block of contract.split("\n\n")) {
+    const header = HEADER.exec(block.split("\n", 1)[0] ?? "");
+    const id = header?.[1];
+    const rest = header?.[2];
+    if (id === undefined || rest === undefined || rest.startsWith("(section:")) continue;
+    const number = rest.split(" ", 1)[0];
+    if (number !== undefined && number !== "" && !byNumber.has(number)) byNumber.set(number, id);
+  }
+  return byNumber;
+}
+
+function answerFor(rule: OracleRule, byNumber: Map<string, string>): RuleCheck {
+  const named = rule.clauseNumbers ?? [];
+  const clauseIds = named.flatMap((number) => {
+    const id = byNumber.get(number);
+    return id === undefined ? [] : [id];
+  });
+  if (named.length > 0 && clauseIds.length === 0) return ABSENT;
+
+  const edit = rule.edit ?? null;
+  const editClauseId = edit === null ? undefined : byNumber.get(edit.clauseNumber);
+  return {
+    status: rule.status,
+    clauseIds: [...new Set(clauseIds)],
+    explanation: rule.explanation ?? "",
+    comment: rule.comment ?? "",
+    edit:
+      edit === null || editClauseId === undefined
+        ? null
+        : { clauseId: editClauseId, quote: edit.quote, replacement: edit.replacement },
+    suggestedClause: rule.suggestedClause ?? null,
+  };
+}
+
+/**
+ * A model stand-in that answers each playbook rule from a script, the way a competent model would.
+ * The script is keyed by rule id, which the oracle reads from the "Rule ID: <id>" line of the rule
+ * block; it throws for an id it has no script for. Clause numbers in a script become clause ids by
+ * reading the header lines of the contract block it was sent, such as "[c12] 3.1 (section: 3.
+ * Term)", and the first clause with a number is the one meant. When a script names clauses and none
+ * of them is in the window it was sent, the answer is not_applicable, as a real model would say
+ * about a part of the contract that does not cover the topic, so a review in several windows finds
+ * the clause in one and merges the rest. A script that names no clauses is answered in every window.
+ * The script is otherwise passed through unchecked, so a test can give the pipeline an answer a
+ * model should not give, but the schema in the request still validates it.
+ */
+export function createOracleGenerator(
+  rules: Record<string, OracleRule>,
+  options: { cachesSharedPrefix?: boolean } = {},
+): ObjectGenerator & { readonly calls: GenerateObjectRequest<unknown>[] } {
+  return createScriptedGenerator(
+    (request) => {
+      // The contract is untrusted and may hold a line that looks like a rule header, so only
+      // what follows the closing tag is read. Contract text cannot hold the tag itself.
+      const close = request.prompt.lastIndexOf(CONTRACT_CLOSE);
+      if (close === -1) throw new Error("the prompt has no contract block");
+      const id = RULE_ID.exec(request.prompt.slice(close))?.[1];
+      if (id === undefined) throw new Error("the prompt has no rule id");
+      const rule = Object.hasOwn(rules, id) ? rules[id] : undefined;
+      if (rule === undefined) throw new Error(`the oracle has no answer for rule "${id}"`);
+      return answerFor(rule, clauseIdsByNumber(request.prompt, close));
+    },
+    {
+      provider: "oracle",
+      model: "oracle",
+      disclosure: "a scripted test oracle (nothing is sent anywhere)",
+      cachesSharedPrefix: options.cachesSharedPrefix ?? false,
+    },
+  );
+}

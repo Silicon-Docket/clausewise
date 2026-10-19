@@ -48,19 +48,6 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-function anthropicMessage(text: string, stopReason = "end_turn") {
-  return json({
-    id: "msg_test",
-    type: "message",
-    role: "assistant",
-    model: "claude-sonnet-5-5",
-    content: text === "" ? [] : [{ type: "text", text }],
-    stop_reason: stopReason,
-    stop_sequence: null,
-    usage: { input_tokens: 10, output_tokens: 5 },
-  });
-}
-
 function chatCompletion(text: string, finishReason = "stop") {
   return json({
     id: "chatcmpl-test",
@@ -94,8 +81,8 @@ function openaiResponse(text: string) {
 
 function makeConfig(overrides: Partial<LlmConfig> = {}): LlmConfig {
   return {
-    provider: "anthropic",
-    model: "claude-sonnet-5-5",
+    provider: "openai",
+    model: "test-model",
     apiKey: API_KEY,
     baseUrl: undefined,
     maxOutputTokens: 12345,
@@ -133,197 +120,16 @@ async function failure(promise: Promise<unknown>): Promise<Error> {
   throw new Error("expected the promise to reject");
 }
 
-describe.each(["claude-sonnet-5-5", "claude-opus-5-5"])("anthropic request for %s", (model) => {
-  async function send(overrides: Partial<LlmConfig> = {}) {
-    const { fetch, requests } = recordingFetch(() => anthropicMessage(answer));
-    const generator = createObjectGenerator(makeConfig({ model, ...overrides }), { fetch });
-    const result = await generator.generate({ ...request, schemaName: "rule_check" });
-    const [sent] = requests;
-    if (sent === undefined) throw new Error("no request was sent");
-    return { sent, requests, result };
-  }
-
-  it("posts to the Messages API with the key and returns the parsed answer", async () => {
-    const { sent, result } = await send();
-    expect(result).toEqual({ verdict: "ok", quote: null });
-    expect(sent.url).toBe("https://api.anthropic.com/v1/messages");
-    expect(sent.method).toBe("POST");
-    expect(sent.headers.get("x-api-key")).toBe(API_KEY);
-    expect(sent.headers.get("authorization")).toBeNull();
-    expect(sent.body.model).toBe(model);
-  });
-
-  it("requests native structured output built from the caller's schema", async () => {
-    const { sent } = await send();
-    expect(sent.body.output_config).toMatchObject({
-      format: {
-        type: "json_schema",
-        schema: {
-          type: "object",
-          required: ["verdict", "quote"],
-          properties: { verdict: { enum: ["ok", "bad"] } },
-        },
-      },
-    });
-  });
-
-  it("does not use a forced JSON tool, which this model answers with HTTP 400", async () => {
-    const { sent } = await send();
-    expect(sent.body).not.toHaveProperty("tool_choice");
-    expect(sent.body).not.toHaveProperty("tools");
-  });
-
-  it("leaves out temperature, top_p and top_k", async () => {
-    const { sent } = await send();
-    expect(sent.body).not.toHaveProperty("temperature");
-    expect(sent.body).not.toHaveProperty("top_p");
-    expect(sent.body).not.toHaveProperty("top_k");
-  });
-
-  it("leaves thinking at the model's adaptive default instead of disabling it", async () => {
-    const { sent } = await send();
-    expect(sent.body).not.toHaveProperty("thinking");
-  });
-
-  it("sets max_tokens to the configured output limit", async () => {
-    const { sent } = await send({ maxOutputTokens: 777 });
-    expect(sent.body.max_tokens).toBe(777);
-  });
-
-  it("sends the prompts as the system and user text", async () => {
-    const { sent } = await send();
-    expect(sent.body.system).toEqual([{ type: "text", text: "You review contracts." }]);
-    expect(JSON.stringify(sent.body.messages)).toContain(PROMPT_TEXT);
-  });
-
-  it("omits effort when none is configured", async () => {
-    const { sent } = await send();
-    expect(sent.body.output_config).not.toHaveProperty("effort");
-  });
-
-  it.each(["low", "medium", "high", "xhigh", "max"] as const)(
-    "sends output_config.effort %s when configured",
-    async (effort) => {
-      const { sent } = await send({ effort });
-      expect(sent.body.output_config).toMatchObject({ effort });
-      expect(sent.body.output_config).toHaveProperty("format");
-      expect(sent.body).not.toHaveProperty("thinking");
-      expect(sent.body).not.toHaveProperty("temperature");
-    },
-  );
-
-  it("produces no SDK warnings", async () => {
-    await send({ effort: "xhigh" });
-    expect(warnings).toEqual([]);
-  });
-
-  it("sends the same body again when it retries bad output", async () => {
-    const { fetch, requests } = recordingFetch((call) =>
-      anthropicMessage(call === 1 ? "not json" : answer),
-    );
-    const generator = createObjectGenerator(makeConfig({ model }), { fetch });
-    await expect(generator.generate(request)).resolves.toEqual({ verdict: "ok", quote: null });
-    expect(requests).toHaveLength(2);
-    expect(requests[1]?.body).toEqual(requests[0]?.body);
-  });
-});
-
-describe("anthropic base URL", () => {
-  it("sends the request to the configured base URL", async () => {
-    const { fetch, requests } = recordingFetch(() => anthropicMessage(answer));
-    const generator = createObjectGenerator(
-      makeConfig({ baseUrl: "https://gateway.example.com/v1/" }),
-      {
-        fetch,
-      },
-    );
-    await generator.generate(request);
-    expect(requests[0]?.url).toBe("https://gateway.example.com/v1/messages");
-  });
-});
-
 describe("base URL variables left over from other tools", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
-  it("do not redirect the Anthropic request away from the disclosed host", async () => {
-    vi.stubEnv("ANTHROPIC_BASE_URL", "https://elsewhere.example.com/v1");
-    const { fetch, requests } = recordingFetch(() => anthropicMessage(answer));
-    await createObjectGenerator(makeConfig(), { fetch }).generate(request);
-    expect(requests[0]?.url).toBe("https://api.anthropic.com/v1/messages");
-  });
-
   it("do not redirect the OpenAI request away from the disclosed host", async () => {
     vi.stubEnv("OPENAI_BASE_URL", "https://elsewhere.example.com/v1");
     const { fetch, requests } = recordingFetch(() => openaiResponse(answer));
-    const config = makeConfig({ provider: "openai", model: "test-model" });
-    await createObjectGenerator(config, { fetch }).generate(request);
-    expect(requests[0]?.url).toBe("https://api.openai.com/v1/responses");
-  });
-
-  it("do not replace the configured key", async () => {
-    vi.stubEnv("ANTHROPIC_API_KEY", "key-from-the-environment");
-    const { fetch, requests } = recordingFetch(() => anthropicMessage(answer));
     await createObjectGenerator(makeConfig(), { fetch }).generate(request);
-    expect(requests[0]?.headers.get("x-api-key")).toBe(API_KEY);
-  });
-});
-
-describe("anthropic stop reasons", () => {
-  it("maps stop_reason refusal to ModelRefusalError without retrying", async () => {
-    const { fetch, requests } = recordingFetch(() => anthropicMessage("", "refusal"));
-    const generator = createObjectGenerator(makeConfig({ maxRetries: 3 }), { fetch });
-
-    const error = await failure(generator.generate(request));
-
-    expect(error).toBeInstanceOf(ModelRefusalError);
-    expect(requests).toHaveLength(1);
-  });
-
-  it("maps a refusal that arrives with partial text to ModelRefusalError", async () => {
-    const { fetch, requests } = recordingFetch(() => anthropicMessage('{"verdict":', "refusal"));
-    const error = await failure(createObjectGenerator(makeConfig(), { fetch }).generate(request));
-    expect(error).toBeInstanceOf(ModelRefusalError);
-    expect(requests).toHaveLength(1);
-  });
-
-  it("treats max_tokens with cut-off JSON as bad output and says how to fix it", async () => {
-    const { fetch, requests } = recordingFetch(() =>
-      anthropicMessage('{"verdict":"o', "max_tokens"),
-    );
-    const generator = createObjectGenerator(makeConfig({ maxRetries: 1 }), { fetch });
-
-    const error = await failure(generator.generate(request));
-
-    expect(error).toBeInstanceOf(ModelOutputError);
-    expect(error.message).toContain("CLAUSEWISE_MAX_OUTPUT_TOKENS");
-    expect(requests).toHaveLength(2);
-  });
-});
-
-describe("anthropic HTTP errors", () => {
-  const apiError = {
-    type: "error",
-    error: { type: "invalid_request_error", message: "Your credit balance is too low." },
-  };
-
-  it("reports the status and the API's message, and does not retry a 400", async () => {
-    const { fetch, requests } = recordingFetch(() => json(apiError, 400));
-    const error = await failure(createObjectGenerator(makeConfig(), { fetch }).generate(request));
-
-    expect(error).toBeInstanceOf(ModelRequestError);
-    expect((error as ModelRequestError).statusCode).toBe(400);
-    expect(error.message).toContain("credit balance is too low");
-    expect(requests).toHaveLength(1);
-  });
-
-  it("keeps the contract and the key out of the error the SDK built around the request", async () => {
-    const { fetch } = recordingFetch(() => json(apiError, 401));
-    const error = await failure(createObjectGenerator(makeConfig(), { fetch }).generate(request));
-    const everything = inspect(error, { depth: 10, showHidden: true });
-    expect(everything).not.toContain("CONFIDENTIAL");
-    expect(everything).not.toContain(API_KEY);
+    expect(requests[0]?.url).toBe("https://api.openai.com/v1/responses");
   });
 });
 
@@ -463,5 +269,30 @@ describe("openai request", () => {
   it("produces no SDK warnings", async () => {
     await send();
     expect(warnings).toEqual([]);
+  });
+
+  it("reports the status and the API's message, and does not retry a 401", async () => {
+    const { fetch, requests } = recordingFetch(() =>
+      json(
+        { error: { message: "Incorrect API key provided.", type: "invalid_request_error" } },
+        401,
+      ),
+    );
+    const error = await failure(createObjectGenerator(openai, { fetch }).generate(request));
+
+    expect(error).toBeInstanceOf(ModelRequestError);
+    expect((error as ModelRequestError).statusCode).toBe(401);
+    expect(error.message).toContain("Incorrect API key provided");
+    expect(requests).toHaveLength(1);
+  });
+
+  it("keeps the contract and the key out of the error the SDK built around the request", async () => {
+    const { fetch } = recordingFetch(() =>
+      json({ error: { message: `bad key ${API_KEY}`, type: "invalid_request_error" } }, 401),
+    );
+    const error = await failure(createObjectGenerator(openai, { fetch }).generate(request));
+    const everything = inspect(error, { depth: 10, showHidden: true });
+    expect(everything).not.toContain("CONFIDENTIAL");
+    expect(everything).not.toContain(API_KEY);
   });
 });

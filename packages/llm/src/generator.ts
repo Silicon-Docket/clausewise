@@ -1,4 +1,3 @@
-import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
@@ -11,6 +10,13 @@ import {
   type LanguageModel,
 } from "ai";
 import {
+  ModelRequestError,
+  createAnthropicGenerator,
+  describeAnthropicDestination,
+  scrubProviderText,
+  type AnthropicOverrides,
+} from "./anthropic.js";
+import {
   LlmConfigError,
   ModelOutputError,
   ModelRefusalError,
@@ -19,23 +25,9 @@ import {
   type ObjectGenerator,
 } from "./types.js";
 
-/**
- * The provider could not be reached or rejected the request. The AI SDK's own errors carry the
- * whole request body, which is the contract, so this keeps only the status and the provider's
- * message.
- */
-export class ModelRequestError extends Error {
-  override name = "ModelRequestError";
-  readonly statusCode: number | undefined;
-
-  constructor(message: string, statusCode: number | undefined) {
-    super(message);
-    this.statusCode = statusCode;
-  }
-}
+export { ModelRequestError };
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]", "::1", "host.docker.internal"]);
-const MAX_PROVIDER_MESSAGE = 300;
 
 function parseUrl(raw: string | undefined): URL | undefined {
   if (raw === undefined) return undefined;
@@ -54,7 +46,7 @@ function hostOrDefault(baseUrl: string | undefined, defaultHost: string): string
 function describeDestination(config: LlmConfig): string {
   switch (config.provider) {
     case "anthropic":
-      return `Anthropic API (${hostOrDefault(config.baseUrl, "api.anthropic.com")})`;
+      return describeAnthropicDestination(config.baseUrl);
     case "openai":
       return `OpenAI API (${hostOrDefault(config.baseUrl, "api.openai.com")})`;
     case "openai-compatible": {
@@ -68,24 +60,26 @@ function describeDestination(config: LlmConfig): string {
   }
 }
 
-// The SDK reads ANTHROPIC_BASE_URL and OPENAI_BASE_URL when it is given no base URL, so the default
-// is passed explicitly: otherwise a variable left over from another tool would send the document
-// somewhere other than what the disclosure says.
-const ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1";
+// The SDK reads OPENAI_BASE_URL when it is given no base URL, so the default is passed explicitly:
+// otherwise a variable left over from another tool would send the document somewhere other than
+// what the disclosure says.
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
+
+// Anthropic goes through its own SDK in anthropic.ts, so only these two reach the AI SDK.
+type AiSdkConfig = LlmConfig & { provider: "openai" | "openai-compatible" };
+
+function usesAiSdk(config: LlmConfig): config is AiSdkConfig {
+  return config.provider !== "anthropic";
+}
 
 // Optional fields are spread in only when set. The SDK's option types reject an explicit undefined,
 // and an unset key must stay unset so a keyless local server gets no Authorization header at all.
-function buildModel(config: LlmConfig, fetchOverride: typeof globalThis.fetch | undefined) {
+function buildModel(config: AiSdkConfig, fetchOverride: typeof globalThis.fetch | undefined) {
   const shared = {
     ...(config.apiKey === undefined ? {} : { apiKey: config.apiKey }),
     ...(fetchOverride === undefined ? {} : { fetch: fetchOverride }),
   };
   switch (config.provider) {
-    case "anthropic":
-      return createAnthropic({ ...shared, baseURL: config.baseUrl ?? ANTHROPIC_BASE_URL })(
-        config.model,
-      );
     case "openai":
       return createOpenAI({ ...shared, baseURL: config.baseUrl ?? OPENAI_BASE_URL })(config.model);
     case "openai-compatible": {
@@ -111,16 +105,8 @@ interface CallSettings {
   providerOptions?: Record<string, Record<string, string | boolean>>;
 }
 
-function callSettings(config: LlmConfig): CallSettings {
+function callSettings(config: AiSdkConfig): CallSettings {
   switch (config.provider) {
-    case "anthropic":
-      // claude-sonnet-5-5 and claude-opus-5-5 answer HTTP 400 to a non-default temperature, top_p or
-      // top_k, to thinking disabled and to forced tool use, and think adaptively by default. So
-      // sampling and thinking stay unset, and structuredOutputMode stays on the SDK's auto, which
-      // uses native structured outputs for these models instead of a forced JSON tool.
-      return config.effort === undefined
-        ? {}
-        : { providerOptions: { anthropic: { effort: config.effort } } };
     case "openai":
       // The Responses API keeps what it generates for 30 days unless told not to.
       return { providerOptions: { openai: { store: false } } };
@@ -138,14 +124,30 @@ function wireName(name: string): string {
 
 type Attempt<T> = { ok: true; value: T } | { ok: false; truncated: boolean };
 
+/**
+ * `fetch` replaces the network for every provider. `model` stands in for the AI SDK model of the
+ * openai providers, while `client` and `onUsage` belong to the anthropic adapter and are ignored
+ * by the others.
+ */
 export function createObjectGenerator(
   config: LlmConfig,
-  overrides?: { model?: LanguageModel; fetch?: typeof globalThis.fetch },
+  overrides?: { model?: LanguageModel } & AnthropicOverrides,
 ): ObjectGenerator {
   // A bare string would be resolved by the AI SDK's default provider, the Vercel AI Gateway, and
   // the document would leave for a service nobody configured.
   if (typeof overrides?.model === "string") {
     throw new TypeError("overrides.model must be a model object, not a model id string.");
+  }
+  if (!usesAiSdk(config)) {
+    // A model stand-in meant for a test would be ignored here, and the test would then call the
+    // real API.
+    if (overrides?.model !== undefined) {
+      throw new TypeError(
+        "overrides.model only applies to the openai and openai-compatible providers. " +
+          "Use overrides.client or overrides.fetch for anthropic.",
+      );
+    }
+    return createAnthropicGenerator(config, overrides);
   }
   const model = overrides?.model ?? buildModel(config, overrides?.fetch);
   const settings = callSettings(config);
@@ -157,13 +159,6 @@ export function createObjectGenerator(
         "filter. Retrying the same request will not help.",
     );
 
-  function scrub(text: string): string {
-    const withoutKey = config.apiKey ? text.split(config.apiKey).join("[redacted]") : text;
-    return withoutKey.length > MAX_PROVIDER_MESSAGE
-      ? `${withoutKey.slice(0, MAX_PROVIDER_MESSAGE)}...`
-      : withoutKey;
-  }
-
   // Only an APICallError's message is repeated. It is the provider's own error text, whereas other
   // SDK errors can quote the value that failed to validate, which may be model output.
   function requestError(error: unknown): ModelRequestError {
@@ -171,7 +166,7 @@ export function createObjectGenerator(
     if (APICallError.isInstance(cause)) {
       const status = cause.statusCode === undefined ? "" : ` with HTTP ${cause.statusCode}`;
       return new ModelRequestError(
-        `The request to ${who} failed${status}: ${scrub(cause.message)}`,
+        `The request to ${who} failed${status}: ${scrubProviderText(cause.message, config.apiKey)}`,
         cause.statusCode,
       );
     }

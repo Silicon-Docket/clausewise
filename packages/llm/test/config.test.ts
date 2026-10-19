@@ -124,6 +124,87 @@ describe("loadLlmConfig defaults", () => {
   });
 });
 
+describe("loadLlmConfig fallback", () => {
+  it("is off by default and leaves no trace in the config", () => {
+    const config = loadLlmConfig({ ANTHROPIC_API_KEY: KEY });
+    expect(config.fallback).toBeUndefined();
+    expect(config).not.toHaveProperty("fallback");
+  });
+
+  it("is on only for the exact word default", () => {
+    expect(loadLlmConfig({ ANTHROPIC_API_KEY: KEY, CLAUSEWISE_FALLBACK: "default" })).toEqual({
+      ...anthropicDefaults,
+      fallback: "default",
+    });
+  });
+
+  it("trims a trailing newline like every other variable", () => {
+    expect(
+      loadLlmConfig({ ANTHROPIC_API_KEY: KEY, CLAUSEWISE_FALLBACK: " default\n" }).fallback,
+    ).toBe("default");
+  });
+
+  it("treats an empty value as off, also for the other providers", () => {
+    expect(loadLlmConfig({ ANTHROPIC_API_KEY: KEY, CLAUSEWISE_FALLBACK: " " }).fallback).toBe(
+      undefined,
+    );
+    const config = loadLlmConfig({
+      CLAUSEWISE_PROVIDER: "openai",
+      CLAUSEWISE_MODEL: "m",
+      OPENAI_API_KEY: "k",
+      CLAUSEWISE_FALLBACK: "",
+    });
+    expect(config.fallback).toBeUndefined();
+  });
+
+  it.each(["Default", "DEFAULT", "true", "1", "on", "yes", "off", "false", "none", "default,x"])(
+    "rejects %s rather than guess whether fallback was meant",
+    (value) => {
+      const error = configError({ ANTHROPIC_API_KEY: KEY, CLAUSEWISE_FALLBACK: value });
+      expect(error.message).toContain("CLAUSEWISE_FALLBACK");
+      expect(error.message).toMatch(/\b(set|unset|fix)\b/i);
+      expect(error.message).not.toContain(`"${value}"`);
+    },
+  );
+
+  it("rejects it for providers it does not apply to", () => {
+    for (const env of [
+      { CLAUSEWISE_PROVIDER: "openai", CLAUSEWISE_MODEL: "m", OPENAI_API_KEY: "k" },
+      {
+        CLAUSEWISE_PROVIDER: "openai-compatible",
+        CLAUSEWISE_MODEL: "m",
+        CLAUSEWISE_BASE_URL: "http://localhost:11434/v1",
+      },
+    ]) {
+      const error = configError({ ...env, CLAUSEWISE_FALLBACK: "default" });
+      expect(error.message).toContain("CLAUSEWISE_FALLBACK");
+      expect(error.message).toContain("anthropic");
+    }
+  });
+
+  it("rejects it with a custom base URL, naming both variables", () => {
+    const error = configError({
+      ANTHROPIC_API_KEY: KEY,
+      CLAUSEWISE_BASE_URL: "https://gateway.example.com",
+      CLAUSEWISE_FALLBACK: "default",
+    });
+    expect(error.message).toContain("CLAUSEWISE_FALLBACK");
+    expect(error.message).toContain("CLAUSEWISE_BASE_URL");
+    expect(error.message).toMatch(/\bunset\b/i);
+    expect(error.message).not.toContain("gateway.example.com");
+  });
+
+  it("still accepts a base URL that is only set to an empty string", () => {
+    expect(
+      loadLlmConfig({
+        ANTHROPIC_API_KEY: KEY,
+        CLAUSEWISE_BASE_URL: "",
+        CLAUSEWISE_FALLBACK: "default",
+      }).fallback,
+    ).toBe("default");
+  });
+});
+
 describe("loadLlmConfig empty and padded values", () => {
   it("treats empty and whitespace-only strings as unset", () => {
     expect(
@@ -309,6 +390,7 @@ describe("loadLlmConfig errors", () => {
         CLAUSEWISE_API_KEY: KEY,
       },
       { ANTHROPIC_API_KEY: KEY, CLAUSEWISE_EFFORT: KEY },
+      { ANTHROPIC_API_KEY: KEY, CLAUSEWISE_FALLBACK: KEY },
       { ANTHROPIC_API_KEY: KEY, CLAUSEWISE_BASE_URL: `ftp://user:${KEY}@example.com` },
       { ANTHROPIC_API_KEY: KEY, CLAUSEWISE_CONCURRENCY: KEY },
       { ANTHROPIC_API_KEY: KEY, CLAUSEWISE_MAX_OUTPUT_TOKENS: KEY },

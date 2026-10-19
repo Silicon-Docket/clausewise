@@ -136,9 +136,39 @@ function readEffort(env: Env, provider: ProviderName): Effort | undefined {
   return effort;
 }
 
+// Off unless the variable is exactly "default". Server-side fallback sends the same prompt to a
+// second model whenever the first declines it, so it is never switched on by a vague value.
+function readFallback(
+  env: Env,
+  provider: ProviderName,
+  baseUrl: string | undefined,
+): "default" | undefined {
+  const raw = read(env, "CLAUSEWISE_FALLBACK");
+  if (raw === undefined) return undefined;
+  if (provider !== "anthropic") {
+    fail(
+      "CLAUSEWISE_FALLBACK only applies when CLAUSEWISE_PROVIDER is anthropic. " +
+        "Unset it for other providers.",
+    );
+  }
+  if (raw !== "default") {
+    fail(
+      "CLAUSEWISE_FALLBACK must be exactly default. " +
+        "Fix the value, or unset it to keep fallback off.",
+    );
+  }
+  if (baseUrl !== undefined) {
+    fail(
+      "CLAUSEWISE_FALLBACK works only against the Anthropic API itself, not through " +
+        "CLAUSEWISE_BASE_URL. Unset one of the two.",
+    );
+  }
+  return raw;
+}
+
 export function loadLlmConfig(env: Record<string, string | undefined>): LlmConfig {
   const provider = readProvider(env);
-  return {
+  const config: LlmConfig = {
     provider,
     model: readModel(env, provider),
     apiKey: readApiKey(env, provider),
@@ -149,4 +179,6 @@ export function loadLlmConfig(env: Record<string, string | undefined>): LlmConfi
     maxContextTokens: readInteger(env, "CLAUSEWISE_MAX_CONTEXT_TOKENS", undefined, 1),
     maxRetries: readInteger(env, "CLAUSEWISE_MAX_RETRIES", DEFAULT_MAX_RETRIES, 0),
   };
+  const fallback = readFallback(env, provider, config.baseUrl);
+  return fallback === undefined ? config : { ...config, fallback };
 }
