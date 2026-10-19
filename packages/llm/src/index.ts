@@ -1,5 +1,5 @@
 export { loadLlmConfig } from "./config.js";
-export { createObjectGenerator } from "./generator.js";
+export { ModelRequestError, createObjectGenerator } from "./generator.js";
 export {
   LlmConfigError,
   ModelOutputError,

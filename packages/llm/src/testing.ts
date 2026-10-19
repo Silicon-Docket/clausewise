@@ -7,13 +7,19 @@ import type { GenerateObjectRequest, ObjectGenerator } from "./types.js";
  */
 export function createScriptedGenerator(
   answer: (request: GenerateObjectRequest<unknown>) => unknown | Promise<unknown>,
-  info: { provider?: string; model?: string; disclosure?: string } = {},
+  info: {
+    provider?: string;
+    model?: string;
+    disclosure?: string;
+    cachesSharedPrefix?: boolean;
+  } = {},
 ): ObjectGenerator & { readonly calls: GenerateObjectRequest<unknown>[] } {
   const calls: GenerateObjectRequest<unknown>[] = [];
   return {
     provider: info.provider ?? "scripted",
     model: info.model ?? "scripted-model",
     disclosure: info.disclosure ?? "a scripted test generator (nothing is sent anywhere)",
+    cachesSharedPrefix: info.cachesSharedPrefix ?? false,
     calls,
     async generate<T>(request: GenerateObjectRequest<T>): Promise<T> {
       calls.push(request as GenerateObjectRequest<unknown>);

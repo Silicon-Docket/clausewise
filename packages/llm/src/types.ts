@@ -31,6 +31,12 @@ export interface GenerateObjectRequest<T> {
   /** Keep the shape plain: strings, enums, arrays, nullable objects. No min/max constraints. */
   schema: ZodType<T>;
   schemaName?: string;
+  /**
+   * The leading part of `prompt` that is identical across a batch of calls over the same document.
+   * An adapter whose provider caches by prefix marks the end of it. `prompt` still holds the whole
+   * text, so an adapter that ignores this field loses nothing.
+   */
+  sharedPrefix?: string;
   signal?: AbortSignal;
 }
 
@@ -43,11 +49,23 @@ export interface ObjectGenerator {
    * "Anthropic API (api.anthropic.com)". Shown to the user before a review starts.
    */
   readonly disclosure: string;
+  /**
+   * True when `sharedPrefix` is cached. A cache entry only becomes readable once the first
+   * response starts, so callers should finish one call before launching the rest in parallel.
+   */
+  readonly cachesSharedPrefix?: boolean;
 }
 
 /** The model declined to answer (a safety stop), so retrying the same request will not help. */
 export class ModelRefusalError extends Error {
   override name = "ModelRefusalError";
+  /** The provider's reason for declining, such as "cyber", when it gave one. */
+  readonly category: string | undefined;
+
+  constructor(message: string, category?: string) {
+    super(message);
+    this.category = category;
+  }
 }
 
 /** The model answered, but never with output that fits the schema, even after retries. */
