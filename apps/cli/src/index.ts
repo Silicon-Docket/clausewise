@@ -2,6 +2,7 @@ import { CliError, UsageError, describeError } from "./errors.js";
 import type { CliIo } from "./io.js";
 import { playbookCheck } from "./playbook.js";
 import { reviewCommand } from "./review.js";
+import { safeBlock } from "./text.js";
 import { USAGE, USAGE_HINT, readVersion } from "./usage.js";
 
 export type { CliIo } from "./io.js";
@@ -66,7 +67,14 @@ function fail(error: unknown, io: CliIo): number {
  * Runs the command line and returns the process exit code. Nothing a user can do wrong makes it
  * throw, and nothing it prints can hold contract text.
  */
-export async function run(argv: string[], io: CliIo): Promise<number> {
+export async function run(argv: string[], rawIo: CliIo): Promise<number> {
+  // Everything printed passes through here, so a path, a title or a provider's message cannot take
+  // control of the terminal however it got into the text.
+  const io: CliIo = {
+    ...rawIo,
+    stdout: (text) => rawIo.stdout(safeBlock(text)),
+    stderr: (text) => rawIo.stderr(safeBlock(text)),
+  };
   try {
     return await dispatch(argv, io);
   } catch (error) {

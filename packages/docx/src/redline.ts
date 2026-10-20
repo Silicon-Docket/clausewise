@@ -1,9 +1,38 @@
-import { addComment, loadComments, saveComments } from "./comments.js";
-import { trimEdit } from "./minimize.js";
-import { createW, getW, isW, parseXml, serializeXml, setText, wChild } from "./ooxml.js";
-import { DOCUMENT_PART, openPackage, readDocumentXml, writePackage } from "./package.js";
-import { type Atom, bodyParagraphs, collectAtoms } from "./paragraphs.js";
-import { explodeRuns, splitAt } from "./runs.js";
+import { addComment, createCommentsPart, loadComments, saveComments } from "./comments.js";
+import type { CommentsPart } from "./comments.js";
+import { matchQuoteStyle, trimEdit } from "./minimize.js";
+import {
+  DocxError,
+  appendRunText,
+  createW,
+  getW,
+  isPreserved,
+  isW,
+  parseXml,
+  resolveLimits,
+  sanitizeText,
+  setText,
+  wChild,
+  type DocxLimits,
+} from "./ooxml.js";
+import {
+  DOCUMENT_PART,
+  openPackage,
+  readDocumentXml,
+  writePackage,
+  writeXmlPart,
+} from "./package.js";
+import {
+  type Atom,
+  type BarrierKind,
+  type Blocker,
+  type ParagraphScan,
+  bodyParagraphs,
+  isInTextBox,
+  limitsAfterCutting,
+  scanParagraph,
+} from "./paragraphs.js";
+import { explodeRuns, insertionRunProps, splitAtOffsets } from "./runs.js";
 
 /** Replace `[start, end)` of a paragraph's current text. `start === end` inserts. */
 export interface Edit {
@@ -27,6 +56,8 @@ export interface RedlineOptions {
   date?: Date;
   /** Strike and insert only the words that differ (default true). */
   minimize?: boolean;
+  /** Overrides for the default limits on how large and how complex a file may be. */
+  limits?: Partial<DocxLimits>;
 }
 
 export type Outcome = { applied: true } | { applied: false; reason: string };
@@ -39,8 +70,38 @@ export interface RedlineResult {
   comments: Outcome[];
 }
 
-const UNEDITABLE =
-  "the range includes a hyperlink, a field or an existing tracked change, which cannot be edited safely";
+const BLOCKER_PHRASE: Record<Blocker, string> = {
+  hyperlink: "a hyperlink",
+  field: "a field result",
+  contentControl: "a content control",
+  trackedChange: "an existing tracked change",
+  movedText: "text moved by an existing tracked change",
+  smartTag: "a smart tag",
+  customXml: "custom XML markup",
+  textDirection: "a text direction override",
+  alternateContent: "an unsupported object (alternate content)",
+};
+
+const BARRIER_PHRASE: Record<BarrierKind, string> = {
+  hiddenText: "hidden text",
+  equation: "an unsupported object (an equation)",
+  ruby: "an unsupported object (ruby text)",
+  symbol: "an unsupported object (a symbol character)",
+  positionalTab: "an unsupported object (a positional tab)",
+};
+
+function joinPhrases(phrases: string[]): string {
+  const unique = [...new Set(phrases)];
+  if (unique.length <= 1) return unique.join("");
+  return `${unique.slice(0, -1).join(", ")} and ${unique.at(-1)}`;
+}
+
+function blockedReason(atoms: Atom[]): string {
+  const kinds = atoms.flatMap((a) =>
+    a.blockedBy === undefined ? [] : [BLOCKER_PHRASE[a.blockedBy]],
+  );
+  return `the range includes ${joinPhrases(kinds)}, which cannot be edited safely`;
+}
 
 interface PlannedEdit {
   index: number;
@@ -57,10 +118,19 @@ interface PlannedComment {
   text: string;
 }
 
-interface ParagraphPlan {
+export interface ParagraphPlan {
+  index: number;
   p: Element;
+  scan: ParagraphScan;
   edits: PlannedEdit[];
   comments: PlannedComment[];
+}
+
+/** What was accepted for each input, before anything is written. */
+export interface RedlinePlan {
+  edits: Outcome[];
+  comments: Outcome[];
+  paragraphs: ParagraphPlan[];
 }
 
 function midSurrogate(text: string, i: number): boolean {
@@ -75,41 +145,61 @@ function conflicts(a: PlannedEdit, b: PlannedEdit): boolean {
   return a.start === a.end && b.start === b.end && a.start === b.start;
 }
 
-function checkEdit(atoms: Atom[], text: string, e: PlannedEdit): string | undefined {
+function checkEdit(scan: ParagraphScan, e: PlannedEdit): string | undefined {
+  const { atoms, barriers, text } = scan;
   if (midSurrogate(text, e.start) || midSurrogate(text, e.end)) {
     return "the range splits a surrogate pair";
   }
   if (e.start < e.end) {
+    const crossed = barriers.filter((b) => b.position > e.start && b.position < e.end);
+    if (crossed.length > 0) {
+      return `the range crosses ${joinPhrases(crossed.map((b) => BARRIER_PHRASE[b.kind]))}, which the text view cannot represent`;
+    }
     const hit = atoms.filter((a) => a.start < e.end && a.end > e.start);
-    return hit.length > 0 && hit.every((a) => a.editable) ? undefined : UNEDITABLE;
+    if (hit.length === 0) return "there is no editable text in the range";
+    const blocked = hit.filter((a) => !a.editable);
+    return blocked.length === 0 ? undefined : blockedReason(blocked);
   }
   const straddled = atoms.find((a) => a.start < e.start && e.start < a.end);
-  if (straddled) return straddled.editable ? undefined : UNEDITABLE;
+  if (straddled) return straddled.editable ? undefined : blockedReason([straddled]);
   const prev = atoms.filter((a) => a.end <= e.start).at(-1);
   const next = atoms.find((a) => a.start >= e.start);
-  return prev?.editable || next?.editable ? undefined : UNEDITABLE;
+  if (prev?.editable || next?.editable) return undefined;
+  const neighbours = [prev, next].flatMap((a) => (a ? [a] : []));
+  return neighbours.length > 0
+    ? blockedReason(neighbours)
+    : "there is no editable text next to the position";
 }
 
-function topLevel(p: Element, node: Node): Node {
-  let n = node;
-  while (n.parentNode && n.parentNode !== p) n = n.parentNode;
+/** The child of `p` that holds `node`, or null if `node` is not inside `p`. */
+function topLevel(p: Element, node: Node): Node | null {
+  let n: Node | null = node;
+  while (n && n.parentNode !== p) n = n.parentNode;
   return n;
 }
+
+/** Ids this large cannot be incremented safely, and Word keeps them in a signed 32-bit number. */
+const MAX_USABLE_ID = 2_000_000_000;
 
 function maxId(doc: Document): number {
   let max = 0;
   for (const el of Array.from(doc.getElementsByTagName("*"))) {
     const n = Number(getW(el, "id"));
-    if (Number.isInteger(n)) max = Math.max(max, n);
+    if (Number.isInteger(n) && n < MAX_USABLE_ID) max = Math.max(max, n);
   }
   return max;
 }
 
-export async function applyRedline(
-  buf: Uint8Array,
+/**
+ * Decides, for each input, whether it can be applied, without touching the document. Each edit is
+ * measured against the paragraph as it was read, so the answer does not depend on the order in
+ * which the inputs arrive.
+ */
+export function planRedline(
+  doc: Document,
   ops: { edits?: Edit[]; comments?: Comment[] },
   options: RedlineOptions = {},
-): Promise<RedlineResult> {
+): RedlinePlan {
   const edits = ops.edits ?? [];
   const comments = ops.comments ?? [];
   const editOutcomes: Outcome[] = edits.map(() => ({ applied: false, reason: "not processed" }));
@@ -117,14 +207,8 @@ export async function applyRedline(
     applied: false,
     reason: "not processed",
   }));
-  const unchanged = { buffer: buf, edits: editOutcomes, comments: commentOutcomes };
-  if (edits.length === 0 && comments.length === 0) return unchanged;
-
-  const zip = await openPackage(buf);
-  const doc = parseXml(await readDocumentXml(zip), DOCUMENT_PART);
   const paragraphs = bodyParagraphs(doc);
   const plans = new Map<number, ParagraphPlan>();
-  const atomsOf = new Map<number, Atom[]>();
 
   const lookup = (id: string): { index: number; p: Element } | undefined => {
     const m = /^p:(\d+)$/.exec(id);
@@ -134,14 +218,11 @@ export async function applyRedline(
   const planFor = (index: number, p: Element): ParagraphPlan => {
     let plan = plans.get(index);
     if (!plan) {
-      plan = { p, edits: [], comments: [] };
+      plan = { index, p, scan: scanParagraph(p), edits: [], comments: [] };
       plans.set(index, plan);
-      atomsOf.set(index, collectAtoms(p));
     }
     return plan;
   };
-  const textOf = (index: number): string => (atomsOf.get(index) ?? []).map((a) => a.text).join("");
-
   const reject = (list: Outcome[], i: number, reason: string): void => {
     list[i] = { applied: false, reason };
   };
@@ -150,7 +231,7 @@ export async function applyRedline(
     const found = lookup(edit.paragraphId);
     if (!found) return reject(editOutcomes, i, `unknown paragraph ${edit.paragraphId}`);
     const plan = planFor(found.index, found.p);
-    const text = textOf(found.index);
+    const { text } = plan.scan;
     if (
       !Number.isInteger(edit.start) ||
       !Number.isInteger(edit.end) ||
@@ -160,12 +241,17 @@ export async function applyRedline(
     ) {
       return reject(editOutcomes, i, `range ${edit.start}-${edit.end} is outside the paragraph`);
     }
+    const replacement = sanitizeText(edit.replacement);
+    if (replacement === "" && edit.replacement !== "") {
+      // Characters that were all dropped must not turn a replacement into a deletion.
+      return reject(editOutcomes, i, "the replacement has no text that Word can hold");
+    }
     let planned: PlannedEdit = {
       index: i,
       start: edit.start,
       end: edit.end,
       removed: text.slice(edit.start, edit.end),
-      inserted: edit.replacement,
+      inserted: replacement,
     };
     if (options.minimize !== false) {
       const t = trimEdit(planned.removed, planned.inserted);
@@ -177,9 +263,11 @@ export async function applyRedline(
         inserted: t.inserted,
       };
     }
-    if (planned.removed === planned.inserted)
+    planned.inserted = matchQuoteStyle(planned.inserted, text, planned.start);
+    if (planned.removed === planned.inserted) {
       return reject(editOutcomes, i, "the edit changes nothing");
-    const problem = checkEdit(atomsOf.get(found.index) ?? [], text, planned);
+    }
+    const problem = checkEdit(plan.scan, planned);
     if (problem) return reject(editOutcomes, i, problem);
     if (plan.edits.some((other) => conflicts(planned, other))) {
       return reject(editOutcomes, i, "the edit overlaps an earlier edit");
@@ -190,123 +278,255 @@ export async function applyRedline(
   comments.forEach((comment, i) => {
     const found = lookup(comment.paragraphId);
     if (!found) return reject(commentOutcomes, i, `unknown paragraph ${comment.paragraphId}`);
+    if (isInTextBox(found.p)) {
+      return reject(commentOutcomes, i, "comments cannot be placed inside a text box");
+    }
     const plan = planFor(found.index, found.p);
-    const length = textOf(found.index).length;
+    const { text } = plan.scan;
     const start = comment.start ?? 0;
-    const end = comment.end ?? length;
+    const end = comment.end ?? text.length;
     if (
       !Number.isInteger(start) ||
       !Number.isInteger(end) ||
       start < 0 ||
-      end > length ||
+      end > text.length ||
       start > end ||
-      (start === end && length > 0)
+      (start === end && text.length > 0)
     ) {
       return reject(commentOutcomes, i, `range ${start}-${end} is outside the paragraph or empty`);
+    }
+    if (midSurrogate(text, start) || midSurrogate(text, end)) {
+      return reject(commentOutcomes, i, "the range splits a surrogate pair");
     }
     plan.comments.push({ index: i, start, end, text: comment.text });
   });
 
-  const planned = [...plans.values()].filter((pl) => pl.edits.length + pl.comments.length > 0);
-  if (planned.length === 0) return unchanged;
-  for (const plan of planned) {
-    for (const e of plan.edits) editOutcomes[e.index] = { applied: true };
-    for (const c of plan.comments) commentOutcomes[c.index] = { applied: true };
+  return {
+    edits: editOutcomes,
+    comments: commentOutcomes,
+    paragraphs: [...plans.values()]
+      .filter((pl) => pl.edits.length + pl.comments.length > 0)
+      .sort((a, b) => a.index - b.index),
+  };
+}
+
+const NOT_PREPARED = "the paragraph could not be edited safely, so it was left as it was";
+
+/** Puts back what a paragraph held before anything was done to it. */
+function restoreParagraph(p: Element, backup: Node): void {
+  while (p.firstChild) p.removeChild(p.firstChild);
+  while (backup.firstChild) p.appendChild(backup.firstChild);
+}
+
+function refuseParagraph(plan: RedlinePlan, pl: ParagraphPlan): void {
+  for (const e of pl.edits) plan.edits[e.index] = { applied: false, reason: NOT_PREPARED };
+  for (const c of pl.comments) plan.comments[c.index] = { applied: false, reason: NOT_PREPARED };
+}
+
+const COMMENTS_UNREADABLE = "the file's comments cannot be read, so no comment was added";
+
+/** Takes the comments out of a plan, leaving the edits and the paragraphs that still have one. */
+function refuseComments(plan: RedlinePlan): void {
+  for (const pl of plan.paragraphs) {
+    for (const c of pl.comments)
+      plan.comments[c.index] = { applied: false, reason: COMMENTS_UNREADABLE };
+    pl.comments = [];
+  }
+  plan.paragraphs = plan.paragraphs.filter((pl) => pl.edits.length > 0);
+}
+
+interface Writer {
+  doc: Document;
+  commentsPart: CommentsPart;
+  author: string;
+  initials: string;
+  date: string;
+  takeId: () => number;
+}
+
+/**
+ * Writes one paragraph's tracked changes and comments. Returns whether a comment was added.
+ * Everything it does to the tree is undone by the caller if it throws.
+ */
+function writeParagraph(w: Writer, plan: RedlinePlan, pl: ParagraphPlan): boolean {
+  const { doc, commentsPart, author, initials, date, takeId } = w;
+  const annotation = (): Record<string, string> => ({ id: String(takeId()), author, date });
+  const freshId = (): string => String(takeId());
+  const { p } = pl;
+  let addedComments = false;
+
+  explodeRuns(p, freshId);
+  const cuts = new Set<number>();
+  for (const e of pl.edits) cuts.add(e.start).add(e.end);
+  for (const c of pl.comments) cuts.add(c.start).add(c.end);
+  splitAtOffsets(doc, p, cuts, freshId);
+
+  // One reading of the paragraph, taken after the cuts and before anything is wrapped, serves
+  // every edit. Re-reading between edits would see the markup earlier edits just wrote.
+  const { atoms, text } = scanParagraph(p, undefined, limitsAfterCutting(doc));
+  if (text !== pl.scan.text)
+    throw new DocxError("The text of a paragraph changed while it was cut");
+
+  for (const c of pl.comments) {
+    const id = takeId();
+    addComment(commentsPart, { id, author, initials, date, text: c.text });
+    addedComments = true;
+
+    const first = atoms.find((a) => a.end > c.start);
+    const last = atoms.findLast((a) => a.start < c.end);
+    const pPr = wChild(p, "pPr");
+    const startRef: Node | null = first
+      ? topLevel(p, first.run)
+      : pPr
+        ? pPr.nextSibling
+        : p.firstChild;
+    const startMarker = createW(doc, "commentRangeStart", { id: String(id) });
+    p.insertBefore(startMarker, startRef);
+    const lastTop = last ? topLevel(p, last.run) : null;
+    const endRef: Node | null = lastTop ? lastTop.nextSibling : startMarker.nextSibling;
+    p.insertBefore(createW(doc, "commentRangeEnd", { id: String(id) }), endRef);
+    const refRun = createW(doc, "r");
+    refRun.appendChild(createW(doc, "commentReference", { id: String(id) }));
+    p.insertBefore(refRun, endRef);
+    plan.comments[c.index] = { applied: true };
   }
 
+  for (const e of [...pl.edits].sort((a, b) => b.start - a.start || b.end - a.end)) {
+    const covered = atoms.filter((a) => a.start >= e.start && a.end <= e.end);
+    let source: Element;
+    let ref: Node | null;
+    if (covered.length > 0) {
+      source = covered[0]!.run;
+      let lastDel: Element = source;
+      for (const a of covered) {
+        const del = createW(doc, "del", annotation());
+        a.run.parentNode!.insertBefore(del, a.run);
+        del.appendChild(a.run);
+        if (isW(a.node, "t")) {
+          const delText = createW(doc, "delText");
+          setText(doc, delText, a.text, isPreserved(a.node));
+          a.run.replaceChild(delText, a.node);
+        }
+        lastDel = del;
+      }
+      ref = lastDel.nextSibling;
+    } else {
+      const prev = atoms.filter((a) => a.end <= e.start).at(-1);
+      const next = atoms.find((a) => a.start >= e.start);
+      if (prev?.editable) {
+        source = prev.run;
+        ref = topLevel(p, prev.run)?.nextSibling ?? null;
+      } else if (next?.editable) {
+        source = next.run;
+        ref = topLevel(p, next.run);
+      } else {
+        plan.edits[e.index] = {
+          applied: false,
+          reason: "there is no editable text next to the position",
+        };
+        continue;
+      }
+    }
+    plan.edits[e.index] = { applied: true };
+    if (!e.inserted) continue;
+    const run = createW(doc, "r");
+    const rPr = wChild(source, "rPr");
+    if (rPr) run.appendChild(insertionRunProps(rPr));
+    appendRunText(doc, run, e.inserted, true);
+    const ins = createW(doc, "ins", annotation());
+    ins.appendChild(run);
+    p.insertBefore(ins, ref);
+  }
+  return addedComments;
+}
+
+/**
+ * Writes the planned tracked changes and comments into the document and records in the plan's
+ * outcomes which of them were placed. A paragraph that cannot be written is put back as it was
+ * and its edits and comments are refused, so one odd paragraph never costs the others.
+ */
+export function executeRedline(
+  doc: Document,
+  plan: RedlinePlan,
+  commentsPart: CommentsPart,
+  options: RedlineOptions = {},
+): { addedComments: boolean } {
   const author = options.author ?? "Clausewise";
   const initials = options.initials ?? "CW";
-  const date = (options.date ?? new Date()).toISOString().replace(/\.\d{3}Z$/, "Z");
-  const commentsPart = await loadComments(zip);
-  let nextId = Math.max(maxId(doc), maxId(commentsPart.doc)) + 1;
-  const annotation = (): Record<string, string> => ({ id: String(nextId++), author, date });
+  const when = options.date ?? new Date();
+  if (Number.isNaN(when.getTime()))
+    throw new DocxError("The date for the tracked changes is not valid");
+  const date = when.toISOString().replace(/\.\d{3}Z$/, "Z");
+
+  const ids = { next: Math.max(maxId(doc), maxId(commentsPart.doc)) + 1 };
+  const writer: Writer = {
+    doc,
+    commentsPart,
+    author,
+    initials,
+    date,
+    takeId: () => ids.next++,
+  };
 
   let addedComments = false;
-  for (const plan of planned) {
-    const { p } = plan;
-    explodeRuns(p);
-    const cuts = new Set<number>();
-    for (const e of plan.edits) cuts.add(e.start).add(e.end);
-    for (const c of plan.comments) cuts.add(c.start).add(c.end);
-    for (const cut of cuts) splitAt(doc, p, cut);
-
-    for (const c of plan.comments) {
-      const atoms = collectAtoms(p);
-      const id = nextId++;
-      addComment(commentsPart, { id, author, initials, date, text: c.text });
-      addedComments = true;
-
-      const first = atoms.find((a) => a.end > c.start);
-      const pPr = wChild(p, "pPr");
-      const startRef: Node | null = first
-        ? topLevel(p, first.run)
-        : pPr
-          ? pPr.nextSibling
-          : p.firstChild;
-      const last = atoms.findLast((a) => a.start < c.end);
-      const startMarker = createW(doc, "commentRangeStart", { id: String(id) });
-      p.insertBefore(startMarker, startRef);
-      const endRef: Node | null = last
-        ? topLevel(p, last.run).nextSibling
-        : startMarker.nextSibling;
-      p.insertBefore(createW(doc, "commentRangeEnd", { id: String(id) }), endRef);
-      const refRun = createW(doc, "r");
-      refRun.appendChild(createW(doc, "commentReference", { id: String(id) }));
-      p.insertBefore(refRun, endRef);
-    }
-
-    for (const e of [...plan.edits].sort((a, b) => b.start - a.start || b.end - a.end)) {
-      const atoms = collectAtoms(p);
-      const covered = atoms.filter((a) => a.end > a.start && a.start >= e.start && a.end <= e.end);
-      let source: Element;
-      let ref: Node | null;
-      if (covered.length > 0) {
-        source = covered[0]!.run;
-        let lastDel: Element = source;
-        for (const a of covered) {
-          const del = createW(doc, "del", annotation());
-          a.run.parentNode!.insertBefore(del, a.run);
-          del.appendChild(a.run);
-          if (isW(a.node, "t")) {
-            const delText = createW(doc, "delText");
-            setText(doc, delText, a.text);
-            a.run.replaceChild(delText, a.node);
-          }
-          lastDel = del;
-        }
-        ref = lastDel.nextSibling;
-      } else {
-        const prev = atoms.filter((a) => a.end <= e.start).at(-1);
-        const next = atoms.find((a) => a.start >= e.start);
-        if (prev?.editable) {
-          source = prev.run;
-          ref = prev.run.nextSibling;
-        } else {
-          source = next!.run;
-          ref = next!.run;
-        }
+  for (const pl of plan.paragraphs) {
+    const backup = pl.p.cloneNode(true);
+    const commentsBefore = commentsPart.root.childNodes.length;
+    try {
+      if (writeParagraph(writer, plan, pl)) addedComments = true;
+    } catch {
+      restoreParagraph(pl.p, backup);
+      while (commentsPart.root.childNodes.length > commentsBefore) {
+        commentsPart.root.removeChild(commentsPart.root.lastChild!);
       }
-      if (!e.inserted) continue;
-      const run = createW(doc, "r");
-      const rPr = wChild(source, "rPr");
-      if (rPr) run.appendChild(rPr.cloneNode(true));
-      for (const part of e.inserted.split(/(\n|\t)/)) {
-        if (part === "") continue;
-        if (part === "\n") run.appendChild(createW(doc, "br"));
-        else if (part === "\t") run.appendChild(createW(doc, "tab"));
-        else {
-          const t = createW(doc, "t");
-          setText(doc, t, part);
-          run.appendChild(t);
-        }
-      }
-      const ins = createW(doc, "ins", annotation());
-      ins.appendChild(run);
-      p.insertBefore(ins, ref);
+      refuseParagraph(plan, pl);
     }
   }
+  return { addedComments };
+}
 
-  zip.file(DOCUMENT_PART, serializeXml(doc));
-  if (addedComments) await saveComments(zip, commentsPart);
-  return { buffer: await writePackage(zip), edits: editOutcomes, comments: commentOutcomes };
+export async function applyRedline(
+  buf: Uint8Array,
+  ops: { edits?: Edit[]; comments?: Comment[] },
+  options: RedlineOptions = {},
+): Promise<RedlineResult> {
+  const edits = ops.edits ?? [];
+  const comments = ops.comments ?? [];
+  if (edits.length === 0 && comments.length === 0) {
+    return {
+      buffer: buf,
+      edits: [],
+      comments: [],
+    };
+  }
+
+  const limits = resolveLimits(options.limits);
+  const zip = await openPackage(buf, limits);
+  const doc = parseXml(await readDocumentXml(zip), DOCUMENT_PART, limits);
+  const plan = planRedline(doc, ops, options);
+  if (plan.paragraphs.length === 0) {
+    return { buffer: buf, edits: plan.edits, comments: plan.comments };
+  }
+
+  // The existing comments are read even when none is added, so that the ids given to tracked
+  // changes cannot repeat theirs. A comments part that cannot be read costs the comments only.
+  let commentsPart: CommentsPart | undefined;
+  try {
+    commentsPart = await loadComments(zip);
+  } catch (error) {
+    if (!(error instanceof DocxError)) throw error;
+    refuseComments(plan);
+  }
+  const { addedComments } = executeRedline(
+    doc,
+    plan,
+    commentsPart ?? createCommentsPart(),
+    options,
+  );
+  const applied = [...plan.edits, ...plan.comments].some((outcome) => outcome.applied);
+  if (!applied) return { buffer: buf, edits: plan.edits, comments: plan.comments };
+
+  writeXmlPart(zip, DOCUMENT_PART, doc);
+  if (addedComments && commentsPart) await saveComments(zip, commentsPart);
+  return { buffer: await writePackage(zip), edits: plan.edits, comments: plan.comments };
 }

@@ -66,7 +66,7 @@ export function describePlan(plan: Plan, context: PlanContext): string {
   if (context.selftest) return `${lines.join("\n")}\n`;
 
   lines.push(
-    `  Input tokens, upper bound: ${int(plan.inputTokens)} (1 token per 3 characters of every prompt and of the response schema, no caching, one attempt per call)`,
+    `  Input tokens, upper bound: ${int(plan.inputTokens)} (1 token per 3 characters of Latin text and 1 per character of other scripts, over every prompt and the response schema, no caching, one attempt per call)`,
     `  Output tokens, upper bound: ${int(plan.outputTokens)} (${int(plan.calls)} calls x ${int(plan.assumedOutputTokens)} tokens assumed per call. Thinking counts as output, so raise it for a model that thinks at length, with --assumed-output-tokens)`,
   );
   if (context.price !== null && context.upperBoundUsd !== null) {

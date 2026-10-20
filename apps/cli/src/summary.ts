@@ -1,12 +1,21 @@
-import { SEVERITIES } from "@clausewise/playbook";
+import { SEVERITIES, type Severity } from "@clausewise/playbook";
 import type { ReviewReport, RuleResult, RuleStatus } from "@clausewise/review";
-import { aligned, plain, plural } from "./text.js";
+import { aligned, plain, plural, visible } from "./text.js";
 
 export interface WrittenFiles {
   redlined: string;
   report: string;
   summary: string;
 }
+
+export interface SummaryOptions {
+  /** The severity the gate was set to. A rule that could not be checked counts as open from it up. */
+  failOn?: Severity | undefined;
+}
+
+/** True when a rule of this severity is at the threshold or more severe. */
+export const atOrAbove = (severity: Severity, threshold: Severity): boolean =>
+  SEVERITIES.indexOf(severity) <= SEVERITIES.indexOf(threshold);
 
 const STATUS_ROWS: [RuleStatus, string][] = [
   ["deviation", "Deviations"],
@@ -25,11 +34,45 @@ function openItem(result: RuleResult): string {
   return `  [${result.severity}] ${plain(result.title)}: ${result.status}${where}`;
 }
 
+// Tracked insertions are not in this list: the model read their text, as if it were accepted.
+const NOT_SHOWN: [keyof NonNullable<ReviewReport["notShown"]>, string, string][] = [
+  ["trackedDeletions", "tracked deletion", "tracked deletions"],
+  ["comments", "comment", "comments"],
+  ["footnotes", "footnote", "footnotes"],
+  ["endnotes", "endnote", "endnotes"],
+  ["headerFooterParts", "header or footer part", "header or footer parts"],
+  ["hiddenRuns", "run of hidden text", "runs of hidden text"],
+  ["images", "picture", "pictures"],
+];
+
+/** One line on what the file holds that the model did not see, or undefined when nothing. */
+export function notShownLine(report: ReviewReport): string | undefined {
+  const seen = report.notShown;
+  if (seen === undefined) return undefined;
+  const unseen = NOT_SHOWN.flatMap(([key, one, many]) =>
+    seen[key] > 0 ? [`${seen[key]} ${plural(seen[key], one, many)}`] : [],
+  );
+  const accepted = seen.trackedInsertions;
+  const sentences = [
+    ...(unseen.length === 0 ? [] : [`Not shown to the model: ${unseen.join(", ")}.`]),
+    ...(accepted > 0
+      ? [
+          `${accepted} tracked ${plural(accepted, "insertion was", "insertions were")} read as accepted text.`,
+        ]
+      : []),
+  ];
+  return sentences.length === 0 ? undefined : sentences.join(" ");
+}
+
 /**
  * What the terminal shows once the files are written: the counts, then every item a lawyer has to
  * look at, most severe first. Nothing from the contract is repeated except clause numbers.
  */
-export function formatSummary(report: ReviewReport, written: WrittenFiles): string {
+export function formatSummary(
+  report: ReviewReport,
+  written: WrittenFiles,
+  options: SummaryOptions = {},
+): string {
   const { counts, open, stats } = report;
   const document = report.document === undefined ? "" : `${plain(report.document)} `;
   const severities = SEVERITIES.map((severity) => `${open[severity]} ${severity}`).join(", ");
@@ -49,17 +92,33 @@ export function formatSummary(report: ReviewReport, written: WrittenFiles): stri
   const flagged = report.results
     .filter((result) => result.status === "deviation" || result.status === "missing")
     .sort((a, b) => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity));
-  if (flagged.length === 0) {
+  const failed = report.results.filter((result) => result.status === "error");
+  const checked = report.results.length - failed.length;
+  if (flagged.length > 0) {
+    lines.push("Deviations and missing clauses:", ...flagged.map(openItem));
+  } else if (failed.length === 0) {
     lines.push("No deviations or missing clauses.");
   } else {
-    lines.push("Deviations and missing clauses:", ...flagged.map(openItem));
+    // Silence about the rules that did not run would read as a clean contract.
+    lines.push(
+      checked === 0
+        ? "No rule could be checked."
+        : `No deviations or missing clauses among the ${checked} ${plural(checked, "rule that was", "rules that were")} checked.`,
+    );
   }
 
-  const failed = report.results.filter((result) => result.status === "error");
   if (failed.length > 0) {
+    const { failOn } = options;
     lines.push("", "These rules could not be checked, so the review does not cover them:");
     for (const result of failed) {
-      lines.push(`  ${plain(result.title)}: ${plain(result.error ?? "The rule was not checked.")}`);
+      const open =
+        failOn !== undefined && atOrAbove(result.severity, failOn)
+          ? `could not be checked, treated as open (--fail-on ${failOn}): `
+          : "";
+      lines.push(
+        `  [${result.severity}] ${plain(result.title)}: ${open}` +
+          plain(result.error ?? "The rule was not checked."),
+      );
     }
   }
 
@@ -67,9 +126,9 @@ export function formatSummary(report: ReviewReport, written: WrittenFiles): stri
     "",
     "Written:",
     ...aligned([
-      ["Redlined contract:", written.redlined],
-      ["Report (JSON):", written.report],
-      ["Summary (Markdown):", written.summary],
+      ["Redlined contract:", visible(written.redlined)],
+      ["Report (JSON):", visible(written.report)],
+      ["Summary (Markdown):", visible(written.summary)],
     ]),
     "",
   );

@@ -13,6 +13,7 @@ import {
   onlyRules,
   run,
   viewDocx,
+  withAbsence,
   type DocxView,
 } from "./pipeline-support.js";
 
@@ -103,7 +104,7 @@ describe("reviewContract on the aggressive NDA", () => {
       paragraphId: "p:10",
       start: expect.any(Number),
       end: expect.any(Number),
-      original: "perpetual and shall continue indefinitely",
+      original: "are perpetual and shall continue indefinitely",
       replacement: "end three (3) years after the date of disclosure",
     });
     if (term.edit.kind !== "applied") throw new Error("expected an applied edit");
@@ -188,10 +189,14 @@ describe("reviewContract on the aggressive NDA", () => {
     );
     replaceIn(
       10,
-      "perpetual and shall continue indefinitely",
+      "are perpetual and shall continue indefinitely",
       "end three (3) years after the date of disclosure",
     );
     expect(after.paragraphs.map((p) => p.accepted)).toEqual(expected);
+    // The quote takes in the verb, so the sentence still reads correctly once the edit is accepted.
+    expect(after.paragraphs[10]?.accepted).toBe(
+      "3.1 Recipient's obligations under this Agreement end three (3) years after the date of disclosure, whether or not the parties proceed with any transaction.",
+    );
 
     const changed = after.paragraphs.flatMap((p, i) => (p.tracked ? [i] : []));
     expect(changed).toEqual([4, 10]);
@@ -245,13 +250,13 @@ describe("reviewContract on the aggressive NDA", () => {
   it("anchors the comment of an applied edit on the edit's range", () => {
     const term = commentFor("[HIGH] Duration of confidentiality obligations");
     expect(term.paragraph).toBe(10);
-    expect(term.anchored).toBe("perpetual and shall continue indefinitely");
+    expect(term.anchored).toBe("are perpetual and shall continue indefinitely");
     const mutuality = commentFor("[HIGH] Obligations bind both parties");
     expect(mutuality.paragraph).toBe(4);
     expect(mutuality.anchored).toBe("disclosed by or on behalf of Discloser to Recipient");
   });
 
-  it("anchors every other comment on the whole first paragraph of its first clause", () => {
+  it("anchors every other comment on the whole first paragraph of its first clause, or of the clause its edit names", () => {
     const whole = (heading: string, paragraph: number): void => {
       const comment = commentFor(heading);
       expect(comment.paragraph).toBe(paragraph);
@@ -261,15 +266,18 @@ describe("reviewContract on the aggressive NDA", () => {
     whole("[HIGH] Standard exclusions", 5);
     whole("[MEDIUM] Permitted use and disclosure to representatives", 8);
     whole("[LOW] Return or destruction of information", 12);
-    whole("[MEDIUM] Remedies", 14);
+    // The model cited 5.1, 5.2 and 5.3 and proposed its edit in 5.2, which is what the comment says.
+    whole("[MEDIUM] Remedies", 15);
+    expect(before.paragraphs[15]?.accepted).toMatch(/^5\.2 /);
     whole("[HIGH] No hidden restrictive covenants", 18);
     whole("[LOW] Governing law and venue", 20);
   });
 
-  it("anchors a comment with no clause on the document's first clause", () => {
+  it("anchors a comment with no clause on the first numbered clause, not on the preamble", () => {
     const comment = commentFor("[MEDIUM] Disclosure required by law");
-    expect(comment.paragraph).toBe(1);
-    expect(comment.anchored).toBe(before.paragraphs[1]?.accepted);
+    expect(comment.paragraph).toBe(4);
+    expect(comment.anchored).toBe(before.paragraphs[4]?.accepted);
+    expect(before.paragraphs[4]?.accepted).toMatch(/^1\.1 /);
   });
 
   it("sends one start event and then one event per rule", () => {
@@ -299,15 +307,16 @@ describe("reviewContract on the aggressive NDA", () => {
       expect(json).not.toContain(sentence);
     }
     // The control: the words an applied edit quotes are in the report.
-    expect(json).toContain("perpetual and shall continue indefinitely");
+    expect(json).toContain("are perpetual and shall continue indefinitely");
   });
 });
 
 describe("reviewContract on the balanced NDA", () => {
   it("finds nothing to do and returns the input bytes untouched", async () => {
     const input = fixture("nda-balanced.docx");
+    // The restrictive covenants rule forbids something, so a contract without it passes.
     const { report, redlined } = await reviewContract(
-      { docx: input, playbook },
+      { docx: input, playbook: withAbsence(playbook, "restrictive-covenants") },
       createOracleGenerator(balancedScript()),
     );
     expect(report.document).toBeUndefined();
@@ -409,6 +418,11 @@ describe("reviewContract when the redline engine refuses an edit", () => {
           run(" annually, payable monthly in arrears."),
       },
       { xml: run("1.2 Fees are payable within thirty days of invoice.") },
+      {
+        xml: run(
+          "1.3 Late payments accrue interest at the rate the parties agree in writing before the invoice date.",
+        ),
+      },
     ]);
     const rules = onlyRules(playbook, "term", "permitted-use");
     const { report, redlined } = await reviewContract(
@@ -448,7 +462,7 @@ describe("reviewContract when the redline engine refuses an edit", () => {
     expect(report.stats.editsApplied).toBe(1);
 
     const view = await viewDocx(redlined);
-    expect(view.paragraphs.map((p) => p.tracked)).toEqual([false, true]);
+    expect(view.paragraphs.map((p) => p.tracked)).toEqual([false, true, false]);
     expect(view.paragraphs[1]?.accepted).toBe("1.2 Fees are payable within sixty days of invoice.");
     expect(view.paragraphs[1]?.rejected).toBe(
       "1.2 Fees are payable within thirty days of invoice.",

@@ -1,7 +1,7 @@
 import type { Stats } from "node:fs";
-import { readFile, rm, writeFile } from "node:fs/promises";
-import { basename, resolve } from "node:path";
-import { parseDocx } from "@clausewise/docx";
+import { readFile } from "node:fs/promises";
+import { basename } from "node:path";
+import { DocxError, parseDocx } from "@clausewise/docx";
 import { createObjectGenerator, loadLlmConfig, type ObjectGenerator } from "@clausewise/llm";
 import { SEVERITIES, type Severity } from "@clausewise/playbook";
 import {
@@ -10,6 +10,7 @@ import {
   type ProgressEvent,
   type ReviewOptions,
   type ReviewReport,
+  type RuleResult,
 } from "@clausewise/review";
 import { parseCommandArgs, type OptionKind, type ParsedArgs } from "./args.js";
 import { CliError, UsageError } from "./errors.js";
@@ -21,9 +22,11 @@ import {
   type OutputTarget,
 } from "./files.js";
 import type { CliIo } from "./io.js";
+import { outputMode, probeFolders, writeOutputs } from "./output.js";
 import { loadPlaybook } from "./playbook.js";
-import { formatSummary } from "./summary.js";
-import { plain, plural } from "./text.js";
+import { atOrAbove, formatSummary, notShownLine } from "./summary.js";
+import { createTokenMeter, type TokenMeter } from "./tokens.js";
+import { plain, plural, visible } from "./text.js";
 import { USAGE } from "./usage.js";
 
 const OPTIONS = {
@@ -32,6 +35,7 @@ const OPTIONS = {
   report: "string",
   summary: "string",
   author: "string",
+  client: "string",
   "fail-on": "string",
   force: "boolean",
   quiet: "boolean",
@@ -43,6 +47,7 @@ interface ReviewArgs {
   /** In the order they are written: redlined contract, report, summary. */
   outputs: [OutputTarget, OutputTarget, OutputTarget];
   author: string | undefined;
+  client: string | undefined;
   failOn: Severity | undefined;
   force: boolean;
   quiet: boolean;
@@ -72,6 +77,10 @@ function readArgs(parsed: ParsedArgs): ReviewArgs {
   if (author !== undefined && author.trim() === "") {
     throw new UsageError("--author needs a name.");
   }
+  const client = parsed.strings.get("client");
+  if (client !== undefined && client.trim() === "") {
+    throw new UsageError("--client needs the name of the party you act for.");
+  }
 
   const defaults = defaultOutputPaths(input);
   return {
@@ -83,6 +92,7 @@ function readArgs(parsed: ParsedArgs): ReviewArgs {
       { label: "summary", path: parsed.strings.get("summary") ?? defaults.summary },
     ],
     author,
+    client,
     failOn,
     force: parsed.flags.has("force"),
     quiet: parsed.flags.has("quiet"),
@@ -98,27 +108,40 @@ async function readInput(
   io: CliIo,
 ): Promise<{ path: string; stats: Stats; bytes: Uint8Array }> {
   const stats = await statIfPresent(path);
-  if (stats === undefined) throw new CliError(`Contract file not found: ${path}`);
-  if (!stats.isFile()) throw new CliError(`${path} is not a file.`);
+  if (stats === undefined) throw new CliError(`Contract file not found: ${visible(path)}`);
+  if (!stats.isFile()) throw new CliError(`${visible(path)} is not a file.`);
 
   let bytes: Uint8Array;
   try {
     bytes = await (io.readFile ?? readFile)(path);
   } catch (error) {
-    throw new CliError(`Cannot read ${path}: ${fsReason(error)}.`);
+    throw new CliError(`Cannot read ${visible(path)}: ${fsReason(error)}.`);
   }
-  // Every .docx is a zip, and a zip starts with PK. Anything else is the wrong kind of file, most
-  // often an old .doc, which Word can save again as .docx.
-  if (bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
-    throw new CliError(
-      `${path} is not a .docx file: it is not a zip archive. ` +
-        "If it is an older .doc file, open it in Word and save it as .docx.",
-    );
-  }
+  await checkReadable(path, bytes);
   return { path, stats, bytes };
 }
 
-function buildGenerator(io: CliIo): {
+/**
+ * Opens the contract before anything else is asked of the user, so that a file that is not Word
+ * at all, an old .doc, a password protected file or a damaged one is refused first, in the words
+ * of the Word engine, which knows which of them it is. No file is sniffed here.
+ */
+async function checkReadable(path: string, bytes: Uint8Array): Promise<void> {
+  try {
+    await parseDocx(bytes);
+  } catch (error) {
+    if (!(error instanceof DocxError)) throw error;
+    const reason = plain(error.message);
+    throw new CliError(
+      `Cannot open ${visible(path)}: ${/[.!?]$/.test(reason) ? reason : `${reason}.`}`,
+    );
+  }
+}
+
+function buildGenerator(
+  io: CliIo,
+  meter: TokenMeter,
+): {
   generator: ObjectGenerator;
   limits: Pick<ReviewOptions, "concurrency" | "maxContextTokens">;
 } {
@@ -127,7 +150,11 @@ function buildGenerator(io: CliIo): {
   }
   const config = loadLlmConfig(io.env);
   return {
-    generator: createObjectGenerator(config),
+    // Only the Anthropic adapter reports what it used, so for the others there is nothing to add up.
+    generator:
+      config.provider === "anthropic"
+        ? createObjectGenerator(config, { onUsage: (usage) => meter.add(usage) })
+        : createObjectGenerator(config),
     limits: {
       concurrency: config.concurrency,
       ...(config.maxContextTokens === undefined
@@ -139,8 +166,9 @@ function buildGenerator(io: CliIo): {
 
 function reportProgress(io: CliIo, event: ProgressEvent): void {
   if (event.type === "start") {
-    const windows =
-      event.windows > 1 ? `, in ${event.windows} overlapping parts of the contract` : "";
+    // Windows overlap by a clause when the limit leaves room for it and not at all when it does
+    // not, so only their number is certain.
+    const windows = event.windows > 1 ? `, in ${event.windows} parts of the contract` : "";
     io.stderr(
       `Checking ${event.clauses} ${plural(event.clauses, "clause", "clauses")} against ` +
         `${event.rules} ${plural(event.rules, "rule", "rules")}${windows}.\n`,
@@ -154,36 +182,90 @@ function reportProgress(io: CliIo, event: ProgressEvent): void {
 // After the review
 // ---------------------------------------------------------------------------------------------
 
-/**
- * Writes the outputs one after another. A file this run created is removed again if a later write
- * fails, so a review never leaves half of its outputs behind. A file that was replaced under
- * --force cannot be put back.
- */
-async function writeOutputs(
-  io: CliIo,
-  files: readonly { target: OutputTarget; data: Uint8Array | string }[],
-  present: ReadonlySet<string>,
-): Promise<void> {
-  const write = io.writeFile ?? writeFile;
-  const created: string[] = [];
-  for (const { target, data } of files) {
-    if (!present.has(resolve(target.path))) created.push(target.path);
-    try {
-      await write(target.path, data);
-    } catch (error) {
-      await Promise.all(created.map((path) => rm(path, { force: true }).catch(() => undefined)));
-      throw new CliError(
-        `Could not write the ${target.label} to ${target.path}: ${fsReason(error)}.`,
-      );
-    }
-  }
-}
-
 function openAtOrAbove(report: ReviewReport, severity: Severity): number {
   return SEVERITIES.slice(0, SEVERITIES.indexOf(severity) + 1).reduce(
     (total, level) => total + report.open[level],
     0,
   );
+}
+
+const unchecked = (report: ReviewReport): RuleResult[] =>
+  report.results.filter((result) => result.status === "error");
+
+/**
+ * A review in which no rule ran says nothing about the contract, and an exit code of 0 with a
+ * redline identical to the input would read as "reviewed, nothing to change". The reasons are
+ * grouped, because a provider that is down gives the same one for every rule.
+ */
+function nothingChecked(report: ReviewReport): CliError {
+  const reasons = new Map<string, number>();
+  for (const result of report.results) {
+    const reason = plain(result.error ?? "The rule was not checked.");
+    reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+  }
+  const listed = [...reasons].slice(0, 5);
+  const more = reasons.size - listed.length;
+  return new CliError(
+    [
+      "No rule could be checked, so nothing was reviewed. No output files were written.",
+      "Why:",
+      ...listed.map(([reason, rules]) => `  ${rules} ${plural(rules, "rule", "rules")}: ${reason}`),
+      ...(more > 0 ? [`  and ${more} other ${plural(more, "reason", "reasons")}`] : []),
+      "Check the model settings and the state of the provider, then run the review again.",
+    ].join("\n"),
+  );
+}
+
+const MOST_NAMED = 8;
+
+/** Said whether or not --fail-on is set: a review with holes in it must not pass for a whole one. */
+function warnUnchecked(io: CliIo, report: ReviewReport, failOn: Severity | undefined): void {
+  const failed = unchecked(report);
+  if (failed.length === 0) return;
+  const names = failed.map((result) => `${plain(result.title)} (${result.severity})`);
+  const more = names.length - MOST_NAMED;
+  const gate =
+    failOn === undefined
+      ? ""
+      : ` Rules at ${failOn} severity or above count as open for --fail-on ${failOn}.`;
+  io.stderr(
+    `WARNING: ${failed.length} of ${report.results.length} rules could not be checked, so this ` +
+      `review is incomplete: ${names.slice(0, MOST_NAMED).join(", ")}` +
+      `${more > 0 ? `, and ${more} more` : ""}.${gate}\n`,
+  );
+}
+
+/**
+ * What the review itself says about the file, under the summary: the notes of the report, and in
+ * one line what the model never saw. They are on stderr with the other warnings, so a script that
+ * reads the summary from stdout gets the results alone.
+ */
+function warnAboutFile(io: CliIo, report: ReviewReport): void {
+  for (const warning of report.warnings ?? []) {
+    const text = plain(warning);
+    if (text !== "") io.stderr(`Warning: ${text}\n`);
+  }
+  const notShown = notShownLine(report);
+  if (notShown !== undefined) io.stderr(`${notShown}\n`);
+}
+
+/** The exit code of the gate, with the reason on stderr when it is not 0. */
+function gate(io: CliIo, report: ReviewReport, failOn: Severity | undefined): number {
+  if (failOn === undefined) return 0;
+  // A rule nobody could check may hide a deviation, so for the gate it counts as one.
+  const notChecked = unchecked(report).filter((result) => atOrAbove(result.severity, failOn));
+  const failing = openAtOrAbove(report, failOn) + notChecked.length;
+  if (failing === 0) return 0;
+  const including =
+    notChecked.length === 0
+      ? ""
+      : `, including ${notChecked.length} ${plural(notChecked.length, "rule", "rules")} that could ` +
+        "not be checked";
+  io.stderr(
+    `Exiting with code 2: ${failing} open ${plural(failing, "item", "items")} at ${failOn} ` +
+      `severity or above (--fail-on ${failOn})${including}.\n`,
+  );
+  return 2;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -202,20 +284,43 @@ export async function reviewCommand(args: string[], io: CliIo): Promise<number> 
   // Checked now so a refusal costs nothing, and again before writing because a review can take
   // minutes.
   await checkOutputs(input, options.outputs, options.force);
+  const mode = outputMode(input.stats);
+  // A folder that cannot be written to is found out here, not after every rule was paid for.
+  await probeFolders(io, options.outputs, mode);
   const playbook = await loadPlaybook(options.playbook);
-  const { generator, limits } = buildGenerator(io);
+  const meter = createTokenMeter();
+  const { generator, limits } = buildGenerator(io, meter);
 
-  // A damaged file is reported before the notice below, so the notice is never printed for text
-  // that cannot be sent.
-  await parseDocx(input.bytes);
   io.stderr(`Sending the contract text to: ${plain(generator.disclosure)}\n`);
 
+  try {
+    return await reviewAndWrite(io, options, { input, playbook, generator, limits, mode });
+  } finally {
+    // After everything else, and also when the review fails: the calls were paid for either way.
+    const tokens = meter.line();
+    if (tokens !== undefined) io.stderr(`${tokens}\n`);
+  }
+}
+
+async function reviewAndWrite(
+  io: CliIo,
+  options: ReviewArgs,
+  context: {
+    input: Awaited<ReturnType<typeof readInput>>;
+    playbook: Awaited<ReturnType<typeof loadPlaybook>>;
+    generator: ObjectGenerator;
+    limits: Pick<ReviewOptions, "concurrency" | "maxContextTokens">;
+    mode: number;
+  },
+): Promise<number> {
+  const { input, playbook, generator, limits, mode } = context;
   const { report, redlined } = await reviewContract(
     { docx: input.bytes, playbook, fileName: basename(options.input) },
     generator,
     {
       ...limits,
       ...(options.author === undefined ? {} : { author: options.author }),
+      ...(options.client === undefined ? {} : { client: options.client }),
       ...(io.signal === undefined ? {} : { signal: io.signal }),
       ...(options.quiet ? {} : { onProgress: (event: ProgressEvent) => reportProgress(io, event) }),
     },
@@ -223,6 +328,10 @@ export async function reviewCommand(args: string[], io: CliIo): Promise<number> 
 
   // The last point where Ctrl-C can still mean that nothing is written.
   io.signal?.throwIfAborted();
+  if (report.results.length > 0 && unchecked(report).length === report.results.length) {
+    throw nothingChecked(report);
+  }
+
   const present = await checkOutputs(input, options.outputs, options.force);
   const [redlinedTarget, reportTarget, summaryTarget] = options.outputs;
   await writeOutputs(
@@ -232,30 +341,21 @@ export async function reviewCommand(args: string[], io: CliIo): Promise<number> 
       { target: reportTarget, data: `${JSON.stringify(report, null, 2)}\n` },
       { target: summaryTarget, data: renderMarkdown(report) },
     ],
-    present,
+    { mode, force: options.force, present },
   );
 
   io.stdout(
-    formatSummary(report, {
-      redlined: redlinedTarget.path,
-      report: reportTarget.path,
-      summary: summaryTarget.path,
-    }),
+    formatSummary(
+      report,
+      {
+        redlined: redlinedTarget.path,
+        report: reportTarget.path,
+        summary: summaryTarget.path,
+      },
+      { failOn: options.failOn },
+    ),
   );
-
-  const { failOn } = options;
-  if (failOn === undefined) return 0;
-  if (report.counts.error > 0) {
-    io.stderr(
-      `Warning: ${report.counts.error} ${plural(report.counts.error, "rule", "rules")} could not ` +
-        "be checked, and --fail-on does not count them.\n",
-    );
-  }
-  const failing = openAtOrAbove(report, failOn);
-  if (failing === 0) return 0;
-  io.stderr(
-    `Exiting with code 2: ${failing} open ${plural(failing, "item", "items")} at ${failOn} ` +
-      `severity or above (--fail-on ${failOn}).\n`,
-  );
-  return 2;
+  warnUnchecked(io, report, options.failOn);
+  warnAboutFile(io, report);
+  return gate(io, report, options.failOn);
 }

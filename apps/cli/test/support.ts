@@ -100,6 +100,36 @@ export function tracing(inner: ObjectGenerator, log: string[]): ObjectGenerator 
   };
 }
 
+/** The id of the rule a prompt asks about. Only what follows the contract block is read. */
+export function ruleIdOf(request: GenerateObjectRequest<unknown>): string | undefined {
+  const close = request.prompt.lastIndexOf("</contract>");
+  return /^Rule ID: (.+)$/m.exec(request.prompt.slice(close))?.[1];
+}
+
+/**
+ * The model of `inner`, except that a call for a rule in `failures` throws what that entry makes.
+ * A call that was started for such a rule is still counted in `calls`.
+ */
+export function failingRules(
+  inner: ObjectGenerator,
+  failures: Record<string, () => unknown>,
+): ObjectGenerator & { readonly calls: string[] } {
+  const calls: string[] = [];
+  return {
+    provider: inner.provider,
+    model: inner.model,
+    disclosure: inner.disclosure,
+    calls,
+    async generate<T>(request: GenerateObjectRequest<T>): Promise<T> {
+      const id = ruleIdOf(request as GenerateObjectRequest<unknown>);
+      calls.push(id ?? "?");
+      const fail = id !== undefined && Object.hasOwn(failures, id) ? failures[id] : undefined;
+      if (fail !== undefined) throw fail();
+      return inner.generate(request);
+    },
+  };
+}
+
 /** A model whose every call fails with `error`. */
 export function failingGenerator(error: () => unknown): ObjectGenerator {
   return {
@@ -175,7 +205,7 @@ export const AGGRESSIVE_CLAUSES: Record<string, string[]> = {
 
 export const TERM_EDIT = {
   clauseNumber: "3.1",
-  quote: "perpetual and shall continue indefinitely",
+  quote: "are perpetual and shall continue indefinitely",
   replacement: "end three (3) years after the date of disclosure",
 };
 

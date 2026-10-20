@@ -31,11 +31,19 @@ const ABSENT: RuleCheck = {
   suggestedClause: null,
 };
 
-// Maps each clause number in the contract block to the id of the first clause that has it.
-function clauseIdsByNumber(prompt: string, close: number): Map<string, string> {
+interface ContractBlock {
+  /** The id of the first clause that has each number in the contract block. */
+  byNumber: Map<string, string>;
+  /** The first clause with a number, else the first clause. */
+  first: string | undefined;
+}
+
+// Reads the header lines of the contract block, where a clause is "[c12] 3.1 (section: ...)".
+function readBlock(prompt: string, close: number): ContractBlock {
   const open = prompt.indexOf(CONTRACT_OPEN);
   const byNumber = new Map<string, string>();
-  if (open === -1 || open > close) return byNumber;
+  let firstAny: string | undefined;
+  if (open === -1 || open > close) return { byNumber, first: undefined };
   const contract = prompt.slice(open + CONTRACT_OPEN.length, close);
   // Clauses are separated by a blank line and each starts with its header, so a line inside a
   // paragraph cannot be mistaken for one.
@@ -43,20 +51,30 @@ function clauseIdsByNumber(prompt: string, close: number): Map<string, string> {
     const header = HEADER.exec(block.split("\n", 1)[0] ?? "");
     const id = header?.[1];
     const rest = header?.[2];
-    if (id === undefined || rest === undefined || rest.startsWith("(section:")) continue;
+    if (id === undefined) continue;
+    firstAny ??= id;
+    if (rest === undefined || rest.startsWith("(section:")) continue;
     const number = rest.split(" ", 1)[0];
     if (number !== undefined && number !== "" && !byNumber.has(number)) byNumber.set(number, id);
   }
-  return byNumber;
+  return { byNumber, first: byNumber.values().next().value ?? firstAny };
 }
 
-function answerFor(rule: OracleRule, byNumber: Map<string, string>): RuleCheck {
+function answerFor(rule: OracleRule, block: ContractBlock): RuleCheck {
+  const { byNumber } = block;
   const named = rule.clauseNumbers ?? [];
-  const clauseIds = named.flatMap((number) => {
+  const found = named.flatMap((number) => {
     const id = byNumber.get(number);
     return id === undefined ? [] : [id];
   });
-  if (named.length > 0 && clauseIds.length === 0) return ABSENT;
+  if (named.length > 0 && found.length === 0) return ABSENT;
+  // Meeting a standard is a claim about a clause, so a competent model points at one. A script that
+  // does not say which gets the first clause of the window, as the pipeline rejects a compliant
+  // answer that names none.
+  const clauseIds =
+    found.length === 0 && rule.status === "compliant" && block.first !== undefined
+      ? [block.first]
+      : found;
 
   const edit = rule.edit ?? null;
   const editClauseId = edit === null ? undefined : byNumber.get(edit.clauseNumber);
@@ -81,9 +99,10 @@ function answerFor(rule: OracleRule, byNumber: Map<string, string>): RuleCheck {
  * Term)", and the first clause with a number is the one meant. When a script names clauses and none
  * of them is in the window it was sent, the answer is not_applicable, as a real model would say
  * about a part of the contract that does not cover the topic, so a review in several windows finds
- * the clause in one and merges the rest. A script that names no clauses is answered in every window.
- * The script is otherwise passed through unchecked, so a test can give the pipeline an answer a
- * model should not give, but the schema in the request still validates it.
+ * the clause in one and merges the rest. A script that names no clauses is answered in every window,
+ * and a compliant one points at the first clause of the window, because meeting a standard is a
+ * claim about a clause. The script is otherwise passed through unchecked, so a test can give the
+ * pipeline an answer a model should not give, but the schema in the request still validates it.
  */
 export function createOracleGenerator(
   rules: Record<string, OracleRule>,
@@ -99,7 +118,7 @@ export function createOracleGenerator(
       if (id === undefined) throw new Error("the prompt has no rule id");
       const rule = Object.hasOwn(rules, id) ? rules[id] : undefined;
       if (rule === undefined) throw new Error(`the oracle has no answer for rule "${id}"`);
-      return answerFor(rule, clauseIdsByNumber(request.prompt, close));
+      return answerFor(rule, readBlock(request.prompt, close));
     },
     {
       provider: "oracle",

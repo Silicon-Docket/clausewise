@@ -1,41 +1,49 @@
 name: SaaS subscription agreement (customer)
 description: Starter playbook for a business buying a cloud software subscription. Edit it to match your own risk appetite and the size of the deal.
 contractTypes: [saas, subscription]
-perspective: We are the customer. We want our data protected and ours, predictable cost, a service we can rely on, and a way out if the vendor fails us.
+perspective: We are the party buying the service, usually called the Customer or Subscriber. We want our data protected and ours, predictable cost, a service we can rely on, and a way out if the vendor fails us.
 rules:
   - id: liability-cap
     title: Limitation of liability
     severity: high
     required: true
-    standard: Each party's liability is capped at the greater of twelve months of fees and a fixed sum, applied equally to both sides, with data breach, confidentiality breach and indemnity claims carved out or subject to a higher cap.
-    fallback: A cap of twelve months of fees applied equally, with a super-cap for data breach of at least two times annual fees.
-    unacceptable: A cap that applies only to the vendor, a cap set at the fees paid in the last month, or any cap that also limits the vendor's indemnity for infringement.
-    guidance: Make the cap mutual first. Then add the carve-outs. Do not trade away the indemnity carve-out.
+    standard: Each party's liability is capped at no less than the fees paid or payable in the twelve months before the claim, and the cap applies equally to both parties. Claims for data breach, breach of confidentiality and indemnity are either outside the cap or subject to a higher cap.
+    fallback: A cap of twelve months of fees that applies equally to both parties, with the vendor's infringement indemnity outside the cap and a super-cap for data breach of at least two times annual fees.
+    unacceptable: A cap that applies only to the vendor, a cap below twelve months of fees such as the fees paid in the last month, or a cap that also limits the vendor's infringement indemnity.
+    guidance: If a fix is needed, make the cap mutual first, then raise it, then add the carve-outs. Do not trade away the indemnity carve-out. Where a fix needs a fixed sum that neither this playbook nor the contract gives, write the placeholder [amount].
 
   - id: ip-indemnity
     title: Vendor indemnity for infringement
     severity: high
     required: true
-    standard: The vendor defends and pays for third-party claims that the service infringes intellectual property rights, with a refund and replacement remedy if it cannot be fixed.
-    unacceptable: No indemnity, or an indemnity that covers only patents, or one that is limited to the fees paid.
-    guidance: Ask for patent, copyright, trademark and trade secret coverage. Accept the usual exclusions for our own modifications and combinations.
+    standard: The vendor defends us against third-party claims that the service infringes intellectual property rights, including patent, copyright, trademark and trade secret rights, and pays the resulting damages and costs. If the service cannot be made non-infringing, the vendor provides a replacement or refunds prepaid fees.
+    unacceptable: No indemnity, an indemnity that covers only patents, or an indemnity capped at the fees paid.
+    guidance: If a fix is needed, extend the cover to patent, copyright, trademark and trade secret claims. The usual exclusions for our own modifications and combinations are acceptable.
 
   - id: data-ownership
     title: Ownership and use of customer data
     severity: high
     required: true
-    standard: We own all customer data. The vendor may use it only to provide the service to us, and may use de-identified, aggregated usage statistics that do not identify us.
-    unacceptable: A licence to use customer data to train models or to sell or share data with third parties, or a transfer of ownership of outputs to the vendor.
-    guidance: Delete training and resale rights. De-identified statistics about service performance are acceptable.
+    standard: We own all customer data. The vendor may use customer data only to provide the service to us, except that it may use de-identified, aggregated usage statistics that do not identify us.
+    unacceptable: A licence to use customer data to train models, a right to sell or share customer data with third parties, or a transfer of ownership of outputs to the vendor.
+    guidance: If a fix is needed, delete the training and resale rights.
 
-  - id: security-and-breach
-    title: Security and breach notice
+  - id: security-controls
+    title: Security controls and audit report
     severity: high
     required: true
-    standard: The vendor keeps industry-standard security controls, maintains an independent audit report such as SOC 2 Type II, and tells us of a breach affecting our data without undue delay and within 72 hours.
-    fallback: Notice within five business days.
-    unacceptable: No stated security standard, no breach notification, or notice only at the vendor's discretion.
-    guidance: Ask for a named standard and a fixed notice period. Offer the vendor's own audit report in place of our right to audit.
+    standard: The vendor commits to industry-standard security controls and maintains an independent audit report, such as SOC 2 Type II.
+    unacceptable: No stated security standard, or only a promise of reasonable efforts with no named standard and no audit report.
+    guidance: If a fix is needed, ask for a named standard and an independent audit report. The vendor may offer its own audit report in place of our right to audit.
+
+  - id: breach-notice
+    title: Breach notice
+    severity: high
+    required: true
+    standard: The vendor tells us of a breach affecting our data without undue delay and within 72 hours of becoming aware of it.
+    fallback: Notice within five business days of becoming aware of the breach.
+    unacceptable: No breach notification, or notice only at the vendor's discretion.
+    guidance: If a fix is needed, ask for a fixed notice period of 72 hours.
 
   - id: availability
     title: Uptime commitment and service credits
@@ -43,42 +51,51 @@ rules:
     required: true
     standard: A written availability commitment of at least 99.9 percent per month with service credits, and a right to terminate for repeated or severe failure.
     unacceptable: Service credits as the only remedy for an outage of any length, or no availability commitment.
-    guidance: Keep credits but add a termination right after repeated misses.
+    guidance: If a fix is needed, keep the credits and add a right to terminate after repeated or severe failures.
 
   - id: term-renewal
-    title: Term, renewal and price increases
+    title: Term and renewal
     severity: medium
     required: true
-    standard: A fixed initial term, renewal only if we agree or after a reminder at least 60 days before the renewal date, and any price increase capped at the lesser of 5 percent and inflation.
-    unacceptable: Automatic renewal for a full term with no reminder, with a notice window of 90 days or more, or uncapped price increases.
-    guidance: Prefer a shorter notice window and a price cap. Reminder emails count as the reminder.
+    standard: The initial term is fixed. Renewal is either by our agreement, or automatic only if both of these hold. The vendor sends us a written reminder at least 60 days before the renewal date, and the last day for our notice of non-renewal is less than 90 days before the renewal date.
+    unacceptable: Automatic renewal with no reminder from the vendor, or a last day for our notice of non-renewal that is 90 days or more before the renewal date.
+    guidance: If a fix is needed, add the reminder and shorten the notice window. A reminder email counts as the reminder.
+
+  - id: price-increase
+    title: Price increases at renewal
+    severity: medium
+    kind: absence
+    standard: The vendor has no right to raise fees at renewal except within a cap, which is the lesser of 5 percent and the annual change in a named consumer price index.
+    unacceptable: An increase that is uncapped or that the vendor sets at its discretion.
+    guidance: If a fix is needed, add the cap and name the index.
 
   - id: termination-refund
     title: Termination rights and refund
     severity: medium
     required: true
-    standard: We may terminate for uncorrected material breach, and the vendor refunds prepaid fees for the period after termination when we terminate for its breach.
-    unacceptable: Termination only for convenience on the vendor's side, or no refund of prepaid fees in any case.
-    guidance: Add a refund for the unused period on termination for cause and on vendor insolvency.
+    standard: We may terminate for the vendor's uncorrected material breach, and when we do the vendor refunds prepaid fees for the period after termination.
+    unacceptable: No right for us to terminate for the vendor's breach while the vendor can terminate for convenience, or prepaid fees that are not refundable whatever the reason for termination.
+    guidance: If a fix is needed, add a refund of prepaid fees for the unused period when we terminate for the vendor's breach.
 
   - id: suspension
     title: Vendor's right to suspend
     severity: medium
-    standard: The vendor may suspend only for a security threat or unpaid undisputed fees after notice, and restores service promptly once the cause is fixed.
-    unacceptable: Suspension at the vendor's sole discretion without notice, or suspension while fees are in good-faith dispute.
-    guidance: Limit suspension to the narrowest part of the service where possible.
+    kind: absence
+    standard: The vendor has no right to suspend the service except where reasonably necessary to deal with a security threat, or for non-payment of undisputed fees after written notice. The vendor restores the service promptly once the cause is fixed.
+    unacceptable: A right to suspend at the vendor's sole discretion, a right to suspend for non-payment without notice, or a right to suspend while fees are in good-faith dispute.
+    guidance: If a fix is needed, require notice and prompt restoration. Narrowing the scope of a suspension is a nice-to-have and never by itself a reason to report a deviation.
 
   - id: data-return
     title: Data return on exit
     severity: medium
     required: true
-    standard: For at least 30 days after the term ends we may export our data in a common format at no extra charge, after which the vendor deletes it and confirms in writing.
-    unacceptable: No export right, an export fee, or immediate deletion on the termination date.
-    guidance: Ask for a 30-day window and a standard export format.
+    standard: For at least 30 days after the term ends we may export our data in a common format at no extra charge. After that the vendor deletes it and confirms in writing.
+    unacceptable: No export right, an export fee, or deletion immediately on the termination date.
+    guidance: If a fix is needed, ask for a 30-day window and a standard export format.
 
   - id: governing-law
     title: Governing law and venue
     severity: low
-    standard: The law and courts of a US state where we do business, or a neutral and well-developed commercial jurisdiction.
-    unacceptable: Exclusive jurisdiction in a distant or unfamiliar forum chosen only for the vendor's convenience.
-    guidance: Flag the forum but treat it as a business decision.
+    standard: The governing law and the courts are those of Delaware, New York, England and Wales, or the place where we are based. Edit this list to match your business.
+    unacceptable: An exclusive forum in the vendor's home place, when that place is not on the list in the standard.
+    guidance: Flag the forum and name the places on the list in the comment, but treat the choice as a business decision for the lawyer.

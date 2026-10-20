@@ -37,7 +37,10 @@ to stderr and the report to stdout, and `-s` stops pnpm adding its own banner to
 The model comes from the same variables as the `clausewise` command: `CLAUSEWISE_PROVIDER`,
 `CLAUSEWISE_MODEL` (default `claude-sonnet-5-5`), `ANTHROPIC_API_KEY`, `CLAUSEWISE_CONCURRENCY`,
 `CLAUSEWISE_MAX_CONTEXT_TOKENS` and the rest. A review here uses the pipeline's own defaults, so
-what you measure is what `clausewise review` does.
+what you measure is what `clausewise review` does. A context limit has to leave room for a clause
+or two on top of the roughly 4,800 tokens that the instructions, the rule and the answer take in
+every call, which for the shipped playbooks means more than 5,858. A smaller one is refused before
+the plan, and the plan shows how many windows a larger one gives.
 
 | Option                        | Meaning                                                                  |
 | ----------------------------- | ------------------------------------------------------------------------ |
@@ -52,7 +55,8 @@ what you measure is what `clausewise review` does.
 | `--selftest`                  | Run against the perfect oracle. No key, no `--yes`, no cost.             |
 
 Exit codes: 0 means it finished and every integrity check passed. 1 is any failure, including a
-fatal answer from the provider (HTTP 401, 403 or 404). 2 is an integrity failure, the most serious
+fatal answer from the provider (a rejected key, no permission, an unknown model, an empty balance
+or a redirect). 2 is an integrity failure, the most serious
 result, and it is the exit code even when the run also stopped early. 3 is the spend guard refusing
 or stopping the run. 130 is Ctrl-C, SIGTERM or SIGHUP.
 
@@ -83,16 +87,21 @@ killed outright (SIGKILL) still leaves what finished. It is removed once the res
 5. **Unknown models are an error.** The price table is `evals/prices.json`, in USD per million
    tokens. A model that is not in it stops the run before the plan, unless `--prices` supplies it.
    The harness never guesses a price from a similar name.
-6. **A fatal error ends the run.** HTTP 401, 403 or 404 means every other call would fail the same
-   way. The run stops with code 1 after printing what was spent so far.
+6. **A fatal error ends the run.** A rejected key (HTTP 401), a key without permission (403), an
+   unknown model (404), an account that cannot pay (402, or a spend limit) and a redirect (3xx,
+   which is never followed) mean every other call would fail the same way. The run stops with code
+   1 after printing what was spent so far. The message says what to check, and for a redirect that
+   is `CLAUSEWISE_BASE_URL`.
 
 How the bound is worked out: every prompt of the plan, plus the response schema, counted with the
-pipeline's `estimateTokens` (one token per three characters, which overestimates English), priced
-at the plain input rate with no caching and one attempt per call. Output is the number of calls
-times 1500 tokens, a stated assumption and not a measurement, so the figure is an estimate and not
-a ceiling. Thinking tokens are output, and the default models think adaptively, so a call can use
-anything up to `CLAUSEWISE_MAX_OUTPUT_TOKENS` (16,000 by default) on each of its attempts. The
-plan prints that hard ceiling too, and the per-request cap above is what keeps the run under
+pipeline's `estimateTokens` (one token per three characters for Latin text, which overestimates
+English, and one token per character for every other script), priced at the plain input rate with
+no caching and one attempt per call. Where that would count a character of four UTF-8 bytes, an
+emoji for one, as less than a third of its bytes, the bound uses the bytes. Output is the number of
+calls times 1500 tokens, a stated assumption and not a measurement, so the figure is an estimate
+and not a ceiling. Thinking tokens are output, and the default models think adaptively, so a call
+can use anything up to `CLAUSEWISE_MAX_OUTPUT_TOKENS` (16,000 by default) on each of its attempts.
+The plan prints that hard ceiling too, and the per-request cap above is what keeps the run under
 `--max-cost` whatever the ceiling is. The bound leaves out retries, and the plan prints what it
 would be if every call used all of them.
 
@@ -117,26 +126,32 @@ The three shipped fixtures, one review of each, with the default settings (no
 
 | Fixture                     | Playbook      | Rules | Clauses | Windows | Calls | Input tokens, bound |
 | --------------------------- | ------------- | ----: | ------: | ------: | ----: | ------------------: |
-| `nda-aggressive.docx`       | nda-mutual    |    10 |      16 |       1 |    10 |              31,053 |
-| `nda-balanced.docx`         | nda-mutual    |    10 |      16 |       1 |    10 |              33,453 |
-| `saas-vendor-friendly.docx` | saas-customer |    10 |      22 |       1 |    10 |              34,661 |
-| **Total**                   |               |    30 |         |         |    30 |          **99,167** |
+| `nda-aggressive.docx`       | nda-mutual    |    10 |      16 |       1 |    10 |              46,181 |
+| `nda-balanced.docx`         | nda-mutual    |    10 |      16 |       1 |    10 |              48,581 |
+| `saas-vendor-friendly.docx` | saas-customer |    12 |      22 |       1 |    12 |              59,579 |
+| **Total**                   |               |    32 |         |         |    32 |         **154,341** |
 
-Output is assumed to be 45,000 tokens (30 calls times 1500). The cost bound, which is what the guard
+Output is assumed to be 48,000 tokens (32 calls times 1500). The cost bound, which is what the guard
 compares with `--max-cost`, and an optimistic estimate:
 
 | Model               | Upper bound | Optimistic estimate |
 | ------------------- | ----------: | ------------------: |
-| `claude-haiku-5-5`  |     $0.0324 |             $0.0062 |
-| `claude-sonnet-5-5` |     $0.6483 |             $0.1236 |
-| `claude-opus-5-5`   |     $1.2967 |             $0.2371 |
+| `claude-haiku-5-5`  |     $0.0394 |             $0.0072 |
+| `claude-sonnet-5-5` |     $0.7887 |             $0.1446 |
+| `claude-opus-5-5`   |     $1.5774 |             $0.2733 |
 
-The optimistic estimate is arithmetic and not a measurement. It assumes the system prompt and the
-contract are written to the cache once per contract and read nine times, prompts of four
-characters per token, and answers of 300 tokens. Nothing has been run against a live model, so
-expect the first real cost to land between the two columns, and treat a cost above the bound as a
+These figures are what `pnpm eval` prints for the shipped playbooks and fixtures (set
+`CLAUSEWISE_MODEL` to price another model). They change when a playbook, a fixture or a prompt
+does, so run `pnpm eval` again before relying on them.
+
+The optimistic estimate is arithmetic and not a measurement. It assumes the system prompt, the
+contract and the playbook's opening lines are written to the cache once per contract and read on
+every later call of that contract (nine times for each NDA, eleven for the SaaS contract), prompts
+of four characters per token, the rest of each prompt at the plain input rate, no tokens for the
+response schema, and answers of 300 tokens. Nothing has been run against a live model, so expect
+the first real cost to land between the two columns, and treat a cost above the bound as a
 finding: it means the model thinks at length, the cache is not hitting, or the prices are wrong.
-`--runs 3` triples everything, so on opus it needs `--max-cost 4`. Run `nda-balanced.docx` alone
+`--runs 3` triples everything, so on opus it needs `--max-cost 5`. Run `nda-balanced.docx` alone
 first and read its real output tokens per call in the usage table before you spend more.
 
 ## Reading the report
@@ -204,7 +219,7 @@ with what the first real runs show.
 - **Cache reads above 70 percent of prompt tokens** after the first call per contract. Zero means
   the caching does not work and the cost is several times what it should be.
 
-There are only 30 rules, so one wrong answer is 3.3 points of accuracy. Do not read a single
+There are only 32 rules, so one wrong answer is 3.1 points of accuracy. Do not read a single
 point of difference between two runs as a change; use `--runs 3` and look at the stability table.
 
 ## Adding a fixture

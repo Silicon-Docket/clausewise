@@ -1,7 +1,8 @@
 import type { Stats } from "node:fs";
-import { stat } from "node:fs/promises";
+import { lstat, stat } from "node:fs/promises";
 import { dirname, join, parse, resolve } from "node:path";
 import { CliError } from "./errors.js";
+import { visible } from "./text.js";
 
 export interface OutputTarget {
   /** What the file is, as a phrase for messages: "redlined contract". */
@@ -33,16 +34,25 @@ export function fsReason(error: unknown): string {
   return REASONS.get(code) ?? `error ${code}`;
 }
 
-/** The file's stats, or undefined when nothing is there. */
-export async function statIfPresent(path: string): Promise<Stats | undefined> {
+async function statOrAbsent(
+  look: (path: string) => Promise<Stats>,
+  path: string,
+): Promise<Stats | undefined> {
   try {
-    return await stat(path);
+    return await look(path);
   } catch (error) {
     const code = errorCode(error);
     if (code === "ENOENT" || code === "ENOTDIR") return undefined;
-    throw new CliError(`Cannot access ${path}: ${fsReason(error)}.`);
+    throw new CliError(`Cannot access ${visible(path)}: ${fsReason(error)}.`);
   }
 }
+
+/** The file's stats, following a symbolic link, or undefined when nothing is there. */
+export const statIfPresent = (path: string): Promise<Stats | undefined> => statOrAbsent(stat, path);
+
+/** The stats of the path itself, so a symbolic link is seen as a link. A dangling one is present. */
+export const lstatIfPresent = (path: string): Promise<Stats | undefined> =>
+  statOrAbsent(lstat, path);
 
 /** `contracts/nda.docx` gives `contracts/nda.redlined.docx` and its two siblings. */
 export function defaultOutputPaths(input: string): {
@@ -61,15 +71,29 @@ export function defaultOutputPaths(input: string): {
 
 function refuseInput(target: OutputTarget): CliError {
   return new CliError(
-    `Refusing to overwrite the input file: ${target.path} would be written as the ${target.label}. ` +
-      "Choose another path.",
+    `Refusing to overwrite the input file: ${visible(target.path)} would be written as the ` +
+      `${target.label}. Choose another path.`,
   );
 }
 
 /**
- * Settles, before any money is spent and again before anything is written, whether the outputs
- * can be written. Returns the paths that already hold a file, so a failed write can tell what it
- * created from what it replaced.
+ * A link at an output path is never written through, with or without --force: its target can be
+ * anywhere, and a folder unpacked from someone else's archive can hold links that were put there
+ * for exactly this.
+ */
+export function refuseLink(target: OutputTarget): CliError {
+  return new CliError(
+    `Refusing to write the ${target.label} to ${visible(target.path)}: it is a symbolic link. ` +
+      "Remove the link, or choose another path with --out, --report and --summary.",
+  );
+}
+
+/**
+ * Settles, before any money is spent and again before anything is written, whether the output
+ * paths can be used: that none is the input, two of them, a link or a folder, that the folders
+ * exist, and that nothing is replaced without --force. Whether a folder accepts a new file is
+ * probed separately. Returns the paths that already hold a file, so a failed write can tell what
+ * it created from what it replaced.
  */
 export async function checkOutputs(
   input: { path: string; stats: Stats },
@@ -88,8 +112,8 @@ export async function checkOutputs(
     const twin = claimed.get(path);
     if (twin !== undefined) {
       throw new CliError(
-        `The ${twin.label} and the ${target.label} would both be written to ${target.path}. ` +
-          "Choose different paths.",
+        `The ${twin.label} and the ${target.label} would both be written to ` +
+          `${visible(target.path)}. Choose different paths.`,
       );
     }
     claimed.set(path, target);
@@ -97,17 +121,25 @@ export async function checkOutputs(
     const folder = await statIfPresent(dirname(path));
     if (folder === undefined || !folder.isDirectory()) {
       throw new CliError(
-        `The folder for the ${target.label} does not exist: ${dirname(target.path)}`,
+        `The folder for the ${target.label} does not exist: ${visible(dirname(target.path))}`,
       );
     }
-    const current = await statIfPresent(path);
-    if (current === undefined) continue;
+    // The link itself is looked at first: a dangling link is nothing to stat but is not free.
+    const here = await lstatIfPresent(path);
+    if (here === undefined) continue;
+    const current = here.isSymbolicLink() ? await statIfPresent(path) : here;
     // Some file systems report 0 for every inode, which would make every file look like the input.
     const sameFile =
-      input.stats.ino !== 0 && current.dev === input.stats.dev && current.ino === input.stats.ino;
+      current !== undefined &&
+      input.stats.ino !== 0 &&
+      current.dev === input.stats.dev &&
+      current.ino === input.stats.ino;
     if (sameFile) throw refuseInput(target);
-    if (!current.isFile()) {
-      throw new CliError(`Cannot write the ${target.label}: ${target.path} is not a regular file.`);
+    if (here.isSymbolicLink()) throw refuseLink(target);
+    if (!here.isFile()) {
+      throw new CliError(
+        `Cannot write the ${target.label}: ${visible(target.path)} is not a regular file.`,
+      );
     }
     present.add(path);
     if (!force) blocked.push(target.path);
@@ -117,7 +149,7 @@ export async function checkOutputs(
     const many = blocked.length > 1;
     throw new CliError(
       `Refusing to overwrite ${many ? "existing files" : "an existing file"}:\n` +
-        `${blocked.map((path) => `  ${path}`).join("\n")}\n` +
+        `${blocked.map((path) => `  ${visible(path)}`).join("\n")}\n` +
         `Use --force to replace ${many ? "them" : "it"}, or choose other paths with ` +
         "--out, --report and --summary.",
     );

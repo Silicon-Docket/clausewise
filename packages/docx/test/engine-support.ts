@@ -1,0 +1,379 @@
+import { execFile, spawnSync } from "node:child_process";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import { crc32, createDeflateRaw, deflateRawSync } from "node:zlib";
+import JSZip from "jszip";
+
+const execFileAsync = promisify(execFile);
+
+/** Small seeded generator (mulberry32) so every failure can be replayed from its seed. */
+export class Rng {
+  private state: number;
+
+  constructor(seed: number) {
+    this.state = seed >>> 0;
+  }
+
+  next(): number {
+    this.state = (this.state + 0x6d2b79f5) >>> 0;
+    let t = this.state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+
+  int(n: number): number {
+    return Math.floor(this.next() * n);
+  }
+
+  range(lo: number, hi: number): number {
+    return lo + this.int(hi - lo + 1);
+  }
+
+  chance(p: number): boolean {
+    return this.next() < p;
+  }
+
+  pick<T>(items: readonly T[]): T {
+    return items[this.int(items.length)]!;
+  }
+}
+
+/** True when XML 1.0 could not carry the code point. Written out by hand, not shared with the library. */
+export function isForbiddenXmlCodePoint(cp: number): boolean {
+  if (cp === 0x9 || cp === 0xa || cp === 0xd) return false;
+  if (cp >= 0x20 && cp <= 0xd7ff) return false;
+  if (cp >= 0xe000 && cp <= 0xfffd) return false;
+  if (cp >= 0x10000 && cp <= 0x10ffff) return false;
+  return true;
+}
+
+/** Every forbidden code point in a string, as hex, with lone surrogates included. */
+export function forbiddenCodePoints(text: string): string[] {
+  const found: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const unit = text.charCodeAt(i);
+    let cp = unit;
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const low = text.charCodeAt(i + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        cp = 0x10000 + ((unit - 0xd800) << 10) + (low - 0xdc00);
+        i++;
+      }
+    }
+    if (isForbiddenXmlCodePoint(cp)) found.push(cp.toString(16));
+  }
+  return found;
+}
+
+export async function zipParts(buf: Uint8Array): Promise<Record<string, Uint8Array>> {
+  const zip = await JSZip.loadAsync(buf);
+  const out: Record<string, Uint8Array> = {};
+  for (const [name, entry] of Object.entries(zip.files)) {
+    if (!entry.dir) out[name] = await entry.async("uint8array");
+  }
+  return out;
+}
+
+const hasPython =
+  spawnSync("python3", ["-I", "-c", "import lxml.etree"], { stdio: "ignore" }).status === 0;
+export const hasStrictParser = hasPython;
+
+const STRICT_SCRIPT = `
+import sys, json, base64
+from lxml import etree
+data = json.load(sys.stdin)
+parser = etree.XMLParser(resolve_entities=False, no_network=True, recover=False, huge_tree=True)
+out = {}
+for name, b64 in data.items():
+    try:
+        etree.fromstring(base64.b64decode(b64), parser)
+        out[name] = None
+    except Exception as e:
+        out[name] = str(e)
+json.dump(out, sys.stdout)
+`;
+
+/**
+ * Parses each part with libxml2 in its strict mode, a parser that shares nothing with xmldom,
+ * and returns the error for every part that is not well-formed (null for the ones that are).
+ */
+export function strictParse(parts: Record<string, Uint8Array>): Record<string, string | null> {
+  const payload: Record<string, string> = {};
+  for (const [name, bytes] of Object.entries(parts)) {
+    payload[name] = Buffer.from(bytes).toString("base64");
+  }
+  const run = spawnSync("python3", ["-I", "-c", STRICT_SCRIPT], {
+    input: JSON.stringify(payload),
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  if (run.status !== 0) throw new Error(`strict parser failed to run: ${String(run.stderr)}`);
+  return JSON.parse(String(run.stdout)) as Record<string, string | null>;
+}
+
+/** The XML parts of a redlined package that the engine writes. */
+export async function writtenXml(buf: Uint8Array): Promise<Record<string, Uint8Array>> {
+  const parts = await zipParts(buf);
+  const out: Record<string, Uint8Array> = {};
+  for (const name of [
+    "word/document.xml",
+    "word/comments.xml",
+    "word/_rels/document.xml.rels",
+    "[Content_Types].xml",
+  ]) {
+    const part = parts[name];
+    if (part) out[name] = part;
+  }
+  return out;
+}
+
+export const hasSoffice = spawnSync("soffice", ["--version"], { stdio: "ignore" }).status === 0;
+
+/**
+ * Converts documents to text with LibreOffice in one run. A document it cannot load has no entry
+ * in the result, which is how a corrupt file shows.
+ */
+export async function libreOfficeText(
+  docs: Record<string, Uint8Array>,
+): Promise<Record<string, string | undefined>> {
+  const dir = await mkdtemp(join(tmpdir(), "clausewise-engine-lo-"));
+  const names = Object.keys(docs);
+  const inputs: string[] = [];
+  for (const name of names) {
+    const path = join(dir, `${name}.docx`);
+    await writeFile(path, docs[name]!);
+    inputs.push(path);
+  }
+  try {
+    await execFileAsync(
+      "soffice",
+      [
+        `-env:UserInstallation=file://${join(dir, "profile")}`,
+        "--headless",
+        "--convert-to",
+        "txt:Text",
+        "--outdir",
+        dir,
+        ...inputs,
+      ],
+      { timeout: 150_000 },
+    );
+  } catch {
+    // A file LibreOffice refuses is reported through its missing output below.
+  }
+  const out: Record<string, string | undefined> = {};
+  for (const name of names) {
+    try {
+      out[name] = await readFile(join(dir, `${name}.txt`), "utf8");
+    } catch {
+      out[name] = undefined;
+    }
+  }
+  return out;
+}
+
+export interface CraftedEntry {
+  name: string;
+  /** The uncompressed bytes. */
+  data?: Uint8Array;
+  /** 0 stores, 8 deflates. */
+  method?: 0 | 8;
+  /** Already-compressed content, for something too large to hold uncompressed. */
+  packed?: PackedContent;
+  /** What the headers claim the uncompressed size is, when it should differ from the truth. */
+  claimedSize?: number;
+}
+
+export interface PackedContent {
+  bytes: Uint8Array;
+  crc: number;
+  /** The real uncompressed size. */
+  size: number;
+}
+
+/** Deflates `total` zero bytes without ever holding them all, which is how a small file inflates to a huge one. */
+export async function deflateZeros(total: number): Promise<PackedContent> {
+  const chunk = Buffer.alloc(1024 * 1024);
+  const deflater = createDeflateRaw({ level: 9 });
+  const out: Buffer[] = [];
+  deflater.on("data", (piece: Buffer) => out.push(piece));
+  let crc = 0;
+  for (let done = 0; done < total; done += chunk.length) {
+    const part = chunk.subarray(0, Math.min(chunk.length, total - done));
+    crc = crc32(part, crc);
+    if (!deflater.write(part)) await new Promise((resolve) => deflater.once("drain", resolve));
+  }
+  await new Promise<void>((resolve) => deflater.end(resolve));
+  return { bytes: Buffer.concat(out), crc, size: total };
+}
+
+function u16(n: number): number[] {
+  return [n & 0xff, (n >>> 8) & 0xff];
+}
+
+function u32(n: number): number[] {
+  return [n & 0xff, (n >>> 8) & 0xff, (n >>> 16) & 0xff, (n >>> 24) & 0xff];
+}
+
+/**
+ * Writes a zip by hand so a test can state sizes and counts in the headers that are not the real
+ * ones, which JSZip never produces. Entries are written as they are given.
+ */
+export function craftZip(
+  entries: CraftedEntry[],
+  options: { claimedEntries?: number } = {},
+): Uint8Array {
+  const chunks: Uint8Array[] = [];
+  const central: Uint8Array[] = [];
+  let offset = 0;
+  for (const entry of entries) {
+    const name = Buffer.from(entry.name, "utf8");
+    const method = entry.packed ? 8 : (entry.method ?? 8);
+    const data = entry.data ?? new Uint8Array();
+    const body = entry.packed
+      ? entry.packed.bytes
+      : method === 8
+        ? deflateRawSync(data, { level: 9 })
+        : data;
+    const size = entry.claimedSize ?? entry.packed?.size ?? data.length;
+    const crc = entry.packed ? entry.packed.crc : crc32(data);
+    const local = Uint8Array.from([
+      ...u32(0x04034b50),
+      ...u16(20),
+      ...u16(0),
+      ...u16(method),
+      ...u16(0),
+      ...u16(0x21),
+      ...u32(crc),
+      ...u32(body.length),
+      ...u32(size),
+      ...u16(name.length),
+      ...u16(0),
+    ]);
+    chunks.push(local, name, body);
+    central.push(
+      Uint8Array.from([
+        ...u32(0x02014b50),
+        ...u16(20),
+        ...u16(20),
+        ...u16(0),
+        ...u16(method),
+        ...u16(0),
+        ...u16(0x21),
+        ...u32(crc),
+        ...u32(body.length),
+        ...u32(size),
+        ...u16(name.length),
+        ...u16(0),
+        ...u16(0),
+        ...u16(0),
+        ...u16(0),
+        ...u32(0),
+        ...u32(offset),
+      ]),
+      name,
+    );
+    offset += local.length + name.length + body.length;
+  }
+  const centralSize = central.reduce((n, c) => n + c.length, 0);
+  const claimed = options.claimedEntries ?? entries.length;
+  const end = Uint8Array.from([
+    ...u32(0x06054b50),
+    ...u16(0),
+    ...u16(0),
+    ...u16(claimed),
+    ...u16(claimed),
+    ...u32(centralSize),
+    ...u32(offset),
+    ...u16(0),
+  ]);
+  const all = [...chunks, ...central, end];
+  const out = new Uint8Array(all.reduce((n, c) => n + c.length, 0));
+  let at = 0;
+  for (const c of all) {
+    out.set(c, at);
+    at += c.length;
+  }
+  return out;
+}
+
+export const utf8 = (text: string): Uint8Array => new TextEncoder().encode(text);
+
+export const W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+/** word/document.xml exactly as written in the package, without any parsing. */
+export async function rawDocumentXml(buf: Uint8Array): Promise<string> {
+  const part = (await zipParts(buf))["word/document.xml"];
+  if (!part) throw new Error("no word/document.xml");
+  return new TextDecoder().decode(part);
+}
+
+/** The raw text of every `w:p` element that has no `w:p` inside it. */
+export function rawParagraphs(xml: string): string[] {
+  return xml.match(/<w:p[ >](?:(?!<w:p[ >])[\s\S])*?<\/w:p>/g) ?? [];
+}
+
+/** The package's other parts, as written, keyed by part name. */
+export async function otherParts(
+  buf: Uint8Array,
+  except: string[] = ["word/document.xml"],
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const [name, bytes] of Object.entries(await zipParts(buf))) {
+    if (!except.includes(name)) out[name] = Buffer.from(bytes).toString("base64");
+  }
+  return out;
+}
+
+export const REL_TYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
+
+export interface RelSpec {
+  id: string;
+  /** The last part of the relationship type, such as "comments" or "header". */
+  type: string;
+  target: string;
+  external?: boolean;
+}
+
+/** A word/_rels/document.xml.rels with exactly these relationships. */
+export function relsXml(rels: RelSpec[]): string {
+  const items = rels
+    .map(
+      (r) =>
+        `<Relationship Id="${r.id}" Type="${REL_TYPE}${r.type}" Target="${r.target}"${r.external ? ' TargetMode="External"' : ""}/>`,
+    )
+    .join("");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${items}</Relationships>`;
+}
+
+/** A copy of the package with one part replaced, added (content given) or removed (null). */
+export async function withPart(
+  buf: Uint8Array,
+  path: string,
+  content: string | Uint8Array | null,
+): Promise<Uint8Array> {
+  const zip = await JSZip.loadAsync(buf);
+  if (content === null) zip.remove(path);
+  else zip.file(path, content);
+  return zip.generateAsync({ type: "uint8array" });
+}
+
+/** A part's bytes as stored, or undefined when the package has none by that name. */
+export async function partBytes(buf: Uint8Array, path: string): Promise<Uint8Array | undefined> {
+  const entry = (await JSZip.loadAsync(buf)).file(path);
+  return entry ? entry.async("uint8array") : undefined;
+}
+
+export const W_DECL = `xmlns:w="${W}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`;
+export const MC_DECL = 'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"';
+export const M_DECL = 'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"';
+
+/** A complete document.xml around the body. */
+export function documentXml(
+  body: string,
+  declaration = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+): string {
+  return `${declaration}<w:document ${W_DECL}><w:body>${body}</w:body></w:document>`;
+}

@@ -313,18 +313,21 @@ describe("buildRulePrompt system prompt", () => {
     const { system } = buildRulePrompt({ playbook, rule: rule(), clauses: contractA });
     expect(system).toMatch(/character for character/i);
     expect(system).toMatch(/ONE paragraph/);
-    expect(system).toMatch(/occur once/i);
-    expect(system).toMatch(/as short as possible/i);
+    expect(system).toMatch(/exactly once/i);
     expect(system).toMatch(/set edit to null/i);
     expect(system).toMatch(/suggestedClause/);
     expect(system).toMatch(/60 words/);
     expect(system).toMatch(/clause 3\.1/);
     expect(system).toMatch(/no legal disclaimers/i);
     expect(system).toMatch(/choose deviation/i);
-    expect(system).toMatch(/otherwise not_applicable/i);
     expect(system).toMatch(/only refer to clause ids that appear/i);
     expect(system).toMatch(/fallback counts as compliant/i);
     expect(system).toMatch(/output only the structured object/i);
+  });
+
+  it("chooses between missing and not_applicable for a presence rule by whether it is required", () => {
+    const { system } = buildRulePrompt({ playbook, rule: rule(), clauses: contractA });
+    expect(system).toMatch(/missing if the rule is required and otherwise not_applicable/i);
   });
 });
 
@@ -796,7 +799,7 @@ describe("mergeWindowChecks", () => {
       expect(merged).toEqual({ ...only, suggestedClause: null });
     });
 
-    it("takes comment and explanation from the first deviation in window order", () => {
+    it("takes comment and explanation from the first deviation when none of them proposes an edit", () => {
       const merged = mergeWindowChecks(required, [
         check({ status: "compliant", explanation: "ok", clauseIds: ["c1"] }),
         check({ status: "deviation", explanation: "first", comment: "A", clauseIds: ["c2"] }),
@@ -805,6 +808,29 @@ describe("mergeWindowChecks", () => {
       expect(merged.status).toBe("deviation");
       expect(merged.explanation).toBe("first");
       expect(merged.comment).toBe("A");
+    });
+
+    it("takes comment, explanation and edit together from the first deviation that proposes an edit", () => {
+      const merged = mergeWindowChecks(required, [
+        check({ status: "deviation", explanation: "first", comment: "A", clauseIds: ["c2"] }),
+        check({
+          status: "deviation",
+          explanation: "second",
+          comment: "B",
+          clauseIds: ["c3"],
+          edit: edit("c3"),
+        }),
+        check({
+          status: "deviation",
+          explanation: "third",
+          comment: "C",
+          clauseIds: ["c4"],
+          edit: edit("c4"),
+        }),
+      ]);
+      expect(merged).toMatchObject({ explanation: "second", comment: "B", edit: edit("c3") });
+      // Every deviating clause is still listed, the first window's first.
+      expect(merged.clauseIds).toEqual(["c2", "c3", "c4"]);
     });
 
     it("keeps the base comment even when it is empty", () => {
@@ -827,7 +853,7 @@ describe("mergeWindowChecks", () => {
       expect(merged.clauseIds).toEqual(["c5", "c2", "c7", "c1"]);
     });
 
-    it("prefers the base edit", () => {
+    it("takes the edit of the first deviation that proposes one, and no other edit", () => {
       const merged = mergeWindowChecks(required, [
         check({ status: "deviation", edit: edit("c1", "a", "b") }),
         check({ status: "deviation", edit: edit("c2", "c", "d") }),
@@ -835,7 +861,7 @@ describe("mergeWindowChecks", () => {
       expect(merged.edit).toEqual(edit("c1", "a", "b"));
     });
 
-    it("falls back to the first deviation edit found", () => {
+    it("passes over deviations that propose no edit to the first one that does", () => {
       const merged = mergeWindowChecks(required, [
         check({ status: "deviation", edit: null }),
         check({ status: "deviation", edit: null }),
@@ -1073,7 +1099,7 @@ describe("RuleCheckSchema", () => {
     comment: "Clause 3.1 should end after three years.",
     edit: {
       clauseId: "c2",
-      quote: "perpetual and shall continue indefinitely",
+      quote: "are perpetual and shall continue indefinitely",
       replacement: "end three (3) years after the date of disclosure",
     },
     suggestedClause: null,

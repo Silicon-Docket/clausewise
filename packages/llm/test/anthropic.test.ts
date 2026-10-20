@@ -409,17 +409,27 @@ describe("usage", () => {
     ]);
   });
 
-  it("reports every response, so cut-off, rejected and refused calls still count", async () => {
+  it("reports every response, so rejected and refused calls still count", async () => {
     const { seen, onUsage } = recorder();
     const replies = [
-      messageResponse('{"verdict":"o', { stopReason: "max_tokens", usage: { output_tokens: 99 } }),
       messageResponse("not json", { usage: { output_tokens: 7 } }),
+      messageResponse('{"verdict":"maybe","quote":null}', { usage: { output_tokens: 8 } }),
       messageResponse("", { stopReason: "refusal", usage: { output_tokens: 1 } }),
     ];
     const { fetch } = recordingFetch((call) => replies[call - 1] ?? messageResponse(answer));
     const generator = createAnthropicGenerator(makeConfig({ maxRetries: 5 }), { fetch, onUsage });
     await expect(generator.generate(request)).rejects.toBeInstanceOf(ModelRefusalError);
-    expect(seen.map((usage) => usage.outputTokens)).toEqual([99, 7, 1]);
+    expect(seen.map((usage) => usage.outputTokens)).toEqual([7, 8, 1]);
+  });
+
+  it("reports a cut-off response too, though it is the last one", async () => {
+    const { seen, onUsage } = recorder();
+    const { fetch } = recordingFetch(() =>
+      messageResponse('{"verdict":"o', { stopReason: "max_tokens", usage: { output_tokens: 99 } }),
+    );
+    const generator = createAnthropicGenerator(makeConfig({ maxRetries: 5 }), { fetch, onUsage });
+    await expect(generator.generate(request)).rejects.toBeInstanceOf(ModelOutputError);
+    expect(seen.map((usage) => usage.outputTokens)).toEqual([99]);
   });
 
   it("reports nothing for a call that never got a response", async () => {
@@ -640,40 +650,58 @@ describe("stop reasons", () => {
     expect(requests).toHaveLength(2);
   });
 
-  it("counts max_tokens as a failed attempt and retries, then succeeds", async () => {
+  it("does not resend a request whose reply was cut off at max_tokens", async () => {
     const { fetch, requests } = recordingFetch((call) =>
       call === 1
         ? messageResponse('{"verdict":"o', { stopReason: "max_tokens" })
         : messageResponse(answer),
     );
-    const generator = createAnthropicGenerator(makeConfig(), { fetch });
-    await expect(generator.generate(request)).resolves.toEqual({ verdict: "ok", quote: null });
-    expect(requests).toHaveLength(2);
-  });
-
-  it("tells the user to raise the token limit when every attempt was cut off", async () => {
-    const { fetch, requests } = recordingFetch(() =>
-      messageResponse('{"verdict":"o', { stopReason: "max_tokens" }),
-    );
-    const generator = createAnthropicGenerator(makeConfig({ maxRetries: 1 }), { fetch });
+    const generator = createAnthropicGenerator(makeConfig({ maxRetries: 2 }), { fetch });
 
     const error = await failure(generator.generate(request));
 
     expect(error).toBeInstanceOf(ModelOutputError);
+    expect((error as ModelOutputError).truncated).toBe(true);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("tells the user to raise the token limit as soon as a reply was cut off", async () => {
+    const { fetch, requests } = recordingFetch(() =>
+      messageResponse('{"verdict":"o', { stopReason: "max_tokens" }),
+    );
+    const generator = createAnthropicGenerator(makeConfig({ maxRetries: 5 }), { fetch });
+
+    const error = await failure(generator.generate({ ...request, schemaName: "rule_check" }));
+
+    expect(error).toBeInstanceOf(ModelOutputError);
     expect(error.message).toContain("CLAUSEWISE_MAX_OUTPUT_TOKENS");
+    expect(error.message).toContain("rule_check");
+    expect((error as ModelOutputError).truncated).toBe(true);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("stops at a cut-off reply that follows an earlier bad answer", async () => {
+    const { fetch, requests } = recordingFetch((call) =>
+      call === 1
+        ? messageResponse("not json")
+        : messageResponse('{"verdict":"o', { stopReason: "max_tokens" }),
+    );
+    const error = await failure(
+      createAnthropicGenerator(makeConfig({ maxRetries: 5 }), { fetch }).generate(request),
+    );
+    expect((error as ModelOutputError).truncated).toBe(true);
     expect(requests).toHaveLength(2);
   });
 
-  it("only blames the token limit when the last attempt was the one cut off", async () => {
-    const { fetch } = recordingFetch((call) =>
-      call === 1
-        ? messageResponse('{"verdict":"o', { stopReason: "max_tokens" })
-        : messageResponse("not json"),
-    );
+  it("does not blame the token limit for output that was complete but wrong", async () => {
+    const { fetch, requests } = recordingFetch(() => messageResponse("not json"));
     const error = await failure(
       createAnthropicGenerator(makeConfig({ maxRetries: 1 }), { fetch }).generate(request),
     );
+    expect(error).toBeInstanceOf(ModelOutputError);
+    expect((error as ModelOutputError).truncated).toBe(false);
     expect(error.message).not.toContain("CLAUSEWISE_MAX_OUTPUT_TOKENS");
+    expect(requests).toHaveLength(2);
   });
 
   it("uses a reply that is complete and valid even if the stop reason says max_tokens", async () => {
@@ -802,9 +830,10 @@ describe("a limit above what one request may wait for", () => {
         : streamResponse(answer),
     );
     const generator = createAnthropicGenerator(makeConfig({ maxOutputTokens: 64_000 }), { fetch });
-    await expect(generator.generate(request)).resolves.toEqual({ verdict: "ok", quote: null });
-    expect(requests).toHaveLength(2);
-    expect(requests[1]?.body).toEqual(requests[0]?.body);
+    const error = await failure(generator.generate(request));
+    expect((error as ModelOutputError).truncated).toBe(true);
+    expect(error.message).toContain("CLAUSEWISE_MAX_OUTPUT_TOKENS");
+    expect(requests).toHaveLength(1);
   });
 
   it("retries streamed output that breaks the schema, then gives up with ModelOutputError", async () => {

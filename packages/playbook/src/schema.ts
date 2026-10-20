@@ -2,6 +2,23 @@ import { z } from "zod";
 
 export const SEVERITIES = ["high", "medium", "low"] as const;
 
+// Everything that draws nothing: white space and line breaks, control and format characters
+// (zero-width space and joiners, bidi marks, soft hyphen, byte order mark), code points that
+// renderers ignore by default (variation selectors, tag characters, fillers), combining marks
+// with no base character, and the blank braille pattern.
+const INVISIBLE = /[\p{White_Space}\p{Cc}\p{Cf}\p{Z}\p{M}\p{Default_Ignorable_Code_Point}\u2800]/gu;
+
+/** True when the text has at least one character a reader can see. */
+export function hasVisibleText(text: string): boolean {
+  return text.replace(INVISIBLE, "") !== "";
+}
+
+// A title or name that is blank to the eye still passes min(1), and then shows up as an empty
+// heading in the report and an unlabelled finding in Word.
+const visible = z
+  .string()
+  .refine(hasVisibleText, "must contain a visible character, not only spaces or invisible ones");
+
 export const RuleSchema = z.strictObject({
   id: z
     .string()
@@ -9,7 +26,7 @@ export const RuleSchema = z.strictObject({
       /^[a-z0-9][a-z0-9-]*$/,
       "use lowercase letters, digits and hyphens, starting with a letter or digit",
     ),
-  title: z.string().min(1),
+  title: visible,
   severity: z.enum(SEVERITIES),
   /**
    * "presence" (the default): the contract should contain a clause that meets the standard.
@@ -19,22 +36,26 @@ export const RuleSchema = z.strictObject({
   /** When true, a contract with no clause on this topic is reported as missing. */
   required: z.boolean().default(false),
   /** The position we want to see. */
-  standard: z.string().min(1),
+  standard: visible,
   /** A position we can live with if the standard is refused. */
-  fallback: z.string().min(1).optional(),
+  fallback: visible.optional(),
   /** What must be flagged and pushed back on. */
-  unacceptable: z.string().min(1).optional(),
-  /** Free-form advice to the reviewer, including how to word a fix. */
-  guidance: z.string().min(1).optional(),
+  unacceptable: visible.optional(),
+  /** Free-form advice on how to word a fix. It is not a further test of the standard. */
+  guidance: visible.optional(),
 });
 
 export const PlaybookSchema = z
   .strictObject({
-    name: z.string().min(1),
-    description: z.string().min(1).optional(),
-    contractTypes: z.array(z.string().min(1)).min(1),
-    /** Which side we are on and what we care about, in a sentence or two. */
-    perspective: z.string().min(1),
+    name: visible,
+    description: visible.optional(),
+    contractTypes: z.array(visible).min(1),
+    /**
+     * Who "we" are, in terms a reader of the contract can apply, then what we care about. For
+     * example "We are the party receiving most of the information, usually called the Recipient
+     * or Receiving Party." The review prompt names the client separately.
+     */
+    perspective: visible,
     rules: z.array(RuleSchema).min(1),
   })
   .superRefine((playbook, ctx) => {

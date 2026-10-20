@@ -14,6 +14,7 @@ import {
   compliantScript,
   expectedScript,
   failingGenerator,
+  failingRules,
   listing,
   makeIo,
   makeTempDir,
@@ -303,6 +304,30 @@ describe("review options", () => {
     expect(xml).not.toContain('w:author="Clausewise"');
   });
 
+  it("tells the model which party the lawyer acts for with --client", async () => {
+    const dir = await makeDir();
+    const input = await stage(dir, "nda-balanced.docx");
+    const client = "Fabrikam Labs LLC, the Recipient";
+    const generator = createOracleGenerator(compliantScript());
+    const { io } = makeIo({ generator });
+
+    expect(await run(["review", input, "--playbook", PLAYBOOK, "--client", client], io)).toBe(0);
+
+    expect(generator.calls).toHaveLength(10);
+    for (const call of generator.calls) expect(call.prompt).toContain(`Our client: ${client}\n`);
+  });
+
+  it("names no client to the model when --client is not given", async () => {
+    const dir = await makeDir();
+    const input = await stage(dir, "nda-balanced.docx");
+    const generator = createOracleGenerator(compliantScript());
+    const { io } = makeIo({ generator });
+
+    expect(await run(["review", input, "--playbook", PLAYBOOK], io)).toBe(0);
+
+    for (const call of generator.calls) expect(call.prompt).not.toContain("Our client:");
+  });
+
   it("prints no progress with --quiet, but still says where the text is going", async () => {
     const dir = await makeDir();
     const input = await stage(dir, "nda-balanced.docx");
@@ -388,7 +413,7 @@ describe("paths and names", () => {
 describe("a review that ends with rules it could not check", () => {
   const makeDir = tempDirs();
 
-  it("lists them, exits 0, and warns when --fail-on cannot count them", async () => {
+  it("lists them, warns loudly, and counts them as open when --fail-on is set", async () => {
     const dir = await makeDir();
     const input = await stage(dir, "nda-aggressive.docx");
     const script = compliantScript();
@@ -397,15 +422,37 @@ describe("a review that ends with rules it could not check", () => {
 
     const code = await run(["review", input, "--playbook", PLAYBOOK, "--fail-on", "low"], io);
 
-    expect(code).toBe(0);
+    // Remedies is a medium rule, so for a gate at low it is open.
+    expect(code).toBe(2);
+    expect(await listing(dir)).toHaveLength(4);
     expect(stdout()).toMatch(/Could not be checked:\s+1/);
     expect(stdout()).toContain(
       "These rules could not be checked, so the review does not cover them:",
     );
-    expect(stdout()).toContain("Remedies: The check failed unexpectedly (Error).");
-    expect(stderr()).toContain(
-      "Warning: 1 rule could not be checked, and --fail-on does not count them.",
+    expect(stdout()).toContain(
+      "[medium] Remedies: could not be checked, treated as open (--fail-on low): " +
+        "The check failed unexpectedly (Error).",
     );
+    expect(stdout()).toContain(
+      "No deviations or missing clauses among the 9 rules that were checked.",
+    );
+    expect(stderr()).toContain(
+      "WARNING: 1 of 10 rules could not be checked, so this review is incomplete: Remedies (medium).",
+    );
+    expect(stderr()).toContain("Exiting with code 2: 1 open item at low severity or above");
+  });
+
+  it("still exits 0 without --fail-on, with the warning", async () => {
+    const dir = await makeDir();
+    const input = await stage(dir, "nda-aggressive.docx");
+    const script = compliantScript();
+    delete script["remedies"];
+    const { io, stdout, stderr } = makeIo({ generator: createOracleGenerator(script) });
+
+    expect(await run(["review", input, "--playbook", PLAYBOOK], io)).toBe(0);
+
+    expect(stderr()).toContain("WARNING: 1 of 10 rules could not be checked");
+    expect(stdout()).not.toContain("treated as open");
   });
 });
 
@@ -416,13 +463,16 @@ describe("confidentiality", () => {
   it("prints and writes nothing from the message of a failing model call", async () => {
     const dir = await makeDir();
     const input = await stage(dir, "nda-aggressive.docx");
-    const generator = failingGenerator(() => new Error(`The model said: ${SECRET}`));
+    const generator = failingRules(createOracleGenerator(compliantScript()), {
+      term: () => new Error(`The model said: ${SECRET}`),
+      remedies: () => new Error(`The model said: ${SECRET}`),
+    });
     const { io, stdout, stderr } = makeIo({ generator });
 
     const code = await run(["review", input, "--playbook", PLAYBOOK], io);
 
     expect(code).toBe(0);
-    expect(stdout()).toMatch(/Could not be checked:\s+10/);
+    expect(stdout()).toMatch(/Could not be checked:\s+2/);
     const seen = [stdout(), stderr()];
     for (const name of await listing(dir)) {
       if (name.endsWith(".json") || name.endsWith(".md")) {
@@ -431,5 +481,19 @@ describe("confidentiality", () => {
     }
     expect(seen).toHaveLength(4);
     expect(seen.join("\n")).not.toContain(SECRET);
+  });
+
+  it("prints nothing from the message of a model call that failed every rule", async () => {
+    const dir = await makeDir();
+    const input = await stage(dir, "nda-aggressive.docx");
+    const generator = failingGenerator(() => new Error(`The model said: ${SECRET}`));
+    const { io, stdout, stderr } = makeIo({ generator });
+
+    const code = await run(["review", input, "--playbook", PLAYBOOK], io);
+
+    expect(code).toBe(1);
+    expect(stderr()).toContain("No rule could be checked");
+    expect(`${stdout()}${stderr()}`).not.toContain(SECRET);
+    expect(await listing(dir)).toEqual(["nda-aggressive.docx"]);
   });
 });

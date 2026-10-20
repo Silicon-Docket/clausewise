@@ -16,7 +16,7 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "fixtures": "tsx tools/make-fixtures.ts",
-    "clausewise": "tsx apps/cli/src/bin.ts",
+    "clausewise": "node apps/cli/bin/clausewise.mjs",
     "eval": "tsx evals/src/run.ts"
   },
   "devDependencies": {

@@ -33,12 +33,12 @@ describe("a perfect oracle", () => {
     const { result, stdout, code } = await selftest("perfect");
     expect(code).toBe(0);
     expect(result.score).toMatchObject({
-      total: 30,
-      correct: 30,
+      total: 32,
+      correct: 32,
       accuracy: 1,
       errored: 0,
       flag: {
-        truePositives: 18,
+        truePositives: 20,
         falseAlarms: 0,
         misses: 0,
         trueNegatives: 12,
@@ -47,15 +47,15 @@ describe("a perfect oracle", () => {
         f1: 1,
       },
     });
-    // Counted by hand from fixtures/expected.json: 11 compliant, 16 deviation, 2 missing, 1 n/a.
+    // Counted by hand from fixtures/expected.json: 11 compliant, 18 deviation, 2 missing, 1 n/a.
     expect(result.score.confusion).toEqual({
       compliant: { compliant: 11, deviation: 0, missing: 0, not_applicable: 0, error: 0 },
-      deviation: { compliant: 0, deviation: 16, missing: 0, not_applicable: 0, error: 0 },
+      deviation: { compliant: 0, deviation: 18, missing: 0, not_applicable: 0, error: 0 },
       missing: { compliant: 0, deviation: 0, missing: 2, not_applicable: 0, error: 0 },
       not_applicable: { compliant: 0, deviation: 0, missing: 0, not_applicable: 1, error: 0 },
     });
     expect(result.score.integrityFailures).toEqual([]);
-    expect(stdout).toContain("| Exact status accuracy | 30/30 (100.0%) |");
+    expect(stdout).toContain("| Exact status accuracy | 32/32 (100.0%) |");
     expect(stdout).toContain("| Flag F1 | 100.0% |");
   });
 
@@ -74,9 +74,9 @@ describe("a perfect oracle", () => {
   it("applies the scripted edits as tracked changes", async () => {
     const { result } = await selftest("edits");
     expect(result.score.edits).toEqual({
-      deviations: 16,
-      proposed: 16,
-      applied: 16,
+      deviations: 18,
+      proposed: 18,
+      applied: 18,
       commentOnly: 0,
       fallbackReasons: [],
     });
@@ -94,7 +94,7 @@ describe("a perfect oracle", () => {
 //     governing-law         compliant => deviation   (a false alarm)
 //     term                  compliant => missing     (a false alarm)
 //     return-or-destroy     n/a       => deviation   (a false alarm)
-//   saas-vendor-friendly.docx, 7 deviation, 2 compliant and 1 missing
+//   saas-vendor-friendly.docx, 9 deviation, 2 compliant and 1 missing
 //     suspension            compliant => deviation   (a false alarm)
 //     data-return           missing   => deviation   (still flagged, wrong kind)
 //     ip-indemnity          deviation => error       (the model call fails: a miss)
@@ -136,29 +136,29 @@ describe("a noisy oracle", () => {
 
     expect(result.score.confusion).toEqual({
       compliant: { compliant: 8, deviation: 2, missing: 1, not_applicable: 0, error: 0 },
-      deviation: { compliant: 1, deviation: 13, missing: 1, not_applicable: 0, error: 1 },
+      deviation: { compliant: 1, deviation: 15, missing: 1, not_applicable: 0, error: 1 },
       missing: { compliant: 1, deviation: 1, missing: 0, not_applicable: 0, error: 0 },
       not_applicable: { compliant: 0, deviation: 1, missing: 0, not_applicable: 0, error: 0 },
     });
-    expect(result.score).toMatchObject({ total: 30, correct: 21, errored: 1 });
-    expect(result.score.accuracy).toBeCloseTo(0.7, 12);
+    expect(result.score).toMatchObject({ total: 32, correct: 23, errored: 1 });
+    expect(result.score.accuracy).toBeCloseTo(23 / 32, 12);
 
-    // 15 flags were right (13 + 1 + 1), 3 were missed (1 + 1 error + 1), 4 were false alarms
+    // 17 flags were right (15 + 1 + 1), 3 were missed (1 + 1 error + 1), 4 were false alarms
     // (2 + 1 + 1), and 8 compliant or n/a rules were rightly left alone.
     expect(result.score.flag).toMatchObject({
-      truePositives: 15,
+      truePositives: 17,
       misses: 3,
       falseAlarms: 4,
       trueNegatives: 8,
     });
-    expect(result.score.flag.precision).toBeCloseTo(15 / 19, 12);
-    expect(result.score.flag.recall).toBeCloseTo(15 / 18, 12);
-    expect(result.score.flag.f1).toBeCloseTo(30 / 37, 12);
+    expect(result.score.flag.precision).toBeCloseTo(17 / 21, 12);
+    expect(result.score.flag.recall).toBeCloseTo(17 / 20, 12);
+    expect(result.score.flag.f1).toBeCloseTo(34 / 41, 12);
 
     // The same numbers reach the report.
-    expect(stdout).toContain("| Exact status accuracy | 21/30 (70.0%) |");
-    expect(stdout).toContain("| Flag precision | 15/19 (78.9%) |");
-    expect(stdout).toContain("| Flag recall | 15/18 (83.3%) |");
+    expect(stdout).toContain("| Exact status accuracy | 23/32 (71.9%) |");
+    expect(stdout).toContain("| Flag precision | 17/21 (81.0%) |");
+    expect(stdout).toContain("| Flag recall | 17/20 (85.0%) |");
     expect(stdout).toContain("| False alarms | 4 |");
     expect(stdout).toContain("| Misses | 3 |");
     expect(stdout).toContain("| Rules that errored | 1 |");
@@ -180,12 +180,12 @@ describe("a noisy oracle", () => {
 
   it("counts edits only for the deviations that remain", async () => {
     const { result } = await selftest("noisy-edits", [], { generatorFactory: noisyModel });
-    // 17 deviations: 7 in the first contract, 2 in the second and 8 in the third. The flipped
-    // ones have no scripted edit, so 7 + 6 of them were applied.
+    // 19 deviations: 7 in the first contract, 2 in the second and 10 in the third. The flipped
+    // ones have no scripted edit, so 7 + 8 of them were applied.
     expect(result.score.edits).toMatchObject({
-      deviations: 17,
-      proposed: 13,
-      applied: 13,
+      deviations: 19,
+      proposed: 15,
+      applied: 15,
       commentOnly: 0,
     });
     expect(result.score.integrityFailures).toEqual([]);

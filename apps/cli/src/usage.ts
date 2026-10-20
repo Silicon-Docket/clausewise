@@ -19,8 +19,11 @@ Review options:
   --report <file>       The full report as JSON. Default: <contract>.report.json next to the input.
   --summary <file>      The report as Markdown. Default: <contract>.summary.md next to the input.
   --author <name>       The author shown on tracked changes and comments. Default: Clausewise.
+  --client <text>       Which party you act for, in your words, such as "Fabrikam Labs LLC, the
+                        Recipient". Playbooks say "we"; this says who that is.
   --fail-on <severity>  Exit with code 2 when a deviation or a missing clause is found at this
-                        severity or above: high, medium or low.
+                        severity or above: high, medium or low. A rule that could not be checked
+                        counts as open at its own severity.
   --force               Replace output files that already exist. The input file is never replaced.
   --quiet               Do not print progress.
   -h, --help            Show this help.
@@ -28,10 +31,24 @@ Review options:
 The playbook check command validates a playbook and lists its rules, without calling any model.
 
 Exit codes:
-  0    The review finished (or, for playbook check, the playbook is valid).
-  1    Something went wrong. No output files are written when a review fails.
-  2    --fail-on was set and an open item at or above that severity was found.
+  0    The review finished (or, for playbook check, the playbook is valid). When only some rules
+       could not be checked, a warning names them and the exit code is still 0 without --fail-on.
+  1    Something went wrong, including a review in which no rule could be checked. No output
+       files are written when a review fails.
+  2    --fail-on was set and an item at or above that severity is open: a deviation, a missing
+       clause, or a rule that could not be checked.
   130  Interrupted with Ctrl-C. No output files are written.
+
+Output files:
+  They get the permissions of the contract without write access for group and others, so a
+  contract that only you can read gives outputs that only you can read. Every output folder is
+  checked for write access before the first model call. Each file is written to a temporary file
+  in its folder and renamed into place, so a file is never left half written. Without --force an
+  existing file is never touched. With --force each existing file is replaced atomically, and a
+  symbolic link is refused either way. A review that fails leaves no output files behind, and
+  files that were there before stay as they were.
+
+After a review with the anthropic provider, the tokens the model used are printed on stderr.
 
 Where your contract goes:
   The contract text is sent to the model provider you configure below, and nowhere else. There
@@ -50,7 +67,9 @@ Environment variables:
   CLAUSEWISE_EFFORT               Anthropic only: low, medium, high, xhigh or max.
   CLAUSEWISE_CONCURRENCY          How many rule checks run at once. Default 4.
   CLAUSEWISE_MAX_CONTEXT_TOKENS   Largest prompt, in estimated tokens. Longer contracts are reviewed
-                                  in overlapping windows. Default: the whole contract every time.
+                                  in parts. It must leave room for a clause or two above the
+                                  roughly 4,800 tokens that the instructions, the rule and the
+                                  answer take in every call. Default: the whole contract every time.
   CLAUSEWISE_MAX_RETRIES          Retries after a network error or an unusable reply. Default 2.
   CLAUSEWISE_FALLBACK             Anthropic only: "default" lets the API rerun a declined request
                                   on its fallback model. Off unless set.

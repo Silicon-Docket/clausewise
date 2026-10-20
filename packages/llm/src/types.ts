@@ -8,7 +8,11 @@ export interface LlmConfig {
   model: string;
   /** Not needed for most local OpenAI-compatible servers such as Ollama. */
   apiKey: string | undefined;
-  /** Required for `openai-compatible`; optional override for the others. */
+  /**
+   * Required for `openai-compatible`; optional override for the others. An http or https URL with
+   * no credentials, query or fragment. A hand-built config should write it as `loadLlmConfig`
+   * does, without a trailing slash.
+   */
   baseUrl: string | undefined;
   /** Upper bound on tokens in one response, thinking included. Default 16000. */
   maxOutputTokens: number;
@@ -21,11 +25,22 @@ export interface LlmConfig {
    * reviewed in overlapping windows. Unset means the whole contract goes in every call.
    */
   maxContextTokens: number | undefined;
-  /** Retries for transport errors and for output that fails the schema. Default 2. */
+  /**
+   * Retries for transport errors, for an error event inside a stream, and for output that fails
+   * the schema. A reply cut off at the output token limit is never retried. Default 2.
+   */
   maxRetries: number;
   /**
    * Anthropic only, and only against the Anthropic API itself. "default" asks the API to rerun a
    * request on its default fallback model when the requested model declines it. Unset means off.
+   *
+   * Known limit: the adapter reads the answer from the text after the last fallback block, which is
+   * right for a request that declined before it wrote anything and for a reply that was not
+   * streamed. For a streamed request that declines part-way, the API documents that the fallback
+   * model continues the partial text, so the answer is the text before the block joined to the text
+   * after it. The adapter does not join them: it reads only the text after the block, which is then
+   * not valid JSON, and the call fails with a ModelOutputError instead of returning a wrong answer.
+   * Streaming starts only above a CLAUSEWISE_MAX_OUTPUT_TOKENS of 21333.
    */
   fallback?: "default" | undefined;
 }

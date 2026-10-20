@@ -1,7 +1,7 @@
 import { parse as parseYaml } from "yaml";
 import { PlaybookSchema, type Playbook } from "./schema.js";
 
-export { PlaybookSchema, RuleSchema, SEVERITIES } from "./schema.js";
+export { PlaybookSchema, RuleSchema, SEVERITIES, hasVisibleText } from "./schema.js";
 export type { Playbook, Rule, Severity } from "./schema.js";
 
 export class PlaybookError extends Error {

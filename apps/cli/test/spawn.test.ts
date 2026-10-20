@@ -1,50 +1,10 @@
-import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { listing, playbookPath, root, stage, tempDirs } from "./support.js";
+import { BASE_ENV, LAUNCHER, TIMEOUT, cleanUpChildren, cli, start } from "./child.js";
+import { listing, playbookPath, stage, tempDirs } from "./support.js";
 
-// Starting tsx takes a second or two, and a loaded machine takes longer.
-const TIMEOUT = 90_000;
-
-// No key of any kind: the child must not inherit one from the machine running the tests.
-const BASE_ENV: Record<string, string> = {
-  PATH: process.env["PATH"] ?? "",
-  HOME: process.env["HOME"] ?? tmpdir(),
-  NO_UPDATE_NOTIFIER: "1",
-};
-
-interface Outcome {
-  code: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-const started: ChildProcess[] = [];
-
-afterEach(() => {
-  // Only processes this file started are ever stopped.
-  for (const child of started.splice(0)) child.kill("SIGKILL");
-});
-
-function start(command: string, args: string[], env: Record<string, string>) {
-  const child = spawn(command, args, { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
-  started.push(child);
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
-  child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
-  const done = new Promise<Outcome>((resolve, reject) => {
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-  });
-  return { child, done, stderr: () => stderr };
-}
-
-const cli = (args: string[], env: Record<string, string> = BASE_ENV) =>
-  start("pnpm", ["tsx", "apps/cli/src/bin.ts", ...args], env).done;
+cleanUpChildren();
 
 describe("the clausewise command", () => {
   const makeDir = tempDirs();
@@ -120,10 +80,7 @@ describe("Ctrl-C on the real command", () => {
       const input = await stage(dir, "nda-aggressive.docx");
       const run = start(
         process.execPath,
-        [
-          ...["--import", "tsx", "apps/cli/src/bin.ts"],
-          ...["review", input, "--playbook", playbookPath("nda-mutual.yaml")],
-        ],
+        [LAUNCHER, ...["review", input, "--playbook", playbookPath("nda-mutual.yaml")]],
         {
           ...BASE_ENV,
           CLAUSEWISE_PROVIDER: "openai-compatible",

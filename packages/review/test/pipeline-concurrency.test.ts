@@ -224,6 +224,61 @@ describe("createLimiter", () => {
     await blocked;
   });
 
+  it("hands out a queue of 200,000 tasks in order and in linear time", async () => {
+    const limit = createLimiter(4);
+    const count = 200_000;
+    const started: number[] = [];
+    let running = 0;
+    let most = 0;
+    const began = performance.now();
+    // All submitted at once, as a review does, so nearly all of them wait.
+    const runs = Array.from({ length: count }, (_, i) =>
+      limit(async () => {
+        running += 1;
+        most = Math.max(most, running);
+        started.push(i);
+        await Promise.resolve();
+        running -= 1;
+        return i;
+      }),
+    );
+    const results = await Promise.all(runs);
+    const elapsed = performance.now() - began;
+
+    expect(results[0]).toBe(0);
+    expect(results.at(-1)).toBe(count - 1);
+    expect(started.length).toBe(count);
+    expect(started.every((id, position) => id === position)).toBe(true);
+    expect(most).toBe(4);
+    // Shifting the head of a long array made this quadratic: over ten seconds at this size.
+    expect(elapsed).toBeLessThan(12_000);
+  }, 120_000);
+
+  it("keeps its order when a long queue drains and fills again", async () => {
+    const limit = createLimiter(2);
+    const order: number[] = [];
+    const wave = (from: number, size: number): Promise<unknown> =>
+      Promise.all(
+        Array.from({ length: size }, (_, i) =>
+          limit(async () => {
+            order.push(from + i);
+            await Promise.resolve();
+          }),
+        ),
+      );
+    await wave(0, 3000);
+    await wave(3000, 1);
+    await Promise.all([wave(3001, 2000), wave(5001, 2000)]);
+    expect(order).toEqual(Array.from({ length: 7001 }, (_, i) => i));
+    // A task submitted now starts at once, so nothing is left held.
+    let ran = false;
+    const later = limit(async () => {
+      ran = true;
+    });
+    expect(ran).toBe(true);
+    await later;
+  });
+
   it("accepts tasks while others are running and after the queue has emptied", async () => {
     const limit = createLimiter(2);
     const log: string[] = [];

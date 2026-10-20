@@ -47,7 +47,7 @@ describe("createOracleGenerator", () => {
       comment: script["term"]?.comment,
       edit: {
         clauseId: "c7",
-        quote: "perpetual and shall continue indefinitely",
+        quote: "are perpetual and shall continue indefinitely",
         replacement: "end three (3) years after the date of disclosure",
       },
       suggestedClause: null,
@@ -94,14 +94,23 @@ describe("createOracleGenerator", () => {
 
   it("fills in what a script leaves out", async () => {
     const oracle = createOracleGenerator({ term: { status: "compliant" } });
+    // Meeting a standard is a claim about a clause, so a compliant script that names none points
+    // at the first clause that has a number.
+    const firstNumbered = clauses.find((c) => c.number !== undefined);
+    expect(firstNumbered?.id).toBe("c3");
     expect(await ask(oracle, "term")).toEqual({
       status: "compliant",
-      clauseIds: [],
+      clauseIds: [firstNumbered?.id],
       explanation: "",
       comment: "",
       edit: null,
       suggestedClause: null,
     });
+  });
+
+  it("names no clause for a script that is not compliant and names none", async () => {
+    const oracle = createOracleGenerator({ term: { status: "deviation" } });
+    expect(await ask(oracle, "term")).toMatchObject({ status: "deviation", clauseIds: [] });
   });
 
   it("passes a script through as written, even one a real model should not give", async () => {

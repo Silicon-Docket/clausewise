@@ -1,3 +1,4 @@
+import { BaseUrlError, normalizeBaseUrl } from "./endpoint.js";
 import { LlmConfigError, type Effort, type LlmConfig, type ProviderName } from "./types.js";
 
 const PROVIDERS: readonly ProviderName[] = ["anthropic", "openai", "openai-compatible"];
@@ -103,18 +104,16 @@ function readBaseUrl(env: Env, provider: ProviderName): string | undefined {
     }
     return undefined;
   }
-  let url: URL;
   try {
-    url = new URL(raw);
-  } catch {
-    return fail(
-      "CLAUSEWISE_BASE_URL is not a valid URL. Set it to a full http or https URL, or unset it.",
-    );
+    return normalizeBaseUrl(raw);
+  } catch (error) {
+    // The reason never repeats the URL, which can carry a password.
+    if (error instanceof BaseUrlError)
+      return fail(
+        `CLAUSEWISE_BASE_URL is not usable. ${error.message} Fix the value, or unset it.`,
+      );
+    throw error;
   }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    fail("CLAUSEWISE_BASE_URL must start with http:// or https://. Fix the value, or unset it.");
-  }
-  return raw;
 }
 
 function readEffort(env: Env, provider: ProviderName): Effort | undefined {

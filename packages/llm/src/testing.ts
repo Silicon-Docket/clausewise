@@ -12,6 +12,7 @@ export function createScriptedGenerator(
     model?: string;
     disclosure?: string;
     cachesSharedPrefix?: boolean;
+    minCacheableChars?: number;
   } = {},
 ): ObjectGenerator & { readonly calls: GenerateObjectRequest<unknown>[] } {
   const calls: GenerateObjectRequest<unknown>[] = [];
@@ -20,6 +21,7 @@ export function createScriptedGenerator(
     model: info.model ?? "scripted-model",
     disclosure: info.disclosure ?? "a scripted test generator (nothing is sent anywhere)",
     cachesSharedPrefix: info.cachesSharedPrefix ?? false,
+    ...(info.minCacheableChars === undefined ? {} : { minCacheableChars: info.minCacheableChars }),
     calls,
     async generate<T>(request: GenerateObjectRequest<T>): Promise<T> {
       calls.push(request as GenerateObjectRequest<unknown>);

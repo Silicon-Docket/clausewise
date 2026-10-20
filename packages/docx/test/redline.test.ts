@@ -221,7 +221,7 @@ describe("applyRedline: edits", () => {
   });
 
   it("rejects bad ranges, no-ops and surrogate splits", async () => {
-    const buf = await buildDocx(para(run("a😀b")));
+    const buf = await buildDocx(para(run("a\u{1F600}b")));
     const result = await applyRedline(
       buf,
       {
