@@ -383,7 +383,10 @@ can inject one.
    and errored rules are listed in a collapsed section, errors visible and in words.
    A **Download** button with a count: "Download redline (3 accepted)". It is disabled with a
    reason when nothing is accepted, and a secondary "Download with everything not rejected"
-   link. Also links to the original file and the Markdown report.
+   button. The original file and the Markdown report are buttons too. Every download is a
+   `fetch` that saves the response as a file, because only a fetch can carry the access token and
+   read the `X-Clausewise-Warnings` header; the warnings show in a dismissible status notice that
+   says the file was still saved.
 3. **Playbooks** (`#/playbooks`): the list (built-in marked read-only, with "Copy to edit"),
    a YAML editor (a plain monospace textarea is fine) with live validation against
    `/api/playbooks/validate` (debounced) showing every problem, Save, Delete. A new playbook
@@ -407,28 +410,36 @@ can inject one.
 
 ## 5. Docker
 
-- `Dockerfile` at the repository root, multi stage: build (install with the lockfile, build the
-  web app, bundle the server with esbuild, with PGlite and other packages that need their own
-  files left external) and run. Runtime: `node:22-bookworm-slim` (pin the minor version), user
-  `node`, `WORKDIR /app`, production dependencies only, `HOST=0.0.0.0`, `NODE_ENV=production`,
-  data in `/data` (a volume), built-in playbooks copied to `/app/playbooks`, a `HEALTHCHECK` that
-  calls `/healthz` with `node -e` (no curl in the image), `EXPOSE 8787`, no secrets baked in.
-  `.dockerignore` excludes `.git`, `node_modules`, `data`, `.env*`, outputs and `evals/results`.
-- `docker-compose.yml`: `app` (builds from the Dockerfile, publishes `127.0.0.1:8787:8787` only,
-  `env_file: .env` optional, `depends_on` postgres healthy, volume `clausewise-data:/data`,
-  `read_only: true` with `tmpfs: /tmp`, `cap_drop: [ALL]`, `security_opt:
-[no-new-privileges:true]`) and `postgres` (`postgres:17-alpine`, not published, volume,
-  `POSTGRES_PASSWORD` required with `${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}`,
-  healthcheck with `pg_isready`). The plan said a pgvector image; vectors are unused until a later
-  milestone, so the plain image is used and the README notes the switch.
-  An `ollama` profile adds an `ollama/ollama` service on the internal network only and the
-  matching `CLAUSEWISE_PROVIDER=openai-compatible`, `CLAUSEWISE_BASE_URL=http://ollama:11434/v1`
-  settings documented in `.env.example` (they are not set by default).
-- `.env.example` lists every variable with a comment, with no real values. Real `.env` is
-  git-ignored already.
-- This environment has no Docker daemon. What can be checked here: `docker compose config`, a
-  lint read of the Dockerfile, and running the same install, build and start steps by hand in a
-  clean directory. The README must say that the image itself has not been built here until it has.
+What was built (the image itself has not been built by us until the CI `docker` job has run
+green; there is no Docker daemon in the development environment):
+
+- `apps/server/build.mjs` bundles the server with esbuild into `apps/server/dist/main.mjs`
+  (workspace packages inlined; `@electric-sql/pglite` and `pg` left external), copies the
+  migrations to `dist/drizzle`, writes the third party licence list, and has two subcommands the
+  Dockerfile uses: `prune` (keeps only the packages the bundle needs) and `check` (starts the
+  bundle once and fails if it does not come up).
+- `Dockerfile` at the repository root, two stages on `node:22.23-bookworm-slim` (the base image can
+  be overridden by digest with `--build-arg NODE_IMAGE`). Build stage: Corepack pnpm, frozen
+  lockfile install, build web and server, `pnpm deploy --legacy --prod` (plain deploy does not
+  work with this workspace), prune, check. Runtime stage: only the pruned `node_modules`, `dist`,
+  `web`, `playbooks` and the licence files; user `node`; `HOST=0.0.0.0`, `NODE_ENV=production`,
+  `CLAUSEWISE_DATA_DIR=/data`, `CLAUSEWISE_PLAYBOOKS_DIR=/app/playbooks`,
+  `CLAUSEWISE_WEB_DIR=/app/web`; `VOLUME /data` owned by `node`; a `HEALTHCHECK` that calls
+  `/healthz` with `node -e`; exec form `CMD`. No secrets, no `.env`, no fixtures, no evals.
+- `docker-compose.yml`: `app` (publishes `127.0.0.1:8787:8787` only, `init: true`,
+  `read_only: true` with a tmpfs for `/tmp`, `cap_drop: [ALL]`, `no-new-privileges`, healthcheck,
+  waits for postgres to be healthy) and `postgres` (`postgres:17-alpine`, not published, healthcheck
+  with `pg_isready`, `POSTGRES_PASSWORD` required with the `:?` syntax). Variables are passed
+  explicitly with `${VAR:-}`, so nothing unlisted reaches the app. The database password travels as
+  `PGPASSWORD`, not inside `DATABASE_URL`, so it can hold any character. Volumes are named `data`,
+  `db` and `ollama` (project name `clausewise`). One `app` service per data volume: the data folder
+  lock cannot tell two containers on one volume apart. An `ollama` profile adds an `ollama/ollama`
+  service that is not published, with the matching `CLAUSEWISE_PROVIDER=openai-compatible` and
+  `CLAUSEWISE_BASE_URL=http://ollama:11434/v1` documented in `.env.example`. The plan said a
+  pgvector image; vectors are unused until a later milestone, so the plain image is used.
+- `.env.example` lists every variable with a comment and no real values.
+- `<CLAUSEWISE_DATA_DIR>/clausewise.lock` holds the process id of the server using the folder. It
+  is removed on shutdown, and a stale one (no such process) is taken over with a log line.
 
 ## 6. Tests and CI
 

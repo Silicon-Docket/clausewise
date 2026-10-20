@@ -15,9 +15,12 @@ export default defineConfig({
     sourcemap: false,
   },
   server: {
+    // changeOrigin stays false on purpose: the server compares the Origin of a request with its
+    // Host header, and a proxy that rewrites Host to the target would make every POST look like a
+    // request from another site.
     proxy: {
-      "/api": apiServer,
-      "/healthz": apiServer,
+      "/api": { target: apiServer, changeOrigin: false },
+      "/healthz": { target: apiServer, changeOrigin: false },
     },
   },
 });
