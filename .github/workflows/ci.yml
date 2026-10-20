@@ -3,6 +3,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Lets a branch be checked by hand before it is merged.
+  workflow_dispatch:
 
 permissions:
   contents: read
