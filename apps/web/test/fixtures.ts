@@ -181,3 +181,13 @@ export function playbookDetail(overrides: Partial<PlaybookDetail> = {}): Playboo
     ...overrides,
   };
 }
+
+/** The first four bytes of every real .docx: the zip signature, which the server checks for. */
+export const ZIP_SIGNATURE = String.fromCharCode(0x50, 0x4b, 0x03, 0x04);
+
+/** A file for an upload test. Its content is a stand-in, but it starts like a .docx does. */
+export function docxFile(name: string, extra = "contract bytes"): File {
+  return new File([`${ZIP_SIGNATURE}${extra}`], name, {
+    type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  });
+}

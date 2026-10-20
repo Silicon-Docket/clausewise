@@ -176,7 +176,10 @@ describe("Playbooks screen: live validation", () => {
       "rules[1].id: duplicate id term.",
       "The playbook needs a name.",
     ]);
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save changes" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     expect(screen.getByText("Fix the problems above to save.")).toBeInTheDocument();
   });
 
@@ -233,7 +236,10 @@ describe("Playbooks screen: live validation", () => {
       await screen.findByText("The playbook is empty. Type or paste its YAML."),
     ).toBeInTheDocument();
     expect(validations(server)).toHaveLength(before);
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save changes" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 
   it("does not send a playbook larger than the server accepts", async () => {
@@ -259,7 +265,10 @@ describe("Playbooks screen: live validation", () => {
     expect(
       await screen.findByText(/The playbook could not be checked\. The checker is down\./),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save changes" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     expect(
       screen.getByText("The playbook could not be checked, so it can not be saved yet."),
     ).toBeInTheDocument();
@@ -273,12 +282,12 @@ describe("Playbooks screen: saving and deleting", () => {
     const save = await screen.findByRole("button", { name: "Save changes" });
     await screen.findByText(/The playbook is valid/);
     // Nothing has changed yet.
-    expect(save).toBeDisabled();
-    expect(screen.getByText("There are no changes to save.")).toBeInTheDocument();
+    expect(save).toHaveAttribute("aria-disabled", "true");
+    expect(save).toHaveAccessibleDescription("There are no changes to save.");
 
     fireEvent.change(editor(), { target: { value: "name: My NDA, second edition\nrules: []\n" } });
     await screen.findByText(/The playbook is valid: My NDA, second edition/);
-    expect(save).toBeEnabled();
+    expect(save).not.toHaveAttribute("aria-disabled");
     await user.click(save);
 
     await waitFor(() => {
@@ -292,7 +301,10 @@ describe("Playbooks screen: saving and deleting", () => {
       await screen.findByRole("heading", { name: "My NDA, second edition" }),
     ).toBeInTheDocument();
     // Saved: nothing left to save.
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save changes" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     expect(
       await screen.findByRole("button", { name: /My NDA, second edition/ }),
     ).toBeInTheDocument();
@@ -314,7 +326,9 @@ describe("Playbooks screen: saving and deleting", () => {
     expect(alert).toHaveTextContent("The playbook was not saved");
     expect(alert).toHaveTextContent("A playbook with the name changed already exists.");
     expect(editor()).toHaveValue("name: changed");
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save changes" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
   });
 
   it("asks before it deletes, and deletes only when told to", async () => {

@@ -38,13 +38,28 @@ export interface JobRunner {
   idle(): Promise<void>;
 }
 
-/** The text of a NUL character cannot be stored in Postgres, in text or in JSON. */
-function withoutNul<T>(value: T): T {
-  if (typeof value === "string") return value.replaceAll("\u0000", "\ufffd") as T;
-  if (Array.isArray(value)) return value.map((item) => withoutNul(item)) as T;
+// A NUL character cannot be stored in Postgres, in text or in JSON, and neither can half of a
+// surrogate pair in JSON: the database refuses the whole report. A model can write either (a
+// character of its answer cut in the middle), and a review that was paid for must not be lost to
+// it, so both become the replacement character. Text in a text column never holds a lone half
+// when it reaches the driver, which turns it into the replacement character itself.
+const UNSTORABLE = /\u0000|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+
+function storable<T>(value: T): T {
+  if (typeof value === "string") return value.replace(UNSTORABLE, "\ufffd") as T;
+  if (Array.isArray(value)) return value.map((item) => storable(item)) as T;
   if (value !== null && typeof value === "object") {
     const copy: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(value)) copy[key] = withoutNul(item);
+    for (const [key, item] of Object.entries(value)) {
+      // Defined, and not assigned, so that a key called __proto__ is a key and not a change of
+      // prototype.
+      Object.defineProperty(copy, storable(key), {
+        value: storable(item),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
     return copy as T;
   }
   return value;
@@ -100,8 +115,8 @@ export function createJobRunner(args: {
         .set({
           status: "done",
           error: null,
-          report: withoutNul(report),
-          context: withoutNul(context),
+          report: storable(report),
+          context: storable(context),
           modelProvider: report.model.provider,
           modelName: report.model.model,
           progressDone: report.results.length,
@@ -228,6 +243,10 @@ export function createJobRunner(args: {
           // Best effort: the database may be what failed.
           await fail(reviewId, describeReviewFailure(error).message).catch(() => {});
         })
+        // Nothing may leave this chain as a rejection that no one handles, which would end the
+        // process and every other review in it. The handler above can itself fail, for instance
+        // when the log cannot be written.
+        .catch(() => {})
         .finally(() => {
           running.delete(reviewId);
           active.delete(job);

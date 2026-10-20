@@ -93,7 +93,42 @@ export async function advance(ms: number): Promise<void> {
   });
 }
 
-/** The text of the live region that announces changes to a screen reader. */
+/**
+ * The text of the live region that announces changes to a screen reader. The page has one of
+ * these outside its main content; the notices inside it that are statuses are not this one.
+ */
+export function announcer(): HTMLElement {
+  const region = [...document.querySelectorAll<HTMLElement>('[role="status"]')].find(
+    (element) => element.closest("main") === null,
+  );
+  if (region === undefined) throw new Error("The page has no announcer.");
+  return region;
+}
+
 export function announced(): string {
-  return screen.getByRole("status").textContent ?? "";
+  return announcer().textContent ?? "";
+}
+
+/**
+ * Counts the changes made to the announcer from now on, which is what a screen reader reacts to.
+ * Records are collected as the observer delivers them and also taken from its queue, so that a
+ * change is counted whether or not the browser has got round to delivering it yet.
+ */
+export function watchAnnouncer(): { changes: () => number; stop: () => void } {
+  let seen = 0;
+  const watch = new MutationObserver((records) => {
+    seen += records.length;
+  });
+  watch.observe(announcer(), { childList: true, characterData: true, subtree: true });
+  return {
+    changes: () => {
+      seen += watch.takeRecords().length;
+      const total = seen;
+      seen = 0;
+      return total;
+    },
+    stop: () => {
+      watch.disconnect();
+    },
+  };
 }

@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiClientError, errorMessage, isAbortError } from "../api/client.js";
 import { applyBulk, editRequestFor, resetRequestFor } from "../lib/findings.js";
 import { DECISION_LABEL, plural } from "../lib/format.js";
+import { shareUnchanged } from "../lib/share.js";
 import { useServices } from "../services.js";
 import { useAnnounce } from "./useAnnounce.js";
 import { usePolling } from "./usePolling.js";
@@ -48,9 +49,16 @@ export function useReview(reviewId: string) {
 
   // The newest detail, for the actions: they run after awaits, when a closure would be stale.
   const detailRef = useRef<ReviewDetail | null>(null);
+  // A read that learned nothing new keeps the objects the screen already holds, and with them the
+  // screen as it is: React sees the same state and draws nothing.
   const setDetail = useCallback((detail: ReviewDetail) => {
-    detailRef.current = detail;
-    setLoad({ status: "ready", detail });
+    const shared = shareUnchanged(detailRef.current, detail);
+    detailRef.current = shared;
+    setLoad((current) =>
+      current.status === "ready" && current.detail === shared
+        ? current
+        : { status: "ready", detail: shared },
+    );
   }, []);
   const updateFindings = useCallback((change: (findings: Finding[]) => Finding[]) => {
     const current = detailRef.current;
@@ -70,7 +78,9 @@ export function useReview(reviewId: string) {
 
   const mounted = useRef(true);
   const lastStatus = useRef<ReviewDetail["status"] | null>(null);
-  const lastProgress = useRef({ done: -1, at: 0 });
+  // The last progress figure that was read out, and when. Null until a run is first seen.
+  const spokenProgress = useRef<{ done: number; at: number } | null>(null);
+  const pollProblemSpoken = useRef(false);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -110,17 +120,23 @@ export function useReview(reviewId: string) {
         if (signal.aborted) return;
         setDetail(detail);
         setPollProblem(null);
+        pollProblemSpoken.current = false;
       } catch (error) {
         if (signal.aborted || isAbortError(error)) return;
         if (error instanceof ApiClientError && error.status === 404) {
           setLoad({ status: "error", message: error.message });
           return;
         }
-        setPollProblem(
+        const problem =
           error instanceof ApiClientError && error.status === 0
             ? "The server cannot be reached. This page keeps trying."
-            : `The latest progress could not be read. ${errorMessage(error)} This page keeps trying.`,
-        );
+            : `The latest progress could not be read. ${errorMessage(error)} This page keeps trying.`;
+        setPollProblem(problem);
+        // Said once when it starts, not at every failed attempt after it.
+        if (!pollProblemSpoken.current) {
+          pollProblemSpoken.current = true;
+          announce(problem);
+        }
       }
     },
   });
@@ -132,28 +148,46 @@ export function useReview(reviewId: string) {
     const { detail } = load;
     const previous = lastStatus.current;
     lastStatus.current = detail.status;
-    if (previous === null) {
-      lastProgress.current = { done: detail.progress.done, at: Date.now() };
-      return;
-    }
-    if (previous !== detail.status) {
-      if (detail.status === "running") announce("The review has started.");
-      else if (detail.status === "done") {
-        announce(
-          `The review is finished. ${plural(detail.findings.length, "finding")} to look at.`,
-        );
-      } else if (detail.status === "failed") announce("The review failed.");
-      else if (detail.status === "cancelled") announce("The review was cancelled.");
-      return;
-    }
-    if (detail.status === "running" && detail.progress.done !== lastProgress.current.done) {
-      const now = Date.now();
-      if (now - lastProgress.current.at >= PROGRESS_ANNOUNCE_MS) {
-        announce(`${detail.progress.done} of ${detail.progress.total} rules checked.`);
-        lastProgress.current = { done: detail.progress.done, at: now };
-      }
-    }
+    if (previous === null || previous === detail.status) return;
+    if (detail.status === "running") announce("The review has started.");
+    else if (detail.status === "done") {
+      announce(`The review is finished. ${plural(detail.findings.length, "finding")} to look at.`);
+    } else if (detail.status === "failed") announce("The review failed.");
+    else if (detail.status === "cancelled") announce("The review was cancelled.");
   }, [load, announce]);
+
+  // Progress is read out when the number of rules checked has changed, and not oftener than every
+  // few seconds. A poll that finds the same number says nothing, and a change that comes too soon
+  // is held back and spoken, as the newest figure, when the wait is over.
+  const running = load.status === "ready" && load.detail.status === "running";
+  const progressDone = load.status === "ready" ? load.detail.progress.done : 0;
+  const progressTotal = load.status === "ready" ? load.detail.progress.total : 0;
+  useEffect(() => {
+    if (!running) {
+      spokenProgress.current = null;
+      return undefined;
+    }
+    const last = spokenProgress.current;
+    if (last === null) {
+      // First sight of the run: the figure is on the screen already.
+      spokenProgress.current = { done: progressDone, at: Date.now() };
+      return undefined;
+    }
+    if (progressDone === last.done) return undefined;
+    const speak = (): void => {
+      announce(`${progressDone} of ${progressTotal} rules checked.`);
+      spokenProgress.current = { done: progressDone, at: Date.now() };
+    };
+    const wait = last.at + PROGRESS_ANNOUNCE_MS - Date.now();
+    if (wait <= 0) {
+      speak();
+      return undefined;
+    }
+    const timer = setTimeout(speak, wait);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [running, progressDone, progressTotal, announce]);
 
   const setRowBusyFor = useCallback((ruleId: string, busy: boolean) => {
     setRowBusy((current) => {
@@ -198,9 +232,9 @@ export function useReview(reviewId: string) {
         return true;
       } catch (error) {
         replaceFinding(before);
+        // The card shows this in an alert, which is read out by itself.
         const message = `That change was not saved, and the finding is back as it was. ${errorMessage(error)}`;
         setRowErrorFor(ruleId, message);
-        announce(`${before.title}: ${message}`);
         return false;
       } finally {
         if (mounted.current) setRowBusyFor(ruleId, false);
@@ -280,9 +314,9 @@ export function useReview(reviewId: string) {
         }
       } catch (error) {
         updateFindings(() => before);
-        const message = `That change was not saved, and the findings are back as they were. ${errorMessage(error)}`;
-        setBulkError(message);
-        announce(message);
+        setBulkError(
+          `That change was not saved, and the findings are back as they were. ${errorMessage(error)}`,
+        );
       } finally {
         if (mounted.current) setBulkBusy(false);
       }

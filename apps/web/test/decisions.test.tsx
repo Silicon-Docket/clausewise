@@ -106,15 +106,47 @@ describe("deciding on a finding", () => {
     );
     expect(card).toHaveAttribute("aria-busy", "true");
     expect(within(card).getByText("Saving...")).toBeInTheDocument();
-    expect(within(card).getByRole("button", { name: "Accept" })).toBeDisabled();
-    expect(within(card).getByRole("button", { name: "Reject" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Accept all findings" })).toBeDisabled();
+    // Unavailable, said in words for a screen reader, but not disabled: see the next test.
+    for (const button of [
+      within(card).getByRole("button", { name: "Accept" }),
+      within(card).getByRole("button", { name: "Reject" }),
+      screen.getByRole("button", { name: "Accept all findings" }),
+    ]) {
+      expect(button).toHaveAttribute("aria-disabled", "true");
+    }
+    // Pressing them while the change is on its way sends nothing more.
+    await user.click(within(card).getByRole("button", { name: "Reject" }));
+    await user.click(screen.getByRole("button", { name: "Accept all findings" }));
 
     release();
     await waitFor(() => {
       expect(card).toHaveAttribute("aria-busy", "false");
     });
     expect(patches(server)).toHaveLength(1);
+    expect(server.callsTo("PATCH", /\/findings$/)).toHaveLength(0);
+    expect(within(card).getByRole("button", { name: "Reject" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+  });
+
+  it("leaves the focus on the button that was pressed, while it saves and after", async () => {
+    const { server, user } = open();
+    const release = server.hold((call) => call.method === "PATCH");
+    const card = await cardOf("Duration of confidentiality obligations");
+    const accept = within(card).getByRole("button", { name: "Accept" });
+    accept.focus();
+    await user.keyboard("{Enter}");
+
+    // A disabled button gives up the focus in a browser; this one is still a button that takes it.
+    expect(accept).not.toBeDisabled();
+    expect(accept).toHaveFocus();
+    release();
+    await waitFor(() => {
+      expect(card).toHaveAttribute("aria-busy", "false");
+    });
+    expect(within(card).getByRole("button", { name: "Accept" })).toBe(accept);
+    expect(accept).toHaveFocus();
+    expect(accept).toHaveAttribute("aria-pressed", "true");
   });
 });
 
@@ -140,12 +172,15 @@ describe("rolling a decision back", () => {
     );
     expect(card).toHaveTextContent("Not decided");
     expect(stored(server, "term")?.decision).toBe("pending");
-    expect(announced()).toContain("The database is busy.");
+    // The alert above is read out by itself; the polite region does not say it a second time.
+    expect(announced()).toBe("");
     expect(screen.getByRole("region", { name: "Summary" })).toHaveTextContent(
       "0 accepted, 0 rejected, 3 not decided.",
     );
     // The buttons work again.
-    expect(within(card).getByRole("button", { name: "Accept" })).toBeEnabled();
+    expect(within(card).getByRole("button", { name: "Accept" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
   });
 
   it("clears the message when the next try works", async () => {
@@ -478,14 +513,25 @@ describe("changing many at once", () => {
     const release = server.hold((call) => call.method === "PATCH");
     await user.click(await screen.findByRole("button", { name: "Accept all findings" }));
     expect(screen.getByRole("region", { name: "Summary" })).toHaveTextContent("3 accepted");
-    expect(screen.getByRole("button", { name: "Reject all findings" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Accept all high" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reject all findings" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Accept all high" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     for (const card of screen.getAllByRole("article")) {
-      expect(within(card).getByRole("button", { name: "Reject" })).toBeDisabled();
+      expect(within(card).getByRole("button", { name: "Reject" })).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
     }
     release();
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Reject all findings" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Reject all findings" })).not.toHaveAttribute(
+        "aria-disabled",
+      );
     });
   });
 

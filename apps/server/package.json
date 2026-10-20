@@ -9,6 +9,7 @@
   },
   "scripts": {
     "typecheck": "tsc -p .",
+    "build": "node build.mjs",
     "dev": "tsx watch src/main.ts",
     "start": "tsx src/main.ts",
     "db:generate": "drizzle-kit generate"
@@ -30,6 +31,7 @@
     "@types/pg": "^8.23.1",
     "drizzle-kit": "^0.31.11",
     "embedded-postgres": "18.4.0-beta.17",
-    "esbuild": "^0.28.2"
+    "esbuild": "^0.28.2",
+    "jszip": "^3.10.2"
   }
 }

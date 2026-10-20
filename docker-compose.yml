@@ -1,0 +1,127 @@
+# Clausewise with its own PostgreSQL.
+#
+#   cp .env.example .env        then set POSTGRES_PASSWORD and the model settings in .env
+#   docker compose up -d --build
+#   open http://localhost:8787
+#
+# A local model through Ollama is a profile that is off unless asked for:
+#   docker compose --profile ollama up -d
+# See .env.example for the settings that point Clausewise at it.
+#
+# Everything in this file keeps the services to themselves: the web app is published on this
+# computer only (127.0.0.1), and the database and the model server are not published at all.
+
+name: clausewise
+
+x-logging: &logging # Logs hold no contract text, but they should not fill the disk either.
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  app:
+    build: .
+    image: clausewise:local
+    # A small init process as PID 1 that reaps what the server might start. The server itself
+    # stops on SIGTERM. The health check is the one in the image (/healthz).
+    init: true
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${CLAUSEWISE_PORT:-8787}:8787"
+    environment:
+      # The password is not in the address. PGPASSWORD is read by the database driver, so the
+      # password may hold any character, including ones an address would need escaped.
+      DATABASE_URL: postgres://clausewise@postgres:5432/clausewise
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      # Server. Empty means the server's own default.
+      CLAUSEWISE_ACCESS_TOKEN: ${CLAUSEWISE_ACCESS_TOKEN:-}
+      CLAUSEWISE_ALLOWED_HOSTS: ${CLAUSEWISE_ALLOWED_HOSTS:-}
+      CLAUSEWISE_MAX_UPLOAD_MB: ${CLAUSEWISE_MAX_UPLOAD_MB:-}
+      CLAUSEWISE_REVIEW_CONCURRENCY: ${CLAUSEWISE_REVIEW_CONCURRENCY:-}
+      CLAUSEWISE_MAX_QUEUED: ${CLAUSEWISE_MAX_QUEUED:-}
+      # Model. Empty keys stay empty: nothing is sent anywhere until you set one.
+      CLAUSEWISE_PROVIDER: ${CLAUSEWISE_PROVIDER:-}
+      CLAUSEWISE_MODEL: ${CLAUSEWISE_MODEL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      CLAUSEWISE_API_KEY: ${CLAUSEWISE_API_KEY:-}
+      CLAUSEWISE_BASE_URL: ${CLAUSEWISE_BASE_URL:-}
+      CLAUSEWISE_MAX_OUTPUT_TOKENS: ${CLAUSEWISE_MAX_OUTPUT_TOKENS:-}
+      CLAUSEWISE_EFFORT: ${CLAUSEWISE_EFFORT:-}
+      CLAUSEWISE_CONCURRENCY: ${CLAUSEWISE_CONCURRENCY:-}
+      CLAUSEWISE_MAX_CONTEXT_TOKENS: ${CLAUSEWISE_MAX_CONTEXT_TOKENS:-}
+      CLAUSEWISE_MAX_RETRIES: ${CLAUSEWISE_MAX_RETRIES:-}
+      CLAUSEWISE_FALLBACK: ${CLAUSEWISE_FALLBACK:-}
+    volumes:
+      - data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging: *logging
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: clausewise
+      POSTGRES_DB: clausewise
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --username=clausewise --dbname=clausewise"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    logging: *logging
+
+  # Only with --profile ollama. Reached by the app under the name "ollama" and published nowhere.
+  # It needs to reach the internet once, to download a model; see the README.
+  ollama:
+    profiles:
+      - ollama
+    image: ollama/ollama:0.40.6
+    restart: unless-stopped
+    environment:
+      # The window Ollama gives a model. Its own default is small for a contract. Keep
+      # CLAUSEWISE_MAX_CONTEXT_TOKENS below it.
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-16384}
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    logging: *logging
+    # A GPU is used only if you hand it over. For an NVIDIA card with its container toolkit
+    # installed, add this to the service:
+    #   deploy:
+    #     resources:
+    #       reservations:
+    #         devices:
+    #           - driver: nvidia
+    #             count: all
+    #             capabilities: [gpu]
+
+volumes:
+  # Uploaded contracts (and the embedded database, if DATABASE_URL were unset). Owned by the node user.
+  data:
+  # The PostgreSQL files: every review and every decision.
+  db:
+  # Downloaded models.
+  ollama:

@@ -1,31 +1,53 @@
 import { LIMITS, type Decision, type Finding, type FindingClause } from "@clausewise/api";
-import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import {
+  memo,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
 import { DECISION_LABEL, FINDING_STATUS_LABEL } from "../lib/format.js";
 import { effectiveReplacement } from "../lib/findings.js";
+import { Button } from "./Button.js";
 import { DiffView } from "./DiffView.js";
 import { SeverityBadge } from "./SeverityBadge.js";
 
 /** A clause longer than this is cut, with a button for the rest. */
 const CLAUSE_PREVIEW_CHARS = 900;
 
+/**
+ * The handlers take the rule id instead of being made for one card, so that the same functions
+ * serve every card and a card whose finding did not change is not drawn again.
+ */
 export interface FindingCardProps {
   finding: Finding;
   /** A request for this finding is in flight, or a bulk change is. */
   busy: boolean;
   /** Why the last change was not saved, in words. */
   error: string | null;
-  onDecide: (decision: Decision) => void;
+  onDecide: (ruleId: string, decision: Decision) => void;
   /** Stores a new wording. Resolves true when it was saved, so that the editor can close. */
-  onSaveEdit: (text: string, accept: boolean) => Promise<boolean>;
-  onReset: () => void;
+  onSaveEdit: (ruleId: string, text: string, accept: boolean) => Promise<boolean>;
+  onReset: (ruleId: string) => void;
 }
 
-export function FindingCard(props: FindingCardProps) {
+/**
+ * Memoised: a review can have dozens of findings with long clauses, and the screen above is drawn
+ * again for every change in any one of them. A card is drawn only when its own finding, its busy
+ * flag or its error changes.
+ */
+export const FindingCard = memo(function FindingCard(props: FindingCardProps) {
   const { finding, busy, error, onDecide, onSaveEdit, onReset } = props;
+  const { ruleId } = finding;
   const titleId = useId();
+  const errorId = useId();
   const [editing, setEditing] = useState(false);
   const editButton = useRef<HTMLButtonElement>(null);
+  const acceptButton = useRef<HTMLButtonElement>(null);
   const returnFocus = useRef(false);
+  const resetPressed = useRef(false);
 
   // When the editor closes its own buttons go away, so focus goes back to the button that opened it.
   useEffect(() => {
@@ -41,6 +63,18 @@ export function FindingCard(props: FindingCardProps) {
 
   const edited = finding.editedReplacement !== null;
   const canReset = finding.decision !== "pending" || edited;
+
+  // Reset takes itself away once it has done its work, and the focus would go with it. The first
+  // button of the row is the nearest place that is still there.
+  useEffect(() => {
+    if (resetPressed.current && !canReset) {
+      resetPressed.current = false;
+      acceptButton.current?.focus();
+    }
+  }, [canReset]);
+  useEffect(() => {
+    if (!busy) resetPressed.current = false;
+  }, [busy]);
 
   return (
     <article
@@ -68,6 +102,7 @@ export function FindingCard(props: FindingCardProps) {
         finding={finding}
         editing={editing}
         busy={busy}
+        errorId={error === null ? undefined : errorId}
         onSaveEdit={onSaveEdit}
         onClose={closeEditor}
       />
@@ -85,51 +120,63 @@ export function FindingCard(props: FindingCardProps) {
       </details>
 
       {error === null ? null : (
-        <p className="field-error" role="alert">
+        <p id={errorId} className="field-error message-text" role="alert">
           {error}
         </p>
       )}
 
+      {/* The buttons are unavailable, not disabled, while a change is saved: the one that was
+          pressed keeps the focus. Each is described by the finding's title, so that a list of
+          buttons read out of context still says which finding it is for. */}
       <div className="finding-actions" role="group" aria-label="Decision">
-        <button
-          type="button"
+        <Button
+          ref={acceptButton}
           className="button button-accept"
           aria-pressed={finding.decision === "accepted"}
-          disabled={busy}
-          onClick={() => onDecide(finding.decision === "accepted" ? "pending" : "accepted")}
+          aria-describedby={titleId}
+          unavailable={busy}
+          onClick={() => onDecide(ruleId, finding.decision === "accepted" ? "pending" : "accepted")}
         >
           Accept
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
           className="button button-reject"
           aria-pressed={finding.decision === "rejected"}
-          disabled={busy}
-          onClick={() => onDecide(finding.decision === "rejected" ? "pending" : "rejected")}
+          aria-describedby={titleId}
+          unavailable={busy}
+          onClick={() => onDecide(ruleId, finding.decision === "rejected" ? "pending" : "rejected")}
         >
           Reject
-        </button>
+        </Button>
         {finding.edit.kind === "applied" && !editing ? (
-          <button
+          <Button
             ref={editButton}
-            type="button"
             className="button"
-            disabled={busy}
+            aria-describedby={titleId}
+            unavailable={busy}
             onClick={() => setEditing(true)}
           >
             Edit wording
-          </button>
+          </Button>
         ) : null}
         {canReset ? (
-          <button type="button" className="button button-quiet" disabled={busy} onClick={onReset}>
+          <Button
+            className="button button-quiet"
+            aria-describedby={titleId}
+            unavailable={busy}
+            onClick={() => {
+              resetPressed.current = true;
+              onReset(ruleId);
+            }}
+          >
             Reset
-          </button>
+          </Button>
         ) : null}
         {busy ? <span className="saving">Saving...</span> : null}
       </div>
     </article>
   );
-}
+});
 
 function DecisionChip(props: { decision: Decision }) {
   const { decision } = props;
@@ -198,10 +245,12 @@ function Change(props: {
   finding: Finding;
   editing: boolean;
   busy: boolean;
+  /** The element that says why the last change was not saved, when there is one. */
+  errorId: string | undefined;
   onSaveEdit: FindingCardProps["onSaveEdit"];
   onClose: () => void;
 }) {
-  const { finding, editing, busy, onSaveEdit, onClose } = props;
+  const { finding, editing, busy, errorId, onSaveEdit, onClose } = props;
   const { edit } = finding;
 
   if (edit.kind === "none") return null;
@@ -232,6 +281,7 @@ function Change(props: {
         <WordingEditor
           finding={finding}
           busy={busy}
+          errorId={errorId}
           initial={replacement}
           onSave={onSaveEdit}
           onClose={onClose}
@@ -252,12 +302,14 @@ function Change(props: {
 function WordingEditor(props: {
   finding: Finding;
   busy: boolean;
+  /** Set while the card shows why the last save failed, so that the box can point at it. */
+  errorId: string | undefined;
   initial: string;
   onSave: FindingCardProps["onSaveEdit"];
   onClose: () => void;
 }) {
-  const { finding, busy, initial, onSave, onClose } = props;
-  const { edit } = finding;
+  const { finding, busy, errorId, initial, onSave, onClose } = props;
+  const { edit, ruleId } = finding;
   const fieldId = useId();
   const hintId = useId();
   const [draft, setDraft] = useState(initial);
@@ -265,7 +317,7 @@ function WordingEditor(props: {
   if (edit.kind !== "applied") return null;
 
   const save = (accept: boolean): void => {
-    void onSave(draft, accept).then((saved) => {
+    void onSave(ruleId, draft, accept).then((saved) => {
       if (saved) onClose();
     });
   };
@@ -291,7 +343,8 @@ function WordingEditor(props: {
         rows={4}
         value={draft}
         maxLength={LIMITS.maxReplacementChars}
-        aria-describedby={hintId}
+        aria-describedby={errorId === undefined ? hintId : `${hintId} ${errorId}`}
+        aria-invalid={errorId === undefined ? undefined : true}
         onChange={(event) => setDraft(event.target.value)}
         // The box opens ready to type, because the only reason to open it is to type.
         autoFocus
@@ -309,15 +362,15 @@ function WordingEditor(props: {
         replacement={draft}
       />
       <div className="finding-actions">
-        <button type="submit" className="button button-primary" disabled={busy}>
+        <Button type="submit" className="button button-primary" unavailable={busy}>
           Save wording
-        </button>
-        <button type="button" className="button" disabled={busy} onClick={() => save(true)}>
+        </Button>
+        <Button className="button" unavailable={busy} onClick={() => save(true)}>
           Save and accept
-        </button>
-        <button type="button" className="button button-quiet" disabled={busy} onClick={onClose}>
+        </Button>
+        <Button className="button button-quiet" unavailable={busy} onClick={onClose}>
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   );

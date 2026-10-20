@@ -62,13 +62,18 @@ export async function readBody(
 }
 
 // Zod's messages name the expected type and never repeat the value that failed, so they are safe
-// to send back. Only the first few are shown.
+// to send back, except that the message about a key that is not allowed names the key, and a
+// client chooses how long that is. Only the first few messages are shown, each cut short.
 const MAX_ISSUES = 3;
+const MAX_ISSUE_CHARS = 160;
+
+const brief = (text: string): string =>
+  text.length > MAX_ISSUE_CHARS ? `${text.slice(0, MAX_ISSUE_CHARS)}...` : text;
 
 export function describeIssues(error: z.ZodError): string {
   const shown = error.issues.slice(0, MAX_ISSUES).map((issue) => {
     const path = issue.path.map(String).join(".");
-    return path === "" ? issue.message : `${path}: ${issue.message}`;
+    return brief(path === "" ? issue.message : `${path}: ${issue.message}`);
   });
   const more = error.issues.length - shown.length;
   return `The request is not valid. ${shown.join("; ")}${more > 0 ? `; and ${more} more` : ""}`;

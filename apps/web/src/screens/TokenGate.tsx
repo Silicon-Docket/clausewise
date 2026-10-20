@@ -1,5 +1,6 @@
 import { useId, useState, type FormEvent } from "react";
 import { errorMessage } from "../api/client.js";
+import { Button } from "../components/Button.js";
 import { Notice } from "../components/Notice.js";
 import { useDocumentTitle } from "../hooks/useDocumentTitle.js";
 import { useServices, useTokenState } from "../services.js";
@@ -14,6 +15,7 @@ export function TokenGate() {
   const state = useTokenState();
   const fieldId = useId();
   const hintId = useId();
+  const problemId = useId();
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -65,7 +67,7 @@ export function TokenGate() {
             autoCapitalize="off"
             spellCheck={false}
             value={value}
-            aria-describedby={hintId}
+            aria-describedby={problem === null ? hintId : `${hintId} ${problemId}`}
             aria-invalid={problem !== null}
             onChange={(event) => setValue(event.target.value)}
             autoFocus
@@ -76,13 +78,13 @@ export function TokenGate() {
           </p>
         </div>
         {problem === null ? null : (
-          <p className="field-error" role="alert">
+          <p id={problemId} className="field-error message-text" role="alert">
             {problem}
           </p>
         )}
-        <button type="submit" className="button button-primary" disabled={busy} aria-busy={busy}>
+        <Button type="submit" className="button button-primary" unavailable={busy} aria-busy={busy}>
           {busy ? "Checking..." : "Continue"}
-        </button>
+        </Button>
       </form>
     </div>
   );

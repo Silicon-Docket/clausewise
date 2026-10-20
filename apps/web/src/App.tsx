@@ -26,7 +26,10 @@ function Shell() {
   const route = useRoute();
   const main = useRef<HTMLElement>(null);
 
-  // A new screen starts at its top and a screen reader hears its heading: focus goes to the page.
+  // A new screen starts at its top and a screen reader hears its heading: focus goes to the
+  // screen's main heading when it is already there, else to the page. A screen that loads its
+  // content first (a review) has no heading yet; the page takes the focus and the screen moves it
+  // on if it needs to. The heading is not in the tab order, so it takes focus by script only.
   const routeKey = route.name === "review" ? `review:${route.id}` : route.name;
   const firstRoute = useRef(true);
   useEffect(() => {
@@ -34,7 +37,13 @@ function Shell() {
       firstRoute.current = false;
       return;
     }
-    main.current?.focus();
+    const heading = main.current?.querySelector("h1");
+    if (heading instanceof HTMLElement) {
+      heading.tabIndex = -1;
+      heading.focus();
+    } else {
+      main.current?.focus();
+    }
   }, [routeKey]);
 
   const config = state.status === "ready" ? state.config : null;

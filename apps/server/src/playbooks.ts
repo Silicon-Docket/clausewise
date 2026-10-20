@@ -50,6 +50,13 @@ const summaryOf = (
   updatedAt: updatedAt === null ? null : updatedAt.toISOString(),
 });
 
+// YAML can write a NUL character as the escape \0 in a quoted name, and the database cannot store
+// one in text. The name is kept in a column of its own, so it is the one value that has to be
+// looked at here; every other text of a playbook is stored as YAML, where the escape is two
+// ordinary characters, and the texts of a report are cleaned when the report is saved.
+const NUL_IN_NAME =
+  "The playbook name contains a NUL character (written \\0 in YAML), which cannot be stored. Take it out of the name.";
+
 /**
  * Playbook YAML as the server accepts it: no larger than the limit, and valid. `parsePlaybook`
  * reads it with the YAML library's own protection against alias bombs, and then checks the
@@ -59,12 +66,15 @@ function parseChecked(yaml: string): Playbook {
   if (Buffer.byteLength(yaml, "utf8") > LIMITS.maxPlaybookBytes) {
     throw tooLarge(`The playbook is larger than ${LIMITS.maxPlaybookBytes / 1024} KB.`);
   }
+  let playbook: Playbook;
   try {
-    return parsePlaybook(yaml, "The playbook");
+    playbook = parsePlaybook(yaml, "The playbook");
   } catch (error) {
     if (error instanceof PlaybookError) throw badRequest(error.message);
     throw error;
   }
+  if (playbook.name.includes("\u0000")) throw badRequest(NUL_IN_NAME);
+  return playbook;
 }
 
 export function createPlaybookStore(args: {
@@ -96,7 +106,9 @@ export function createPlaybookStore(args: {
         const info = await stat(path);
         if (!info.isFile() || info.size > LIMITS.maxPlaybookBytes) continue;
         const yaml = await readFile(path, "utf8");
-        found.set(`${BUILTIN_PREFIX}${stem}`, { yaml, playbook: parsePlaybook(yaml, name) });
+        const playbook = parsePlaybook(yaml, name);
+        if (playbook.name.includes("\u0000")) throw new Error(NUL_IN_NAME);
+        found.set(`${BUILTIN_PREFIX}${stem}`, { yaml, playbook });
       } catch {
         log.warn("a built-in playbook file is not valid and was left out", { file: name });
       }
@@ -186,6 +198,7 @@ export function createPlaybookStore(args: {
       }
       try {
         const playbook = parsePlaybook(yaml, "The playbook");
+        if (playbook.name.includes("\u0000")) return { ok: false, problems: [NUL_IN_NAME] };
         return {
           ok: true,
           name: playbook.name,

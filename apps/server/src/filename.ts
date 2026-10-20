@@ -1,6 +1,7 @@
 import { LIMITS } from "@clausewise/api";
 
 export const DEFAULT_FILE_NAME = "contract.docx";
+export const DOCX_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 // Characters that change how text is laid out or ordered without being seen: the bidirectional
 // marks, embeddings, overrides and isolates. A name containing them can read as a different name
@@ -9,8 +10,12 @@ export const DEFAULT_FILE_NAME = "contract.docx";
 const BIDI = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
 // Control characters, the C1 range and the line and paragraph separators.
 const CONTROL = /[\p{Cc}\u2028\u2029]/gu;
-const SEPARATORS = /[\\/]/;
 const MAX_EXTENSION_CHARS = 12;
+// A client chooses how long its file name is, up to the whole upload. A name longer than this is
+// cut before anything is done to it, to its start and its end, which is where the part that is
+// kept and the extension are. Looking at every character of a 25 MB name takes hundreds of MB.
+const SCAN_HEAD_UNITS = 1024;
+const SCAN_TAIL_UNITS = 64;
 
 function truncate(name: string, limit: number): string {
   const characters = [...name];
@@ -28,13 +33,18 @@ function truncate(name: string, limit: number): string {
 /**
  * The name to show for an uploaded file: the base name only (what a browser sends is whatever the
  * user's system has, and a hostile client can send anything), without control characters, path
- * separators or bidirectional overrides, at most 200 characters. A name with nothing left becomes
+ * separators or bidirectional overrides, at most 200 characters. A name over about a thousand
+ * units long is cut to its start and its end before it is cleaned. A name with nothing left becomes
  * `contract.docx`. The result is for display and for the Content-Disposition header, never for a
  * path: the file on disk is named by a random key.
  */
 export function cleanFileName(raw: string): string {
-  const base = raw.replace(BIDI, "").replace(CONTROL, "").split(SEPARATORS).pop() ?? "";
-  const trimmed = base.trim();
+  const cut = Math.max(raw.lastIndexOf("/"), raw.lastIndexOf("\\"));
+  let base = cut === -1 ? raw : raw.slice(cut + 1);
+  if (base.length > SCAN_HEAD_UNITS + SCAN_TAIL_UNITS) {
+    base = base.slice(0, SCAN_HEAD_UNITS) + base.slice(-SCAN_TAIL_UNITS);
+  }
+  const trimmed = base.replace(BIDI, "").replace(CONTROL, "").trim();
   // "." and ".." name folders, and a name of only dots and spaces shows as nothing.
   if (trimmed === "" || /^[.\s]+$/.test(trimmed)) return DEFAULT_FILE_NAME;
   return truncate(trimmed, LIMITS.maxFileNameChars);
@@ -70,4 +80,14 @@ export function stemOf(name: string): string {
   const dot = name.lastIndexOf(".");
   const stem = dot > 0 ? name.slice(0, dot) : name;
   return stem === "" ? "contract" : stem;
+}
+
+/**
+ * The name of a file made from an uploaded one, such as `nda.redlined.docx` from `nda.docx`: the
+ * name without its extension, then `suffix`. A name can be as long as the limit allows, so the stem
+ * is cut to leave room for the suffix, which is what tells the person which file it is.
+ */
+export function derivedFileName(name: string, suffix: string): string {
+  const room = Math.max(1, LIMITS.maxFileNameChars - [...suffix].length);
+  return cleanFileName(`${[...stemOf(name)].slice(0, room).join("")}${suffix}`);
 }

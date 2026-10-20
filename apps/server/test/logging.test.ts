@@ -96,6 +96,10 @@ describe("what the server writes to its log", () => {
     await t.request(`/api/reviews/${reviewId}/report?format=md`, { headers: auth });
     await t.request(`/api/reviews/${reviewId}/report`, { headers: auth });
     await t.request(`/api/documents/${documentId}/file`, { headers: auth });
+    // The redline, which is built from the contract and the lawyer's own wording.
+    const redline = await t.request(`/api/reviews/${reviewId}/docx`, { headers: auth });
+    expect(redline.status).toBe(200);
+    await t.request(`/api/reviews/${reviewId}/docx?include=all`, { headers: auth });
 
     // A review that fails on a provider error that quotes the contract.
     failing = true;
@@ -137,6 +141,8 @@ describe("what the server writes to its log", () => {
     expect(logged).not.toContain(documentId);
     expect(logged).not.toContain(reviewId);
     expect(logged).not.toContain("format=md");
+    expect(logged).not.toContain("include=all");
+    expect(logged).toContain("/api/reviews/:id/docx");
   });
 
   it("writes one line per request, with the time, id, method, route, status and duration and nothing else", async () => {

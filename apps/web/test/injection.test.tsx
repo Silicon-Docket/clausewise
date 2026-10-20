@@ -6,6 +6,7 @@ import {
   COMPLIANT_ROW,
   appliedFinding,
   commentOnlyFinding,
+  docxFile,
   missingFinding,
   playbookDetail,
   reviewDetail,
@@ -154,7 +155,7 @@ describe("document text is never rendered as HTML", () => {
       message: `Bad file ${IMG}`,
     });
     const input = await screen.findByLabelText("Choose a Word file");
-    await user.upload(input, new File(["x"], "a.docx"));
+    await user.upload(input, docxFile("a.docx"));
     await user.click(screen.getByRole("button", { name: "Start review" }));
     expect(await screen.findByText(`Bad file ${IMG}`)).toBeInTheDocument();
     noMarkupWasCreated();

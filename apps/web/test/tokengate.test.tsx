@@ -48,6 +48,25 @@ describe("the access token screen", () => {
     );
   });
 
+  it("ties the field to the reason it was refused, so that it is read with the field", async () => {
+    const { user } = renderApp("#/", { config: { authRequired: true }, token: TOKEN });
+    const field = await screen.findByLabelText("Access token");
+    expect(field).toHaveAttribute("aria-invalid", "false");
+    await user.type(field, "wrong-token-value");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    const alert = await screen.findByRole("alert");
+
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(field.getAttribute("aria-describedby")?.split(" ")).toContain(alert.id);
+    expect(field).toHaveAccessibleDescription(
+      expect.stringContaining("That token was not accepted"),
+    );
+    // The hint stays part of the description as well.
+    expect(field).toHaveAccessibleDescription(expect.stringContaining("never stored in a cookie"));
+    // The button that was pressed is still where the focus is.
+    expect(screen.getByRole("button", { name: "Continue" })).not.toHaveAttribute("aria-disabled");
+  });
+
   it("asks for a token when the box is empty", async () => {
     const { server, user } = renderApp("#/", { config: { authRequired: true }, token: TOKEN });
     await user.click(await screen.findByRole("button", { name: "Continue" }));

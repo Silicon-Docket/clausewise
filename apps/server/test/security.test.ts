@@ -259,7 +259,7 @@ describe("without an access token", () => {
 
   describe("headers and the shape of errors on every answer", () => {
     it("carries the security headers on successes, errors and downloads alike", async () => {
-      const { document } = await t.reviewedFixture("nda-aggressive.docx");
+      const { document, review } = await t.reviewedFixture("nda-aggressive.docx");
       const api: [string, Response][] = [
         ["200", await t.request("/api/config")],
         ["204", await t.request("/api/playbooks/missing", { method: "DELETE" })],
@@ -278,6 +278,8 @@ describe("without an access token", () => {
         ["421", await t.request("/api/config", { headers: { Host: "evil.example" } })],
         ["403", await t.request("/api/playbooks", jsonInit({}, { Origin: "http://evil.example" }))],
         ["download", await t.request(`/api/documents/${document.id}/file`)],
+        ["redline", await t.request(`/api/reviews/${review.id}/docx?include=all`)],
+        ["redline refused", await t.request(`/api/reviews/${review.id}/docx?include=nothing`)],
       ];
       const elsewhere: [string, Response][] = [
         ["healthz", await t.request("/healthz")],
@@ -404,6 +406,7 @@ describe("with an access token", () => {
       ["GET", "/api/reviews"],
       ["POST", "/api/reviews"],
       ["GET", `/api/reviews/${UUID}/report`],
+      ["GET", `/api/reviews/${UUID}/docx`],
       ["PATCH", `/api/reviews/${UUID}/findings`],
       ["GET", "/api/no/such/route"],
       ["GET", "/api"],

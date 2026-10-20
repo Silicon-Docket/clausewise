@@ -1,8 +1,25 @@
-import type { Finding, ModelInfo, ResultRow, ReviewDetail, Severity } from "@clausewise/api";
-import { useId, useState, type ReactNode } from "react";
+import type {
+  Decision,
+  Finding,
+  ModelInfo,
+  ResultRow,
+  ReviewDetail,
+  Severity,
+} from "@clausewise/api";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { errorMessage, paths } from "../api/client.js";
+import { Button } from "../components/Button.js";
 import { ConfirmButton } from "../components/ConfirmButton.js";
-import { FileLink } from "../components/FileLink.js";
+import { FileLink, type SavedFile } from "../components/FileLink.js";
 import { FindingCard } from "../components/FindingCard.js";
 import { Notice } from "../components/Notice.js";
 import { ProgressBar } from "../components/ProgressBar.js";
@@ -32,6 +49,20 @@ export function ReviewScreen(props: { reviewId: string }) {
   const { load } = review;
   useDocumentTitle(load.status === "ready" ? load.detail.documentName : "Review");
 
+  // The progress panel, with the Cancel button, goes away when the review ends. If the focus was
+  // in it, it falls to the top of the page; it goes to the review's own heading instead.
+  const heading = useRef<HTMLHeadingElement>(null);
+  const wasActive = useRef(false);
+  const status = load.status === "ready" ? load.detail.status : null;
+  useEffect(() => {
+    const active = status === "queued" || status === "running";
+    if (wasActive.current && !active && status !== null) {
+      const focused = document.activeElement;
+      if (focused === null || focused === document.body) heading.current?.focus();
+    }
+    wasActive.current = active;
+  }, [status]);
+
   if (load.status === "loading") {
     return (
       <div>
@@ -58,13 +89,15 @@ export function ReviewScreen(props: { reviewId: string }) {
   return (
     <div className="review">
       <BackLink />
-      <ReviewHeader detail={detail} />
+      <ReviewHeader detail={detail} headingRef={heading} />
       {detail.status === "queued" || detail.status === "running" ? (
         <ActiveReview detail={detail} review={review} />
       ) : null}
       {detail.status === "failed" ? (
         <Notice kind="error" title="The review did not finish">
-          <p>{detail.error ?? "The server did not say why. Start the review again."}</p>
+          <p className="message-text">
+            {detail.error ?? "The server did not say why. Start the review again."}
+          </p>
           <p>
             <a href="#/">Go back and start it again</a>
           </p>
@@ -72,7 +105,7 @@ export function ReviewScreen(props: { reviewId: string }) {
       ) : null}
       {detail.status === "cancelled" ? (
         <Notice kind="info" title="This review was cancelled">
-          <p>
+          <p className="message-text">
             {detail.error ?? "It was stopped before it finished, so there are no findings to show."}
           </p>
           <p>
@@ -112,9 +145,8 @@ function RemovePanel(props: { detail: ReviewDetail }) {
         navigate({ name: "start" });
       })
       .catch((failure: unknown) => {
-        const message = errorMessage(failure);
-        setError(message);
-        announce(`The contract was not deleted. ${message}`);
+        // The notice below is an alert, which is read out by itself.
+        setError(errorMessage(failure));
         setBusy(false);
       });
   };
@@ -123,7 +155,7 @@ function RemovePanel(props: { detail: ReviewDetail }) {
     <section className="remove" aria-label="Delete this contract">
       {error === null ? null : (
         <Notice kind="error" title="The contract was not deleted">
-          <p>{error}</p>
+          <p className="message-text">{error}</p>
         </Notice>
       )}
       <ConfirmButton
@@ -154,11 +186,16 @@ function modelLine(model: ModelInfo): string {
   return `Model: ${model.model} (${model.provider}). ${disclosureSentence(model.disclosure)}`;
 }
 
-function ReviewHeader(props: { detail: ReviewDetail }) {
-  const { detail } = props;
+function ReviewHeader(props: {
+  detail: ReviewDetail;
+  headingRef: RefObject<HTMLHeadingElement | null>;
+}) {
+  const { detail, headingRef } = props;
   return (
     <div className="review-head">
-      <h1>{detail.documentName}</h1>
+      <h1 ref={headingRef} tabIndex={-1}>
+        {detail.documentName}
+      </h1>
       <p className="meta">
         Playbook: {detail.playbookName}
         {detail.client === null ? "" : `. Acting for: ${detail.client}`}. Started{" "}
@@ -191,12 +228,12 @@ function ActiveReview(props: { detail: ReviewDetail; review: ReviewState }) {
       <p className="progress-text">{text}</p>
       {review.pollProblem === null ? null : (
         <Notice kind="warning">
-          <p>{review.pollProblem}</p>
+          <p className="message-text">{review.pollProblem}</p>
         </Notice>
       )}
       {review.cancelError === null ? null : (
         <Notice kind="error">
-          <p>{review.cancelError}</p>
+          <p className="message-text">{review.cancelError}</p>
         </Notice>
       )}
       <ConfirmButton
@@ -217,18 +254,47 @@ function ActiveReview(props: { detail: ReviewDetail; review: ReviewState }) {
 // When it is done
 // ---------------------------------------------------------------------------------------------
 
+/** Notes the server sent with the files saved from this screen, by kind of file. */
+type DownloadNotesByKind = Readonly<Record<string, SavedFile>>;
+
 function FinishedReview(props: { detail: ReviewDetail; review: ReviewState }) {
   const { detail, review } = props;
   const { findings } = detail;
-  const saving = review.bulkBusy || review.rowBusy.size > 0;
+  const { decide, saveEdit, reset, bulk, rowBusy, rowErrors, bulkBusy, bulkError } = review;
+  const saving = bulkBusy || rowBusy.size > 0;
   const notShown = describeNotShown(detail.notShown);
   const errors = detail.results.filter((row) => row.status === "error");
   const quiet = detail.results.filter((row) => row.status !== "error");
+  // Recomputed only when the findings change, so the sections below get lists that stay the same
+  // across the many small changes of state while a decision is saved.
+  const groups = useMemo(() => groupBySeverity(findings), [findings]);
+
+  // What the server said about the files saved here stays until the lawyer dismisses it. A newer
+  // file of the same kind replaces the notes about the older one, which no longer describe the
+  // file that is wanted.
+  const [notes, setNotes] = useState<DownloadNotesByKind>({});
+  const summaryHeading = useRef<HTMLHeadingElement>(null);
+  const noteSaved = useCallback((kind: string, saved: SavedFile): void => {
+    setNotes((current) => ({ ...current, [kind]: saved }));
+  }, []);
+  const dismissNotes = useCallback((kind: string): void => {
+    setNotes((current) => {
+      const rest: Record<string, SavedFile> = { ...current };
+      delete rest[kind];
+      return rest;
+    });
+    // The notice takes the button with it. The summary is where the download buttons are, and the
+    // next press of Tab lands on the first of them.
+    summaryHeading.current?.focus();
+  }, []);
 
   return (
     <>
-      <Summary detail={detail}>
-        {findings.length === 0 ? null : <DownloadBlock detail={detail} saving={saving} />}
+      <Summary detail={detail} headingRef={summaryHeading}>
+        {findings.length === 0 ? null : (
+          <DownloadBlock detail={detail} saving={saving} onSaved={noteSaved} />
+        )}
+        <DownloadNotes notes={notes} onDismiss={dismissNotes} />
       </Summary>
       {detail.warnings.length === 0 ? null : (
         <Notice kind="warning" title="Read these first">
@@ -256,25 +322,41 @@ function FinishedReview(props: { detail: ReviewDetail; review: ReviewState }) {
         </p>
       ) : (
         <>
-          <BulkBar review={review} findings={findings} />
-          {groupBySeverity(findings).map((group) => (
+          <BulkBar
+            findings={findings}
+            busy={saving}
+            error={bulkError}
+            onBulk={(decision) => void bulk(decision)}
+          />
+          {groups.map((group) => (
             <SeveritySection
               key={group.severity}
               severity={group.severity}
               findings={group.findings}
-              review={review}
+              busy={saving}
+              bulkBusy={bulkBusy}
+              rowBusy={rowBusy}
+              rowErrors={rowErrors}
+              onBulk={bulk}
+              onDecide={decide}
+              onSaveEdit={saveEdit}
+              onReset={reset}
             />
           ))}
         </>
       )}
       {quiet.length === 0 ? null : <QuietRules rows={quiet} />}
-      <FilesPanel detail={detail} />
+      <FilesPanel detail={detail} onSaved={noteSaved} />
     </>
   );
 }
 
-function Summary(props: { detail: ReviewDetail; children?: ReactNode }) {
-  const { detail, children } = props;
+function Summary(props: {
+  detail: ReviewDetail;
+  headingRef: RefObject<HTMLHeadingElement | null>;
+  children?: ReactNode;
+}) {
+  const { detail, headingRef, children } = props;
   const headingId = useId();
   const bySeverity = countBySeverity(detail.findings);
   const decisions = countDecisions(detail.findings);
@@ -284,7 +366,9 @@ function Summary(props: { detail: ReviewDetail; children?: ReactNode }) {
 
   return (
     <section className="panel summary" aria-labelledby={headingId}>
-      <h2 id={headingId}>Summary</h2>
+      <h2 id={headingId} ref={headingRef} tabIndex={-1}>
+        Summary
+      </h2>
       <p>
         {plural(checked, "rule")} checked.{" "}
         <strong>{plural(detail.findings.length, "finding")}</strong>
@@ -310,8 +394,12 @@ function Summary(props: { detail: ReviewDetail; children?: ReactNode }) {
 const sum = (values: number[]): number => values.reduce((total, value) => total + value, 0);
 
 /** The download buttons, kept inside the summary so that the first finding is not pushed off the screen. */
-function DownloadBlock(props: { detail: ReviewDetail; saving: boolean }) {
-  const { detail, saving } = props;
+function DownloadBlock(props: {
+  detail: ReviewDetail;
+  saving: boolean;
+  onSaved: (kind: string, saved: SavedFile) => void;
+}) {
+  const { detail, saving, onSaved } = props;
   const reasonId = useId();
   const accepted = detail.findings.filter((f) => f.decision === "accepted").length;
   const notRejected = detail.findings.filter((f) => f.decision !== "rejected").length;
@@ -333,6 +421,7 @@ function DownloadBlock(props: { detail: ReviewDetail; saving: boolean }) {
           fallbackName={name}
           disabled={reason !== null}
           describedBy={reasonId}
+          onSaved={(saved) => onSaved(REDLINE, saved)}
         />
         <FileLink
           variant="link"
@@ -341,6 +430,7 @@ function DownloadBlock(props: { detail: ReviewDetail; saving: boolean }) {
           fallbackName={name}
           disabled={saving || notRejected === 0}
           describedBy={reasonId}
+          onSaved={(saved) => onSaved(REDLINE, saved)}
         />
       </div>
       {reason === null ? null : (
@@ -356,53 +446,126 @@ function DownloadBlock(props: { detail: ReviewDetail; saving: boolean }) {
   );
 }
 
-function BulkBar(props: { review: ReviewState; findings: Finding[] }) {
-  const { review, findings } = props;
-  const busy = review.bulkBusy || review.rowBusy.size > 0;
+const REDLINE = "redline";
+
+/**
+ * What the server noted while building a file, kept on the screen until the lawyer dismisses it.
+ * The box is always in the page and the notice is put into it, which is what makes a screen reader
+ * read a notice that appears. It is a status and not an alert: the file was saved, and nothing
+ * here needs to cut in on what the lawyer is doing.
+ */
+function DownloadNotes(props: { notes: DownloadNotesByKind; onDismiss: (kind: string) => void }) {
+  const { notes, onDismiss } = props;
+  const shown = Object.entries(notes).filter(([, saved]) => saved.warnings.length > 0);
+  return (
+    <div role="status" className="download-notes">
+      {shown.map(([kind, saved]) => {
+        const many = saved.warnings.length > 1;
+        return (
+          <Notice
+            key={kind}
+            kind="warning"
+            title={`Saved, with ${plural(saved.warnings.length, "note")} to read`}
+          >
+            <p className="message-text">
+              {`"${saved.fileName}" was still saved. The server noted ${many ? "these things" : "this"} while building it:`}
+            </p>
+            <ul>
+              {saved.warnings.map((warning, index) => (
+                <li key={index} className="message-text">
+                  {warning}
+                </li>
+              ))}
+            </ul>
+            <Button
+              className="button button-small"
+              aria-label={`Dismiss the notes about ${saved.fileName}`}
+              onClick={() => onDismiss(kind)}
+            >
+              Dismiss
+            </Button>
+          </Notice>
+        );
+      })}
+    </div>
+  );
+}
+
+function BulkBar(props: {
+  findings: Finding[];
+  busy: boolean;
+  error: string | null;
+  onBulk: (decision: Decision) => void;
+}) {
+  const { findings, busy, error, onBulk } = props;
+  const acceptAll = useRef<HTMLButtonElement>(null);
+  const clearPressed = useRef(false);
+  const showClear = findings.some((f) => f.decision !== "pending");
+
+  // "Clear all decisions" goes away when nothing is left to clear, and the focus would go with it.
+  useEffect(() => {
+    if (clearPressed.current && !showClear) {
+      clearPressed.current = false;
+      acceptAll.current?.focus();
+    }
+  }, [showClear]);
+  useEffect(() => {
+    if (!busy) clearPressed.current = false;
+  }, [busy]);
+
   return (
     <div className="bulk-bar">
       <div className="bulk-actions" role="group" aria-label="All findings">
-        <button
-          type="button"
+        <Button
+          ref={acceptAll}
           className="button"
-          disabled={busy}
-          onClick={() => void review.bulk("accepted")}
+          unavailable={busy}
+          onClick={() => onBulk("accepted")}
         >
           Accept all findings
-        </button>
-        <button
-          type="button"
-          className="button"
-          disabled={busy}
-          onClick={() => void review.bulk("rejected")}
-        >
+        </Button>
+        <Button className="button" unavailable={busy} onClick={() => onBulk("rejected")}>
           Reject all findings
-        </button>
-        {findings.some((f) => f.decision !== "pending") ? (
-          <button
-            type="button"
+        </Button>
+        {showClear ? (
+          <Button
             className="button button-quiet"
-            disabled={busy}
-            onClick={() => void review.bulk("pending")}
+            unavailable={busy}
+            onClick={() => {
+              clearPressed.current = true;
+              onBulk("pending");
+            }}
           >
             Clear all decisions
-          </button>
+          </Button>
         ) : null}
       </div>
-      {review.bulkError === null ? null : (
-        <p className="field-error" role="alert">
-          {review.bulkError}
+      {error === null ? null : (
+        <p className="field-error message-text" role="alert">
+          {error}
         </p>
       )}
     </div>
   );
 }
 
-function SeveritySection(props: { severity: Severity; findings: Finding[]; review: ReviewState }) {
-  const { severity, findings, review } = props;
+function SeveritySection(props: {
+  severity: Severity;
+  findings: Finding[];
+  /** Something is being saved, so the bulk buttons wait. */
+  busy: boolean;
+  bulkBusy: boolean;
+  rowBusy: ReadonlySet<string>;
+  rowErrors: Readonly<Record<string, string>>;
+  onBulk: ReviewState["bulk"];
+  onDecide: ReviewState["decide"];
+  onSaveEdit: ReviewState["saveEdit"];
+  onReset: ReviewState["reset"];
+}) {
+  const { severity, findings, busy, bulkBusy, rowBusy, rowErrors } = props;
+  const { onBulk, onDecide, onSaveEdit, onReset } = props;
   const headingId = useId();
   const word = SEVERITY_LABEL[severity].toLowerCase();
-  const busy = review.bulkBusy || review.rowBusy.size > 0;
   return (
     <section className="severity-section" aria-labelledby={headingId}>
       <div className="section-head">
@@ -412,22 +575,20 @@ function SeveritySection(props: { severity: Severity; findings: Finding[]; revie
           <span className="count">({findings.length})</span>
         </h2>
         <div className="section-actions" role="group" aria-label={`All ${word} severity findings`}>
-          <button
-            type="button"
+          <Button
             className="button button-small"
-            disabled={busy}
-            onClick={() => void review.bulk("accepted", [severity])}
+            unavailable={busy}
+            onClick={() => void onBulk("accepted", [severity])}
           >
             Accept all {word}
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
             className="button button-small"
-            disabled={busy}
-            onClick={() => void review.bulk("rejected", [severity])}
+            unavailable={busy}
+            onClick={() => void onBulk("rejected", [severity])}
           >
             Reject all {word}
-          </button>
+          </Button>
         </div>
       </div>
       <div className="finding-list">
@@ -435,11 +596,11 @@ function SeveritySection(props: { severity: Severity; findings: Finding[]; revie
           <FindingCard
             key={finding.ruleId}
             finding={finding}
-            busy={review.bulkBusy || review.rowBusy.has(finding.ruleId)}
-            error={review.rowErrors[finding.ruleId] ?? null}
-            onDecide={(decision) => void review.decide(finding.ruleId, decision)}
-            onSaveEdit={(text, accept) => review.saveEdit(finding.ruleId, text, accept)}
-            onReset={() => void review.reset(finding.ruleId)}
+            busy={bulkBusy || rowBusy.has(finding.ruleId)}
+            error={rowErrors[finding.ruleId] ?? null}
+            onDecide={onDecide}
+            onSaveEdit={onSaveEdit}
+            onReset={onReset}
           />
         ))}
       </div>
@@ -491,8 +652,11 @@ function QuietRules(props: { rows: ResultRow[] }) {
   );
 }
 
-function FilesPanel(props: { detail: ReviewDetail }) {
-  const { detail } = props;
+function FilesPanel(props: {
+  detail: ReviewDetail;
+  onSaved: (kind: string, saved: SavedFile) => void;
+}) {
+  const { detail, onSaved } = props;
   const stem = detail.documentName.replace(/\.docx$/i, "");
   return (
     <section className="files" aria-label="Other files">
@@ -503,6 +667,7 @@ function FilesPanel(props: { detail: ReviewDetail }) {
             path={paths.document(detail.documentId)}
             label="Download the original file"
             fallbackName={detail.documentName}
+            onSaved={(saved) => onSaved("original", saved)}
           />
         </li>
         <li>
@@ -511,6 +676,7 @@ function FilesPanel(props: { detail: ReviewDetail }) {
             path={paths.report(detail.id, "md")}
             label="Download the report (Markdown)"
             fallbackName={`${stem} (report).md`}
+            onSaved={(saved) => onSaved("report", saved)}
           />
         </li>
       </ul>

@@ -5,10 +5,11 @@ import { createAdaptorServer } from "@hono/node-server";
 import pkg from "../package.json" with { type: "json" };
 import { createApp } from "./app.js";
 import { isLoopbackHost, type ServerConfig } from "./config.js";
-import { openDatabase, type DatabaseTarget } from "./db/client.js";
+import { openDatabase, type Database, type DatabaseTarget } from "./db/client.js";
 import { applyMigrations } from "./db/migrate.js";
 import { randomIds, systemClock, type Clock, type IdSource, type ModelSetup } from "./deps.js";
 import { createJobRunner } from "./jobs.js";
+import { lockDataFolder } from "./lock.js";
 import { createLogger, type Logger } from "./log.js";
 import { modelFromEnv } from "./model.js";
 import { createPlaybookStore } from "./playbooks.js";
@@ -84,9 +85,25 @@ export async function startServer(options: StartOptions): Promise<RunningServer>
     (config.databaseUrl === undefined
       ? { kind: "pglite", dataDir: config.dataDir }
       : { kind: "postgres", url: config.databaseUrl });
-  const database = await openDatabase(target, (error) =>
-    log.error("the database connection failed", error),
-  );
+
+  // Before anything is opened or tidied. The folder is locked whenever something of this server
+  // lives in it: the embedded database, or the stored files, which a Postgres server does not
+  // replace. Only a server with its files elsewhere and its database elsewhere needs no lock.
+  const lock =
+    target.kind === "pglite" || options.storage === undefined
+      ? await lockDataFolder(config.dataDir, log)
+      : undefined;
+  const unlock = (): Promise<void> => lock?.release() ?? Promise.resolve();
+
+  let database: Database;
+  try {
+    database = await openDatabase(target, (error) =>
+      log.error("the database connection failed", error),
+    );
+  } catch (error) {
+    await unlock().catch(() => {});
+    throw error;
+  }
 
   let runnerStop: () => Promise<void> = async () => {};
   try {
@@ -133,6 +150,10 @@ export async function startServer(options: StartOptions): Promise<RunningServer>
         resolve();
       });
     });
+    // An event with no listener is thrown, and the process ends. Once listening, the server can
+    // still report an error (for instance when it runs out of file descriptors while accepting),
+    // and one failed connection is no reason to stop the reviews that are running.
+    server.on("error", (error) => log.error("the HTTP server reported an error", error));
     const address = server.address();
     const port = typeof address === "object" && address !== null ? address.port : config.port;
     const url = serverUrl(config.host, port);
@@ -158,7 +179,8 @@ export async function startServer(options: StartOptions): Promise<RunningServer>
           });
           server.closeIdleConnections();
         });
-        await database.close();
+        // The folder is let go last, when nothing of this server writes in it any more.
+        await database.close().finally(unlock);
       })();
       return closing;
     };
@@ -166,6 +188,7 @@ export async function startServer(options: StartOptions): Promise<RunningServer>
   } catch (error) {
     await runnerStop().catch(() => {});
     await database.close().catch(() => {});
+    await unlock().catch(() => {});
     throw error;
   }
 }

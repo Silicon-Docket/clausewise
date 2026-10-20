@@ -75,6 +75,12 @@ export interface DownloadedFile {
   blob: Blob;
   /** The name the server suggested, if it sent a readable one. */
   fileName: string | null;
+  /**
+   * What the server wants the lawyer to know about this file, in its own words (the redline route
+   * sends them, for instance when a tracked change had to become a comment). Empty when there is
+   * nothing to say. The file is complete either way.
+   */
+  warnings: string[];
 }
 
 export interface ApiClient {
@@ -100,14 +106,18 @@ export interface ApiClient {
   patchFinding(reviewId: string, ruleId: string, body: PatchFindingRequest): Promise<Finding>;
   bulkDecision(reviewId: string, body: BulkDecisionRequest): Promise<BulkDecisionResponse>;
 
-  /** Fetches a file the server offers for download, with the token. `path` comes from the path helpers. */
+  /**
+   * Fetches a file the server offers for download, with the token when one is held. `path` comes
+   * from the path helpers. A failed answer throws with the server's own message.
+   */
   fetchFile(path: string, signal?: AbortSignal): Promise<DownloadedFile>;
   /** Asks whether the server accepts this token, without touching the stored one. */
   checkToken(token: string, signal?: AbortSignal): Promise<boolean>;
 }
 
 // ---------------------------------------------------------------------------------------------
-// Paths of the files the server offers. Plain anchors use them when no token is needed.
+// Paths of the files the server offers. Every download is fetched from one of them, so that the
+// token travels in a header and the answer's headers can be read.
 // ---------------------------------------------------------------------------------------------
 
 const enc = encodeURIComponent;
@@ -132,6 +142,8 @@ interface RequestOptions {
   token?: string | null;
   /** Skip `onUnauthorized`, for `checkToken`. */
   quietUnauthorized?: boolean;
+  /** The `Accept` header. A file is asked for whatever its type; everything else is JSON. */
+  accept?: string;
 }
 
 export function createApiClient(options: ApiClientOptions): ApiClient {
@@ -139,7 +151,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
   const base = options.baseUrl ?? "";
 
   async function send(method: string, path: string, opts: RequestOptions = {}): Promise<Response> {
-    const headers: Record<string, string> = { Accept: "application/json" };
+    const headers: Record<string, string> = { Accept: opts.accept ?? "application/json" };
     const token = opts.token === undefined ? (options.getToken?.() ?? null) : opts.token;
     if (token !== null) headers["Authorization"] = `Bearer ${token}`;
     const init: RequestInit = { method, headers, cache: "no-store", credentials: "omit" };
@@ -222,7 +234,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       json("PATCH", `/api/reviews/${enc(reviewId)}/findings`, { json: body }),
 
     fetchFile: async (path, signal) => {
-      const response = await send("GET", path, { signal });
+      const response = await send("GET", path, { signal, accept: "*/*" });
       let blob: Blob;
       try {
         blob = await response.blob();
@@ -236,6 +248,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       return {
         blob,
         fileName: fileNameFromDisposition(response.headers.get("Content-Disposition")),
+        warnings: warningsFromHeader(response.headers.get(WARNINGS_HEADER)),
       };
     },
 
@@ -333,10 +346,36 @@ function messageFromStatus(status: number): string {
   return `The server did not accept the request (status ${status}).`;
 }
 
+/** The header the redline route uses for its notes: a percent-encoded JSON array of strings. */
+export const WARNINGS_HEADER = "X-Clausewise-Warnings";
+
+/** Shown when the server sent notes that could not be read, because dropping them would hide them. */
+export const UNREADABLE_WARNINGS =
+  "The server added notes about this file, but they could not be read. Open the file in Word and check every tracked change and comment before you use it.";
+
+/**
+ * The notes in the warnings header, in the server's words. A header that is missing or empty has
+ * none. One that is there but is not a list of strings is reported as one note that says so: an
+ * unreadable warning must never read as no warning.
+ */
+export function warningsFromHeader(header: string | null): string[] {
+  if (header === null || header.trim() === "") return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(decodeURIComponent(header.trim()));
+  } catch {
+    return [UNREADABLE_WARNINGS];
+  }
+  if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) {
+    return [UNREADABLE_WARNINGS];
+  }
+  return (parsed as string[]).map((item) => item.trim()).filter((item) => item !== "");
+}
+
 /** The file name from a Content-Disposition header, or null. Control characters and slashes are dropped. */
 export function fileNameFromDisposition(header: string | null): string | null {
   if (header === null) return null;
-  const star = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(header);
+  const star = /filename\*\s*=\s*UTF-8'[^']*'([^;]+)/i.exec(header);
   let name: string | null = null;
   if (star?.[1] !== undefined) {
     try {

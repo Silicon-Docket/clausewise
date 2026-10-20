@@ -623,8 +623,33 @@ describe("a review that cannot finish", () => {
       },
     });
     const { review } = await t.reviewedFixture("nda-aggressive.docx");
+    expect(review.error).toBeNull();
     expect(review.status).toBe("done");
     expect(review.findings[0]?.explanation).toContain("before\ufffdafter");
+  });
+
+  it("stores what a model wrote even when it ends in half of a character outside the basic plane", async () => {
+    // A character that takes two units of UTF-16, cut after the first, or begun before the second.
+    // The database refuses such text in JSON, and the review must not be lost to it.
+    const inner = await oracleFor("nda-aggressive.docx");
+    const t = await createHarness({
+      generator: {
+        ...inner,
+        generate: (async (request: Parameters<typeof inner.generate>[0]) => {
+          const answer = (await inner.generate(request)) as { explanation?: string };
+          return {
+            ...answer,
+            explanation: `${answer.explanation ?? ""}cut \ud83d | begun \ude00 | whole \u{1F600}`,
+          };
+        }) as typeof inner.generate,
+      },
+    });
+    const { review } = await t.reviewedFixture("nda-aggressive.docx");
+    expect(review.error).toBeNull();
+    expect(review.status).toBe("done");
+    expect(review.findings[0]?.explanation).toContain(
+      "cut \ufffd | begun \ufffd | whole \u{1F600}",
+    );
   });
 });
 

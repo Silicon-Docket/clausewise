@@ -2,7 +2,7 @@
 import type { ReviewDetail } from "@clausewise/api";
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { createFakeServer } from "./fakeServer.js";
+import { createFakeServer, NOTHING_CHECKED_MESSAGE, RESTART_MESSAGE } from "./fakeServer.js";
 import {
   COMPLIANT_ROW,
   ERROR_ROW,
@@ -13,7 +13,14 @@ import {
   missingFinding,
   reviewDetail,
 } from "./fixtures.js";
-import { advance, announced, installCommonHooks, renderApp, useFakeClock } from "./support.js";
+import {
+  advance,
+  announced,
+  installCommonHooks,
+  renderApp,
+  useFakeClock,
+  watchAnnouncer,
+} from "./support.js";
 
 installCommonHooks();
 
@@ -140,15 +147,25 @@ describe("Review screen: following a review", () => {
       times: 2,
     });
     await advance(1000);
+    const page = within(screen.getByRole("main"));
     expect(
-      screen.getByText(
+      page.getByText(
         /The latest progress could not be read\. The database is busy\. This page keeps trying\./,
       ),
     ).toBeInTheDocument();
+    // Said to a screen reader once, when it started, and not again for the second failed attempt.
+    expect(announced()).toBe(
+      "The latest progress could not be read. The database is busy. This page keeps trying.",
+    );
+    const watch = watchAnnouncer();
+    await advance(1000);
+    expect(watch.changes()).toBe(0);
+    watch.stop();
+
     server.updateReview("rev-1", { status: "running", progress: { done: 1, total: 4 } });
     await advance(2000);
-    expect(screen.queryByText(/keeps trying/)).not.toBeInTheDocument();
-    expect(screen.getByText("1 of 4 rules checked")).toBeInTheDocument();
+    expect(page.queryByText(/keeps trying/)).not.toBeInTheDocument();
+    expect(page.getByText("1 of 4 rules checked")).toBeInTheDocument();
   });
 
   it("shows an error when the review does not exist", async () => {
@@ -590,5 +607,151 @@ describe("Review screen: deleting the contract", () => {
     expect(
       screen.getByRole("button", { name: "Delete the contract and its reviews" }),
     ).toBeEnabled();
+  });
+});
+
+describe("Review screen: what a screen reader is told while a review runs", () => {
+  const running = (done: number): ReviewDetail => ({
+    ...queued(),
+    status: "running",
+    progress: { done, total: 20 },
+  });
+
+  it("says nothing when a poll finds the same progress, however many polls there are", async () => {
+    useFakeClock();
+    const server = createFakeServer({ reviews: [running(3)] });
+    renderApp("#/reviews/rev-1", { server });
+    await advance(0);
+    const watch = watchAnnouncer();
+
+    await advance(30_000);
+
+    expect(server.callsTo("GET", "/api/reviews/rev-1").length).toBeGreaterThan(25);
+    expect(watch.changes()).toBe(0);
+    expect(announced()).toBe("");
+    watch.stop();
+  });
+
+  it("says the newest figure, once, when it has changed and the last was a while ago", async () => {
+    useFakeClock();
+    const server = createFakeServer({ reviews: [running(3)] });
+    renderApp("#/reviews/rev-1", { server });
+    await advance(0);
+    const watch = watchAnnouncer();
+
+    // Several changes within the first seconds: nothing yet.
+    server.updateReview("rev-1", { progress: { done: 4, total: 20 } });
+    await advance(1000);
+    server.updateReview("rev-1", { progress: { done: 5, total: 20 } });
+    await advance(1000);
+    server.updateReview("rev-1", { progress: { done: 6, total: 20 } });
+    await advance(2000);
+    expect(watch.changes()).toBe(0);
+
+    // Five seconds after the screen first saw the review, the newest figure is said, once.
+    await advance(1000);
+    expect(announced()).toBe("6 of 20 rules checked.");
+    expect(watch.changes()).toBeGreaterThan(0);
+    expect(watch.changes()).toBe(0);
+
+    // Then quiet again while it stays at 6.
+    await advance(10_000);
+    expect(watch.changes()).toBe(0);
+
+    // A change after a quiet spell is said at once.
+    server.updateReview("rev-1", { progress: { done: 7, total: 20 } });
+    await advance(1000);
+    expect(announced()).toBe("7 of 20 rules checked.");
+    watch.stop();
+  });
+
+  it("does not say a figure that is the same, when only the total behind it is learned later", async () => {
+    useFakeClock();
+    const server = createFakeServer({
+      reviews: [{ ...queued(), status: "running", progress: { done: 0, total: 0 } }],
+    });
+    renderApp("#/reviews/rev-1", { server });
+    await advance(0);
+    const watch = watchAnnouncer();
+    server.updateReview("rev-1", { progress: { done: 0, total: 20 } });
+    await advance(10_000);
+    expect(screen.getByText("0 of 20 rules checked")).toBeInTheDocument();
+    expect(watch.changes()).toBe(0);
+    watch.stop();
+  });
+
+  it("does not say progress for a review that is only waiting", async () => {
+    useFakeClock();
+    const server = createFakeServer({ reviews: [queued()] });
+    renderApp("#/reviews/rev-1", { server });
+    await advance(0);
+    const watch = watchAnnouncer();
+    await advance(10_000);
+    expect(watch.changes()).toBe(0);
+    watch.stop();
+  });
+
+  it("puts the focus on the review's heading when the progress panel that held it goes away", async () => {
+    const server = createFakeServer({ reviews: [running(2)] });
+    const { user } = renderApp("#/reviews/rev-1", { server });
+    await screen.findByText("2 of 20 rules checked");
+    await user.click(screen.getByRole("button", { name: "Cancel review" }));
+    expect(screen.getByRole("button", { name: "Keep going" })).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "Stop the review" }));
+    await screen.findByText("This review was cancelled");
+    expect(screen.getByRole("heading", { level: 1, name: "Acme NDA.docx" })).toHaveFocus();
+  });
+
+  it("leaves the focus alone when the person has moved it elsewhere before the review ends", async () => {
+    useFakeClock();
+    const server = createFakeServer({ reviews: [running(2)] });
+    renderApp("#/reviews/rev-1", {
+      server,
+      userOptions: { advanceTimers: vi.advanceTimersByTime },
+    });
+    await advance(0);
+    const link = screen.getByRole("link", { name: "All reviews" });
+    link.focus();
+    server.updateReview("rev-1", reviewDetail({ id: "rev-1" }));
+    await advance(1000);
+    expect(screen.getByRole("heading", { name: "Summary" })).toBeInTheDocument();
+    expect(link).toHaveFocus();
+  });
+
+  it("shows a failed review's message with its line breaks, as the server wrote it", async () => {
+    renderApp("#/reviews/rev-1", {
+      reviews: [
+        reviewDetail({
+          status: "failed",
+          error: NOTHING_CHECKED_MESSAGE,
+          findings: [],
+          results: [],
+          open: null,
+          counts: null,
+        }),
+      ],
+    });
+    const alert = await screen.findByRole("alert");
+    const message = within(alert).getByText(/No rule could be checked/);
+    // The text is the server's, all of it, and the lines stay lines.
+    expect(message.textContent).toBe(NOTHING_CHECKED_MESSAGE);
+    expect(message).toHaveClass("message-text");
+    expect(message.textContent?.split("\n")).toHaveLength(3);
+  });
+
+  it("shows the restart message of a review the server lost when it stopped", async () => {
+    renderApp("#/reviews/rev-1", {
+      reviews: [
+        reviewDetail({
+          status: "failed",
+          error: RESTART_MESSAGE,
+          findings: [],
+          results: [],
+          open: null,
+          counts: null,
+        }),
+      ],
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent(RESTART_MESSAGE);
   });
 });

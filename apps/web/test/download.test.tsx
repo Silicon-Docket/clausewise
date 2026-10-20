@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-import { screen, waitFor, within } from "@testing-library/react";
+import type { Finding } from "@clausewise/api";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { TOKEN_STORAGE_KEY } from "../src/api/token.js";
 import { REVOKE_AFTER_MS, saveBlob } from "../src/lib/download.js";
+import { createFakeServer, MESSAGES, MISMATCH_MESSAGE, type FakeServer } from "./fakeServer.js";
 import { appliedFinding, commentOnlyFinding, missingFinding, reviewDetail } from "./fixtures.js";
 import { advance, announced, installCommonHooks, renderApp, useFakeClock } from "./support.js";
 
@@ -10,46 +12,170 @@ installCommonHooks();
 
 const TOKEN = "correct-horse-battery";
 
-describe("download buttons without an access token", () => {
-  it("are plain links to the server's addresses, with the count of accepted findings", async () => {
-    renderApp("#/reviews/rev-1", {
-      reviews: [
-        reviewDetail({
-          findings: [
-            appliedFinding({ decision: "accepted" }),
-            commentOnlyFinding({ decision: "accepted" }),
-            missingFinding(),
-          ],
-        }),
-      ],
-    });
-    const primary = await screen.findByRole("link", { name: "Download redline (2 accepted)" });
-    expect(primary).toHaveAttribute("href", "/api/reviews/rev-1/docx?include=accepted");
-    expect(primary).toHaveAttribute("download");
+const accepted = (): Finding[] => [
+  appliedFinding({ decision: "accepted" }),
+  commentOnlyFinding({ decision: "accepted" }),
+  missingFinding(),
+];
 
-    const everything = screen.getByRole("link", { name: "Download with everything not rejected" });
-    expect(everything).toHaveAttribute("href", "/api/reviews/rev-1/docx?include=all");
-
-    expect(screen.getByRole("link", { name: "Download the original file" })).toHaveAttribute(
-      "href",
-      "/api/documents/doc-1/file",
-    );
-    expect(screen.getByRole("link", { name: "Download the report (Markdown)" })).toHaveAttribute(
-      "href",
-      "/api/reviews/rev-1/report?format=md",
-    );
+function open(findings: Finding[] = accepted(), options: { token?: boolean } = {}) {
+  if (options.token === true) window.sessionStorage.setItem(TOKEN_STORAGE_KEY, TOKEN);
+  return renderApp("#/reviews/rev-1", {
+    ...(options.token === true ? { config: { authRequired: true }, token: TOKEN } : {}),
+    reviews: [reviewDetail({ findings })],
   });
+}
 
-  it("puts nothing about the document in the addresses", async () => {
-    renderApp("#/reviews/rev-1", {
-      reviews: [reviewDetail({ documentName: "Secret Merger Terms.docx" })],
-    });
-    await screen.findByRole("heading", { name: "Summary" });
-    for (const link of screen.getAllByRole("link")) {
-      expect(link.getAttribute("href") ?? "").not.toMatch(/Secret|Merger/i);
+const redlineCalls = (server: FakeServer) => server.callsTo("GET", "/api/reviews/rev-1/docx");
+
+/** The redline button, whatever its count says. */
+const redlineButton = (): Promise<HTMLElement> =>
+  screen.findByRole("button", { name: /^Download redline/ });
+
+describe("download buttons: one way for every case", () => {
+  it("are buttons and never links, with or without an access token", async () => {
+    for (const token of [false, true]) {
+      const { view } = open(accepted(), { token });
+      await redlineButton();
+      for (const label of [
+        "Download redline (2 accepted)",
+        "Download with everything not rejected",
+        "Download the original file",
+        "Download the report (Markdown)",
+      ]) {
+        expect(screen.getByRole("button", { name: label })).toBeEnabled();
+      }
+      // No anchor to a file: the addresses carry nothing, and a link could not carry the token or
+      // read the notes the server sends with the redline.
+      expect(screen.queryAllByRole("link", { name: /Download/ })).toHaveLength(0);
+      expect(document.querySelector("a[download], a[href*='/api/']")).toBeNull();
+      view.unmount();
+      window.sessionStorage.clear();
     }
   });
 
+  it("fetch the redline, save it under the name the server gave, and say so", async () => {
+    const { server, saved, user } = open();
+    await user.click(await redlineButton());
+    await waitFor(() => {
+      expect(saved).toHaveLength(1);
+    });
+    const requests = redlineCalls(server);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.search).toBe("?include=accepted");
+    // No token is held, so none is sent; the file is asked for whatever its type.
+    expect(requests[0]?.authorization).toBeNull();
+    expect(requests[0]?.accept).toBe("*/*");
+    expect(saved[0]?.name).toBe("Acme NDA.redlined.docx");
+    expect(saved[0]?.blob.type).toContain("wordprocessingml");
+    // What the fake put in the file is what the server was asked for: the accepted findings.
+    expect(await saved[0]?.blob.text()).toBe("redline:accepted:term|governing-law");
+    expect(announced()).toBe("The file was saved as Acme NDA.redlined.docx.");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("send the access token with the request when one is held", async () => {
+    const { server, saved, user } = open(accepted(), { token: true });
+    await user.click(await redlineButton());
+    await waitFor(() => {
+      expect(saved).toHaveLength(1);
+    });
+    expect(redlineCalls(server)[0]?.authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("send the token even when the settings said none was needed, as soon as one is held", async () => {
+    window.sessionStorage.setItem(TOKEN_STORAGE_KEY, TOKEN);
+    const { server, saved, user } = renderApp("#/reviews/rev-1", {
+      reviews: [reviewDetail({ findings: accepted() })],
+    });
+    await user.click(await redlineButton());
+    await waitFor(() => {
+      expect(saved).toHaveLength(1);
+    });
+    expect(redlineCalls(server)[0]?.authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("fetch the everything-not-rejected file, which holds the findings nobody rejected", async () => {
+    const { server, saved, user } = open([
+      appliedFinding({ decision: "accepted", editedReplacement: "two (2) years" }),
+      commentOnlyFinding({ decision: "rejected" }),
+      missingFinding(),
+    ]);
+    await user.click(
+      await screen.findByRole("button", { name: "Download with everything not rejected" }),
+    );
+    await waitFor(() => {
+      expect(saved).toHaveLength(1);
+    });
+    expect(redlineCalls(server)[0]?.search).toBe("?include=all");
+    // The lawyer's own wording goes with the finding, and the rejected one stays out.
+    expect(await saved[0]?.blob.text()).toBe(
+      "redline:all:term=two (2) years|return-of-information",
+    );
+  });
+
+  it("save the original and the report under the names the server gave", async () => {
+    const { server, saved, user } = open();
+    await user.click(await screen.findByRole("button", { name: "Download the original file" }));
+    await waitFor(() => {
+      expect(saved).toHaveLength(1);
+    });
+    expect(saved[0]?.name).toBe("Acme NDA.docx");
+    expect(server.callsTo("GET", "/api/documents/doc-1/file")).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: "Download the report (Markdown)" }));
+    await waitFor(() => {
+      expect(saved).toHaveLength(2);
+    });
+    expect(saved[1]?.name).toBe("Acme NDA.summary.md");
+    expect(server.callsTo("GET", "/api/reviews/rev-1/report")[0]?.search).toBe("?format=md");
+  });
+
+  it("make a name from the document's when the server sends none", async () => {
+    const { server, saved, user } = open();
+    server.state.fileNames = false;
+    await user.click(await redlineButton());
+    await user.click(screen.getByRole("button", { name: "Download the original file" }));
+    await user.click(screen.getByRole("button", { name: "Download the report (Markdown)" }));
+    await waitFor(() => {
+      expect(saved).toHaveLength(3);
+    });
+    expect(saved.map((file) => file.name)).toEqual([
+      "Acme NDA (redline).docx",
+      "Acme NDA.docx",
+      "Acme NDA (report).md",
+    ]);
+  });
+
+  it("prefer the full name in filename* over the ASCII one beside it", async () => {
+    const name = `M${String.fromCodePoint(0xfc)}ller Vertrag.docx`;
+    const { saved, user } = renderApp("#/reviews/rev-1", {
+      reviews: [reviewDetail({ documentName: name, findings: accepted() })],
+    });
+    await user.click(await redlineButton());
+    await waitFor(() => {
+      expect(saved).toHaveLength(1);
+    });
+    // The header carried filename="Muller Vertrag.redlined.docx" as well; the real name wins.
+    expect(saved[0]?.name).toBe(`M${String.fromCodePoint(0xfc)}ller Vertrag.redlined.docx`);
+  });
+
+  it("put nothing about the document in the addresses", async () => {
+    const { server, user } = renderApp("#/reviews/rev-1", {
+      reviews: [reviewDetail({ documentName: "Secret Merger Terms.docx", findings: accepted() })],
+    });
+    await user.click(await redlineButton());
+    await user.click(screen.getByRole("button", { name: "Download the original file" }));
+    await waitFor(() => {
+      expect(server.callsTo("GET", /\/(docx|file)$/)).toHaveLength(2);
+    });
+    for (const call of server.calls) {
+      expect(`${call.path}${call.search}`).not.toMatch(/Secret|Merger/i);
+    }
+  });
+});
+
+describe("download buttons: when they can be used", () => {
   it("is disabled, with the reason shown, while nothing is accepted", async () => {
     renderApp("#/reviews/rev-1", { reviews: [reviewDetail()] });
     const primary = await screen.findByRole("button", { name: "Download redline (0 accepted)" });
@@ -59,14 +185,13 @@ describe("download buttons without an access token", () => {
     expect(primary).toHaveAccessibleDescription(
       "Accept at least one suggestion to download a redline.",
     );
-    expect(screen.queryByRole("link", { name: /Download redline/ })).not.toBeInTheDocument();
     // Everything that is not rejected is still on offer.
     expect(
-      screen.getByRole("link", { name: "Download with everything not rejected" }),
-    ).toBeInTheDocument();
+      screen.getByRole("button", { name: "Download with everything not rejected" }),
+    ).toBeEnabled();
   });
 
-  it("turns into a link as soon as one finding is accepted, and the count follows the decisions", async () => {
+  it("is enabled as soon as one finding is accepted, and the count follows the decisions", async () => {
     const { user } = renderApp("#/reviews/rev-1", { reviews: [reviewDetail()] });
     await screen.findByRole("button", { name: "Download redline (0 accepted)" });
 
@@ -76,16 +201,16 @@ describe("download buttons without an access token", () => {
       }),
     );
     expect(
-      await screen.findByRole("link", { name: "Download redline (1 accepted)" }),
-    ).toBeInTheDocument();
+      await screen.findByRole("button", { name: "Download redline (1 accepted)" }),
+    ).toBeEnabled();
     expect(
       screen.queryByText("Accept at least one suggestion to download a redline."),
     ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Accept all findings" }));
     expect(
-      await screen.findByRole("link", { name: "Download redline (3 accepted)" }),
-    ).toBeInTheDocument();
+      await screen.findByRole("button", { name: "Download redline (3 accepted)" }),
+    ).toBeEnabled();
 
     await user.click(
       within(screen.getByRole("article", { name: "Governing law" })).getByRole("button", {
@@ -93,8 +218,8 @@ describe("download buttons without an access token", () => {
       }),
     );
     expect(
-      await screen.findByRole("link", { name: "Download redline (2 accepted)" }),
-    ).toBeInTheDocument();
+      await screen.findByRole("button", { name: "Download redline (2 accepted)" }),
+    ).toBeEnabled();
 
     await user.click(screen.getByRole("button", { name: "Reject all findings" }));
     expect(
@@ -126,115 +251,247 @@ describe("download buttons without an access token", () => {
     ).toBeDisabled();
 
     release();
-    expect(
-      await screen.findByRole("link", { name: "Download redline (1 accepted)" }),
-    ).toBeInTheDocument();
-  });
-});
-
-describe("download buttons when an access token is needed", () => {
-  function openWithToken() {
-    window.sessionStorage.setItem(TOKEN_STORAGE_KEY, TOKEN);
-    return renderApp("#/reviews/rev-1", {
-      config: { authRequired: true },
-      token: TOKEN,
-      reviews: [
-        reviewDetail({
-          findings: [appliedFinding({ decision: "accepted" }), commentOnlyFinding()],
-        }),
-      ],
-    });
-  }
-
-  it("fetch the file with the token and hand it over as a download, under the name the server gave", async () => {
-    const { server, saved, user } = openWithToken();
-    // A button, not a link: a link could not carry the Authorization header.
-    const button = await screen.findByRole("button", { name: "Download redline (1 accepted)" });
-    expect(screen.queryByRole("link", { name: /Download redline/ })).not.toBeInTheDocument();
-
-    await user.click(button);
     await waitFor(() => {
-      expect(saved).toHaveLength(1);
+      expect(screen.getByRole("button", { name: "Download redline (1 accepted)" })).toBeEnabled();
     });
-    const requests = server.callsTo("GET", "/api/reviews/rev-1/docx");
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.search).toBe("?include=accepted");
-    expect(requests[0]?.authorization).toBe(`Bearer ${TOKEN}`);
-    expect(saved[0]?.name).toBe("Acme NDA (redline).docx");
-    expect(await saved[0]?.blob.text()).toBe("redline:accepted");
-    expect(announced()).toContain("the file was saved");
   });
 
-  it("fetches the everything-not-rejected file and the other files the same way", async () => {
-    const { server, saved, user } = openWithToken();
-    await user.click(
-      await screen.findByRole("button", { name: "Download with everything not rejected" }),
-    );
-    await waitFor(() => {
-      expect(saved).toHaveLength(1);
-    });
-    expect(await saved[0]?.blob.text()).toBe("redline:all");
-    expect(server.callsTo("GET", "/api/reviews/rev-1/docx")[0]?.search).toBe("?include=all");
-
-    await user.click(screen.getByRole("button", { name: "Download the original file" }));
-    await waitFor(() => {
-      expect(saved).toHaveLength(2);
-    });
-    expect(saved[1]?.name).toBe("original.docx");
-    expect(server.callsTo("GET", "/api/documents/doc-1/file")[0]?.authorization).toBe(
-      `Bearer ${TOKEN}`,
-    );
-
-    await user.click(screen.getByRole("button", { name: "Download the report (Markdown)" }));
-    await waitFor(() => {
-      expect(saved).toHaveLength(3);
-    });
-    // The server sent no name for the report, so the screen makes one from the document's name.
-    expect(saved[2]?.name).toBe("Acme NDA (report).md");
-  });
-
-  it("shows pending state while the file is on its way and does not ask for it twice", async () => {
-    const { server, saved, user } = openWithToken();
+  it("shows pending state while the file is on its way, keeps the focus, and does not ask twice", async () => {
+    const { server, saved, user } = open();
     const release = server.hold((call) => call.path.endsWith("/docx"));
-    await user.click(await screen.findByRole("button", { name: "Download redline (1 accepted)" }));
+    const button = await redlineButton();
+    await user.click(button);
+
     const busy = await screen.findByRole("button", { name: "Preparing the file..." });
-    expect(busy).toBeDisabled();
+    // The same button, still focusable: it is unavailable, not disabled.
+    expect(busy).toBe(button);
+    expect(busy).toHaveAttribute("aria-disabled", "true");
+    expect(busy).not.toBeDisabled();
+    expect(busy).toHaveFocus();
     await user.click(busy);
     release();
     await waitFor(() => {
       expect(saved).toHaveLength(1);
     });
-    expect(server.callsTo("GET", "/api/reviews/rev-1/docx")).toHaveLength(1);
-    expect(
-      await screen.findByRole("button", { name: "Download redline (1 accepted)" }),
-    ).toBeEnabled();
+    expect(redlineCalls(server)).toHaveLength(1);
+    const again = await screen.findByRole("button", { name: "Download redline (2 accepted)" });
+    expect(again).not.toHaveAttribute("aria-disabled");
+    expect(again).toHaveFocus();
   });
+});
 
-  it("shows the server's message when the file can not be made, and saves nothing", async () => {
-    const { server, saved, user } = openWithToken();
-    server.failNext((call) => call.path.endsWith("/docx"), {
-      status: 409,
-      code: "conflict",
-      message: "The review is not finished.",
-    });
-    await user.click(await screen.findByRole("button", { name: "Download redline (1 accepted)" }));
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(
-      "The file could not be downloaded. The review is not finished.",
-    );
-    expect(saved).toHaveLength(0);
-    expect(announced()).toContain("The review is not finished.");
-  });
+describe("when the server has notes about a file", () => {
+  const NOTES = [
+    "The wording for Duration of confidentiality obligations could not be written as a tracked change, so it is a comment instead.",
+    "A comment on Governing law was moved to the whole paragraph.",
+  ];
 
-  it("uses a fetch for the file as soon as a token is held, even if the settings said none was needed", async () => {
-    window.sessionStorage.setItem(TOKEN_STORAGE_KEY, TOKEN);
-    const { saved, user } = renderApp("#/reviews/rev-1", {
-      reviews: [reviewDetail({ findings: [appliedFinding({ decision: "accepted" })] })],
-    });
-    await user.click(await screen.findByRole("button", { name: "Download redline (1 accepted)" }));
+  it("shows them in a status that stays, says the file was still saved, and names the file", async () => {
+    const { server, saved, user } = open();
+    server.state.redline.warnings = NOTES;
+    await redlineButton();
+    // The box that will hold the notice is in the page before there is anything to say, which is
+    // what makes a screen reader read what is put into it.
+    const box = document.querySelector<HTMLElement>(".download-notes");
+    expect(box).not.toBeNull();
+    expect(box).toHaveAttribute("role", "status");
+
+    await user.click(await redlineButton());
     await waitFor(() => {
       expect(saved).toHaveLength(1);
     });
+    // The file is saved, notes or not.
+    expect(saved[0]?.name).toBe("Acme NDA.redlined.docx");
+
+    const notice = await within(box as HTMLElement).findByText(
+      /"Acme NDA\.redlined\.docx" was still saved\. The server noted these things while building it:/,
+    );
+    const body = notice.closest(".notice") as HTMLElement;
+    expect(body).toHaveTextContent("Saved, with 2 notes to read");
+    for (const note of NOTES) expect(within(body).getByText(note)).toBeInTheDocument();
+    expect(within(body).getAllByRole("listitem")).toHaveLength(2);
+
+    // A status, not an alert: nothing cuts in, and the page is not locked behind it.
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    // The notice speaks for itself; the polite announcer does not say the same thing again.
+    expect(announced()).toBe("");
+  });
+
+  it("use the singular for one note", async () => {
+    const { server, user } = open();
+    server.state.redline.warnings = [NOTES[1] as string];
+    await user.click(await redlineButton());
+    expect(await screen.findByText("Saved, with 1 note to read")).toBeInTheDocument();
+    expect(
+      screen.getByText(/was still saved\. The server noted this while building it:/),
+    ).toBeInTheDocument();
+  });
+
+  it("stay until they are dismissed, through other changes and other downloads", async () => {
+    const { server, saved, user } = open();
+    server.state.redline.warnings = NOTES;
+    await user.click(await redlineButton());
+    await screen.findByText("Saved, with 2 notes to read");
+
+    // Another decision, another file: the notice is still there.
+    await user.click(
+      within(
+        screen.getByRole("article", { name: "Return or destruction of information" }),
+      ).getByRole("button", { name: "Accept" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Download the original file" }));
+    await waitFor(() => {
+      expect(saved).toHaveLength(2);
+    });
+    expect(screen.getByText("Saved, with 2 notes to read")).toBeInTheDocument();
+  });
+
+  it("go when dismissed, and the focus goes to the summary heading, not to the top of the page", async () => {
+    const { server, user } = open();
+    server.state.redline.warnings = NOTES;
+    await user.click(await redlineButton());
+    await screen.findByText("Saved, with 2 notes to read");
+
+    const dismiss = screen.getByRole("button", {
+      name: "Dismiss the notes about Acme NDA.redlined.docx",
+    });
+    await user.click(dismiss);
+    expect(screen.queryByText("Saved, with 2 notes to read")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Summary" })).toHaveFocus();
+    // The box stays in the page for the next notice.
+    expect(document.querySelector(".download-notes")).not.toBeNull();
+  });
+
+  it("are replaced by the notes of the next redline, and go when that one has none", async () => {
+    const { server, user } = open();
+    server.state.redline.warnings = NOTES;
+    await user.click(await redlineButton());
+    await screen.findByText("Saved, with 2 notes to read");
+
+    server.state.redline.warnings = [NOTES[0] as string];
+    await user.click(
+      await screen.findByRole("button", { name: "Download with everything not rejected" }),
+    );
+    await screen.findByText("Saved, with 1 note to read");
+    expect(screen.queryByText("Saved, with 2 notes to read")).not.toBeInTheDocument();
+
+    server.state.redline.warnings = [];
+    await user.click(await redlineButton());
+    await waitFor(() => {
+      expect(screen.queryByText(/Saved, with/)).not.toBeInTheDocument();
+    });
+    expect(announced()).toBe("The file was saved as Acme NDA.redlined.docx.");
+  });
+
+  it("are shown, as one note that says so, when the header can not be read", async () => {
+    const server = createFakeServer({ reviews: [reviewDetail({ findings: accepted() })] });
+    const wrapped = {
+      ...server,
+      // A header that is not valid percent-encoding, as a proxy or a bug might leave it.
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const response = await server.fetch(input, init);
+        if (!String(input).includes("/docx")) return response;
+        const headers = new Headers(response.headers);
+        headers.set("X-Clausewise-Warnings", "%E0%A4%A");
+        return new Response(response.body, { status: response.status, headers });
+      }) as typeof globalThis.fetch,
+    };
+    const { saved, user } = renderApp("#/reviews/rev-1", { server: wrapped });
+    await user.click(await redlineButton());
+    await waitFor(() => {
+      expect(saved).toHaveLength(1);
+    });
+    expect(
+      await screen.findByText(/The server added notes about this file, but they could not be read/),
+    ).toBeInTheDocument();
+  });
+
+  it("are not made up when the server has none", async () => {
+    const { saved, user } = open();
+    await user.click(await redlineButton());
+    await waitFor(() => {
+      expect(saved).toHaveLength(1);
+    });
+    expect(screen.queryByText(/Saved, with/)).not.toBeInTheDocument();
+    expect(document.querySelector(".download-notes")?.textContent).toBe("");
+  });
+});
+
+describe("when a download fails", () => {
+  it("shows the server's message when the file can not be made, and saves nothing", async () => {
+    const { server, saved, user } = open();
+    server.failNext((call) => call.path.endsWith("/docx"), {
+      status: 409,
+      code: "conflict",
+      message: MESSAGES.redlineNotFinished,
+    });
+    await user.click(await redlineButton());
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(
+      `The file could not be downloaded. ${MESSAGES.redlineNotFinished}`,
+    );
+    expect(saved).toHaveLength(0);
+    // The alert is read out by itself; the polite region stays quiet.
+    expect(announced()).toBe("");
+  });
+
+  it("shows the redline writer's message when the stored file is not the one that was reviewed", async () => {
+    const { server, saved, user } = open();
+    server.state.redline.mismatch = MISMATCH_MESSAGE;
+    await user.click(await redlineButton());
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(MISMATCH_MESSAGE);
+    expect(alert).toHaveTextContent("Check that this is the file that was reviewed");
+    expect(saved).toHaveLength(0);
+    expect(screen.queryByText(/Saved, with/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the button where it was and works again on the next try", async () => {
+    const { server, saved, user } = open();
+    server.failNext((call) => call.path.endsWith("/docx"), {
+      status: 500,
+      code: "internal_error",
+      message: "Something went wrong inside Clausewise. The details are in the server log.",
+    });
+    const button = await redlineButton();
+    await user.click(button);
+    await screen.findByRole("alert");
+    expect(screen.getByRole("button", { name: /^Download redline/ })).toBe(button);
+    expect(button).toHaveFocus();
+    expect(button).not.toHaveAttribute("aria-disabled");
+
+    await user.click(button);
+    await waitFor(() => {
+      expect(saved).toHaveLength(1);
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows that the server could not be reached", async () => {
+    const server = createFakeServer({ reviews: [reviewDetail({ findings: accepted() })] });
+    const wrapped = {
+      ...server,
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).includes("/docx")) throw new TypeError("fetch failed");
+        return server.fetch(input, init);
+      }) as typeof globalThis.fetch,
+    };
+    const { saved, user } = renderApp("#/reviews/rev-1", { server: wrapped });
+    await user.click(await redlineButton());
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The Clausewise server could not be reached.",
+    );
+    expect(saved).toHaveLength(0);
+  });
+
+  it("shows a refused token as the token screen, because the server said no", async () => {
+    const { server, user } = open(accepted(), { token: true });
+    await redlineButton();
+    server.state.token = "a-different-token-1234";
+    await user.click(await redlineButton());
+    expect(await screen.findByLabelText("Access token")).toBeInTheDocument();
   });
 });
 
@@ -295,5 +552,20 @@ describe("saveBlob", () => {
     expect(document.querySelector("a[download]")).toBeNull();
     await advance(REVOKE_AFTER_MS);
     expect(revoke).toHaveBeenCalledWith("blob:test-url");
+  });
+});
+
+describe("a click that the browser sends to an unavailable button", () => {
+  it("does nothing, because aria-disabled stops nothing by itself", async () => {
+    const { server, user } = open();
+    const release = server.hold((call) => call.path.endsWith("/docx"));
+    const button = await redlineButton();
+    await user.click(button);
+    await screen.findByRole("button", { name: "Preparing the file..." });
+    fireEvent.click(button);
+    release();
+    await waitFor(() => {
+      expect(redlineCalls(server)).toHaveLength(1);
+    });
   });
 });

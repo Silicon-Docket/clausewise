@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attachmentDisposition, cleanFileName, stemOf } from "../src/filename.js";
+import { attachmentDisposition, cleanFileName, derivedFileName, stemOf } from "../src/filename.js";
 
 describe("cleanFileName", () => {
   const cases: [string, string][] = [
@@ -41,6 +41,36 @@ describe("cleanFileName", () => {
     const name = `${"a".repeat(300)}.${"b".repeat(50)}`;
     expect([...cleanFileName(name)]).toHaveLength(200);
   });
+
+  describe("with a name as long as the upload", () => {
+    it("keeps the start and the extension of a name of millions of characters", () => {
+      const name = `${"n".repeat(3_000_000)}.docx`;
+      const cleaned = cleanFileName(name);
+      expect(cleaned).toBe(`${"n".repeat(195)}.docx`);
+    });
+
+    it("finds the base name after the last separator without looking at the rest", () => {
+      expect(cleanFileName(`${"x/".repeat(2_000_000)}last.docx`)).toBe("last.docx");
+      expect(cleanFileName(`${"x\\".repeat(2_000_000)}last.docx`)).toBe("last.docx");
+      expect(cleanFileName(`${"y".repeat(2_000_000)}/z.docx`)).toBe("z.docx");
+    });
+
+    it("still takes control characters and overrides out of the part that is kept", () => {
+      const name = `\u202e\u0007${"n".repeat(3_000_000)}.docx`;
+      expect(cleanFileName(name)).toBe(`${"n".repeat(195)}.docx`);
+    });
+
+    it("does not take memory in proportion to the length of the name", () => {
+      // Spreading a name into its characters takes about 15 bytes of memory for each; for this
+      // name that is well over 300 MB. The limit leaves room for a slow collector.
+      const name = `${"n".repeat(25_000_000)}.docx`;
+      const before = process.memoryUsage().rss;
+      const cleaned = cleanFileName(name);
+      const grown = process.memoryUsage().rss - before;
+      expect(cleaned).toBe(`${"n".repeat(195)}.docx`);
+      expect(grown).toBeLessThan(120 * 1024 * 1024);
+    });
+  });
 });
 
 describe("attachmentDisposition", () => {
@@ -74,5 +104,30 @@ describe("stemOf", () => {
     expect(stemOf("a.b.docx")).toBe("a.b");
     expect(stemOf("noextension")).toBe("noextension");
     expect(stemOf(".docx")).toBe(".docx");
+  });
+});
+
+describe("derivedFileName", () => {
+  it("puts the suffix after the name without its extension", () => {
+    expect(derivedFileName("nda.docx", ".redlined.docx")).toBe("nda.redlined.docx");
+    expect(derivedFileName("a.b.docx", ".summary.md")).toBe("a.b.summary.md");
+    expect(derivedFileName("noextension", ".report.json")).toBe("noextension.report.json");
+    expect(derivedFileName(".docx", ".redlined.docx")).toBe(".docx.redlined.docx");
+  });
+
+  it("cuts the name, not the suffix, when the two together would be too long", () => {
+    for (const suffix of [".redlined.docx", ".summary.md", ".report.json"]) {
+      const name = `${"n".repeat(195)}.docx`;
+      expect(name).toHaveLength(200);
+      const derived = derivedFileName(name, suffix);
+      expect([...derived]).toHaveLength(200);
+      expect(derived.endsWith(suffix)).toBe(true);
+    }
+    // Whole characters, with characters outside the basic plane in the name.
+    const emoji = `${"\u{1F4C4}".repeat(195)}.docx`;
+    const derived = derivedFileName(emoji, ".redlined.docx");
+    expect([...derived]).toHaveLength(200);
+    expect(derived.endsWith(".redlined.docx")).toBe(true);
+    expect(derived).toBe(Buffer.from(derived, "utf8").toString("utf8"));
   });
 });

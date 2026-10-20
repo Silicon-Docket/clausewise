@@ -6,6 +6,7 @@ import {
 } from "@clausewise/api";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { errorMessage, isAbortError } from "../api/client.js";
+import { Button } from "../components/Button.js";
 import { ConfirmButton } from "../components/ConfirmButton.js";
 import { Notice } from "../components/Notice.js";
 import { useAnnounce } from "../hooks/useAnnounce.js";
@@ -27,17 +28,32 @@ export function PlaybooksScreen() {
   const [selection, setSelection] = useState<Selection | null>(null);
   const [switchTo, setSwitchTo] = useState<Selection | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  // Set when the editor on screen is about to be replaced by another that the person asked for,
+  // so that the new one takes the focus: the control they used is gone with the old editor.
+  const [focusEditor, setFocusEditor] = useState(false);
   const unsaved = useRef(false);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const pane = useRef<HTMLDivElement>(null);
+  const keepEditing = useRef<HTMLButtonElement>(null);
 
-  const open = (next: Selection): void => {
+  const open = (next: Selection, takeFocus = false): void => {
     if (unsaved.current) {
       setSwitchTo(next);
       return;
     }
     setSwitchTo(null);
     setMessage(null);
+    setFocusEditor(takeFocus);
     setSelection(next);
   };
+
+  // The question about unsaved changes appears next to the list the person clicked in. It gets the
+  // focus on its safe answer, as a confirmation does, and is told to a screen reader.
+  useEffect(() => {
+    if (switchTo === null) return;
+    keepEditing.current?.focus();
+    announce("You have changes that are not saved. Opening another playbook throws them away.");
+  }, [switchTo, announce]);
   const setUnsaved = useCallback((value: boolean) => {
     unsaved.current = value;
   }, []);
@@ -47,7 +63,9 @@ export function PlaybooksScreen() {
 
   return (
     <div>
-      <h1>Playbooks</h1>
+      <h1 ref={heading} tabIndex={-1}>
+        Playbooks
+      </h1>
       <p className="lead">
         A playbook is the list of positions a contract is checked against. The built-in ones are
         read-only: open one and choose Copy to edit to make your own.
@@ -79,7 +97,7 @@ export function PlaybooksScreen() {
           ) : null}
         </nav>
 
-        <div className="playbook-pane">
+        <div className="playbook-pane" ref={pane}>
           {switchTo === null ? null : (
             <Notice kind="warning" title="You have changes that are not saved">
               <p>Opening another playbook throws them away.</p>
@@ -90,37 +108,47 @@ export function PlaybooksScreen() {
                   onClick={() => {
                     unsaved.current = false;
                     setMessage(null);
+                    setFocusEditor(true);
                     setSelection(switchTo);
                     setSwitchTo(null);
                   }}
                 >
                   Discard and open
                 </button>
-                <button type="button" className="button" onClick={() => setSwitchTo(null)}>
+                <button
+                  ref={keepEditing}
+                  type="button"
+                  className="button"
+                  onClick={() => {
+                    setSwitchTo(null);
+                    // The question goes away; the person goes back to what they were typing.
+                    pane.current?.querySelector("textarea")?.focus();
+                  }}
+                >
                   Keep editing
                 </button>
               </div>
             </Notice>
           )}
-          {message === null ? null : (
-            <p className="saved-note" aria-live="polite">
-              {message}
-            </p>
-          )}
+          {/* Said once through the announcer; this is the visible copy. */}
+          {message === null ? null : <p className="saved-note">{message}</p>}
           {selection === null ? (
             <p className="empty">Choose a playbook to read it.</p>
           ) : selection.kind === "draft" ? (
             <PlaybookEditor
               key={`draft:${selection.from}`}
               mode={selection}
+              takeFocus={focusEditor}
               onUnsavedChange={setUnsaved}
-              onCopy={(yaml, from) => open({ kind: "draft", yaml, from })}
+              onCopy={(yaml, from) => open({ kind: "draft", yaml, from }, true)}
               onSaved={(detail, created) => {
                 list.reload();
                 setMessage(`Saved "${detail.name}".`);
                 announce(`Saved ${detail.name}.`);
                 if (created) {
                   unsaved.current = false;
+                  // The draft's Save button goes with the draft; the saved playbook takes over.
+                  setFocusEditor(true);
                   setSelection({ kind: "saved", id: detail.id });
                 }
               }}
@@ -130,8 +158,9 @@ export function PlaybooksScreen() {
             <SavedPlaybook
               key={selection.id}
               id={selection.id}
+              takeFocus={focusEditor}
               onUnsavedChange={setUnsaved}
-              onCopy={(yaml, from) => open({ kind: "draft", yaml, from })}
+              onCopy={(yaml, from) => open({ kind: "draft", yaml, from }, true)}
               onSaved={(detail) => {
                 list.reload();
                 setMessage(`Saved "${detail.name}".`);
@@ -143,6 +172,8 @@ export function PlaybooksScreen() {
                 setSelection(null);
                 setMessage(`Deleted "${name}".`);
                 announce(`Deleted ${name}.`);
+                // The editor, with the button that was just pressed, is gone: back to the top.
+                heading.current?.focus();
               }}
             />
           )}
@@ -172,6 +203,8 @@ function PlaybookItem(props: { playbook: PlaybookSummary; selected: boolean; onO
 }
 
 type EditorProps = {
+  /** Take the focus when the editor opens, for an editor that replaces the one that had it. */
+  takeFocus: boolean;
   onUnsavedChange: (unsaved: boolean) => void;
   onCopy: (yaml: string, from: string) => void;
   onSaved: (detail: PlaybookDetail, created: boolean) => void;
@@ -209,10 +242,12 @@ function PlaybookEditor(
     mode: { kind: "saved"; detail: PlaybookDetail } | { kind: "draft"; yaml: string; from: string };
   },
 ) {
-  const { mode, onUnsavedChange, onCopy, onSaved, onDeleted } = props;
+  const { mode, takeFocus, onUnsavedChange, onCopy, onSaved, onDeleted } = props;
   const { api } = useServices();
   const fieldId = useId();
   const validationId = useId();
+  const saveHintId = useId();
+  const heading = useRef<HTMLHeadingElement>(null);
 
   const initial = mode.kind === "saved" ? mode.detail.yaml : mode.yaml;
   const editable = mode.kind === "draft" || mode.detail.editable;
@@ -233,6 +268,14 @@ function PlaybookEditor(
     onUnsavedChange(editable && changed);
     return () => onUnsavedChange(false);
   }, [editable, changed, onUnsavedChange]);
+
+  // An editor that was opened by a press on a control in the editor it replaced, such as Copy to
+  // edit, starts with its heading focused: a screen reader says which playbook this is, and the
+  // next press of Tab is the text.
+  useEffect(() => {
+    if (takeFocus) heading.current?.focus();
+    // Once, when the editor opens: later changes of the flag are for editors yet to open.
+  }, []);
 
   // Checks the text a short while after typing stops. An answer for text that has since changed is
   // dropped, so a slow answer can not overwrite a newer one.
@@ -285,6 +328,11 @@ function PlaybookEditor(
   const valid = settled !== null && settled.status === "done" && settled.result.ok;
   const canSave = editable && valid && (mode.kind === "draft" || changed) && !saving;
 
+  // What is read out about the check, once the person has typed: a short sentence, and only when
+  // it changes, not the list of problems and not on every pause. The first check, when the editor
+  // opens, is on the screen already.
+  const spoken = !changed || settled === null ? "" : spokenCheck(settled);
+
   const saveHint = !editable
     ? null
     : settled === null
@@ -330,7 +378,9 @@ function PlaybookEditor(
 
   return (
     <section className="editor" aria-label={name}>
-      <h2>{name}</h2>
+      <h2 ref={heading} tabIndex={-1}>
+        {name}
+      </h2>
       {mode.kind === "draft" ? (
         <p className="hint">
           This is a copy of &quot;{mode.from}&quot;. Change the name in it so that you can tell your
@@ -353,33 +403,41 @@ function PlaybookEditor(
         value={text}
         readOnly={!editable}
         aria-describedby={editable ? validationId : undefined}
+        aria-invalid={settled?.status === "done" && !settled.result.ok ? true : undefined}
         onChange={(event) => setText(event.target.value)}
       />
 
       {editable ? (
-        <div id={validationId} className="validation" aria-live="polite">
-          <ValidationView validation={validation} text={text} />
-        </div>
+        <>
+          <div id={validationId} className="validation">
+            <ValidationView validation={validation} text={text} />
+          </div>
+          <p className="visually-hidden" aria-live="polite">
+            {spoken}
+          </p>
+        </>
       ) : null}
 
       {saveError === null ? null : (
         <Notice kind="error" title="The playbook was not saved">
-          <p>{saveError}</p>
+          <p className="message-text">{saveError}</p>
         </Notice>
       )}
       {deleteError === null ? null : (
         <Notice kind="error" title="The playbook was not deleted">
-          <p>{deleteError}</p>
+          <p className="message-text">{deleteError}</p>
         </Notice>
       )}
 
       <div className="row">
         {editable ? (
-          <button
-            type="button"
+          // Unavailable, not disabled: after a save the button has nothing left to do and is
+          // still where the focus is.
+          <Button
             className="button button-primary"
-            disabled={!canSave}
+            unavailable={!canSave}
             aria-busy={saving}
+            aria-describedby={saveHint === null ? undefined : saveHintId}
             onClick={() => void save()}
           >
             {saving
@@ -387,7 +445,7 @@ function PlaybookEditor(
               : mode.kind === "draft"
                 ? "Save as a new playbook"
                 : "Save changes"}
-          </button>
+          </Button>
         ) : (
           <button
             type="button"
@@ -408,9 +466,19 @@ function PlaybookEditor(
           />
         ) : null}
       </div>
-      {saveHint === null ? null : <p className="hint">{saveHint}</p>}
+      {saveHint === null ? null : (
+        <p id={saveHintId} className="hint">
+          {saveHint}
+        </p>
+      )}
     </section>
   );
+}
+
+function spokenCheck(settled: Exclude<Validation, { status: "checking" }>): string {
+  if (settled.status === "failed") return "Playbook check: it could not be done.";
+  if (settled.result.ok) return "Playbook check: no problems.";
+  return `Playbook check: ${plural(settled.result.problems.length, "problem")}.`;
 }
 
 function ValidationView(props: { validation: Validation; text: string }) {
@@ -421,7 +489,7 @@ function ValidationView(props: { validation: Validation; text: string }) {
   if (validation.status === "failed") {
     return (
       <Notice kind="warning">
-        <p>The playbook could not be checked. {validation.message}</p>
+        <p className="message-text">The playbook could not be checked. {validation.message}</p>
       </Notice>
     );
   }
@@ -443,7 +511,9 @@ function ValidationView(props: { validation: Validation; text: string }) {
       </p>
       <ul>
         {result.problems.map((problem, index) => (
-          <li key={index}>{problem}</li>
+          <li key={index} className="message-text">
+            {problem}
+          </li>
         ))}
       </ul>
     </div>

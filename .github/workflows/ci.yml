@@ -10,6 +10,20 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # A real PostgreSQL for the one server test that does not run on the embedded database. The
+    # password is a throwaway for a container that exists only for this job.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: ci-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username=postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -21,3 +35,96 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+        env:
+          # The test makes a database of its own on this server and drops it at the end. With the
+          # variable unset it tries a Postgres from the embedded-postgres package, and skips if
+          # that cannot start.
+          CLAUSEWISE_TEST_DATABASE_URL: postgres://postgres:ci-only-password@localhost:5432/postgres
+
+  # Builds the image and runs it the way a person would, with docker compose. Nothing is pushed.
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # A throwaway for the containers of this job.
+      POSTGRES_PASSWORD: ci-only-password
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build --tag clausewise:local .
+
+      - name: Check what the image holds
+        run: |
+          set -eu
+          test "$(docker run --rm --entrypoint id clausewise:local -u)" = 1000
+          docker run --rm --entrypoint sh clausewise:local -c '
+            set -eu
+            cd /app
+            found=$(find . -path ./node_modules -prune -o \
+              \( -name "*.test.*" -o -name "*.docx" -o -name ".env*" -o -name fixtures \
+                 -o -name evals -o -name test -o -name "*.ts" \) -print)
+            if [ -n "$found" ]; then
+              echo "Files that do not belong in the image:"
+              echo "$found"
+              exit 1
+            fi
+            ls -A /app'
+
+      - name: Start the stack
+        run: docker compose up --detach --no-build
+
+      - name: Wait for the app to be healthy
+        run: |
+          set -eu
+          app=$(docker compose ps --quiet app)
+          for attempt in $(seq 1 90); do
+            state=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$app")
+            echo "attempt $attempt: $state"
+            if [ "$state" = healthy ]; then exit 0; fi
+            if [ "$state" = unhealthy ]; then break; fi
+            sleep 2
+          done
+          echo "The app did not become healthy."
+          exit 1
+
+      - name: Ask the app
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:8787
+
+          test "$(curl --fail --silent --show-error --max-time 10 "$base/healthz")" = '{"ok":true}'
+
+          curl --fail --silent --show-error --max-time 10 "$base/api/config" | tee config.json
+          echo
+          # No key is set: the app runs, and says that reviews cannot run yet.
+          grep -q '"configured":false' config.json
+
+          curl --fail --silent --show-error --max-time 10 --dump-header headers.txt --output index.html "$base/"
+          cat headers.txt
+          grep -qi "^content-security-policy: default-src 'self'" headers.txt
+          grep -qi '^x-content-type-options: nosniff' headers.txt
+          grep -q '<div id="root">' index.html
+
+          # The database is the PostgreSQL of the stack, and it is not published.
+          docker compose logs app | grep -q '"database":"postgres"'
+          test -z "$(docker compose port postgres 5432 2>/dev/null)"
+
+          # A request addressed to another name is refused (DNS rebinding).
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 --header 'Host: evil.example' "$base/api/config")" = 421
+
+          # The container runs as the node user, on a read-only file system with a volume to write to.
+          test "$(docker compose exec -T app id -u)" = 1000
+          if docker compose exec -T app sh -c 'touch /home/node/not-writable' 2>/dev/null; then
+            echo "The root file system of the app is writable."
+            exit 1
+          fi
+          docker compose exec -T app sh -c 'touch /data/writable && rm /data/writable'
+
+      - name: Logs of the stack
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Stop the stack and delete its volumes
+        if: always()
+        run: docker compose down --volumes

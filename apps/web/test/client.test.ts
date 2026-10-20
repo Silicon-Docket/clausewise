@@ -7,6 +7,9 @@ import {
   fileNameFromDisposition,
   isAbortError,
   paths,
+  UNREADABLE_WARNINGS,
+  warningsFromHeader,
+  WARNINGS_HEADER,
 } from "../src/api/client.js";
 
 interface Sent {
@@ -329,6 +332,28 @@ describe("files", () => {
     expect(file.fileName).toBe("Acme NDA (redline).docx");
   });
 
+  it("ask for any type of file, and not for JSON", async () => {
+    const s = script(new Response("bytes", { status: 200 }));
+    await createApiClient({ fetch: s.fetch }).fetchFile(paths.docx("r1", "accepted"));
+    expect(headersOf(s.sent[0]!)["Accept"]).toBe("*/*");
+    expect(s.sent[0]?.init.credentials).toBe("omit");
+    expect(s.sent[0]?.init.cache).toBe("no-store");
+  });
+
+  it("come back with the notes the server sent in the warnings header", async () => {
+    const notes = ["A change became a comment, 100% sure.", 'Caf\u00e9 & "quotes", [brackets]'];
+    const s = script(
+      new Response("docx bytes", {
+        status: 200,
+        headers: { [WARNINGS_HEADER]: encodeURIComponent(JSON.stringify(notes)) },
+      }),
+      new Response("docx bytes", { status: 200 }),
+    );
+    const client = createApiClient({ fetch: s.fetch });
+    expect((await client.fetchFile(paths.docx("r1", "all"))).warnings).toEqual(notes);
+    expect((await client.fetchFile(paths.docx("r1", "all"))).warnings).toEqual([]);
+  });
+
   it("report a failed download with the server's message", async () => {
     const s = script(failure(409, "conflict", "The review is not finished."));
     await expect(
@@ -343,6 +368,13 @@ describe("files", () => {
 describe("fileNameFromDisposition", () => {
   it.each([
     [`attachment; filename="plain.docx"`, "plain.docx"],
+    // filename* is read first, and the language tag some servers put in it is allowed.
+    [`attachment; filename="ascii.docx"; filename*=UTF-8'en'Real%20name.docx`, "Real name.docx"],
+    [`attachment; filename*=utf-8''lower.docx; filename="other.docx"`, "lower.docx"],
+    // A filename* that can not be read falls back to the plain one beside it.
+    [`attachment; filename="plain.docx"; filename*=UTF-8''bad%ZZ.docx`, "plain.docx"],
+    // A charset other than UTF-8 is not guessed at.
+    [`attachment; filename="plain.docx"; filename*=ISO-8859-1''caf%E9.docx`, "plain.docx"],
     [`attachment; filename=plain.docx`, "plain.docx"],
     [
       `attachment; filename="ascii.docx"; filename*=UTF-8''caf%C3%A9.docx`,
@@ -361,6 +393,40 @@ describe("fileNameFromDisposition", () => {
   it("cuts a very long name", () => {
     const name = fileNameFromDisposition(`attachment; filename="${"a".repeat(500)}.docx"`);
     expect(name?.length).toBe(200);
+  });
+});
+
+describe("warningsFromHeader", () => {
+  const header = (value: unknown): string => encodeURIComponent(JSON.stringify(value));
+
+  it("reads a percent-encoded JSON list of strings, in order", () => {
+    expect(warningsFromHeader(header(["one", "two"]))).toEqual(["one", "two"]);
+    expect(warningsFromHeader(header([]))).toEqual([]);
+  });
+
+  it("keeps characters that need encoding, such as non-ASCII text, quotes and percent signs", () => {
+    const note = `100% of the "caf${String.fromCodePoint(0xe9)}" clause, [moved]; a, b`;
+    expect(warningsFromHeader(header([note]))).toEqual([note]);
+  });
+
+  it("finds nothing to say in a missing or empty header", () => {
+    expect(warningsFromHeader(null)).toEqual([]);
+    expect(warningsFromHeader("")).toEqual([]);
+    expect(warningsFromHeader("   ")).toEqual([]);
+  });
+
+  it("drops notes that are only spaces", () => {
+    expect(warningsFromHeader(header(["  ", "kept ", ""]))).toEqual(["kept"]);
+  });
+
+  it.each([
+    ["a broken percent escape", "%E0%A4%A"],
+    ["text that is not JSON", encodeURIComponent("not json")],
+    ["JSON that is not a list", header({ warnings: ["x"] })],
+    ["a list with something other than text in it", header(["x", 2])],
+    ["a single string", header("x")],
+  ])("reports %s as one note that says the notes could not be read", (_what, value) => {
+    expect(warningsFromHeader(value)).toEqual([UNREADABLE_WARNINGS]);
   });
 });
 

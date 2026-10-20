@@ -61,14 +61,19 @@ export function countBySeverity(findings: readonly Finding[]): Record<Severity, 
   return counts;
 }
 
-/** What a bulk change does to the screen at once, before the server has answered. */
+/**
+ * What a bulk change does to the screen at once, before the server has answered. A finding that
+ * is not touched, or already has the decision, stays the very same object, so that its card is
+ * not drawn again.
+ */
 export function applyBulk(
   findings: readonly Finding[],
   decision: Decision,
   severities: readonly Severity[] | undefined,
 ): Finding[] {
   return findings.map((finding) =>
-    severities === undefined || severities.includes(finding.severity)
+    (severities === undefined || severities.includes(finding.severity)) &&
+    finding.decision !== decision
       ? { ...finding, decision }
       : finding,
   );

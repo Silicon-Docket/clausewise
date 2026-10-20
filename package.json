@@ -19,7 +19,8 @@
     "clausewise": "node apps/cli/bin/clausewise.mjs",
     "eval": "tsx evals/src/run.ts",
     "server": "tsx apps/server/src/main.ts",
-    "dev": "tsx apps/server/src/main.ts"
+    "dev": "tsx apps/server/src/main.ts",
+    "start": "node apps/server/dist/main.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",

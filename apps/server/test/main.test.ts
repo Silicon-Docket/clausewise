@@ -138,6 +138,31 @@ describe("the server process", () => {
   );
 
   it(
+    "stops with exit code 1 on an error nobody caught, and logs its kind and not what it said",
+    { timeout: TIMEOUT },
+    async () => {
+      // The launcher raises the error on a signal: a rejection nobody handles, or an exception.
+      for (const [signal, message] of [
+        ["SIGUSR2", "an unhandled promise rejection"],
+        ["SIGHUP", "an uncaught exception"],
+      ] as const) {
+        const running = await startMain({});
+        running.child.kill(signal);
+        const { code } = await running.exited;
+        expect(code, message).toBe(1);
+        const line = running
+          .output()
+          .split("\n")
+          .find((l) => l.includes(`"${message}"`));
+        expect(line, message).toBeDefined();
+        expect(JSON.parse(line ?? "{}")).toMatchObject({ level: "error", name: "Error" });
+        // What the error said is a sentence of a contract, and it is nowhere in the output.
+        expect(running.output(), message).not.toContain("penalty");
+      }
+    },
+  );
+
+  it(
     "refuses to start on a setting that is wrong, in one line and with exit code 1",
     { timeout: TIMEOUT },
     async () => {

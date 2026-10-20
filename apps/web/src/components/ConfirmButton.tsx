@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Button } from "./Button.js";
 
 /**
  * A button that asks once before it does something that cannot be undone. The question appears in
@@ -35,17 +36,19 @@ export function ConfirmButton(props: {
   }, [asking]);
 
   if (!asking) {
+    // Busy is "unavailable", not disabled: the focus returns to this button after the answer, and
+    // a disabled button would not take it.
     return (
-      <button
+      <Button
         ref={opener}
-        type="button"
         className="button button-danger"
-        disabled={disabled || busy}
+        disabled={disabled}
+        unavailable={busy}
         aria-busy={busy}
         onClick={() => setAsking(true)}
       >
         {label}
-      </button>
+      </Button>
     );
   }
   return (

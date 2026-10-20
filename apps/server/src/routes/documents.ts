@@ -2,19 +2,22 @@ import { createHash } from "node:crypto";
 import type { DocumentListResponse, DocumentSummary } from "@clausewise/api";
 import { DocxError, parseDocx } from "@clausewise/docx";
 import { desc, eq, sql } from "drizzle-orm";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { readBody, sizeLimitText } from "../body.js";
 import { documents, reviews } from "../db/schema.js";
 import type { AppDeps } from "../deps.js";
 import type { AppEnv } from "../env.js";
 import { HttpError, badRequest, notFound, tooLarge } from "../errors.js";
-import { attachmentDisposition, cleanFileName } from "../filename.js";
+import { DOCX_TYPE, attachmentDisposition, cleanFileName } from "../filename.js";
 import { mediaType } from "../security.js";
+import { createSlots } from "../slots.js";
 import { uuidParam } from "./ids.js";
+import { limitParam } from "./limit.js";
 
-const DOCX_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 // The boundary lines and headers of the form around the file.
 const MULTIPART_OVERHEAD = 64 * 1024;
+/** Uploads read at the same time. The next one is told to try again. */
+export const MAX_UPLOADS_IN_FLIGHT = 4;
 const ZIP_SIGNATURE = [0x50, 0x4b, 0x03, 0x04];
 
 const hasZipSignature = (bytes: Uint8Array): boolean =>
@@ -67,15 +70,11 @@ export function documentRoutes(deps: AppDeps): Hono<AppEnv> {
     reviewCount: row.reviewCount,
   });
 
-  app.post("/api/documents", async (c) => {
-    const contentType = c.req.header("content-type");
-    if (mediaType(contentType) !== "multipart/form-data" || contentType === undefined) {
-      throw new HttpError(
-        415,
-        "unsupported_media_type",
-        "Upload the document as a form with one file field named file (multipart/form-data).",
-      );
-    }
+  // An upload is held in memory several times over while it is read, parsed and checked, so the
+  // number in flight is bounded: with the upload cap that bounds the memory they can take.
+  const uploads = createSlots(MAX_UPLOADS_IN_FLIGHT);
+
+  async function receive(c: Context<AppEnv>, contentType: string): Promise<Response> {
     // The cap is applied to the bytes as they arrive, so a larger body is not held in memory.
     const body = await readBody(c.req.raw, config.maxUploadBytes + MULTIPART_OVERHEAD, tooBig);
 
@@ -120,9 +119,39 @@ export function documentRoutes(deps: AppDeps): Hono<AppEnv> {
       summary({ id, fileName, size: bytes.byteLength, paragraphs, createdAt, reviewCount: 0 }),
       201,
     );
+  }
+
+  app.post("/api/documents", async (c) => {
+    const contentType = c.req.header("content-type");
+    if (mediaType(contentType) !== "multipart/form-data" || contentType === undefined) {
+      throw new HttpError(
+        415,
+        "unsupported_media_type",
+        "Upload the document as a form with one file field named file (multipart/form-data).",
+      );
+    }
+    const release = uploads.tryTake();
+    if (release === undefined) {
+      c.header("Retry-After", "5");
+      // The body of this request is not read, so the connection is not kept for it.
+      c.header("Connection", "close");
+      throw new HttpError(
+        429,
+        "too_many_requests",
+        `${MAX_UPLOADS_IN_FLIGHT} documents are being uploaded already, which is the most this server takes at once. Wait a few seconds and try again.`,
+      );
+    }
+    // Whatever happens next, the place is given back: an answer, an error, or a client that went
+    // away in the middle of the upload (its body then fails to read, which ends here too).
+    try {
+      return await receive(c, contentType);
+    } finally {
+      release();
+    }
   });
 
   app.get("/api/documents", async (c) => {
+    const limit = limitParam(c);
     const rows = await db
       .select({
         id: documents.id,
@@ -135,7 +164,8 @@ export function documentRoutes(deps: AppDeps): Hono<AppEnv> {
       .from(documents)
       .leftJoin(reviews, eq(reviews.documentId, documents.id))
       .groupBy(documents.id)
-      .orderBy(desc(documents.createdAt), desc(documents.id));
+      .orderBy(desc(documents.createdAt), desc(documents.id))
+      .limit(limit);
     const response: DocumentListResponse = { documents: rows.map(summary) };
     return c.json(response);
   });

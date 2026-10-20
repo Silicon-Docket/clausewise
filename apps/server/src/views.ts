@@ -101,12 +101,14 @@ export function toReviewSummary(row: SummaryRow): ReviewSummary {
   };
 }
 
-export async function listReviewSummaries(db: Db): Promise<ReviewSummary[]> {
+/** The newest `limit` reviews, newest first. */
+export async function listReviewSummaries(db: Db, limit: number): Promise<ReviewSummary[]> {
   const rows = await db
     .select(summaryColumns)
     .from(reviews)
     .innerJoin(documents, eq(reviews.documentId, documents.id))
-    .orderBy(sql`${reviews.createdAt} desc`, sql`${reviews.id} desc`);
+    .orderBy(sql`${reviews.createdAt} desc`, sql`${reviews.id} desc`)
+    .limit(limit);
   return rows.map(toReviewSummary);
 }
 

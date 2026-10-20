@@ -15,17 +15,66 @@ import type {
 import { CONFIG, playbookDetail, reviewDetail } from "./fixtures.js";
 
 /**
- * A stand-in for the Clausewise server that follows the contract in docs/m3-design.md closely
- * enough for the screens: it holds the playbooks, documents and reviews in memory, answers the
- * routes the web app calls, and records every request. A test changes the state to play out a
- * review that runs, fails or finishes, and can make one request fail on purpose.
+ * A stand-in for the Clausewise server that answers the way the real one does, close enough for
+ * the screens: it holds the playbooks, documents and reviews in memory, answers the routes the
+ * web app calls with the real status codes, messages and headers, and records every request. A
+ * test changes the state to play out a review that runs, fails or finishes, and can make one
+ * request fail on purpose.
+ *
+ * The messages below are copied from apps/server/src. Where one is a literal there, a test
+ * (server-messages.test.ts) checks that it is still the server's, so that this file is not left
+ * behind when the server's wording changes.
  */
+
+export const MESSAGES = {
+  unauthorized: "Sign in with the access token to use Clausewise.",
+  nothingHere: "There is nothing at this address.",
+  noReview: "There is no such review.",
+  noDocument: "There is no such document.",
+  noPlaybook: "There is no such playbook.",
+  noFinding: "There is no such finding in this review.",
+  noFile: "No file was sent. Choose a .docx file in a form field named file.",
+  notZip: "Not a .docx file: it is not a valid zip archive",
+  modelNotSet: "The model is not set up, so no review can run.",
+  queueFull:
+    "Too many reviews are waiting to run. Wait for some of them to finish, or cancel one, and try again.",
+  cannotCancel: "Only a review that is waiting or running can be cancelled.",
+  cannotDeleteRunning: "This review is running. Cancel it first, then delete it.",
+  redlineNotFinished: "This review has not finished, so there is no redline to download yet.",
+  reportNotFinished: "This review has not finished, so it has no report yet.",
+  findingsNotFinished: "This review has not finished, so it has no findings to decide on yet.",
+  includeMode: "include must be accepted or all.",
+  reportFormat: "The format must be json or md.",
+  nothingToSend: "Send a decision, wording of your own, or both.",
+  commentOnly:
+    "Wording of your own can replace only a suggested change to the contract. This finding is a comment only.",
+  builtinChange: "The built-in playbooks cannot be changed. Copy it to edit your own.",
+  builtinDelete: "The built-in playbooks cannot be deleted.",
+  playbookTooLarge: "The playbook is larger than 256 KB.",
+  uploadAdvice:
+    "Make the document smaller, or ask whoever runs this server to raise CLAUSEWISE_MAX_UPLOAD_MB.",
+} as const;
+
+/** What a review that stopped without checking a rule says: one line per reason, as the server writes it. */
+export const NOTHING_CHECKED_MESSAGE = [
+  "No rule could be checked, so nothing was reviewed.",
+  "3 rules: The model provider did not accept the API key. Check CLAUSEWISE_API_KEY.",
+  "Check the model settings and the state of the provider, then start the review again.",
+].join("\n");
+
+export const RESTART_MESSAGE =
+  "The server restarted while this review was running. Start it again.";
+
+/** The wording the redline writer uses when the stored file is not the one that was reviewed. */
+export const MISMATCH_MESSAGE =
+  'The document does not match the report: the text at the recorded place is not what the review saw (rule "Duration of confidentiality obligations"). Check that this is the file that was reviewed and that it has not been changed since.';
 
 export interface RecordedCall {
   method: string;
   path: string;
   search: string;
   authorization: string | null;
+  accept: string | null;
   contentType: string | null;
   body: unknown;
   /** For an upload: the name and size of the file in the "file" field. */
@@ -40,6 +89,19 @@ export interface FakeState {
   documents: DocumentSummary[];
   reviews: Map<string, ReviewDetail>;
   validate: (yaml: string) => PlaybookValidateResponse;
+  /** How the redline route answers. */
+  redline: {
+    /** Sent in the X-Clausewise-Warnings header, as the server sends the redline writer's. */
+    warnings: string[];
+    /** When set the stored file does not match the report, and the route answers 409 with this. */
+    mismatch: string | null;
+  };
+  /** When false the files are sent without a Content-Disposition header. */
+  fileNames: boolean;
+  /** The server's queue of waiting reviews is full. */
+  queueFull: boolean;
+  /** The most reviews one document keeps. The server's is 200. */
+  maxReviewsPerDocument: number;
 }
 
 interface Failure {
@@ -68,6 +130,7 @@ export interface FakeServer {
 }
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
+const DOCX_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
@@ -76,6 +139,39 @@ function json(status: number, body: unknown): Response {
 function problem(status: number, code: ErrorCode, message: string): Response {
   return json(status, { error: { code, message } });
 }
+
+/** "25 MB" for a large limit and "300 KB" for a small one, as the server writes it. */
+export function sizeLimitText(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${Math.round((bytes / (1024 * 1024)) * 10) / 10} MB`;
+  return `${Math.round(bytes / 1024)} KB`;
+}
+
+/** What the server says to an upload over its limit. */
+export const tooLargeMessage = (maxUploadBytes: number): string =>
+  `The file is larger than the limit of ${sizeLimitText(maxUploadBytes)}. ${MESSAGES.uploadAdvice}`;
+
+export const tooManyReviewsMessage = (most: number): string =>
+  `This document already has ${most} reviews, which is the most one document keeps. Delete some of them first.`;
+
+// The same Content-Disposition the server builds: an ASCII filename for old clients and a
+// filename* with the real name.
+function attachment(name: string): string {
+  const ascii = name
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[^\x20-\x7e]|["\\%]/g, "_")
+    .trim();
+  const encoded = encodeURIComponent(name).replace(
+    /['()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename="${ascii === "" ? "contract.docx" : ascii}"; filename*=UTF-8''${encoded}`;
+}
+
+const stemOf = (name: string): string => {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(0, dot) : name;
+};
 
 function summaryOf(detail: ReviewDetail): ReviewSummary {
   return {
@@ -127,6 +223,10 @@ export function createFakeServer(options: FakeOptions = {}): FakeServer {
       yaml.includes("name:")
         ? { ok: true, name: nameOf(yaml), ruleCount: 2, contractTypes: ["nda"] }
         : { ok: false, problems: ["The playbook needs a name."] },
+    redline: { warnings: [], mismatch: null },
+    fileNames: true,
+    queueFull: false,
+    maxReviewsPerDocument: 200,
   };
   for (const detail of options.playbooks ?? [
     playbookDetail(),
@@ -148,7 +248,83 @@ export function createFakeServer(options: FakeOptions = {}): FakeServer {
   let counter = 0;
   const nextId = (prefix: string): string => `${prefix}-${++counter}`;
 
-  async function handle(call: RecordedCall, rawBody: unknown): Promise<Response> {
+  /** A review's file as the server sends it: the bytes, the type and the name for the download. */
+  function file(
+    bytes: string,
+    type: string,
+    name: string,
+    extra: Record<string, string> = {},
+  ): Response {
+    return new Response(new TextEncoder().encode(bytes), {
+      status: 200,
+      headers: {
+        "Content-Type": type,
+        ...(state.fileNames ? { "Content-Disposition": attachment(name) } : {}),
+        ...extra,
+      },
+    });
+  }
+
+  function redline(review: ReviewDetail, include: string): Response {
+    if (include !== "accepted" && include !== "all") {
+      return problem(400, "bad_request", MESSAGES.includeMode);
+    }
+    if (review.status !== "done") return problem(409, "conflict", MESSAGES.redlineNotFinished);
+    if (state.redline.mismatch !== null) return problem(409, "conflict", state.redline.mismatch);
+    // The body names what the real file would hold: the findings that went in, and the lawyer's
+    // own wording where there is one. A test reads it back to see what the server was asked for.
+    const chosen = review.findings.filter((finding) =>
+      include === "accepted" ? finding.decision === "accepted" : finding.decision !== "rejected",
+    );
+    const entries = chosen.map((finding) =>
+      finding.edit.kind === "applied" && finding.editedReplacement !== null
+        ? `${finding.ruleId}=${finding.editedReplacement}`
+        : finding.ruleId,
+    );
+    const warnings = state.redline.warnings;
+    return file(
+      `redline:${include}:${entries.join("|")}`,
+      DOCX_TYPE,
+      `${stemOf(review.documentName)}.redlined.docx`,
+      warnings.length === 0
+        ? {}
+        : { "X-Clausewise-Warnings": encodeURIComponent(JSON.stringify(warnings)) },
+    );
+  }
+
+  function patchFinding(
+    review: ReviewDetail,
+    ruleId: string,
+    request: PatchFindingRequest,
+  ): Response {
+    if (request.decision === undefined && request.editedReplacement === undefined) {
+      return problem(400, "bad_request", MESSAGES.nothingToSend);
+    }
+    if (review.status !== "done") return problem(409, "conflict", MESSAGES.findingsNotFinished);
+    const finding = review.findings.find((f) => f.ruleId === ruleId);
+    if (finding === undefined) return problem(404, "not_found", MESSAGES.noFinding);
+    if (
+      request.editedReplacement !== undefined &&
+      request.editedReplacement !== null &&
+      finding.edit.kind !== "applied"
+    ) {
+      return problem(400, "bad_request", MESSAGES.commentOnly);
+    }
+    const changed: Finding = {
+      ...finding,
+      ...(request.decision === undefined ? {} : { decision: request.decision }),
+      ...(request.editedReplacement === undefined
+        ? {}
+        : { editedReplacement: request.editedReplacement }),
+    };
+    state.reviews.set(review.id, {
+      ...review,
+      findings: review.findings.map((f) => (f.ruleId === ruleId ? changed : f)),
+    });
+    return json(200, changed);
+  }
+
+  async function handle(call: RecordedCall, rawBody: unknown, zipped: boolean): Promise<Response> {
     const { method, path } = call;
     const body = rawBody;
 
@@ -156,7 +332,7 @@ export function createFakeServer(options: FakeOptions = {}): FakeServer {
 
     if (path.startsWith("/api/") && state.token !== null) {
       if (call.authorization !== `Bearer ${state.token}`) {
-        return problem(401, "unauthorized", "Sign in with the access token to use this server.");
+        return problem(401, "unauthorized", MESSAGES.unauthorized);
       }
     }
 
@@ -169,6 +345,8 @@ export function createFakeServer(options: FakeOptions = {}): FakeServer {
     }
     if (method === "POST" && path === "/api/playbooks") {
       const yaml = (body as { yaml: string }).yaml;
+      const checked = state.validate(yaml);
+      if (!checked.ok) return problem(400, "bad_request", checked.problems.join(" "));
       const detail = playbookDetail({
         id: nextId("pb"),
         source: "custom",
@@ -184,13 +362,26 @@ export function createFakeServer(options: FakeOptions = {}): FakeServer {
     if (playbookMatch !== null) {
       const id = decodeURIComponent(playbookMatch[1] ?? "");
       const existing = state.playbooks.get(id);
-      if (existing === undefined) return problem(404, "not_found", "There is no such playbook.");
-      if (method === "GET") return json(200, existing);
-      if (existing.source === "builtin") {
-        return problem(403, "forbidden", "Built-in playbooks cannot be changed.");
+      if (method === "GET") {
+        return existing === undefined
+          ? problem(404, "not_found", MESSAGES.noPlaybook)
+          : json(200, existing);
       }
-      if (method === "PUT") {
+      if (method === "PUT" || method === "DELETE") {
+        // The server refuses a built-in playbook before it looks for it.
+        if (id.startsWith("builtin:")) {
+          return problem(
+            403,
+            "forbidden",
+            method === "PUT" ? MESSAGES.builtinChange : MESSAGES.builtinDelete,
+          );
+        }
+        if (existing === undefined) return problem(404, "not_found", MESSAGES.noPlaybook);
+      }
+      if (method === "PUT" && existing !== undefined) {
         const yaml = (body as { yaml: string }).yaml;
+        const checked = state.validate(yaml);
+        if (!checked.ok) return problem(400, "bad_request", checked.problems.join(" "));
         const detail = {
           ...existing,
           yaml,
@@ -208,8 +399,11 @@ export function createFakeServer(options: FakeOptions = {}): FakeServer {
 
     // Documents
     if (method === "POST" && path === "/api/documents") {
-      if (call.upload === null)
-        return problem(400, "bad_request", "Send the file in a field named file.");
+      if (call.upload === null) return problem(400, "bad_request", MESSAGES.noFile);
+      if (call.upload.size > state.config.maxUploadBytes) {
+        return problem(413, "payload_too_large", tooLargeMessage(state.config.maxUploadBytes));
+      }
+      if (!zipped) return problem(422, "invalid_document", MESSAGES.notZip);
       const document: DocumentSummary = {
         id: nextId("doc"),
         fileName: call.upload.name,
@@ -236,24 +430,38 @@ export function createFakeServer(options: FakeOptions = {}): FakeServer {
     }
     const fileMatch = /^\/api\/documents\/([^/]+)\/file$/.exec(path);
     if (method === "GET" && fileMatch !== null) {
-      return new Response("original bytes", {
-        status: 200,
-        headers: {
-          "Content-Type": "application/octet-stream",
-          "Content-Disposition": `attachment; filename="original.docx"`,
-        },
-      });
+      const id = decodeURIComponent(fileMatch[1] ?? "");
+      const name =
+        state.documents.find((document) => document.id === id)?.fileName ??
+        [...state.reviews.values()].find((review) => review.documentId === id)?.documentName;
+      if (name === undefined) return problem(404, "not_found", MESSAGES.noDocument);
+      return file("original bytes", DOCX_TYPE, name);
     }
 
     // Reviews
     if (method === "POST" && path === "/api/reviews") {
       const request = body as CreateReviewRequest;
+      // Before anything is looked up or created, as the server does it.
+      if (!state.config.model.configured) {
+        return problem(
+          503,
+          "model_not_configured",
+          `${MESSAGES.modelNotSet} ${state.config.model.problem}`,
+        );
+      }
       const document = state.documents.find((d) => d.id === request.documentId);
-      if (document === undefined)
-        return problem(404, "not_found", "That document is not on the server.");
+      if (document === undefined) return problem(404, "not_found", MESSAGES.noDocument);
       const playbook = state.playbooks.get(request.playbookId);
-      if (playbook === undefined)
-        return problem(404, "not_found", "That playbook is not on the server.");
+      if (playbook === undefined) return problem(404, "not_found", MESSAGES.noPlaybook);
+      const kept = [...state.reviews.values()].filter((r) => r.documentId === document.id).length;
+      if (kept >= state.maxReviewsPerDocument) {
+        return problem(
+          429,
+          "too_many_requests",
+          tooManyReviewsMessage(state.maxReviewsPerDocument),
+        );
+      }
+      if (state.queueFull) return problem(429, "too_many_requests", MESSAGES.queueFull);
       const detail = reviewDetail({
         id: nextId("rev"),
         status: "queued",
@@ -282,13 +490,21 @@ export function createFakeServer(options: FakeOptions = {}): FakeServer {
       const id = decodeURIComponent(reviewMatch[1] ?? "");
       const rest = reviewMatch[2] ?? "";
       const review = state.reviews.get(id);
-      if (review === undefined) return problem(404, "not_found", "There is no such review.");
+      if (review === undefined) return problem(404, "not_found", MESSAGES.noReview);
 
       if (method === "GET" && rest === "") return json(200, review);
+      if (method === "DELETE" && rest === "") {
+        if (review.status === "running") {
+          return problem(409, "conflict", MESSAGES.cannotDeleteRunning);
+        }
+        state.reviews.delete(id);
+        return new Response(null, { status: 204 });
+      }
       if (method === "POST" && rest === "cancel") {
         if (review.status !== "queued" && review.status !== "running") {
-          return problem(409, "conflict", "The review has already ended.");
+          return problem(409, "conflict", MESSAGES.cannotCancel);
         }
+        // The server leaves the error empty for a review that was cancelled.
         const cancelled = {
           ...review,
           status: "cancelled" as const,
@@ -298,24 +514,22 @@ export function createFakeServer(options: FakeOptions = {}): FakeServer {
         return json(200, summaryOf(cancelled));
       }
       if (method === "GET" && rest === "docx") {
-        const include = new URLSearchParams(call.search).get("include") ?? "accepted";
-        return new Response(`redline:${include}`, {
-          status: 200,
-          headers: {
-            "Content-Type":
-              "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "Content-Disposition": `attachment; filename="Acme NDA (redline).docx"`,
-          },
-        });
+        return redline(review, new URLSearchParams(call.search).get("include") ?? "accepted");
       }
       if (method === "GET" && rest === "report") {
-        return new Response("# Report", {
-          status: 200,
-          headers: { "Content-Type": "text/markdown; charset=utf-8" },
-        });
+        const format = new URLSearchParams(call.search).get("format") ?? "json";
+        if (format !== "json" && format !== "md") {
+          return problem(400, "bad_request", MESSAGES.reportFormat);
+        }
+        if (review.status !== "done") return problem(409, "conflict", MESSAGES.reportNotFinished);
+        const stem = stemOf(review.documentName);
+        return format === "md"
+          ? file("# Report", "text/markdown; charset=utf-8", `${stem}.summary.md`)
+          : file("{}", "application/json; charset=utf-8", `${stem}.report.json`);
       }
       if (method === "PATCH" && rest === "findings") {
         const request = body as BulkDecisionRequest;
+        if (review.status !== "done") return problem(409, "conflict", MESSAGES.findingsNotFinished);
         let updated = 0;
         const findings = review.findings.map((finding) => {
           const inScope =
@@ -330,33 +544,15 @@ export function createFakeServer(options: FakeOptions = {}): FakeServer {
       }
       const findingMatch = /^findings\/([^/]+)$/.exec(rest);
       if (method === "PATCH" && findingMatch !== null) {
-        const ruleId = decodeURIComponent(findingMatch[1] ?? "");
-        const finding = review.findings.find((f) => f.ruleId === ruleId);
-        if (finding === undefined) return problem(404, "not_found", "There is no such finding.");
-        const request = body as PatchFindingRequest;
-        if (request.editedReplacement !== undefined && finding.edit.kind !== "applied") {
-          return problem(
-            400,
-            "bad_request",
-            "Only a suggested change can be given your own wording.",
-          );
-        }
-        const changed: Finding = {
-          ...finding,
-          ...(request.decision === undefined ? {} : { decision: request.decision }),
-          ...(request.editedReplacement === undefined
-            ? {}
-            : { editedReplacement: request.editedReplacement }),
-        };
-        state.reviews.set(id, {
-          ...review,
-          findings: review.findings.map((f) => (f.ruleId === ruleId ? changed : f)),
-        });
-        return json(200, changed);
+        return patchFinding(
+          review,
+          decodeURIComponent(findingMatch[1] ?? ""),
+          body as PatchFindingRequest,
+        );
       }
     }
 
-    return problem(404, "not_found", "The server has nothing at this address.");
+    return problem(404, "not_found", MESSAGES.nothingHere);
   }
 
   const fakeFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -367,17 +563,24 @@ export function createFakeServer(options: FakeOptions = {}): FakeServer {
     const headers = new Headers(init?.headers);
     let body: unknown = undefined;
     let upload: RecordedCall["upload"] = null;
+    let zipped = false;
     if (typeof init?.body === "string") {
       body = JSON.parse(init.body) as unknown;
     } else if (init?.body instanceof FormData) {
-      const file = init.body.get("file");
-      if (file instanceof File) upload = { name: file.name, size: file.size };
+      const sent = init.body.get("file");
+      if (sent instanceof File) {
+        upload = { name: sent.name, size: sent.size };
+        // The first bytes of a .docx are the zip signature, which is what the server checks.
+        const head = new Uint8Array(await sent.slice(0, 4).arrayBuffer());
+        zipped = [0x50, 0x4b, 0x03, 0x04].every((byte, index) => head[index] === byte);
+      }
     }
     const call: RecordedCall = {
       method: (init?.method ?? "GET").toUpperCase(),
       path: url.pathname,
       search: url.search,
       authorization: headers.get("Authorization"),
+      accept: headers.get("Accept"),
       contentType: headers.get("Content-Type"),
       body,
       upload,
@@ -394,7 +597,7 @@ export function createFakeServer(options: FakeOptions = {}): FakeServer {
       if (failure.times <= 0) failures.splice(index, 1);
       return problem(failure.status, failure.code, failure.message);
     }
-    return handle(call, body);
+    return handle(call, body, zipped);
   };
 
   return {

@@ -96,6 +96,15 @@ describe("source files", () => {
     ).toEqual([]);
   });
 
+  it("show a server's message with its line breaks, and style a button that is unavailable but not disabled", () => {
+    const css = text(join(root, "src", "styles", "components.css"));
+    // jsdom does not read the stylesheets, so the rules the screens rely on are checked here.
+    expect(css).toMatch(/\.message-text\s*\{[^}]*white-space:\s*pre-line/);
+    expect(css).toMatch(/\.button\[aria-disabled="true"\]/);
+    expect(css).toMatch(/\.link-button\[aria-disabled="true"\]/);
+    expect(css).toMatch(/:hover:not\(:disabled\):not\(\[aria-disabled="true"\]\)/);
+  });
+
   it("load nothing from the network in the stylesheets", () => {
     const css = sourceFiles.filter((file) => file.endsWith(".css"));
     expect(offenders(css, /@import|url\(/)).toEqual([]);

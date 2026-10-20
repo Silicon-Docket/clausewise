@@ -10,6 +10,7 @@ import type { AppEnv } from "../env.js";
 import { HttpError, conflict, notFound } from "../errors.js";
 import { getReviewDetail, getReviewSummary, listReviewSummaries } from "../views.js";
 import { isUuid, uuidParam } from "./ids.js";
+import { limitParam } from "./limit.js";
 
 const CreateReview = z.strictObject({
   documentId: z.string().min(1).max(64),
@@ -90,7 +91,7 @@ export function reviewRoutes(deps: AppDeps): Hono<AppEnv> {
   });
 
   app.get("/api/reviews", async (c) => {
-    const response: ReviewListResponse = { reviews: await listReviewSummaries(db) };
+    const response: ReviewListResponse = { reviews: await listReviewSummaries(db, limitParam(c)) };
     return c.json(response);
   });
 

@@ -251,14 +251,15 @@ POST   /api/playbooks/validate         { yaml } -> 200 { ok: true, name, ruleCou
                             ruleCount: number, updatedAt: string | null }
 
 POST   /api/documents                  multipart, one field "file" -> 201 DocumentSummary
-GET    /api/documents                  -> 200 { documents: DocumentSummary[] }   (newest first)
+                                         (429 with Retry-After when four uploads are already being read)
+GET    /api/documents?limit=N          -> 200 { documents: DocumentSummary[] }   (newest first)
 GET    /api/documents/:id/file         -> the original .docx (attachment)
 DELETE /api/documents/:id              -> 204
         DocumentSummary = { id, fileName, size, paragraphs, createdAt, reviewCount }
 
 POST   /api/reviews                    { documentId, playbookId, client?: string }
                                          -> 202 ReviewSummary   (status "queued")
-GET    /api/reviews                    -> 200 { reviews: ReviewSummary[] }       (newest first)
+GET    /api/reviews?limit=N            -> 200 { reviews: ReviewSummary[] }       (newest first)
 GET    /api/reviews/:id                -> 200 ReviewDetail
 POST   /api/reviews/:id/cancel         -> 200 ReviewSummary                      (queued or running only, else 409)
 DELETE /api/reviews/:id                -> 204                                    (not running, else 409)
@@ -301,11 +302,42 @@ GET    /api/reviews/:id/docx?include=accepted|all
                                          -> the redlined .docx (attachment)
         accepted (default): only findings with decision "accepted".
         all: every finding that is not "rejected".
-        409 if the review is not done. Built with renderRedline from the stored file and report,
-        the findings' editedReplacement values, author "Clausewise".
+        Built with renderRedline from the stored file and report, the findings' editedReplacement
+        values, author "Clausewise", and the server's clock for the date of the changes.
+        400 for any other value of include. 409 if the review is not done. 409 with the message of
+        the ReviewError when renderRedline refuses (the stored file is not the one that was
+        reviewed): the message names the rule and never repeats text of the contract. Any other
+        failure is 500 internal_error with the request id.
+        Headers: Content-Type of a .docx; Content-Disposition: attachment with an ASCII filename
+        and a filename* (RFC 5987), the name being the cleaned document name without its
+        extension plus ".redlined.docx" (the name is cut, never the suffix, when the two together
+        pass 200 characters); X-Content-Type-Options: nosniff; Cache-Control: no-store;
+        Content-Length; and X-Clausewise-Warnings (below).
 GET    /api/reviews/:id/report?format=json|md
                                          -> the stored report (json) or renderMarkdown output (md)
+                                            (attachment; names end in ".report.json" or ".summary.md")
 ```
+
+`X-Clausewise-Warnings` carries what renderRedline's `warnings` say (an edit the Word engine
+refused and turned into a comment, a stored result with no comment anchor, and so on). It is
+absent when there is nothing to say. Otherwise its value is a JSON array of strings, passed through
+`encodeURIComponent` so that the header is plain ASCII; read it with
+`JSON.parse(decodeURIComponent(value))`. It is at most 4000 characters after encoding. When the list
+does not fit, whole warnings are dropped from the end and one is added that says how many were left
+out (`"3 more warnings were left out because there was no room for them here."`), so a reader never
+sees half a warning and always learns that the list is cut. The header is for the web app's own
+`fetch`, which is same origin and can read every response header; the server sends no CORS header
+(see 3.3), so no `Access-Control-Expose-Headers` is needed, and none must be added.
+
+Lists: `limit` is optional on `GET /api/reviews` and `GET /api/documents`. Default 100. It must be
+plain digits from 1 to 500; anything else (a sign, a decimal, an exponent, 0, 501) is `400`
+`bad_request`, because an answer cut short without saying so would read as the whole list. The newest
+come first, with the id breaking ties, and `limit` cuts the oldest off.
+
+Uploads: at most four `POST /api/documents` requests are read at the same time. A fifth is answered
+`429` `too_many_requests` with `Retry-After: 5` and `Connection: close` before its body is read. A
+place is given back on every way out, including a client that disconnects in the middle of the
+upload. A request refused for its content type (`415`) never takes a place.
 
 Status codes: `400` invalid input (zod issues turned into a short message), `401`, `403`, `404`,
 `409`, `413`, `421`, `422`, `429`, `503`. A document or playbook that does not exist for a new

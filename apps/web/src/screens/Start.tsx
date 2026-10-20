@@ -1,6 +1,16 @@
 import { LIMITS, type DocumentSummary, type ReviewSummary } from "@clausewise/api";
-import { useId, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
 import { ApiClientError, errorMessage } from "../api/client.js";
+import { Button } from "../components/Button.js";
 import { Notice } from "../components/Notice.js";
 import { useAnnounce } from "../hooks/useAnnounce.js";
 import { useServerConfig } from "../hooks/useConfig.js";
@@ -51,6 +61,7 @@ export function StartScreen() {
   const clientHintId = useId();
   const reasonId = useId();
   const fileInput = useRef<HTMLInputElement>(null);
+  const startButton = useRef<HTMLButtonElement>(null);
 
   const [file, setFile] = useState<File | null>(null);
   const [fileProblem, setFileProblem] = useState<string | null>(null);
@@ -63,6 +74,15 @@ export function StartScreen() {
   const uploaded = useRef<{ file: File; document: DocumentSummary } | null>(null);
   // Set at once, where the phase state would only change on the next render.
   const inFlight = useRef(false);
+  // The fields are locked while the file goes up. If the person was typing in one of them when
+  // they pressed Enter, the focus was lost with the lock; after a failure it returns to Start.
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (phase !== "idle" || !refocus.current) return;
+    refocus.current = false;
+    const focused = document.activeElement;
+    if (focused === null || focused === document.body) startButton.current?.focus();
+  }, [phase]);
 
   const model = config.model;
   const configured = model.configured;
@@ -82,11 +102,21 @@ export function StartScreen() {
     const problem = checkFile(candidate, config.maxUploadBytes);
     setFileProblem(problem);
     setFile(problem === null ? candidate : null);
-    if (problem !== null) announce(problem);
+    // A problem is shown in an alert, which is read out by itself. A file that was accepted has no
+    // other sign for someone who can not see the box change.
+    if (problem === null) announce(`${candidate.name} chosen, ${formatBytes(candidate.size)}.`);
   };
 
   const onFileInput = (event: ChangeEvent<HTMLInputElement>): void => {
     choose(event.target.files?.[0] ?? null);
+  };
+  // The box is for the mouse, and this is the keyboard's way in. Space opens the file chooser by
+  // itself; Enter does not in every browser, and the input is hidden from the eye (its label is the
+  // button that is seen), so Enter is made to do what the button beside it does.
+  const openOnEnter = (event: KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    event.currentTarget.click();
   };
   const onDrop = (event: DragEvent): void => {
     event.preventDefault();
@@ -96,7 +126,11 @@ export function StartScreen() {
   };
   const clearFile = (): void => {
     choose(null);
-    if (fileInput.current !== null) fileInput.current.value = "";
+    if (fileInput.current !== null) {
+      fileInput.current.value = "";
+      // The Remove button goes away with the file; the file chooser is where the focus belongs.
+      fileInput.current.focus();
+    }
   };
 
   // The first thing that stops the review from starting, said out loud next to the button.
@@ -130,11 +164,11 @@ export function StartScreen() {
     } catch (failure) {
       // The stored copy is gone or was refused; the next try uploads the file again.
       if (failure instanceof ApiClientError && failure.status === 404) uploaded.current = null;
-      const message = errorMessage(failure);
-      setError(message);
-      announce(`The review did not start. ${message}`);
+      // The notice below is an alert, which is read out by itself.
+      setError(errorMessage(failure));
       setPhase("idle");
       inFlight.current = false;
+      refocus.current = true;
     }
   };
   const onSubmit = (event: FormEvent): void => {
@@ -152,7 +186,7 @@ export function StartScreen() {
         </p>
       ) : (
         <Notice kind="error" title="The model is not set up">
-          <p>{model.problem}</p>
+          <p className="message-text">{model.problem}</p>
           <p>
             Fix this in the settings of the server that runs Clausewise, restart it, and reload this
             page.
@@ -167,6 +201,8 @@ export function StartScreen() {
           </span>
           <div
             className={`dropzone${dragging ? " dropzone-active" : ""}`}
+            role="group"
+            aria-labelledby={`${fileId}-label`}
             onDragOver={(event) => {
               event.preventDefault();
               setDragging(true);
@@ -182,7 +218,9 @@ export function StartScreen() {
               accept={`.docx,${DOCX_TYPE}`}
               disabled={busy}
               aria-describedby={fileProblem === null ? undefined : `${fileId}-problem`}
+              aria-invalid={fileProblem === null ? undefined : true}
               onChange={onFileInput}
+              onKeyDown={openOnEnter}
             />
             {file === null ? (
               <p className="dropzone-text">Drop a Word file (.docx) here, or</p>
@@ -279,7 +317,7 @@ export function StartScreen() {
 
         {error === null ? null : (
           <Notice kind="error" title="The review did not start">
-            <p>{error}</p>
+            <p className="message-text">{error}</p>
           </Notice>
         )}
 
@@ -287,10 +325,13 @@ export function StartScreen() {
           {model.configured ? (
             <p className="start-disclosure">{startDisclosure(model.disclosure)}</p>
           ) : null}
-          <button
+          {/* Unavailable, not disabled, while the file goes up: it keeps the focus. */}
+          <Button
+            ref={startButton}
             type="submit"
             className="button button-primary button-large"
-            disabled={blocker !== null || busy}
+            disabled={blocker !== null}
+            unavailable={busy}
             aria-describedby={blocker === null ? undefined : reasonId}
             aria-busy={busy}
           >
@@ -299,7 +340,7 @@ export function StartScreen() {
               : phase === "starting"
                 ? "Starting the review..."
                 : "Start review"}
-          </button>
+          </Button>
           {blocker === null ? null : (
             <p id={reasonId} className="hint">
               {blocker}

@@ -1,0 +1,38 @@
+# What the image build never needs, and what must never be in it. Anything not listed here and not
+# named by a COPY in the Dockerfile does not reach the image either: the final stage copies only
+# the bundle, its two run-time packages, the web app and the playbooks.
+
+# Version control and CI
+.git
+.github
+
+# Installed and built files: the build makes its own
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+
+# Secrets and local settings
+.env
+.env.*
+
+# Contracts and results: uploads, the embedded database, and what a review writes
+data
+**/data
+*.redlined.docx
+*.report.json
+*.summary.md
+evals/results
+
+# Tests, fixtures, evaluations and their output
+**/test
+fixtures
+e2e
+evals/src
+test-results
+playwright-report
+coverage
+out
+
+# Documentation and tooling
+docs
+tools
