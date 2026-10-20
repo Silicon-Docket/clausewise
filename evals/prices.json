@@ -1,0 +1,6 @@
+{
+  "_comment": "USD per million tokens. The figures are Anthropic's published prices as recorded in the project's reference notes, and they have not been checked against a live price list. Check every figure against the provider's current price list before trusting a cost figure from the harness. Keys starting with an underscore are notes and are ignored. Add a model here, or pass --prices <file>, to price another one.",
+  "claude-sonnet-5-5": { "input": 2.0, "output": 10.0, "cacheRead": 0.2, "cacheWrite": 2.5 },
+  "claude-opus-5-5": { "input": 4.0, "output": 20.0, "cacheRead": 0.2, "cacheWrite": 5.0 },
+  "claude-haiku-5-5": { "input": 0.1, "output": 0.5, "cacheRead": 0.01, "cacheWrite": 0.125 }
+}

@@ -1,0 +1,241 @@
+# Evaluation harness
+
+Clausewise has never been run against a live model. This package is how we find out whether it
+works. It runs the real review pipeline on the synthetic contracts in `fixtures/`, compares what
+the model said with `fixtures/expected.json`, and writes a report and a JSON file you can compare
+with the next run.
+
+It spends real money, so it is built to refuse first and run second.
+
+## Before you have a key: the selftest
+
+```sh
+pnpm eval --selftest
+```
+
+This runs the whole harness against a scripted oracle that gives every rule its expected status
+and proposes a real edit for each deviation. No key, no network and no `--yes` are needed, and the
+price table is ignored. Use it to see what a report looks like and to check the plumbing: scoring,
+the integrity check, the report and the results file. It must show 100 percent accuracy and an
+integrity pass. A score from a selftest says nothing about any model.
+
+## Your first real run
+
+```sh
+export ANTHROPIC_API_KEY=...
+
+pnpm eval                                      # prints the plan and exits 3. Nothing is sent.
+pnpm eval --fixture nda-balanced.docx --yes    # one contract, 10 calls: the cheapest first look
+pnpm eval --yes --out evals/results/first.json # all three contracts
+pnpm eval --yes --runs 3                       # three reviews of each, to see what is unstable
+pnpm eval --yes --compare evals/results/first.json   # after you change a prompt or a model
+```
+
+Use `pnpm -s eval ... > report.md` to keep the Markdown report in a file. The plan and progress go
+to stderr and the report to stdout, and `-s` stops pnpm adding its own banner to stdout.
+
+The model comes from the same variables as the `clausewise` command: `CLAUSEWISE_PROVIDER`,
+`CLAUSEWISE_MODEL` (default `claude-sonnet-5-5`), `ANTHROPIC_API_KEY`, `CLAUSEWISE_CONCURRENCY`,
+`CLAUSEWISE_MAX_CONTEXT_TOKENS` and the rest. A review here uses the pipeline's own defaults, so
+what you measure is what `clausewise review` does.
+
+| Option                        | Meaning                                                                  |
+| ----------------------------- | ------------------------------------------------------------------------ |
+| `--fixture <file.docx>`       | A fixture named in `expected.json`. Repeat it for several. Default: all. |
+| `--runs <n>`                  | Reviews of each fixture, to measure stability. Default 1.                |
+| `--max-cost <usd>`            | The limit for the spend guard. Default 2.00.                             |
+| `--assumed-output-tokens <n>` | Output tokens assumed per call in the cost bound. Default 1500.          |
+| `--yes`                       | Spend the money. Without it the plan is printed and nothing is sent.     |
+| `--out <file.json>`           | Where the results go. Default `evals/results/<UTC time>.json`.           |
+| `--compare <previous.json>`   | Show what changed since an earlier results file.                         |
+| `--prices <file.json>`        | More prices, added to `evals/prices.json`. See below.                    |
+| `--selftest`                  | Run against the perfect oracle. No key, no `--yes`, no cost.             |
+
+Exit codes: 0 means it finished and every integrity check passed. 1 is any failure, including a
+fatal answer from the provider (HTTP 401, 403 or 404). 2 is an integrity failure, the most serious
+result, and it is the exit code even when the run also stopped early. 3 is the spend guard refusing
+or stopping the run. 130 is Ctrl-C, SIGTERM or SIGHUP.
+
+The results are written when the run ends, whatever ended it, as long as a model response was
+recorded, and they are written whole: to a temporary file that is then linked into place. Whether
+the results file can be written is checked before the plan, so a run is never paid for and then
+lost. After every review a checkpoint is written to `<results file>.partial`, so that a run that is
+killed outright (SIGKILL) still leaves what finished. It is removed once the results are written.
+
+## How it protects your money
+
+1. **The plan comes first.** Before any call it runs the real pipeline once against a generator
+   that sends nothing, so the windows, the prompts and the number of calls are the pipeline's own.
+   It prints the fixtures, rules, clauses, windows, the number of calls, an upper bound on input
+   tokens, an upper bound on output tokens and the cost bound.
+2. **No `--yes`, no calls.** Without `--yes` it exits with code 3 after printing the plan.
+3. **The bound must fit the limit.** With `--yes` it refuses, with code 3, when the cost bound is
+   above `--max-cost`. The message says how to raise the limit.
+4. **The limit is a cap, request by request.** Before each request to the Anthropic API, retries
+   of the SDK and of the generator included, the harness adds up the recorded spend and the most
+   that the requests already under way can still cost (every output token a request is allowed,
+   which is `CLAUSEWISE_MAX_OUTPUT_TOKENS`, and its whole body as a prompt at the dearer of the
+   plain and cache-write rates). A request that could take the total past `--max-cost` waits
+   until the requests under way have settled, and if it would not fit even then the run stops with
+   code 3 and what finished is kept. The cost bound is an estimate, so this is what holds the run
+   to the limit when the model thinks at length. A stop cuts off the
+   requests then under way, which may still be billed, and the harness says by how much at most.
+5. **Unknown models are an error.** The price table is `evals/prices.json`, in USD per million
+   tokens. A model that is not in it stops the run before the plan, unless `--prices` supplies it.
+   The harness never guesses a price from a similar name.
+6. **A fatal error ends the run.** HTTP 401, 403 or 404 means every other call would fail the same
+   way. The run stops with code 1 after printing what was spent so far.
+
+How the bound is worked out: every prompt of the plan, plus the response schema, counted with the
+pipeline's `estimateTokens` (one token per three characters, which overestimates English), priced
+at the plain input rate with no caching and one attempt per call. Output is the number of calls
+times 1500 tokens, a stated assumption and not a measurement, so the figure is an estimate and not
+a ceiling. Thinking tokens are output, and the default models think adaptively, so a call can use
+anything up to `CLAUSEWISE_MAX_OUTPUT_TOKENS` (16,000 by default) on each of its attempts. The
+plan prints that hard ceiling too, and the per-request cap above is what keeps the run under
+`--max-cost` whatever the ceiling is. The bound leaves out retries, and the plan prints what it
+would be if every call used all of them.
+
+**The price table has not been checked against a live price list.** The figures in
+`evals/prices.json` were taken from the project's notes. Check them against the provider's current
+price list before you trust a cost figure. `--prices` takes a file shaped like the table and its
+entries win, which is also how you price a model the table lacks:
+
+```json
+{ "my-model": { "input": 1.0, "output": 4.0, "cacheRead": 0.1, "cacheWrite": 1.25 } }
+```
+
+Token usage is recorded only for the `anthropic` provider, whose adapter reports it for every
+response. For `openai` and `openai-compatible` the harness counts calls and says that usage is
+unavailable, so the runtime limit cannot see spend there. A local model through Ollama still needs
+a price entry (zeros are fine) because the plan needs one.
+
+## What it will cost
+
+The three shipped fixtures, one review of each, with the default settings (no
+`CLAUSEWISE_MAX_CONTEXT_TOKENS`, so one window per contract):
+
+| Fixture                     | Playbook      | Rules | Clauses | Windows | Calls | Input tokens, bound |
+| --------------------------- | ------------- | ----: | ------: | ------: | ----: | ------------------: |
+| `nda-aggressive.docx`       | nda-mutual    |    10 |      16 |       1 |    10 |              31,053 |
+| `nda-balanced.docx`         | nda-mutual    |    10 |      16 |       1 |    10 |              33,453 |
+| `saas-vendor-friendly.docx` | saas-customer |    10 |      22 |       1 |    10 |              34,661 |
+| **Total**                   |               |    30 |         |         |    30 |          **99,167** |
+
+Output is assumed to be 45,000 tokens (30 calls times 1500). The cost bound, which is what the guard
+compares with `--max-cost`, and an optimistic estimate:
+
+| Model               | Upper bound | Optimistic estimate |
+| ------------------- | ----------: | ------------------: |
+| `claude-haiku-5-5`  |     $0.0324 |             $0.0062 |
+| `claude-sonnet-5-5` |     $0.6483 |             $0.1236 |
+| `claude-opus-5-5`   |     $1.2967 |             $0.2371 |
+
+The optimistic estimate is arithmetic and not a measurement. It assumes the system prompt and the
+contract are written to the cache once per contract and read nine times, prompts of four
+characters per token, and answers of 300 tokens. Nothing has been run against a live model, so
+expect the first real cost to land between the two columns, and treat a cost above the bound as a
+finding: it means the model thinks at length, the cache is not hitting, or the prices are wrong.
+`--runs 3` triples everything, so on opus it needs `--max-cost 4`. Run `nda-balanced.docx` alone
+first and read its real output tokens per call in the usage table before you spend more.
+
+## Reading the report
+
+The report is Markdown on stdout. In order:
+
+- **An integrity failure comes first, in capitals.** Every redlined file is read back by a check
+  that shares no code with `packages/docx` (it reads the zip itself). It verifies that rejecting
+  every tracked change gives back exactly the original paragraph texts and, paragraph by
+  paragraph, the original formatting, paragraph properties (so clause numbering and styles) and
+  non-text content such as footnote marks and pictures; that accepting them gives the original
+  with the reported edits applied; that the tracked changes in each paragraph that the original
+  did not have are as many as the report lists; that every other part of the package (headers,
+  footnotes, styles, numbering) is byte for byte the original; that the comments are the ones the
+  report lists; and that text with a space at either end says so with `xml:space="preserve"`,
+  because Word drops the space otherwise. A failure means the tool changed a contract in a way a
+  lawyer cannot undo, or lied about what it did. Nothing else in the report matters until it is
+  understood. It exits with code 2.
+- **Headline.** Exact status accuracy, flag precision, recall and F1, false alarms, misses, rules
+  that errored, deviations that became a tracked change, integrity and cost. A flag is a
+  deviation or a missing clause. A rule that errored is not a flag, so an error where a flag was
+  expected counts as a miss, and every error counts against accuracy.
+- **Changes since the earlier run** (with `--compare`). Regressions first, then improvements, then
+  rules that changed answer without getting better or worse, with the accuracy and F1 deltas in
+  points.
+- **Fixtures.** For each rule: expected, got and match. With several reviews, "got" lists each
+  status with its count and "match" is the share of reviews that were right.
+- **Confusion matrix.** Expected status down the side, given status across the top, errors in
+  their own column. Look for the pattern: deviation turned into compliant is the dangerous one,
+  and missing turned into deviation, or the reverse, is a matter of how the model reads a gap.
+- **Edits.** Of the deviations, how many came with a proposed edit, how many became tracked
+  changes, and why the rest fell back to a comment. "Not found within a single paragraph" means
+  the quote the model gave does not match the text, which is a prompt problem. "Ambiguous" means
+  the quote was not unique.
+- **Integrity**, per file, with the number of tracked changes found against the report's.
+- **Stability** (with `--runs` above 1). The share of reviews that gave each rule its most common
+  status, and the rules that did not always agree.
+- **Usage and cost.** Input (the uncached part), output, cache read and cache write tokens per
+  fixture and in total, the cost from the price table, and cache effectiveness: the share of
+  prompt tokens read from the cache, and what the cache saved against paying full price.
+
+The JSON file holds all of it, including each pipeline report, so a surprising answer can be read
+in full. The pipeline reports quote the words they change and the model's own explanations, which
+is already what `clausewise review` writes next to a contract, and the harness adds no contract
+text to them. The file never holds the key. It holds the host name and port of `CLAUSEWISE_BASE_URL` (in the line that says where the contract text goes) but not its path or any credentials in it. `evals/results/` is ignored by git.
+
+## What a good result looks like
+
+These are starting expectations written before any live run, not measured targets. Replace them
+with what the first real runs show.
+
+- **Integrity: pass, always.** There is no acceptable rate of failure.
+- **Errors: zero.** An errored rule is a schema, refusal or provider problem, and each is worth
+  reading the `error` text of in the JSON.
+- **Recall of flags above 90 percent.** A missed deviation is the costly mistake in a review tool.
+  Precision matters less than recall, but a run with many false alarms on `nda-balanced.docx`
+  means the model reads "unsure" as deviation, which the prompt asks it to do.
+- **Exact accuracy above 85 percent.** The status pairs most likely to be confused are compliant
+  against deviation on borderline clauses, missing against deviation when a clause is thin, and
+  not applicable against compliant for `return-or-destroy` in the balanced NDA.
+- **Most deviations come with an applied edit.** Expect some fallbacks to comments. If most edits
+  fall back, the anchoring is rejecting quotes the model believes are exact.
+- **Stability above 90 percent mean agreement over three reviews.** A rule that flips between
+  reviews is a rule whose standard in the playbook is ambiguous.
+- **Cache reads above 70 percent of prompt tokens** after the first call per contract. Zero means
+  the caching does not work and the cost is several times what it should be.
+
+There are only 30 rules, so one wrong answer is 3.3 points of accuracy. Do not read a single
+point of difference between two runs as a change; use `--runs 3` and look at the stability table.
+
+## Adding a fixture
+
+Fixtures are synthetic, written for this project. Never add a real contract or text copied from
+another product.
+
+1. Add an entry to `fixtures/contracts.ts`: the file name, title, parties, the playbook it is
+   reviewed against, its clauses, and `expected`, the status a correct review gives every rule of
+   that playbook (`compliant`, `deviation`, `missing`, or `"n/a"` for not applicable). Remember
+   that a rule the playbook does not require can never come out as missing, and a required rule
+   can never come out as not applicable.
+2. Run `pnpm fixtures`. It writes the `.docx` files and `fixtures/expected.json`.
+3. Run `pnpm eval --selftest`. The new contract is picked up from `expected.json`, and the harness
+   checks that every playbook rule has an expected status and that no unknown rule is listed.
+4. Optional: so that the selftest also writes tracked changes into the new contract, add an entry
+   for it to `evals/src/selftest.ts`, with a clause number, a quote that occurs once and a
+   replacement for each deviation. Rules without an entry simply get no edit.
+5. The tests in `evals/test` count the three shipped fixtures by hand and always name them, so
+   adding a fourth does not change them.
+
+## Known limits
+
+- The count of tracked changes reads two edits that touch each other, a pure deletion directly
+  followed by a pure insertion for example, as one. The harness would then report a mismatch for a
+  paragraph where the file is fine. The message names the paragraph and both counts. A change that
+  the original file already had is told apart by its id, so it never merges with a new edit.
+- The check does not open the file in Word. It cannot see an invalid element order, a duplicate
+  id or a wrong author or date, and it treats the content of the original file as correct.
+- Reading "reject all" and "accept all" back from the file uses the same XML parser library as the
+  pipeline (xmldom), though none of its logic.
+- The harness scores statuses and edits, not the quality of the explanations or of the wording of
+  a suggested clause. Read those yourself in the JSON.
+- Nothing here has been run against a live model, and the prices have not been checked.

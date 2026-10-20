@@ -1,0 +1,19 @@
+{
+  "name": "@clausewise/evals",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "eval": "tsx src/run.ts"
+  },
+  "dependencies": {
+    "@clausewise/llm": "workspace:*",
+    "@clausewise/playbook": "workspace:*",
+    "@clausewise/review": "workspace:*",
+    "@xmldom/xmldom": "^0.9.12",
+    "jszip": "^3.10.2",
+    "zod": "^4.6.7"
+  }
+}

@@ -49,6 +49,27 @@ importers:
         specifier: ^3.10.2
         version: 3.10.2
 
+  evals:
+    dependencies:
+      '@clausewise/llm':
+        specifier: workspace:*
+        version: link:../packages/llm
+      '@clausewise/playbook':
+        specifier: workspace:*
+        version: link:../packages/playbook
+      '@clausewise/review':
+        specifier: workspace:*
+        version: link:../packages/review
+      '@xmldom/xmldom':
+        specifier: ^0.9.12
+        version: 0.9.12
+      jszip:
+        specifier: ^3.10.2
+        version: 3.10.2
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+
   packages/docx:
     dependencies:
       '@xmldom/xmldom':
