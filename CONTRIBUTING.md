@@ -64,9 +64,117 @@ enable the script for everyone.
 
 ### End to end tests
 
-A Playwright suite (`pnpm e2e`, with its own CI job) is planned and does not exist yet. It will
-drive the built web app against a real server with a scripted model. When it exists, it will be
-described here.
+`pnpm e2e` drives the built web app in Chromium against real Clausewise servers, the way a lawyer
+uses it: upload a contract, run a review, accept, reject and reword findings, download the redline
+and open it. It needs no key and calls no model.
+
+```sh
+pnpm install
+pnpm exec playwright install chromium   # once; CI uses --with-deps. The scripts never download a browser.
+pnpm e2e
+```
+
+What it does:
+
+- The script builds the web app first (`pnpm --filter @clausewise/web build`). The global setup
+  checks again: it builds if `apps/web/dist` is missing or older than the source, so a run
+  never tests a stale build. `CLAUSEWISE_E2E_SKIP_BUILD=1` trusts an existing build (a missing one
+  is an error).
+- `e2e/global-setup.ts` starts four servers with `startServer` (through `e2e/start.ts`), each on a
+  free port, with the embedded database, a fresh data folder under your temporary folder and the
+  repository's own `playbooks/`: `main`, one with an access token, one whose model answers every
+  call with HTTP 401, and one with no model set up. They are closed at the end. The run then
+  fails if a server left its lock file behind, or if a log holds text of a contract or the token.
+  `CLAUSEWISE_E2E_KEEP=1` keeps the data folders and logs and prints where they are.
+- The model is the scripted oracle of the evaluation harness (`oracleScripts`, built from
+  `fixtures/expected.json`), in `e2e/oracle.ts`. It answers for whichever fixture the prompt holds.
+  Two words in the "Who are you acting for?" field change how it answers, so a scenario can ask
+  for them without any switch in the server: `e2e-slow` makes it take about a second over each
+  rule, so that progress can be watched, and `e2e-unanchored` makes it misquote the words of one
+  rule, which gives a finding that only has a comment.
+- The main flows are in `e2e/tests/flow.spec.ts`. They find everything by role and accessible
+  name, never by CSS selector, so they also check the labels. They wait for a state or for the
+  request they caused, never for a fixed time. They run one after the other in one worker, because
+  the servers are shared and one scenario looks at the data folder. The downloaded files are read
+  with JSZip by `e2e/docx-reader.ts`, which shares no code with the writer.
+- `e2e/tests/browser.spec.ts` holds what only a real browser can show, and `e2e/tests/token.spec.ts`
+  the access token as the browser handles it. Together they take about three minutes. They check:
+  - the content security policy (no violation, no console error, no request to another site on any
+    screen, and a control that the browser does block an inline script, a remote address, an inline
+    style and a form that posts elsewhere), the headers of a page, an asset and the API, and that a
+    second visit does not fetch the files again;
+  - who may talk to the server: a request addressed to another name (421), one that names another
+    site as its origin (403), a body a form could send (415), a name that points at this machine
+    resolved by the browser itself (`--host-resolver-rules`), and a page served from another port
+    that tries every request a hostile page can make while the server's state is compared before and
+    after;
+  - the whole happy path with the keyboard alone, and where the focus is after each step;
+  - layout and colour on every screen (`e2e/support/screens.ts` lists them) at 360, 768 and 1280
+    pixels in a light and a dark scheme: no sideways scroll, targets of 24 by 24 pixels, text of 4.5
+    to 1, measured from computed styles by `e2e/support/audit.ts`. That file has scenarios of its
+    own that feed it pages with known answers, so that a measurement that cannot say "too low" is
+    noticed. A new screen or state goes into `screens.ts`. Pictures of the main screens are saved in
+    `test-results/screenshots/` for a person to look at; nothing asserts on pixels;
+  - reflow at 320 pixels wide with the root font size at 200 percent (not the browser's own zoom
+    command, which Playwright cannot press: the window is narrowed and the size is set through the
+    style object of the root element, which the policy allows);
+  - a contract of 200 paragraphs with one clause of 3,000 words (built by
+    `e2e/support/contracts.ts`), file names and contract text that are full of markup, a server that
+    stops and comes back on the same port, double presses, refused files, dropped files, polling
+    that stops, two tabs, and other small things a tester tries.
+- Helpers a scenario of its own may need are in `e2e/support/`: servers owned by one test, with a
+  model scripted for one contract (`servers.ts`), a watcher for a page's violations and errors
+  (`watch.ts`), the API called directly (`api.ts`), keyboard helpers (`keyboard.ts`), and a page on
+  another site (`evil-site.ts`). The specs of this folder delete the contracts they uploaded to the
+  shared servers when a test ends.
+- A test fails if its page throws an uncaught error or logs a console error, which is how a content
+  security policy that blocks something is noticed.
+
+Running part of it:
+
+```sh
+pnpm exec playwright test --config e2e/playwright.config.ts -g "happy path"
+pnpm exec playwright test --config e2e/playwright.config.ts --headed --debug
+```
+
+A failed test leaves a screenshot in `test-results/`, and a trace there too when it is retried
+(CI retries once; a local run does not). CI uploads `test-results/` and `playwright-report/` for
+seven days when the job fails. Open a trace with `pnpm exec playwright show-trace <trace.zip>`.
+Both folders are ignored by git.
+
+**A machine whose browser is not the one Playwright expects.** Playwright 1.64 launches one exact
+Chromium revision, which `playwright install` puts in its cache. If that revision is not there but
+another Chromium is, `e2e/browser.ts` uses the newest one it finds in `PLAYWRIGHT_BROWSERS_PATH`
+(or in Playwright's default cache folder), preferring the headless shell. To choose a browser
+yourself, give the path of a Chromium or Chrome executable:
+
+```sh
+CLAUSEWISE_E2E_CHROMIUM=/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell pnpm e2e
+```
+
+On the machine this was written on, the full Chromium in `/opt/pw-browsers` crashed at start
+(SIGTRAP) and the headless shell next to it worked. Playwright supports only the revision it was
+built for. With another one the suite may run, as it did there (Chromium 141 under Playwright
+1.64), or fail in ways that are not bugs in Clausewise; CI installs the right one.
+
+**LibreOffice.** One scenario converts a downloaded redline to ODT with `soffice`, in a profile
+folder of its own, and counts the tracked changes and comments LibreOffice sees. It skips itself
+with the reason when `soffice` is not installed, as it is not on the CI runner.
+
+**Downloads with accents in the name.** Chromium writes a download under the name the page gave it
+only if the machine's locale can hold the characters. In the C locale of a container it saves a
+name with accents in it as "download", with no extension. That is the machine and not the app, so
+the scenario that checks saved names starts its own browser with `LC_ALL=C.UTF-8`.
+
+**A key that opens the file chooser.** Start listening for the chooser (`listenForFileChooser` in
+`e2e/support/keyboard.ts`) well before the key is pressed. Waiting for the event right before the key
+races with the message that switches the interception on, and the test then waits for a chooser that
+Playwright never saw.
+
+**Adding a scenario.** Check that it can fail: break what it guards in a copy of the repository
+(never the working tree) and watch it fail. Give the scenario its own contract and review, and do
+not rely on what another scenario left behind. Anything else it creates, such as a playbook, gets a
+name that says it belongs to a test and is removed again, even when the scenario fails half way.
 
 ## The server bundle and the image
 

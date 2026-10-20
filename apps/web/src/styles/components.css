@@ -167,6 +167,13 @@
   font: inherit;
 }
 
+/* The browser's own grey for a placeholder is 3.6 to 1 on the dark surface, under the 4.5 to 1 that
+   text needs, and Firefox fades it as well. */
+.input::placeholder {
+  color: var(--ink-muted);
+  opacity: 1;
+}
+
 .textarea {
   max-width: none;
   resize: vertical;

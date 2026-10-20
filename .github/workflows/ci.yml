@@ -128,3 +128,39 @@ jobs:
       - name: Stop the stack and delete its volumes
         if: always()
         run: docker compose down --volumes
+
+  # Drives the built web app in Chromium against real servers with a scripted model. It needs no
+  # key and calls no model. LibreOffice is not installed on the runner, so the one scenario that
+  # converts a download with it skips itself and says why.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      # Builds the web app, then runs the scenarios (see CONTRIBUTING.md).
+      - run: pnpm e2e
+
+      - name: Keep the screenshots and traces of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results
+          path: test-results
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Keep the report of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-playwright-report
+          path: playwright-report
+          retention-days: 7
+          if-no-files-found: ignore
