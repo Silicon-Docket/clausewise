@@ -24,10 +24,16 @@ import {
 export class ModelRequestError extends Error {
   override name = "ModelRequestError";
   readonly statusCode: number | undefined;
+  /**
+   * True when every other call of the same review would fail the same way, such as a rejected key,
+   * a missing model or an exhausted balance, so a caller should stop instead of sending more.
+   */
+  readonly fatal: boolean;
 
-  constructor(message: string, statusCode: number | undefined) {
+  constructor(message: string, statusCode: number | undefined, fatal?: boolean) {
     super(message);
     this.statusCode = statusCode;
+    this.fatal = fatal ?? (statusCode === 401 || statusCode === 403 || statusCode === 404);
   }
 }
 

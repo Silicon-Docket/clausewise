@@ -141,6 +141,11 @@ export interface ReviewOptions {
   concurrency?: number;
   /** Largest prompt, in estimated tokens. Unset sends the whole contract every time. */
   maxContextTokens?: number;
+  /**
+   * Which party of the contract the lawyer acts for, in their words, such as "Fabrikam Labs LLC,
+   * the Recipient". Playbooks say "we"; this says who that is.
+   */
+  client?: string;
   signal?: AbortSignal;
   onProgress?: (event: ProgressEvent) => void;
 }

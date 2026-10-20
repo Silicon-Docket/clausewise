@@ -59,6 +59,11 @@ export interface ObjectGenerator {
    * response starts, so callers should finish one call before launching the rest in parallel.
    */
   readonly cachesSharedPrefix?: boolean;
+  /**
+   * The shortest shared prefix, in characters, that the provider can cache. Below it the prefix is
+   * never cached, so waiting for one call to finish before the rest start gains nothing.
+   */
+  readonly minCacheableChars?: number;
 }
 
 /** The model declined to answer (a safety stop), so retrying the same request will not help. */
@@ -76,6 +81,13 @@ export class ModelRefusalError extends Error {
 /** The model answered, but never with output that fits the schema, even after retries. */
 export class ModelOutputError extends Error {
   override name = "ModelOutputError";
+  /** True when the last reply stopped at the output token limit, so a retry cannot help. */
+  readonly truncated: boolean;
+
+  constructor(message: string, truncated = false) {
+    super(message);
+    this.truncated = truncated;
+  }
 }
 
 /** The environment does not describe a usable model setup. */
