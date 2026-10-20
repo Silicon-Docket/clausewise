@@ -2,17 +2,26 @@ import type JSZip from "jszip";
 import {
   DocxError,
   W_NS,
+  appendRunText,
   childElements,
   createW,
+  isW,
   parseXml,
-  serializeXml,
-  setText,
+  sanitizeText,
 } from "./ooxml.js";
-import { readPart } from "./package.js";
+import {
+  documentRelationships,
+  entryName,
+  isUsableSidePart,
+  packageLimits,
+  readPart,
+  writeXmlPart,
+} from "./package.js";
 
 const REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships";
 const CT_NS = "http://schemas.openxmlformats.org/package/2006/content-types";
-const COMMENTS_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments";
+export const COMMENTS_REL =
+  "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments";
 const COMMENTS_CT = "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml";
 const RELS_PATH = "word/_rels/document.xml.rels";
 const CONTENT_TYPES_PATH = "[Content_Types].xml";
@@ -22,26 +31,67 @@ export interface CommentsPart {
   doc: Document;
   root: Element;
   path: string;
+  /** The part was read from the package, so it is already registered. */
   existed: boolean;
+  /** A relationship to the part is already in the document's relationships. */
+  relationshipExists: boolean;
+}
+
+export function createCommentsPart(
+  path = "word/comments.xml",
+  relationshipExists = false,
+): CommentsPart {
+  const doc = parseXml(`${XML_DECL}<w:comments xmlns:w="${W_NS}"/>`, "new comments part");
+  return { doc, root: doc.documentElement, path, existed: false, relationshipExists };
+}
+
+/**
+ * The comments part the document's relationships point to, if one can be trusted. A relationship
+ * is only a claim: followed blindly, one aimed at document.xml or styles.xml makes the comments
+ * code overwrite or pollute that part.
+ */
+export async function findCommentsPart(
+  zip: JSZip,
+): Promise<{ path: string; doc: Document | undefined } | undefined> {
+  const rels = await documentRelationships(zip);
+  let missing: string | undefined;
+  for (const rel of rels) {
+    if (rel.type !== COMMENTS_REL || !isUsableSidePart(rel.path)) continue;
+    const real = entryName(zip, rel.path);
+    if (real === undefined) {
+      missing ??= rel.path;
+      continue;
+    }
+    const xml = await readPart(zip, real);
+    if (xml === undefined) continue;
+    const doc = parseXml(xml, real, packageLimits(zip));
+    if (isW(doc.documentElement, "comments")) return { path: real, doc };
+  }
+  return missing === undefined ? undefined : { path: missing, doc: undefined };
+}
+
+function unusedCommentsName(zip: JSZip, taken: Set<string>): string {
+  for (let n = 0; ; n++) {
+    const name = `word/comments${n === 0 ? "" : n}.xml`;
+    if (entryName(zip, name) === undefined && !taken.has(name.toLowerCase())) return name;
+  }
 }
 
 export async function loadComments(zip: JSZip): Promise<CommentsPart> {
-  const relsXml = await readPart(zip, RELS_PATH);
-  if (relsXml) {
-    const rels = parseXml(relsXml, RELS_PATH);
-    for (const rel of childElements(rels.documentElement)) {
-      if (rel.getAttribute("Type") !== COMMENTS_REL) continue;
-      const target = rel.getAttribute("Target") ?? "comments.xml";
-      const path = target.startsWith("/") ? target.slice(1) : `word/${target}`;
-      const xml = await readPart(zip, path);
-      if (xml) {
-        const doc = parseXml(xml, path);
-        return { doc, root: doc.documentElement, path, existed: true };
-      }
-    }
+  const found = await findCommentsPart(zip);
+  if (found?.doc) {
+    return {
+      doc: found.doc,
+      root: found.doc.documentElement,
+      path: found.path,
+      existed: true,
+      relationshipExists: true,
+    };
   }
-  const doc = parseXml(`${XML_DECL}<w:comments xmlns:w="${W_NS}"/>`, "new comments part");
-  return { doc, root: doc.documentElement, path: "word/comments.xml", existed: false };
+  if (found) return createCommentsPart(found.path, true);
+  const rels = await documentRelationships(zip);
+  const taken = new Set(rels.flatMap((r) => (r.path === undefined ? [] : [r.path.toLowerCase()])));
+  return createCommentsPart(unusedCommentsName(zip, taken));
 }
 
 export function addComment(
@@ -55,47 +105,66 @@ export function addComment(
     date: c.date,
     initials: c.initials,
   });
-  c.text.split(/\r?\n/).forEach((line, i) => {
-    const p = createW(doc, "p");
-    if (i === 0) {
-      const ref = createW(doc, "r");
-      ref.appendChild(createW(doc, "annotationRef"));
-      p.appendChild(ref);
-    }
-    const r = createW(doc, "r");
-    const t = createW(doc, "t");
-    setText(doc, t, line);
-    r.appendChild(t);
-    p.appendChild(r);
-    comment.appendChild(p);
-  });
+  sanitizeText(c.text)
+    .split("\n")
+    .forEach((line, i) => {
+      const p = createW(doc, "p");
+      if (i === 0) {
+        const ref = createW(doc, "r");
+        ref.appendChild(createW(doc, "annotationRef"));
+        p.appendChild(ref);
+      }
+      const r = createW(doc, "r");
+      appendRunText(doc, r, line, false);
+      p.appendChild(r);
+      comment.appendChild(p);
+    });
   part.root.appendChild(comment);
 }
 
 export async function saveComments(zip: JSZip, part: CommentsPart): Promise<void> {
-  zip.file(part.path, serializeXml(part.doc));
+  const limits = packageLimits(zip);
+  writeXmlPart(zip, part.path, part.doc);
   if (part.existed) return;
 
-  const relsXml = await readPart(zip, RELS_PATH);
-  const rels = parseXml(relsXml ?? `${XML_DECL}<Relationships xmlns="${REL_NS}"/>`, RELS_PATH);
-  let maxId = 0;
-  for (const rel of childElements(rels.documentElement)) {
-    const m = /^rId(\d+)$/.exec(rel.getAttribute("Id") ?? "");
-    if (m) maxId = Math.max(maxId, Number(m[1]));
+  if (!part.relationshipExists) {
+    const relsXml = await readPart(zip, RELS_PATH);
+    const rels = parseXml(
+      relsXml ?? `${XML_DECL}<Relationships xmlns="${REL_NS}"/>`,
+      RELS_PATH,
+      limits,
+    );
+    const used = new Set<string>();
+    let maxId = 0;
+    for (const rel of childElements(rels.documentElement)) {
+      const id = rel.getAttribute("Id") ?? "";
+      used.add(id);
+      const m = /^rId(\d+)$/.exec(id);
+      if (m) maxId = Math.max(maxId, Number(m[1]));
+    }
+    let next = maxId + 1;
+    while (used.has(`rId${next}`)) next++;
+    const rel = rels.createElementNS(REL_NS, "Relationship");
+    rel.setAttribute("Id", `rId${next}`);
+    rel.setAttribute("Type", COMMENTS_REL);
+    rel.setAttribute("Target", part.path.replace(/^word\//, ""));
+    rels.documentElement.appendChild(rel);
+    writeXmlPart(zip, RELS_PATH, rels);
   }
-  const rel = rels.createElementNS(REL_NS, "Relationship");
-  rel.setAttribute("Id", `rId${maxId + 1}`);
-  rel.setAttribute("Type", COMMENTS_REL);
-  rel.setAttribute("Target", part.path.replace(/^word\//, ""));
-  rels.documentElement.appendChild(rel);
-  zip.file(RELS_PATH, serializeXml(rels));
 
   const ctXml = await readPart(zip, CONTENT_TYPES_PATH);
   if (!ctXml) throw new DocxError(`Not a .docx file: ${CONTENT_TYPES_PATH} is missing`);
-  const ct = parseXml(ctXml, CONTENT_TYPES_PATH);
-  const override = ct.createElementNS(CT_NS, "Override");
-  override.setAttribute("PartName", `/${part.path}`);
-  override.setAttribute("ContentType", COMMENTS_CT);
-  ct.documentElement.appendChild(override);
-  zip.file(CONTENT_TYPES_PATH, serializeXml(ct));
+  const ct = parseXml(ctXml, CONTENT_TYPES_PATH, limits);
+  const partName = `/${part.path}`.toLowerCase();
+  const existing = childElements(ct.documentElement).find(
+    (e) => e.localName === "Override" && e.getAttribute("PartName")?.toLowerCase() === partName,
+  );
+  if (existing) existing.setAttribute("ContentType", COMMENTS_CT);
+  else {
+    const override = ct.createElementNS(CT_NS, "Override");
+    override.setAttribute("PartName", `/${part.path}`);
+    override.setAttribute("ContentType", COMMENTS_CT);
+    ct.documentElement.appendChild(override);
+  }
+  writeXmlPart(zip, CONTENT_TYPES_PATH, ct);
 }
