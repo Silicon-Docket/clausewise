@@ -313,18 +313,21 @@ describe("buildRulePrompt system prompt", () => {
     const { system } = buildRulePrompt({ playbook, rule: rule(), clauses: contractA });
     expect(system).toMatch(/character for character/i);
     expect(system).toMatch(/ONE paragraph/);
-    expect(system).toMatch(/occur once/i);
-    expect(system).toMatch(/as short as possible/i);
+    expect(system).toMatch(/exactly once/i);
     expect(system).toMatch(/set edit to null/i);
     expect(system).toMatch(/suggestedClause/);
     expect(system).toMatch(/60 words/);
     expect(system).toMatch(/clause 3\.1/);
     expect(system).toMatch(/no legal disclaimers/i);
     expect(system).toMatch(/choose deviation/i);
-    expect(system).toMatch(/otherwise not_applicable/i);
     expect(system).toMatch(/only refer to clause ids that appear/i);
     expect(system).toMatch(/fallback counts as compliant/i);
     expect(system).toMatch(/output only the structured object/i);
+  });
+
+  it("chooses between missing and not_applicable for a presence rule by whether it is required", () => {
+    const { system } = buildRulePrompt({ playbook, rule: rule(), clauses: contractA });
+    expect(system).toMatch(/missing if the rule is required and otherwise not_applicable/i);
   });
 });
 

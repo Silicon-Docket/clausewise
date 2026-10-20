@@ -158,8 +158,39 @@ function normalizeLineEnds(source: string): string {
   return source.replace(/\r\n?/g, "\n");
 }
 
-export function parseXml(xml: string, what: string, limits?: Partial<DocxLimits>): Document {
+const CHARACTER_REFERENCE = /&#(?:[xX]([0-9a-fA-F]+)|([0-9]+));/g;
+
+function isXmlCodePoint(cp: number): boolean {
+  return (
+    cp === 0x09 ||
+    cp === 0x0a ||
+    cp === 0x0d ||
+    (cp >= 0x20 && cp <= 0xd7ff) ||
+    (cp >= 0xe000 && cp <= 0xfffd) ||
+    (cp >= 0x10000 && cp <= 0x10ffff)
+  );
+}
+
+/**
+ * The parser decodes a numeric reference to a character XML forbids (&#1;) without complaint, and
+ * the writer would then put the raw character back. Such a reference is treated the way the same
+ * character typed in the part is treated: dropped.
+ */
+function dropForbiddenReferences(xml: string): string {
+  if (!xml.includes("&#")) return xml;
+  return xml.replace(
+    CHARACTER_REFERENCE,
+    (ref, hex: string | undefined, dec: string | undefined) => {
+      const cp = hex !== undefined ? parseInt(hex, 16) : parseInt(dec ?? "", 10);
+      if (isXmlCodePoint(cp)) return ref;
+      return cp <= 0x10ffff ? dropNonXmlChars(String.fromCodePoint(cp)) : "";
+    },
+  );
+}
+
+export function parseXml(source: string, what: string, limits?: Partial<DocxLimits>): Document {
   const resolved = resolveLimits(limits);
+  const xml = dropForbiddenReferences(source);
   guardXml(xml, what, resolved);
   const parser = new DOMParser({
     locator: false,
@@ -199,16 +230,24 @@ const HAS_NOT_XML_CHAR = /[^\t\n\r\u0020-\uD7FF\uE000-\uFFFD\u{10000}-\u{10FFFF}
 const BIDI_CONTROL = /[\u202A-\u202E\u2066-\u2069]/g;
 
 /**
- * Makes text safe to put in a text node or attribute: line ends become LF, characters XML cannot
- * carry are dropped (a vertical tab or form feed becomes a space so words do not fuse) and a lone
- * surrogate becomes U+FFFD.
+ * Leaves out the characters XML cannot carry (a vertical tab or form feed becomes a space so
+ * words do not fuse) and turns a lone surrogate into U+FFFD. Line ends are left as they are, so
+ * a piece cut out of text that is already in the contract stays exactly what it was.
  */
-export function xmlSafe(text: string): string {
-  return text.replace(/\r\n?/g, "\n").replace(NOT_XML_CHAR, (ch) => {
+export function dropNonXmlChars(text: string): string {
+  return text.replace(NOT_XML_CHAR, (ch) => {
     const cp = ch.codePointAt(0) ?? 0;
     if (cp >= 0xd800 && cp <= 0xdfff) return "\uFFFD";
     return cp === 0x0b || cp === 0x0c ? " " : "";
   });
+}
+
+/**
+ * Makes text that arrives from outside safe to put in a text node or attribute: line ends become
+ * LF, so a lone CR is not mistaken for something else, and what XML cannot carry is dropped.
+ */
+export function xmlSafe(text: string): string {
+  return dropNonXmlChars(text.replace(/\r\n?/g, "\n"));
 }
 
 /** For text that arrives from a model: also drops the bidi controls that can reorder what a reader sees. */
@@ -296,7 +335,7 @@ export function setText(
   text: string,
   preserve: boolean | "auto" = "auto",
 ): void {
-  const clean = xmlSafe(text);
+  const clean = dropNonXmlChars(text);
   while (el.firstChild) el.removeChild(el.firstChild);
   el.appendChild(doc.createTextNode(clean));
   if (preserve === true || (preserve === "auto" && hasEdgeSpace(clean))) {

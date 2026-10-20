@@ -35,44 +35,53 @@ export interface Clause {
  * shape are done in code after parsing.
  */
 export const RuleCheckSchema = z.object({
+  // The definitions are the ones in the system prompt, word for word. A rule of kind "absence"
+  // forbids something, so for it the clean contract is compliant and missing and not_applicable
+  // do not apply.
   status: z
     .enum(["compliant", "deviation", "missing", "not_applicable"])
     .describe(
-      "compliant: the contract meets the playbook standard or a stated fallback. deviation: a clause addresses the topic but falls short of the standard. missing: the playbook requires this and no clause covers it. not_applicable: no clause covers the topic and the playbook does not require one.",
+      "compliant: the contract meets the playbook standard or a stated fallback, or, for an absence rule, contains nothing the standard forbids. deviation: a clause addresses the topic but falls short of the standard, or, for an absence rule, contains what the standard forbids. missing: a presence rule that the playbook requires and no clause covers. not_applicable: a presence rule that the playbook does not require and no clause covers.",
     ),
   clauseIds: z
     .array(z.string())
     .describe(
-      "Ids such as c7 of the clauses this finding is about. Empty if none covers the topic.",
+      "Ids such as c7 of the clauses that bear on the rule, with the clause that contains the problem first (for a compliant result, the one that best shows compliance). Empty if no clause covers the topic.",
     ),
   explanation: z
     .string()
     .describe(
-      "Two or three sentences for the reviewing lawyer: what the clause says and how it compares with the playbook.",
+      "Two or three sentences stating the finding for the reviewing lawyer: what the clause says and how it compares with the playbook. Never mention clause ids.",
     ),
   comment: z
     .string()
     .describe(
-      "A short margin comment for the lawyer. Empty string when status is compliant or not_applicable.",
+      "A margin note for the lawyer in the Word file: about 60 words or fewer, plain words, what to change and why. Never mention clause ids. Empty string when status is compliant or not_applicable.",
     ),
   edit: z
     .object({
-      clauseId: z.string().describe("The clause containing the quote."),
+      clauseId: z.string().describe("The id of the clause that contains the quote."),
       quote: z
         .string()
         .describe(
-          "Text copied exactly, character for character, from ONE paragraph of that clause. It must occur there once. Keep it as short as possible while staying unique.",
+          "Text copied exactly from ONE paragraph of that clause, starting and ending on whole words, never from the header line. It must occur exactly once in the whole clause, so add neighbouring words until it is unique. Straight and curly quotation marks, dashes and runs of spaces are matched loosely.",
         ),
-      replacement: z.string().describe("The wording to put in place of the quote."),
+      replacement: z
+        .string()
+        .describe(
+          "The wording to put in place of the quote, in the contract's style and with its kind of quotation marks. The sentence must read correctly with it in place. An empty string deletes the quote. Use a bracketed placeholder such as [amount] for a value you do not have.",
+        ),
     })
     .nullable()
     .describe(
-      "A minimal edit that would bring the clause to the playbook standard, or null if no safe single-paragraph edit exists.",
+      "One minimal change inside a single paragraph that would bring the clause to the standard. Null when the status is not deviation, when you are unsure what is wrong, or when the fix needs changes in several places.",
     ),
   suggestedClause: z
     .string()
     .nullable()
-    .describe("For status missing only: complete wording for the clause to add. Otherwise null."),
+    .describe(
+      "For status missing only: complete wording for the clause to add, using the contract's defined terms. Otherwise null.",
+    ),
 });
 
 export type RuleCheck = z.infer<typeof RuleCheckSchema>;

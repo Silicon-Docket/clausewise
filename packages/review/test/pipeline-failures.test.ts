@@ -90,6 +90,12 @@ describe("a failure of one call", () => {
       expected: "The model did not return an answer in the expected format for this rule.",
     },
     {
+      name: "an output error whose reply was cut off at the token limit",
+      error: () => new ModelOutputError(`cut off near ${CONTRACT_TEXT}`, true),
+      expected:
+        "The model's answer was cut off before it was complete, so this rule was not checked. Raise CLAUSEWISE_MAX_OUTPUT_TOKENS and run the review again.",
+    },
+    {
       name: "a server error",
       error: () => new ModelRequestError(`failed: ${CONTRACT_TEXT}`, 500),
       expected: "The request to the model failed (HTTP 500).",
@@ -155,9 +161,70 @@ describe("a failure of one call", () => {
 });
 
 describe("a fatal failure", () => {
-  it.each([401, 403, 404])("HTTP %i stops the review with a ReviewError", async (status) => {
+  // The provider decides what is fatal. The pipeline only words what the user should check.
+  const fatalCases: { name: string; error: () => ModelRequestError; expected: RegExp[] }[] = [
+    {
+      name: "a rejected key (401)",
+      error: () => new ModelRequestError(`rejected: ${CONTRACT_TEXT}`, 401),
+      expected: [
+        /^The model provider answered HTTP 401, so no rule can be checked\./,
+        /Check the API key: the provider rejected it, so it may be wrong, expired or revoked \(model: oracle\)\./,
+      ],
+    },
+    {
+      name: "a key without permission (403)",
+      error: () => new ModelRequestError(`rejected: ${CONTRACT_TEXT}`, 403),
+      expected: [
+        /^The model provider answered HTTP 403, so no rule can be checked\./,
+        /Check the API key's permissions and that the account has access to the model \(oracle\)/,
+      ],
+    },
+    {
+      name: "an unknown model (404)",
+      error: () => new ModelRequestError(`rejected: ${CONTRACT_TEXT}`, 404),
+      expected: [
+        /^The model provider answered HTTP 404, so no rule can be checked\./,
+        /Check the model name \(oracle\) and, for a local server, the base URL: the provider could not find the model/,
+      ],
+    },
+    {
+      name: "an empty balance (402)",
+      error: () => new ModelRequestError(`rejected: ${CONTRACT_TEXT}`, 402),
+      expected: [
+        /^The model provider answered HTTP 402, so no rule can be checked\./,
+        /Check the account behind the API key \(model: oracle\)/,
+        /credit balance/,
+        /spend limit set for the organisation or workspace/,
+      ],
+    },
+    {
+      name: "a spend limit the provider reports as a 400",
+      error: () => new ModelRequestError(`rejected: ${CONTRACT_TEXT}`, 400, undefined, "billing"),
+      expected: [/^The model provider answered HTTP 400, /, /spend limit/],
+    },
+    {
+      name: "a spend cap the provider reports as a 429",
+      error: () => new ModelRequestError(`rejected: ${CONTRACT_TEXT}`, 429, true, "billing"),
+      expected: [/^The model provider answered HTTP 429, /, /spend limit/],
+    },
+    {
+      name: "a failure the provider marked fatal without saying why",
+      error: () => new ModelRequestError(`rejected: ${CONTRACT_TEXT}`, 418, true),
+      expected: [/HTTP 418/, /Check the API key, its permissions and the model name \(oracle\)/],
+    },
+    {
+      name: "a fatal failure with no status",
+      error: () => new ModelRequestError(`rejected: ${CONTRACT_TEXT}`, undefined, true),
+      expected: [
+        /^The model provider answered with an error, so no rule can be checked\./,
+        /API key/,
+      ],
+    },
+  ];
+
+  it.each(fatalCases)("$name stops the review with a ReviewError", async (item) => {
     const generator = intercept(createOracleGenerator(aggressiveScript()), () => {
-      throw new ModelRequestError(`rejected: ${CONTRACT_TEXT}`, status);
+      throw item.error();
     });
     const failure = await reviewContract({ docx: input, playbook }, generator, {
       concurrency: 1,
@@ -165,14 +232,37 @@ describe("a fatal failure", () => {
 
     expect(failure).toBeInstanceOf(ReviewError);
     const message = (failure as Error).message;
-    expect(message).toContain(`HTTP ${status}`);
-    expect(message).toMatch(/API key/);
-    expect(message).toMatch(/permissions/);
-    expect(message).toMatch(/model name/);
-    expect(message).toContain("oracle");
+    for (const part of item.expected) expect(message).toMatch(part);
     expect(message).not.toContain(CONTRACT_TEXT);
     // The first call was fatal, so nothing else was launched.
     expect(generator.calls).toHaveLength(1);
+  });
+
+  it("goes by the provider's flag, not by the status", async () => {
+    // A 401 that the provider says is worth another try, and a 503 that it says is not.
+    const retry = intercept(createOracleGenerator(aggressiveScript()), (request) => {
+      if (ruleIdOf(request) === "term") throw new ModelRequestError("later", 401, false);
+    });
+    const { report } = await reviewContract({ docx: input, playbook }, retry);
+    expect(resultFor(report, "term")).toMatchObject({
+      status: "error",
+      error: "The request to the model failed (HTTP 401).",
+    });
+    expect(retry.calls).toHaveLength(10);
+
+    const stop = intercept(createOracleGenerator(aggressiveScript()), () => {
+      throw new ModelRequestError("down", 503, true);
+    });
+    await expect(
+      reviewContract({ docx: input, playbook }, stop, { concurrency: 1 }),
+    ).rejects.toBeInstanceOf(ReviewError);
+  });
+
+  it.each([429, 500, 529])("HTTP %i is not fatal", async (status) => {
+    const generator = failingTerm(() => new ModelRequestError("busy", status));
+    const { report } = await reviewContract({ docx: input, playbook }, generator);
+    expect(resultFor(report, "term").status).toBe("error");
+    expect(report.counts.error).toBe(1);
   });
 
   it("does not report progress for the rules it never checked", async () => {

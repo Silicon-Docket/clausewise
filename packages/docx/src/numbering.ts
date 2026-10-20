@@ -53,6 +53,9 @@ type Counters = (number | undefined)[];
 const LEVELS = 9;
 const MAX_LINK_DEPTH = 5;
 const MAX_LABEL_LENGTH = 255;
+// Word itself stops a level text at 255 characters. A text far beyond that is hostile, and
+// substituting into it for every paragraph of a long list would take minutes.
+const MAX_LEVEL_TEXT_LENGTH = 2 * MAX_LABEL_LENGTH;
 // A start of 999999999 would otherwise build a label of millions of letters before the length
 // limit rejects it.
 const MAX_LETTER_REPEAT = 100;
@@ -438,7 +441,7 @@ class ListResolver {
       const restart = defs.level(eff.numId, j)?.restart;
       if (restart === undefined || (restart > 0 && k < restart)) counters[j] = undefined;
     }
-    if (isBullet) return undefined;
+    if (isBullet || def.text.length > MAX_LEVEL_TEXT_LENGTH) return undefined;
 
     let text = "";
     let last = 0;

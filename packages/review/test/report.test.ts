@@ -8,6 +8,9 @@ import { aggressiveScript, fixture, loadPlaybook } from "./pipeline-support.js";
 const EN_DASH = String.fromCharCode(0x2013);
 const EM_DASH = String.fromCharCode(0x2014);
 const DASHES = new RegExp(`[${EN_DASH}${EM_DASH}]`);
+// Written as code points because an editor or formatter may turn the escapes into the characters.
+const LINE_SEPARATOR = String.fromCharCode(0x2028);
+const NEXT_LINE = String.fromCharCode(0x85);
 
 function section(markdown: string, title: string): string {
   const start = markdown.indexOf(`## ${title}\n`);
@@ -368,6 +371,50 @@ describe("renderMarkdown details", () => {
     expect(markdown).toContain("### 1. Title - here");
   });
 
+  it("turns a dash and the blanks around it into one hyphen, or a spaced one if there were any", () => {
+    const clause = [
+      `a${EN_DASH}b`,
+      `c ${EM_DASH} d`,
+      `e \t${EN_DASH}\t  f`,
+      `g ${EM_DASH}h`,
+      `i${EM_DASH} j`,
+      `k ${EM_DASH}`,
+      `${EN_DASH}l`,
+      `m${EN_DASH}${EM_DASH}n`,
+    ].join("\n");
+    const markdown = renderMarkdown(
+      reportOf([result({ status: "missing", suggestedClause: clause })]),
+    );
+    const quote = section(markdown, "Needs attention")
+      .split("\n")
+      .filter((line) => line.startsWith("> "));
+    expect(quote).toEqual([
+      "> a-b",
+      "> c - d",
+      "> e - f",
+      "> g - h",
+      "> i - j",
+      "> k -",
+      "> \\-l",
+      "> m--n",
+    ]);
+  });
+
+  it("does not let a dash at the start of model text become a list marker", () => {
+    const markdown = renderMarkdown(
+      reportOf([result({ explanation: `${EM_DASH} an item`, title: `${EN_DASH} Dash title` })], {
+        warnings: [`${EM_DASH} a warning`],
+      }),
+    );
+    expect(markdown).toContain("### 1. - Dash title");
+    expect(markdown).toContain("\n\\- an item\n");
+    expect(markdown).toContain("\n- \\- a warning\n");
+    expect(markdown).not.toMatch(DASHES);
+    // Every line that begins with a list marker is one of the report's own.
+    const markers = markdown.split("\n").filter((line) => /^\s*[-+*]\s/.test(line));
+    expect(markers).toEqual(["- \\- a warning"]);
+  });
+
   it("flattens line breaks and drops control characters in quoted words", () => {
     const markdown = renderMarkdown(
       reportOf([
@@ -495,5 +542,199 @@ describe("renderMarkdown details", () => {
     );
     expect(markdown).toContain("Nothing needs attention.");
     expect(markdown.match(/None\./g)).toHaveLength(3);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Notes: what the review wants the lawyer to know that is not a finding
+// ---------------------------------------------------------------------------------------------
+
+const NOTHING_LEFT_OUT = {
+  trackedInsertions: 0,
+  trackedDeletions: 0,
+  comments: 0,
+  footnotes: 0,
+  endnotes: 0,
+  headerFooterParts: 0,
+  hiddenRuns: 0,
+  images: 0,
+};
+
+const sectionTitles = (markdown: string): string[] =>
+  headings(markdown).filter((line) => line.startsWith("## "));
+
+describe("renderMarkdown notes", () => {
+  const plain = renderMarkdown(reportOf([result()]));
+
+  it("adds nothing when there are no warnings and nothing was left out", () => {
+    for (const extra of [
+      {},
+      { warnings: [] },
+      { notShown: NOTHING_LEFT_OUT },
+      { warnings: [], notShown: NOTHING_LEFT_OUT },
+    ] satisfies Partial<ReviewReport>[]) {
+      expect(renderMarkdown(reportOf([result()], extra))).toBe(plain);
+    }
+    expect(plain).not.toContain("## Notes");
+    expect(plain).not.toContain("The model was not shown");
+  });
+
+  it("prints each warning as a bullet of a Notes section between the summary and the findings", () => {
+    const markdown = renderMarkdown(
+      reportOf([result()], {
+        warnings: ["The document has hidden text.", "Two paragraphs could not be read."],
+      }),
+    );
+    expect(section(markdown, "Notes")).toBe(
+      "## Notes\n\n- The document has hidden text.\n- Two paragraphs could not be read.\n",
+    );
+    expect(sectionTitles(markdown)).toEqual([
+      "## Summary",
+      "## Notes",
+      "## Needs attention",
+      "## Compliant",
+      "## Not applicable",
+      "## Could not be checked",
+    ]);
+  });
+
+  it("escapes a warning like any other model text, whatever it tries to start", () => {
+    const markdown = renderMarkdown(
+      reportOf([result()], {
+        warnings: [
+          NASTY,
+          "- looks like a nested list",
+          "1. looks like a numbered one",
+          "+ and another",
+          "=== underline",
+          "\n## Fake section\n| a | b |\n",
+          "Dashes " + EM_DASH + " and" + EN_DASH + "more",
+          `Controls\u0000\u0007 and${LINE_SEPARATOR}breaks${NEXT_LINE}here`,
+        ],
+      }),
+    );
+    const notes = section(markdown, "Notes").split("\n");
+    // The heading, a blank line, then one line per warning and the blank line that ends it.
+    expect(notes.filter((line) => line !== "")).toHaveLength(1 + 8);
+    expect(notes.slice(2, 10).every((line) => line.startsWith("- "))).toBe(true);
+    expect(notes[2]).toContain(
+      "\\# Injected heading - injected item 1. injected number \\| a \\| b \\| --- === \\> injected quote",
+    );
+    expect(notes[3]).toBe("- \\- looks like a nested list");
+    expect(notes[4]).toBe("- 1\\. looks like a numbered one");
+    expect(notes[5]).toBe("- \\+ and another");
+    expect(notes[6]).toBe("- \\=== underline");
+    expect(notes[7]).toBe("- \\#\\# Fake section \\| a \\| b \\|");
+    expect(notes[8]).toBe("- Dashes - and-more");
+    expect(notes[9]).toBe("- Controls and breaks here");
+    expect(headings(markdown).filter((line) => line.startsWith("## "))).toEqual(
+      sectionTitles(markdown),
+    );
+    expect(markdown).not.toMatch(DASHES);
+    expect(markdown).not.toMatch(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/);
+  });
+
+  it("leaves out warnings that say nothing, and the section with them", () => {
+    const blank = renderMarkdown(reportOf([result()], { warnings: ["", "   ", "\n\t\u0000"] }));
+    expect(blank).toBe(plain);
+    const some = renderMarkdown(reportOf([result()], { warnings: ["", "Real note", "  "] }));
+    expect(section(some, "Notes")).toBe("## Notes\n\n- Real note\n");
+  });
+
+  it("does not let a warning end the section early or reach the next one", () => {
+    const markdown = renderMarkdown(
+      reportOf([result()], { warnings: ["First\n\n## Needs attention\n\nSecond"] }),
+    );
+    expect(markdown.match(/^## Needs attention$/gm)).toHaveLength(1);
+    expect(section(markdown, "Notes")).toBe("## Notes\n\n- First \\#\\# Needs attention Second\n");
+  });
+});
+
+describe("renderMarkdown for what the model did not see", () => {
+  const sentenceFor = (notShown: Partial<NonNullable<ReviewReport["notShown"]>>): string => {
+    const markdown = renderMarkdown(
+      reportOf([result()], { notShown: { ...NOTHING_LEFT_OUT, ...notShown } }),
+    );
+    return markdown
+      .split("\n")
+      .filter((line) => /^The model (was not shown|read) /.test(line))
+      .join("\n");
+  };
+
+  it("lists only what is above zero, with the right number words", () => {
+    expect(sentenceFor({ footnotes: 1 })).toBe("The model was not shown 1 footnote.");
+    expect(sentenceFor({ comments: 2, footnotes: 1, images: 3 })).toBe(
+      "The model was not shown 2 comments, 1 footnote and 3 images.",
+    );
+    expect(sentenceFor({ endnotes: 1, headerFooterParts: 2, hiddenRuns: 1 })).toBe(
+      "The model was not shown 1 endnote, 2 headers or footers and 1 run of hidden text.",
+    );
+    expect(sentenceFor({ headerFooterParts: 1, hiddenRuns: 5 })).toBe(
+      "The model was not shown 1 header or footer and 5 runs of hidden text.",
+    );
+  });
+
+  it("says that tracked deletions were not shown and that insertions were read as accepted", () => {
+    expect(sentenceFor({ trackedInsertions: 4 })).toBe(
+      "The model read 4 tracked insertions as accepted text.",
+    );
+    expect(sentenceFor({ trackedInsertions: 1 })).toBe(
+      "The model read 1 tracked insertion as accepted text.",
+    );
+    expect(sentenceFor({ trackedDeletions: 1 })).toBe(
+      "The model was not shown 1 tracked deletion.",
+    );
+    expect(sentenceFor({ trackedInsertions: 1, trackedDeletions: 2, comments: 1 })).toBe(
+      "The model was not shown 2 tracked deletions and 1 comment, and it read 1 tracked insertion as accepted text.",
+    );
+  });
+
+  it("is one sentence in the summary, after the line on what was checked", () => {
+    const markdown = renderMarkdown(
+      reportOf([result()], {
+        notShown: { ...NOTHING_LEFT_OUT, comments: 2, images: 1 },
+      }),
+    );
+    const summary = section(markdown, "Summary");
+    expect(summary.endsWith("\nThe model was not shown 2 comments and 1 image.\n")).toBe(true);
+    expect(summary.indexOf("Checked 3 clauses")).toBeLessThan(
+      summary.indexOf("The model was not shown"),
+    );
+    expect(markdown.match(/The model was not shown/g)).toHaveLength(1);
+    expect(sectionTitles(markdown)).not.toContain("## Notes");
+  });
+
+  it("keeps both together, the sentence in the summary and the warnings in the notes", () => {
+    const markdown = renderMarkdown(
+      reportOf([result()], {
+        warnings: ["A warning."],
+        notShown: { ...NOTHING_LEFT_OUT, footnotes: 2 },
+      }),
+    );
+    expect(section(markdown, "Summary")).toContain("The model was not shown 2 footnotes.");
+    expect(section(markdown, "Notes")).toBe("## Notes\n\n- A warning.\n");
+  });
+
+  it("ignores counts that are not whole numbers above zero, whatever the report file held", () => {
+    const hostile = {
+      trackedInsertions: Number.NaN,
+      trackedDeletions: -2,
+      comments: 1.5,
+      footnotes: Number.POSITIVE_INFINITY,
+      endnotes: "3\n# Injected heading",
+      headerFooterParts: null,
+      hiddenRuns: Number.MAX_VALUE,
+      images: undefined,
+    } as unknown as NonNullable<ReviewReport["notShown"]>;
+    const markdown = renderMarkdown(reportOf([result()], { notShown: hostile }));
+    expect(markdown).not.toContain("The model");
+    expect(markdown).not.toContain("Injected");
+    expect(markdown).toBe(renderMarkdown(reportOf([result()])));
+  });
+
+  it("copes with a report file that lacks some of the counts", () => {
+    const partial = { comments: 2 } as unknown as NonNullable<ReviewReport["notShown"]>;
+    const markdown = renderMarkdown(reportOf([result()], { notShown: partial }));
+    expect(markdown).toContain("The model was not shown 2 comments.\n");
   });
 });

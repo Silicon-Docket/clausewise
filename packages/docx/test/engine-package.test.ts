@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import JSZip from "jszip";
+import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_LIMITS,
   DocxError,
@@ -20,6 +21,7 @@ import {
   withPart,
   zipParts,
 } from "./engine-support.js";
+import { openPackage, readPart } from "../src/package.js";
 import { buildDocx, para, run } from "./helpers.js";
 
 const date = new Date("2026-03-01T12:00:00Z");
@@ -62,7 +64,10 @@ describe("how a part is turned into text", () => {
   it("decodes UTF-16 with a byte order mark, either way round", async () => {
     const declared = xml.replace('encoding="UTF-8"', 'encoding="UTF-16"');
     const le = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(declared, "utf16le")]);
-    const be = Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(declared, "utf16le").swap16()]);
+    const be = Buffer.concat([
+      Buffer.from([0xfe, 0xff]),
+      Buffer.from(declared, "utf16le").swap16(),
+    ]);
     await expectReadable(await withDocumentBytes(le));
     await expectReadable(await withDocumentBytes(be));
   });
@@ -72,7 +77,10 @@ describe("how a part is turned into text", () => {
   });
 
   it("honours the encoding the XML declaration names", async () => {
-    const latin = documentXml(para(run("caf\u00e9 society")), '<?xml version="1.0" encoding="windows-1252"?>');
+    const latin = documentXml(
+      para(run("caf\u00e9 society")),
+      '<?xml version="1.0" encoding="windows-1252"?>',
+    );
     await expectReadable(
       await withDocumentBytes(Buffer.from(latin, "latin1")),
       "caf\u00e9 society",
@@ -123,6 +131,24 @@ describe("files that are not ordinary Word documents", () => {
     expect((error as Error).message).not.toMatch(/zip/);
   });
 
+  it("says an encrypted zip archive is password protected, not that it is no zip at all", async () => {
+    const zip = new JSZip();
+    zip.file("word/document.xml", "x");
+    const bytes = Buffer.from(await zip.generateAsync({ type: "uint8array" }));
+    for (let i = 0; i + 10 < bytes.length; i++) {
+      // Bit 0 of the general purpose flags marks an entry as encrypted, in both kinds of header.
+      if (bytes.readUInt32LE(i) === 0x04034b50) bytes[i + 6] = (bytes[i + 6] ?? 0) | 1;
+      if (bytes.readUInt32LE(i) === 0x02014b50) bytes[i + 8] = (bytes[i + 8] ?? 0) | 1;
+    }
+    const error = await parseDocx(bytes).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(DocxError);
+    expect((error as Error).message).toMatch(/password protected/);
+    expect((error as Error).message).not.toMatch(/not a valid zip/);
+  });
+
   it("keeps saying that other things are not zip archives", async () => {
     await expect(parseDocx(utf8("just some text"))).rejects.toThrow(
       "Not a .docx file: it is not a valid zip archive",
@@ -137,6 +163,40 @@ describe("files that are not ordinary Word documents", () => {
     );
     expect(error).toBeInstanceOf(DocxError);
     expect((error as Error).message).toBe("word/document.xml is not valid XML");
+  });
+});
+
+describe("a package that spells its part names in another case", () => {
+  it("is rewritten in place, so no stale copy of a part is left beside the new one", async () => {
+    const zip = await JSZip.loadAsync(
+      await buildDocx(para(run("The term is three years.")), {}, { withCommentsRel: true }),
+    );
+    const document = await zip.file("word/document.xml")!.async("string");
+    zip.remove("word/document.xml");
+    zip.file("Word/DOCUMENT.XML", document);
+    zip.file("[CONTENT_TYPES].xml", await zip.file("[Content_Types].xml")!.async("string"));
+    zip.remove("[Content_Types].xml");
+    const odd = await zip.generateAsync({ type: "uint8array" });
+
+    const result = await applyRedline(
+      odd,
+      {
+        edits: [edit(12, 17, "two")],
+        comments: [{ paragraphId: "p:0", text: "note" }],
+      },
+      { date },
+    );
+    expect(result.edits).toEqual([{ applied: true }]);
+    const names = Object.keys((await JSZip.loadAsync(result.buffer)).files).filter(
+      (n) => !n.endsWith("/"),
+    );
+    for (const part of ["word/document.xml", "[content_types].xml", "word/comments.xml"]) {
+      expect(
+        names.filter((n) => n.toLowerCase() === part),
+        part,
+      ).toHaveLength(1);
+    }
+    expect((await parseDocx(result.buffer)).paragraphs[0]?.text).toBe("The term is two years.");
   });
 });
 
@@ -215,6 +275,34 @@ describe("limits", () => {
     await expect(parseDocx(lying)).rejects.toThrow(/maxZipEntries/);
   });
 
+  it("checks the size a part declares before inflating any of it", async () => {
+    const zip = await openPackage(await buildDocx(body), { maxDocumentXmlBytes: 100 });
+    const entry = zip.file("word/document.xml")!;
+    const inflate = vi.spyOn(
+      entry as unknown as { internalStream: () => unknown },
+      "internalStream",
+    );
+    await expect(readPart(zip, "word/document.xml")).rejects.toThrow(/\(maxDocumentXmlBytes\)/);
+    expect(inflate).not.toHaveBeenCalled();
+  });
+
+  it("counts the entries from the central directory before the zip reader builds an object for each", async () => {
+    const entries = Array.from({ length: 50 }, (_, i) => ({
+      name: `junk/${i}.txt`,
+      data: new Uint8Array(),
+      method: 0 as const,
+    }));
+    const load = vi.spyOn(JSZip, "loadAsync");
+    try {
+      await expect(openPackage(craftZip(entries), { maxZipEntries: 10 })).rejects.toThrow(
+        /\(maxZipEntries\)/,
+      );
+      expect(load).not.toHaveBeenCalled();
+    } finally {
+      load.mockRestore();
+    }
+  });
+
   it("refuses a part whose header understates its size, naming the limit when it is hit first", async () => {
     const big = utf8(documentXml(para(run("x".repeat(2000)))));
     const forged = craftZip([
@@ -265,7 +353,10 @@ describe("a zip bomb", () => {
 });
 
 describe("a real contract", () => {
-  const WORDS = "the party shall deliver written notice of any breach within thirty days of discovery".split(" ");
+  const WORDS =
+    "the party shall deliver written notice of any breach within thirty days of discovery".split(
+      " ",
+    );
 
   function contract(pages: number): { body: string; paragraphs: number; maxRuns: number } {
     const perPage = 10;
@@ -274,7 +365,9 @@ describe("a real contract", () => {
     for (let i = 0; i < pages * perPage; i++) {
       const runs: string[] = [];
       for (let r = 0; r < 6; r++) {
-        const words = Array.from({ length: 9 }, (_, w) => WORDS[(i + r + w) % WORDS.length]).join(" ");
+        const words = Array.from({ length: 9 }, (_, w) => WORDS[(i + r + w) % WORDS.length]).join(
+          " ",
+        );
         const props = r % 3 === 0 ? "<w:b/>" : r % 3 === 1 ? '<w:i/><w:color w:val="1F3864"/>' : "";
         runs.push(run(`${r === 0 ? `${i + 1}.${r + 1} ` : ""}${words} `, props));
       }

@@ -49,6 +49,7 @@ describe("--help", () => {
       "--report <file>",
       "--summary <file>",
       "--author <name>",
+      "--client <text>",
       "--fail-on <severity>",
       "--force",
       "--quiet",
@@ -66,6 +67,29 @@ describe("--help", () => {
     for (const code of ["0", "1", "2", "130"]) {
       expect(text).toMatch(new RegExp(`^ {2}${code} {2,}\\S`, "m"));
     }
+  });
+
+  it("says what an incomplete or failed review means for the exit code and the files", async () => {
+    const text = (await help(["--help"])).replace(/\s+/g, " ");
+
+    expect(text).toContain("including a review in which no rule could be checked");
+    expect(text).toContain("A rule that could not be checked counts as open at its own severity.");
+    expect(text).toContain("or a rule that could not be checked.");
+    expect(text).toContain(
+      "A review that fails leaves no output files behind, and files that were there before stay as they were.",
+    );
+    expect(text).toContain("With --force each existing file is replaced atomically");
+    expect(text).toContain(
+      "Every output folder is checked for write access before the first model call",
+    );
+  });
+
+  it("explains --client with an example", async () => {
+    const text = (await help(["--help"])).replace(/\s+/g, " ");
+
+    expect(text).toContain(
+      'Which party you act for, in your words, such as "Fabrikam Labs LLC, the Recipient".',
+    );
   });
 
   it("lists each environment variable with a line about it", async () => {

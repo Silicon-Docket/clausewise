@@ -54,6 +54,12 @@ describe("a command line that is wrong", () => {
     ["no playbook", ["review", "c.docx"], "review needs a playbook: add --playbook <file.yaml>."],
     ["a severity that does not exist", review("--fail-on", "urgent"), "--fail-on must be one of"],
     ["a blank author", review("--author", " "), "--author needs a name."],
+    [
+      "a blank client",
+      review("--client", " "),
+      "--client needs the name of the party you act for.",
+    ],
+    ["an empty client", review("--client="), "Option --client needs a value."],
     ["an unknown command", ["frobnicate"], "Unknown command: frobnicate"],
     ["an unknown option before any command", ["--frobnicate"], "Unknown option: --frobnicate"],
     ["a playbook command that is missing", ["playbook"], "playbook needs a command"],

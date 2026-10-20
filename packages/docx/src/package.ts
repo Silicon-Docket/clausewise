@@ -5,13 +5,13 @@ import {
   W_STRICT_NS,
   assertXmlChars,
   childElements,
+  dropNonXmlChars,
   hasInvalidXmlChars,
   limitError,
   parseXml,
   resolveLimits,
   serializeXml,
   strictFormatError,
-  xmlSafe,
   type DocxLimits,
 } from "./ooxml.js";
 
@@ -91,7 +91,13 @@ export async function openPackage(buf: Uint8Array, limits?: Partial<DocxLimits>)
   let zip: JSZip;
   try {
     zip = await JSZip.loadAsync(buf);
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && /encrypted/i.test(error.message)) {
+      throw new DocxError(
+        "This file is not readable: its zip archive is encrypted (password protected). " +
+          "Open it in Word, remove the password and save it again as a normal .docx.",
+      );
+    }
     throw new DocxError("Not a .docx file: it is not a valid zip archive");
   }
   const entries = Object.values(zip.files);
@@ -194,7 +200,7 @@ export function decodeXml(bytes: Uint8Array, part: string): string {
   } catch {
     throw new DocxError(`${part} uses a text encoding that is not supported`);
   }
-  return hasInvalidXmlChars(text) ? xmlSafe(text) : text;
+  return hasInvalidXmlChars(text) ? dropNonXmlChars(text) : text;
 }
 
 function findEntry(zip: JSZip, path: string): JSZip.JSZipObject | undefined {
@@ -242,11 +248,15 @@ export async function readDocumentXml(zip: JSZip): Promise<string> {
   return xml;
 }
 
-/** Serialises a part, checks that it is readable XML and puts it in the package. */
+/**
+ * Serialises a part, checks that it is readable XML and puts it in the package. A part is
+ * written under the name the zip already uses for it, because part names are case-insensitive
+ * and a second entry spelled differently would leave the old one standing beside the new.
+ */
 export function writeXmlPart(zip: JSZip, path: string, doc: Document): void {
   const xml = serializeXml(doc);
   assertXmlChars(xml, path);
-  zip.file(path, xml);
+  zip.file(entryName(zip, path) ?? path, xml);
 }
 
 export function writePackage(zip: JSZip): Promise<Uint8Array> {

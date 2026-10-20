@@ -4,7 +4,7 @@ import { parseCommandArgs } from "./args.js";
 import { CliError, UsageError } from "./errors.js";
 import { fsReason } from "./files.js";
 import type { CliIo } from "./io.js";
-import { aligned, plain } from "./text.js";
+import { aligned, plain, visible } from "./text.js";
 import { USAGE } from "./usage.js";
 
 /** A PlaybookError already lists every problem, so it is passed on as it is. */
@@ -13,7 +13,7 @@ export async function loadPlaybook(path: string): Promise<Playbook> {
     return await loadPlaybookFile(path);
   } catch (error) {
     if (error instanceof PlaybookError) throw error;
-    throw new CliError(`Cannot read the playbook ${path}: ${fsReason(error)}.`);
+    throw new CliError(`Cannot read the playbook ${visible(path)}: ${fsReason(error)}.`);
   }
 }
 
@@ -34,7 +34,7 @@ export async function playbookCheck(args: string[], io: CliIo): Promise<number> 
   const playbook = await loadPlaybook(path);
   io.stdout(
     [
-      `${path} is a valid playbook.`,
+      `${visible(path)} is a valid playbook.`,
       "",
       `Name: ${plain(playbook.name)}`,
       `Contract types: ${playbook.contractTypes.map(plain).join(", ")}`,

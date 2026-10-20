@@ -1,5 +1,6 @@
-#!/usr/bin/env -S pnpm tsx
+#!/usr/bin/env -S node --import tsx
 import { run } from "./index.js";
+import { guardedWriter } from "./streams.js";
 
 const interrupt = new AbortController();
 process.once("SIGINT", () => {
@@ -9,9 +10,14 @@ process.once("SIGINT", () => {
   setTimeout(() => process.exit(130), 2000).unref();
 });
 
+const stderr = guardedWriter(process.stderr);
+const stdout = guardedWriter(process.stdout, (reason) =>
+  stderr(`Warning: the standard output cannot be written to (${reason}).\n`),
+);
+
 process.exitCode = await run(process.argv.slice(2), {
-  stdout: (text) => process.stdout.write(text),
-  stderr: (text) => process.stderr.write(text),
+  stdout,
+  stderr,
   env: process.env,
   signal: interrupt.signal,
 });

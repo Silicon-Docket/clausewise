@@ -1,9 +1,10 @@
 import { link, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { ObjectGenerator } from "@clausewise/llm";
 import { createOracleGenerator } from "@clausewise/review/testing";
 import { describe, expect, it } from "vitest";
-import { run } from "../src/index.js";
+import { run, type CliIo } from "../src/index.js";
+import { createFile } from "../src/output.js";
 import {
   bytesOf,
   compliantScript,
@@ -242,45 +243,55 @@ describe("output paths that cannot work", () => {
 describe("a write that fails after the review", () => {
   const makeDir = tempDirs();
 
-  it("removes what this run already wrote and says which file failed", async () => {
+  /** A stand-in for the file system that fails for the temporary file of one output. */
+  function failingFor(name: string, code: string): NonNullable<CliIo["writeFile"]> {
+    return async (path, data, mode) => {
+      if (basename(path).includes(name)) {
+        throw Object.assign(new Error(`${code}: leaked detail`), { code });
+      }
+      await createFile(path, data, mode);
+    };
+  }
+
+  it("leaves nothing behind and says which file failed", async () => {
     const dir = await makeDir();
     const input = await stage(dir, "nda-balanced.docx");
     const report = join(dir, "nda-balanced.report.json");
     const { io, stderr, stdout } = makeIo({
       generator: createOracleGenerator(compliantScript()),
     });
-    io.writeFile = async (path, data) => {
-      if (path === report) {
-        throw Object.assign(new Error("ENOSPC: leaked detail"), { code: "ENOSPC" });
-      }
-      await writeFile(path, data);
-    };
+    io.writeFile = failingFor("nda-balanced.report.json", "ENOSPC");
 
     const code = await run(["review", input, "--playbook", PLAYBOOK], io);
 
     expect(code).toBe(1);
     expect(stderr()).toContain(
-      `Could not write the report to ${report}: no space left on the device.`,
+      `Could not write the report to ${report}: no space left on the device. ` +
+        "The review finished, but its results were not saved.",
     );
     expect(stderr()).not.toContain("leaked detail");
     expect(stdout()).toBe("");
     expect(await listing(dir)).toEqual(["nda-balanced.docx"]);
   });
 
-  it("keeps a file that was there before, since this run did not create it", async () => {
+  it("keeps every file that was there before, since nothing is moved until all are written", async () => {
     const dir = await makeDir();
     const input = await stage(dir, "nda-balanced.docx");
     const redlined = join(dir, "nda-balanced.redlined.docx");
     const report = join(dir, "nda-balanced.report.json");
     await writeFile(redlined, SENTINEL);
+    await writeFile(report, SENTINEL);
     const { io } = makeIo({ generator: createOracleGenerator(compliantScript()) });
-    io.writeFile = async (path, data) => {
-      if (path === report) throw Object.assign(new Error("denied"), { code: "EACCES" });
-      await writeFile(path, data);
-    };
+    io.writeFile = failingFor("nda-balanced.summary.md", "EACCES");
 
     expect(await run(["review", input, "--playbook", PLAYBOOK, "--force"], io)).toBe(1);
 
-    expect(await listing(dir)).toEqual(["nda-balanced.docx", "nda-balanced.redlined.docx"]);
+    expect(await listing(dir)).toEqual([
+      "nda-balanced.docx",
+      "nda-balanced.redlined.docx",
+      "nda-balanced.report.json",
+    ]);
+    expect(await readFile(redlined, "utf8")).toBe(SENTINEL);
+    expect(await readFile(report, "utf8")).toBe(SENTINEL);
   });
 });

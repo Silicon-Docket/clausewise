@@ -9,7 +9,7 @@ import {
   setW,
   wChild,
 } from "./ooxml.js";
-import { scanParagraph } from "./paragraphs.js";
+import { limitsAfterCutting, scanParagraph } from "./paragraphs.js";
 
 /**
  * Copies run properties onto a new run. A formatting revision inside them is another author's
@@ -56,11 +56,21 @@ export function explodeRuns(p: Element, newId: () => string): void {
   }
 }
 
-/** Whitespace Word drops at the ends of a `w:t` that lacks xml:space="preserve", as lengths. */
+function isXmlSpace(code: number): boolean {
+  return code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d;
+}
+
+/**
+ * Whitespace Word drops at the ends of a `w:t` that lacks xml:space="preserve", as lengths. Walked
+ * by hand: a pattern anchored at the end backtracks quadratically over a long run of spaces.
+ */
 function insignificantEdges(text: string): { lead: number; trail: number } {
-  const lead = text.length - text.replace(/^[ \t\r\n]+/, "").length;
+  let lead = 0;
+  while (lead < text.length && isXmlSpace(text.charCodeAt(lead))) lead++;
   if (lead === text.length) return { lead, trail: 0 };
-  return { lead, trail: text.length - text.replace(/[ \t\r\n]+$/, "").length };
+  let trail = 0;
+  while (isXmlSpace(text.charCodeAt(text.length - 1 - trail))) trail++;
+  return { lead, trail };
 }
 
 /**
@@ -82,7 +92,7 @@ export function splitAtOffsets(
 ): void {
   const requested = [...new Set(offsets)];
   if (requested.length === 0) return;
-  const atoms = scanParagraph(p).atoms;
+  const atoms = scanParagraph(p, undefined, limitsAfterCutting(doc)).atoms;
   const kept = atoms.map((a) => isPreserved(a.node));
   const lengths = atoms.map((a) => a.text.length);
   const ignored = atoms.map((a, i) =>

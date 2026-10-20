@@ -209,25 +209,37 @@ describe("output that fails the schema", () => {
     expect(model.doGenerateCalls).toHaveLength(1);
   });
 
-  it("tells the user to raise the token limit when the reply was cut off", async () => {
+  it("tells the user to raise the token limit as soon as the reply was cut off", async () => {
     const model = new MockLanguageModelV4({
-      doGenerate: sequence(reply('{"verdict":"o', "length")),
+      doGenerate: sequence(reply('{"verdict":"o', "length"), valid),
     });
-    const generator = createObjectGenerator(makeConfig({ maxRetries: 1 }), { model });
+    const generator = createObjectGenerator(makeConfig({ maxRetries: 3 }), { model });
 
-    const error = (await failure(generator.generate(request))) as Error;
+    const error = (await failure(generator.generate(request))) as ModelOutputError;
 
     expect(error).toBeInstanceOf(ModelOutputError);
+    expect(error.truncated).toBe(true);
     expect(error.message).toContain("CLAUSEWISE_MAX_OUTPUT_TOKENS");
-    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(model.doGenerateCalls).toHaveLength(1);
+  });
+
+  it("accepts a cut-off reply that happens to validate", async () => {
+    const model = new MockLanguageModelV4({
+      doGenerate: sequence(reply('{"verdict":"ok"}', "length")),
+    });
+    await expect(createObjectGenerator(makeConfig(), { model }).generate(request)).resolves.toEqual(
+      { verdict: "ok" },
+    );
+    expect(model.doGenerateCalls).toHaveLength(1);
   });
 
   it("does not suggest a bigger token limit when the reply was not cut off", async () => {
     const model = new MockLanguageModelV4({ doGenerate: sequence(reply("nope")) });
     const error = (await failure(
       createObjectGenerator(makeConfig(), { model }).generate(request),
-    )) as Error;
+    )) as ModelOutputError;
     expect(error.message).not.toContain("CLAUSEWISE_MAX_OUTPUT_TOKENS");
+    expect(error.truncated).toBe(false);
   });
 });
 

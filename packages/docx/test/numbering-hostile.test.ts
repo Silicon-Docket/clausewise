@@ -126,3 +126,46 @@ describe("damaged numbering and styles", () => {
     expect(labelled).toBeGreaterThan(1000);
   });
 });
+
+describe("input built to be slow", () => {
+  // The bounds are an order of magnitude beyond the fixed code and an order below the old code.
+  const LIMIT_MS = 5000;
+
+  it("a level text of hundreds of kilobytes gives no label and does not slow a long list", async () => {
+    const numbering =
+      `<w:numbering ${NS}><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/>` +
+      `<w:numFmt w:val="decimal"/><w:lvlText w:val="${"%1".repeat(300_000)}"/></w:lvl></w:abstractNum>` +
+      `<w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num></w:numbering>`;
+    const body = Array.from({ length: 400 }, (_, i) =>
+      para(run(`Clause ${i}`), '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>'),
+    ).join("");
+    const buf = await buildDocx(body, { "word/numbering.xml": numbering });
+
+    const started = performance.now();
+    const paragraphs = (await parseDocx(buf)).paragraphs;
+    const elapsed = performance.now() - started;
+
+    expect(paragraphs.map((p) => p.label)).toEqual(Array(400).fill(undefined));
+    expect(paragraphs.every((p) => p.level === 0)).toBe(true);
+    expect(elapsed).toBeLessThan(LIMIT_MS);
+  });
+
+  it("thousands of table of contents fields over thousands of paragraphs take no longer than one", async () => {
+    const fldChar = (kind: string): string => `<w:fldChar w:fldCharType="${kind}"/>`;
+    const instruction = '<w:instrText> TOC \\o "1-3" </w:instrText>';
+    const fields = 9000;
+    const body =
+      para(`<w:r>${fldChar("begin")}${instruction}${fldChar("separate")}</w:r>`.repeat(fields)) +
+      "<w:p/>".repeat(90_000) +
+      para(`<w:r>${fldChar("end")}</w:r>`.repeat(fields));
+    const buf = await buildDocx(body);
+
+    const started = performance.now();
+    const paragraphs = (await parseDocx(buf)).paragraphs;
+    const elapsed = performance.now() - started;
+
+    expect(paragraphs).toHaveLength(90_002);
+    expect(paragraphs.every((p) => p.isTocEntry)).toBe(true);
+    expect(elapsed).toBeLessThan(LIMIT_MS);
+  }, 60_000);
+});

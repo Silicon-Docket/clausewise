@@ -371,6 +371,9 @@ export const MC_DECL = 'xmlns:mc="http://schemas.openxmlformats.org/markup-compa
 export const M_DECL = 'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"';
 
 /** A complete document.xml around the body. */
-export function documentXml(body: string, declaration = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'): string {
+export function documentXml(
+  body: string,
+  declaration = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+): string {
   return `${declaration}<w:document ${W_DECL}><w:body>${body}</w:body></w:document>`;
 }

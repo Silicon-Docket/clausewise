@@ -27,6 +27,13 @@ const RELS_PATH = "word/_rels/document.xml.rels";
 const CONTENT_TYPES_PATH = "[Content_Types].xml";
 const XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
 
+/** The parts that must change to register a comments part, read before anything is written. */
+interface Registration {
+  /** Absent when a relationship to the part is already in place. */
+  rels: Document | undefined;
+  contentTypes: Document;
+}
+
 export interface CommentsPart {
   doc: Document;
   root: Element;
@@ -35,6 +42,7 @@ export interface CommentsPart {
   existed: boolean;
   /** A relationship to the part is already in the document's relationships. */
   relationshipExists: boolean;
+  registration?: Registration;
 }
 
 export function createCommentsPart(
@@ -77,6 +85,23 @@ function unusedCommentsName(zip: JSZip, taken: Set<string>): string {
   }
 }
 
+/**
+ * Reads what registering a new comments part will change. Doing it up front means a package whose
+ * relationships or content types cannot be read is found before the document is touched, not
+ * after the comment markers are already in it.
+ */
+async function readRegistration(zip: JSZip, relationshipExists: boolean): Promise<Registration> {
+  const limits = packageLimits(zip);
+  let rels: Document | undefined;
+  if (!relationshipExists) {
+    const relsXml = await readPart(zip, RELS_PATH);
+    rels = parseXml(relsXml ?? `${XML_DECL}<Relationships xmlns="${REL_NS}"/>`, RELS_PATH, limits);
+  }
+  const ctXml = await readPart(zip, CONTENT_TYPES_PATH);
+  if (!ctXml) throw new DocxError(`Not a .docx file: ${CONTENT_TYPES_PATH} is missing`);
+  return { rels, contentTypes: parseXml(ctXml, CONTENT_TYPES_PATH, limits) };
+}
+
 export async function loadComments(zip: JSZip): Promise<CommentsPart> {
   const found = await findCommentsPart(zip);
   if (found?.doc) {
@@ -88,10 +113,20 @@ export async function loadComments(zip: JSZip): Promise<CommentsPart> {
       relationshipExists: true,
     };
   }
-  if (found) return createCommentsPart(found.path, true);
-  const rels = await documentRelationships(zip);
-  const taken = new Set(rels.flatMap((r) => (r.path === undefined ? [] : [r.path.toLowerCase()])));
-  return createCommentsPart(unusedCommentsName(zip, taken));
+  const part = found
+    ? createCommentsPart(found.path, true)
+    : createCommentsPart(
+        unusedCommentsName(
+          zip,
+          new Set(
+            (await documentRelationships(zip)).flatMap((r) =>
+              r.path === undefined ? [] : [r.path.toLowerCase()],
+            ),
+          ),
+        ),
+      );
+  part.registration = await readRegistration(zip, part.relationshipExists);
+  return part;
 }
 
 export function addComment(
@@ -123,17 +158,12 @@ export function addComment(
 }
 
 export async function saveComments(zip: JSZip, part: CommentsPart): Promise<void> {
-  const limits = packageLimits(zip);
   writeXmlPart(zip, part.path, part.doc);
   if (part.existed) return;
 
-  if (!part.relationshipExists) {
-    const relsXml = await readPart(zip, RELS_PATH);
-    const rels = parseXml(
-      relsXml ?? `${XML_DECL}<Relationships xmlns="${REL_NS}"/>`,
-      RELS_PATH,
-      limits,
-    );
+  const { rels, contentTypes: ct } =
+    part.registration ?? (await readRegistration(zip, part.relationshipExists));
+  if (rels) {
     const used = new Set<string>();
     let maxId = 0;
     for (const rel of childElements(rels.documentElement)) {
@@ -152,9 +182,6 @@ export async function saveComments(zip: JSZip, part: CommentsPart): Promise<void
     writeXmlPart(zip, RELS_PATH, rels);
   }
 
-  const ctXml = await readPart(zip, CONTENT_TYPES_PATH);
-  if (!ctXml) throw new DocxError(`Not a .docx file: ${CONTENT_TYPES_PATH} is missing`);
-  const ct = parseXml(ctXml, CONTENT_TYPES_PATH, limits);
   const partName = `/${part.path}`.toLowerCase();
   const existing = childElements(ct.documentElement).find(
     (e) => e.localName === "Override" && e.getAttribute("PartName")?.toLowerCase() === partName,

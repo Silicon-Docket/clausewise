@@ -43,10 +43,10 @@ const body =
   para(tracked("moveFrom", 3, "moved ") + tracked("moveTo", 4, "moved ")) +
   para(
     run("Hidden: ") +
-      '<w:r><w:rPr><w:vanish/></w:rPr><w:t>secret one</w:t></w:r>' +
-      '<w:r><w:rPr><w:specVanish/></w:rPr><w:t>secret two</w:t></w:r>' +
+      "<w:r><w:rPr><w:vanish/></w:rPr><w:t>secret one</w:t></w:r>" +
+      "<w:r><w:rPr><w:specVanish/></w:rPr><w:t>secret two</w:t></w:r>" +
       '<w:r><w:rPr><w:vanish w:val="0"/></w:rPr><w:t>shown</w:t></w:r>' +
-      '<w:r><w:rPr><w:vanish/></w:rPr></w:r>',
+      "<w:r><w:rPr><w:vanish/></w:rPr></w:r>",
   ) +
   para(
     '<w:r><w:drawing><wp:inline xmlns:wp="urn:wp"/></w:drawing></w:r>' +
@@ -150,7 +150,7 @@ describe("inspectDocx", () => {
   });
 
   it("counts hidden text inside a text box and inside a table", async () => {
-    const hidden = '<w:r><w:rPr><w:vanish/></w:rPr><w:t>x</w:t></w:r>';
+    const hidden = "<w:r><w:rPr><w:vanish/></w:rPr><w:t>x</w:t></w:r>";
     const buf = await buildDocx(
       `<w:tbl><w:tr><w:tc>${para(hidden)}</w:tc></w:tr></w:tbl>` +
         para(`<w:r><w:drawing><w:txbxContent>${para(hidden)}</w:txbxContent></w:drawing></w:r>`),
@@ -169,7 +169,10 @@ describe("inspectDocx on documents that are strange but valid", () => {
 
   it("does not stop for a header nested beyond the limit, or too large to read", async () => {
     const deep = "<w:ins>".repeat(1000) + "</w:ins>".repeat(1000);
-    const buf = await documentWith(body, { ...parts, "word/header1.xml": hdr(`<w:p>${deep}</w:p>`) });
+    const buf = await documentWith(body, {
+      ...parts,
+      "word/header1.xml": hdr(`<w:p>${deep}</w:p>`),
+    });
     const found = await inspectDocx(buf);
     expect(found.headerFooterParts).toBe(1);
     const small = await inspectDocx(buf, { maxPartBytes: 100 });
@@ -178,11 +181,10 @@ describe("inspectDocx on documents that are strange but valid", () => {
   });
 
   it("does not follow a comments relationship to a part that is something else", async () => {
-    const buf = await documentWith(
-      body,
-      { ...parts, "word/comments.xml": hdr("<w:p/>") },
-      [...relationships.filter((r) => r.type !== "comments"), { id: "rId2", type: "comments", target: "document.xml" }],
-    );
+    const buf = await documentWith(body, { ...parts, "word/comments.xml": hdr("<w:p/>") }, [
+      ...relationships.filter((r) => r.type !== "comments"),
+      { id: "rId2", type: "comments", target: "document.xml" },
+    ]);
     expect((await inspectDocx(buf)).comments).toBe(0);
   });
 
@@ -209,9 +211,15 @@ describe("inspectDocx on documents that are strange but valid", () => {
     const buf = await documentWith(body, parts);
     const utf16 = Buffer.concat([
       Buffer.from([0xff, 0xfe]),
-      Buffer.from(parts["word/endnotes.xml"]!.replace('encoding="UTF-8"', 'encoding="UTF-16"'), "utf16le"),
+      Buffer.from(
+        parts["word/endnotes.xml"]!.replace('encoding="UTF-8"', 'encoding="UTF-16"'),
+        "utf16le",
+      ),
     ]);
-    const bom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(parts["word/footnotes.xml"]!)]);
+    const bom = Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      Buffer.from(parts["word/footnotes.xml"]!),
+    ]);
     const found = await inspectDocx(
       await withPart(await withPart(buf, "word/endnotes.xml", utf16), "word/footnotes.xml", bom),
     );

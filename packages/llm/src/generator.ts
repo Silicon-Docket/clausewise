@@ -10,12 +10,19 @@ import {
   type LanguageModel,
 } from "ai";
 import {
-  ModelRequestError,
   createAnthropicGenerator,
   describeAnthropicDestination,
-  scrubProviderText,
   type AnthropicOverrides,
 } from "./anthropic.js";
+import { connectionNotes, isLocalHostname, parseUrl } from "./endpoint.js";
+import {
+  ModelRequestError,
+  classifyProviderError,
+  isFatalKind,
+  scrubProviderText,
+  type ModelRequestKind,
+} from "./request-error.js";
+import { REDIRECT_HINT, isRedirectStatus, refuseRedirects } from "./transport.js";
 import {
   LlmConfigError,
   ModelOutputError,
@@ -27,20 +34,10 @@ import {
 
 export { ModelRequestError };
 
-const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]", "::1", "host.docker.internal"]);
-
-function parseUrl(raw: string | undefined): URL | undefined {
-  if (raw === undefined) return undefined;
-  try {
-    return new URL(raw);
-  } catch {
-    return undefined;
-  }
-}
-
-function hostOrDefault(baseUrl: string | undefined, defaultHost: string): string {
-  if (baseUrl === undefined) return defaultHost;
-  return parseUrl(baseUrl)?.host ?? "custom endpoint";
+function describeHost(name: string, baseUrl: string | undefined, defaultUrl: string): string {
+  const url = baseUrl === undefined ? new URL(defaultUrl) : parseUrl(baseUrl);
+  if (url === undefined) return `${name} (custom endpoint)`;
+  return `${name} (${[url.host, ...connectionNotes(url)].join(", ")})`;
 }
 
 function describeDestination(config: LlmConfig): string {
@@ -48,14 +45,18 @@ function describeDestination(config: LlmConfig): string {
     case "anthropic":
       return describeAnthropicDestination(config.baseUrl);
     case "openai":
-      return `OpenAI API (${hostOrDefault(config.baseUrl, "api.openai.com")})`;
+      return describeHost("OpenAI API", config.baseUrl, "https://api.openai.com");
     case "openai-compatible": {
       const url = parseUrl(config.baseUrl);
       if (url === undefined) return "OpenAI-compatible server (address not set)";
-      const where = LOCAL_HOSTNAMES.has(url.hostname)
+      // A proxy makes "on this machine" untrue even for localhost, since the proxy decides where
+      // the request goes next.
+      const notes = connectionNotes(url);
+      const through = notes.some((note) => note.startsWith("through a proxy"));
+      const where = isLocalHostname(url.hostname)
         ? "on this machine"
         : "a remote server you configured";
-      return `OpenAI-compatible server (${url.host}, ${where})`;
+      return `OpenAI-compatible server (${[url.host, ...(through ? [] : [where]), ...notes].join(", ")})`;
     }
   }
 }
@@ -77,7 +78,8 @@ function usesAiSdk(config: LlmConfig): config is AiSdkConfig {
 function buildModel(config: AiSdkConfig, fetchOverride: typeof globalThis.fetch | undefined) {
   const shared = {
     ...(config.apiKey === undefined ? {} : { apiKey: config.apiKey }),
-    ...(fetchOverride === undefined ? {} : { fetch: fetchOverride }),
+    // Every request goes through the wrapper, with or without a stand-in for the network.
+    fetch: refuseRedirects(fetchOverride),
   };
   switch (config.provider) {
     case "openai":
@@ -122,6 +124,60 @@ function wireName(name: string): string {
   return name.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
 }
 
+interface ProviderBody {
+  type: string | undefined;
+  code: string | undefined;
+  message: string | undefined;
+}
+
+function field(source: unknown, name: string): unknown {
+  return typeof source === "object" && source !== null
+    ? (source as Record<string, unknown>)[name]
+    : undefined;
+}
+
+function textOrNumber(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  return typeof value === "number" ? String(value) : undefined;
+}
+
+// OpenAI and the servers that copy it answer with {"error": {"message", "type", "code"}}. Only
+// these three fields are read, and only the message is ever repeated.
+function providerBody(responseBody: string | undefined): ProviderBody {
+  const none = { type: undefined, code: undefined, message: undefined };
+  if (responseBody === undefined) return none;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(responseBody);
+  } catch {
+    return none;
+  }
+  const inner = field(parsed, "error");
+  const message = field(inner, "message");
+  return {
+    type: textOrNumber(field(inner, "type")),
+    code: textOrNumber(field(inner, "code")),
+    message: typeof message === "string" && message !== "" ? message : undefined,
+  };
+}
+
+function hints(config: AiSdkConfig): Record<ModelRequestKind, string> {
+  const keyName = config.provider === "openai" ? "OPENAI_API_KEY" : "CLAUSEWISE_API_KEY";
+  return {
+    auth: `Check that ${keyName} is a valid, active key for this server.`,
+    permission: "This key is not allowed to make this request.",
+    not_found:
+      "Check that CLAUSEWISE_MODEL names a model this account or server offers, and that " +
+      "CLAUSEWISE_BASE_URL is the API root.",
+    billing: "Check the credit balance and the spend limits of the account behind this key.",
+    rate_limit: "Lower CLAUSEWISE_CONCURRENCY, or try again later.",
+    overloaded: "",
+    server: "",
+    network: "",
+    other: "",
+  };
+}
+
 type Attempt<T> = { ok: true; value: T } | { ok: false; truncated: boolean };
 
 /**
@@ -152,6 +208,7 @@ export function createObjectGenerator(
   const model = overrides?.model ?? buildModel(config, overrides?.fetch);
   const settings = callSettings(config);
   const who = `${config.provider} (${config.model})`;
+  const hintFor = hints(config);
 
   const refusal = () =>
     new ModelRefusalError(
@@ -160,18 +217,48 @@ export function createObjectGenerator(
     );
 
   // Only an APICallError's message is repeated. It is the provider's own error text, whereas other
-  // SDK errors can quote the value that failed to validate, which may be model output.
+  // SDK errors can quote the value that failed to validate, which may be model output. A call that
+  // got no answer says so in fixed words: its message holds the network error's cause, which can
+  // name internal hosts or echo the request.
   function requestError(error: unknown): ModelRequestError {
     const cause = RetryError.isInstance(error) ? error.lastError : error;
     if (APICallError.isInstance(cause)) {
-      const status = cause.statusCode === undefined ? "" : ` with HTTP ${cause.statusCode}`;
+      if (cause.statusCode === undefined) {
+        return new ModelRequestError(
+          `The request to ${who} failed (no connection). Check that the API host is reachable ` +
+            "from this machine.",
+          undefined,
+          false,
+          "network",
+        );
+      }
+      const body = providerBody(cause.responseBody);
+      const kind = classifyProviderError({
+        status: cause.statusCode,
+        type: body.type,
+        code: body.code,
+        message: body.message ?? cause.message,
+      });
+      const redirected = isRedirectStatus(cause.statusCode);
+      const detail = redirected
+        ? ""
+        : scrubProviderText(body.message ?? cause.message, config.apiKey);
+      const hint = redirected ? REDIRECT_HINT : hintFor[kind];
       return new ModelRequestError(
-        `The request to ${who} failed${status}: ${scrubProviderText(cause.message, config.apiKey)}`,
+        `The request to ${who} failed with HTTP ${cause.statusCode}` +
+          `${detail === "" ? "." : `: ${detail}`}${hint === "" ? "" : ` ${hint}`}`,
         cause.statusCode,
+        isFatalKind(kind) || redirected,
+        kind,
       );
     }
     const kind = cause instanceof Error ? cause.name : "unknown error";
-    return new ModelRequestError(`The request to ${who} failed (${kind}).`, undefined);
+    return new ModelRequestError(
+      `The request to ${who} failed (${kind}).`,
+      undefined,
+      false,
+      "other",
+    );
   }
 
   async function attempt<T>(request: GenerateObjectRequest<T>): Promise<Attempt<T>> {
@@ -188,6 +275,10 @@ export function createObjectGenerator(
         }),
         maxOutputTokens: config.maxOutputTokens,
         maxRetries: config.maxRetries,
+        // With any telemetry integration registered, or any subscriber on the ai:telemetry
+        // diagnostics channel, the SDK would hand over the whole prompt. A tracing agent preloaded
+        // into the process is not something the contract should be shown to.
+        telemetry: { isEnabled: false },
         ...(request.signal === undefined ? {} : { abortSignal: request.signal }),
         ...settings,
       });
@@ -212,7 +303,7 @@ export function createObjectGenerator(
     disclosure: describeDestination(config),
     async generate<T>(request: GenerateObjectRequest<T>): Promise<T> {
       const attempts = config.maxRetries + 1;
-      let truncated = false;
+      const label = request.schemaName === undefined ? "" : ` for "${request.schemaName}"`;
       for (let made = 0; made < attempts; made += 1) {
         request.signal?.throwIfAborted();
         const outcome = await attempt(request);
@@ -220,15 +311,20 @@ export function createObjectGenerator(
         // A mock or a server that ignores the signal can still hand back unusable output after
         // the abort, and that must not be reported as the model's fault.
         request.signal?.throwIfAborted();
-        truncated = outcome.truncated;
+        // Sending the same request again would be cut off at the same place, and each attempt is
+        // billed for every token up to the limit.
+        if (outcome.truncated) {
+          throw new ModelOutputError(
+            `${who} did not return output that fits the schema${label}: the reply was cut off at ` +
+              "the output token limit, which also covers any reasoning, so retrying cannot help. " +
+              "Raise CLAUSEWISE_MAX_OUTPUT_TOKENS.",
+            true,
+          );
+        }
       }
-      const label = request.schemaName === undefined ? "" : ` for "${request.schemaName}"`;
-      const hint = truncated
-        ? " The last reply was cut off at the output token limit, so raise CLAUSEWISE_MAX_OUTPUT_TOKENS."
-        : "";
       throw new ModelOutputError(
         `${who} did not return output that fits the schema${label} after ${attempts} ` +
-          `${attempts === 1 ? "attempt" : "attempts"}.${hint}`,
+          `${attempts === 1 ? "attempt" : "attempts"}.`,
       );
     },
   };

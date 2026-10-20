@@ -51,7 +51,7 @@ describe("a paragraph nobody edited stays exactly as it was", () => {
   });
 
   it("reads a carriage return given as a character reference as itself, and writes it back as one", async () => {
-    const buf = await buildDocx(para('<w:r><w:t>a&#13;b</w:t></w:r>') + para(run("edit me")));
+    const buf = await buildDocx(para("<w:r><w:t>a&#13;b</w:t></w:r>") + para(run("edit me")));
     expect((await parseDocx(buf)).paragraphs[0]?.text).toBe("a\rb");
     const result = await applyRedline(
       buf,
@@ -63,7 +63,9 @@ describe("a paragraph nobody edited stays exactly as it was", () => {
   });
 
   it("reads a raw line end the way XML says to, as a line feed, and keeps it that way", async () => {
-    const buf = await buildDocx(para('<w:r><w:t xml:space="preserve">a\r\nb\rc</w:t></w:r>') + para(run("x")));
+    const buf = await buildDocx(
+      para('<w:r><w:t xml:space="preserve">a\r\nb\rc</w:t></w:r>') + para(run("x")),
+    );
     expect((await parseDocx(buf)).paragraphs[0]?.text).toBe("a\nb\nc");
     const result = await applyRedline(
       buf,
@@ -188,13 +190,20 @@ describe("a formatting revision on a run that is split or copied", () => {
     expect(result.edits).toEqual([{ applied: true }]);
 
     const changes = await elements(result.buffer, "rPrChange");
-    const ids = changes.map((c) => c.getAttributeNS("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "id"));
+    const ids = changes.map((c) =>
+      c.getAttributeNS("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "id"),
+    );
     expect(ids.length).toBeGreaterThan(0);
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids).toContain("7");
 
     for (const ins of await elements(result.buffer, "ins")) {
-      expect(ins.getElementsByTagNameNS("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "rPrChange")).toHaveLength(0);
+      expect(
+        ins.getElementsByTagNameNS(
+          "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+          "rPrChange",
+        ),
+      ).toHaveLength(0);
     }
   });
 });

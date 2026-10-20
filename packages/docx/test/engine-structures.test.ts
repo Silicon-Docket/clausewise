@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { applyRedline, parseDocx, type Edit } from "../src/index.js";
-import { M_DECL, MC_DECL, rawDocumentXml } from "./engine-support.js";
+import { parseXml } from "../src/ooxml.js";
+import { bodyParagraphs, paragraphNumbering } from "../src/paragraphs.js";
+import { M_DECL, MC_DECL, documentXml, rawDocumentXml } from "./engine-support.js";
 import { buildDocx, para, run, views } from "./helpers.js";
 
 const date = new Date("2026-03-01T12:00:00Z");
@@ -55,11 +57,79 @@ describe("a field that spans paragraphs", () => {
 
   it("does not treat the paragraphs after the field has ended as part of it", async () => {
     const buf = await buildDocx(
-      para(fieldRun("begin") + instruction("PAGE") + fieldRun("separate") + run("3") + fieldRun("end")) +
-        para(run("Plain text here.")),
+      para(
+        fieldRun("begin") + instruction("PAGE") + fieldRun("separate") + run("3") + fieldRun("end"),
+      ) + para(run("Plain text here.")),
     );
     const result = await applyRedline(buf, { edits: [edit("p:1", 0, 5, "Clear")] }, opts);
     expect(result.edits).toEqual([{ applied: true }]);
+  });
+});
+
+describe("a field mark with no partner", () => {
+  const field = (result: string): string =>
+    fieldRun("begin") + instruction("REF x") + fieldRun("separate") + run(result) + fieldRun("end");
+
+  it("does not turn the rest of the document into field result", async () => {
+    const buf = await buildDocx(
+      para(fieldRun("begin") + instruction("TOC") + fieldRun("separate") + run("Entry one")) +
+        para(run("Plain text two.")) +
+        para(run("Plain text three.")),
+    );
+    const result = await applyRedline(
+      buf,
+      { edits: [edit("p:1", 0, 5, "Clear"), edit("p:2", 0, 5, "Clear")] },
+      opts,
+    );
+    expect(result.edits).toEqual([{ applied: true }, { applied: true }]);
+    expect(await views(result.buffer, "accepted")).toEqual([
+      "Entry one",
+      "Clear text two.",
+      "Clear text three.",
+    ]);
+  });
+
+  it("is skipped when it is an end with nothing to end", async () => {
+    const buf = await buildDocx(
+      para(run("Stray end ") + fieldRun("end") + run("and more text.")) +
+        para(run("Next paragraph.")),
+    );
+    const result = await applyRedline(
+      buf,
+      { edits: [edit("p:0", 11, 14, "AND"), edit("p:1", 0, 4, "Last")] },
+      opts,
+    );
+    expect(result.edits).toEqual([{ applied: true }, { applied: true }]);
+  });
+
+  it("leaves a complete field inside protected and the text around it editable", async () => {
+    const buf = await buildDocx(
+      para(
+        fieldRun("begin") +
+          instruction("IF") +
+          fieldRun("separate") +
+          run("Before ") +
+          field("clause 4") +
+          run(" after."),
+      ) + para(run("Plain.")),
+    );
+    const text = "Before clause 4 after.";
+    const result = await applyRedline(
+      buf,
+      {
+        edits: [
+          edit("p:0", text.indexOf("clause"), text.indexOf("clause") + 6, "article"),
+          edit("p:1", 0, 5, "Clear"),
+        ],
+      },
+      opts,
+    );
+    // The inner field is complete, so its result is protected; the outer one never ends.
+    expect(result.edits[0]).toMatchObject({
+      applied: false,
+      reason: expect.stringContaining("a field result"),
+    });
+    expect(result.edits[1]).toEqual({ applied: true });
   });
 });
 
@@ -79,7 +149,11 @@ describe("text boxes", () => {
   it("take an edit in the copy Word shows and leave the fallback copy alone", async () => {
     const buf = await buildDocx(para(run("Host paragraph.") + box("Governing law: Delaware.")));
     const start = "Governing law: ".length;
-    const result = await applyRedline(buf, { edits: [edit("p:1", start, start + 8, "England")] }, opts);
+    const result = await applyRedline(
+      buf,
+      { edits: [edit("p:1", start, start + 8, "England")] },
+      opts,
+    );
     expect(result.edits).toEqual([{ applied: true }]);
     const [shown, fallback] = (await rawDocumentXml(result.buffer)).split("<mc:Fallback>");
     expect(shown).toContain("<w:ins ");
@@ -134,7 +208,9 @@ describe("text boxes", () => {
 describe("text direction containers", () => {
   it.each(["bdo", "dir"])("reads the text inside w:%s and refuses to edit it", async (tag) => {
     const body = para(
-      run("Pay ") + `<w:${tag} w:val="rtl">${run("thirty")}</w:${tag}>` + run(" days after invoice."),
+      run("Pay ") +
+        `<w:${tag} w:val="rtl">${run("thirty")}</w:${tag}>` +
+        run(" days after invoice."),
     );
     const buf = await buildDocx(body);
     const text = "Pay thirty days after invoice.";
@@ -200,7 +276,10 @@ describe("content the text view cannot represent", () => {
       },
       opts,
     );
-    expect(result.edits[0]).toMatchObject({ applied: false, reason: expect.stringMatching(reason) });
+    expect(result.edits[0]).toMatchObject({
+      applied: false,
+      reason: expect.stringMatching(reason),
+    });
     expect(result.edits[1]).toEqual({ applied: true });
     expect(result.edits[2]).toEqual({ applied: true });
     expect((await views(result.buffer, "rejected"))[0]).toContain("days after invoice.");
@@ -221,7 +300,7 @@ describe("content the text view cannot represent", () => {
 
   it("applies an insertion next to hidden text without moving it", async () => {
     const buf = await buildDocx(
-      para(run("Pay ") + '<w:r><w:rPr><w:vanish/></w:rPr><w:t>hidden</w:t></w:r>' + run("now.")),
+      para(run("Pay ") + "<w:r><w:rPr><w:vanish/></w:rPr><w:t>hidden</w:t></w:r>" + run("now.")),
     );
     const result = await applyRedline(buf, { edits: [edit("p:0", 4, 4, "us ")] }, opts);
     expect(result.edits).toEqual([{ applied: true }]);
@@ -231,11 +310,19 @@ describe("content the text view cannot represent", () => {
 
 describe("why an edit is refused", () => {
   const complexField =
-    fieldRun("begin") + instruction("REF a") + fieldRun("separate") + run("WRAPPED") + fieldRun("end");
+    fieldRun("begin") +
+    instruction("REF a") +
+    fieldRun("separate") +
+    run("WRAPPED") +
+    fieldRun("end");
   const cases: Array<[string, string, RegExp]> = [
     ["a hyperlink", `<w:hyperlink r:id="rId9">${run("WRAPPED")}</w:hyperlink>`, /a hyperlink/],
     ["a complex field", complexField, /a field result/],
-    ["a simple field", `<w:fldSimple w:instr=" DATE ">${run("WRAPPED")}</w:fldSimple>`, /a field result/],
+    [
+      "a simple field",
+      `<w:fldSimple w:instr=" DATE ">${run("WRAPPED")}</w:fldSimple>`,
+      /a field result/,
+    ],
     [
       "a content control",
       `<w:sdt><w:sdtPr/><w:sdtContent>${run("WRAPPED")}</w:sdtContent></w:sdt>`,
@@ -287,5 +374,28 @@ describe("why an edit is refused", () => {
       applied: false,
       reason: expect.stringMatching(/a hyperlink and an existing tracked change/),
     });
+  });
+});
+
+describe("paragraphNumbering", () => {
+  const numberingOf = (pPr: string) => {
+    const doc = parseXml(documentXml(para(run("x"), pPr)), "word/document.xml");
+    return paragraphNumbering(bodyParagraphs(doc)[0]!);
+  };
+
+  it("reports the list a paragraph is in and its level", () => {
+    expect(numberingOf('<w:numPr><w:ilvl w:val="2"/><w:numId w:val="7"/></w:numPr>')).toEqual({
+      id: "7",
+      level: 2,
+    });
+    expect(numberingOf('<w:numPr><w:numId w:val="7"/></w:numPr>')).toEqual({ id: "7", level: 0 });
+  });
+
+  it("reports no list for numId 0, whatever level is left beside it", () => {
+    expect(
+      numberingOf('<w:numPr><w:ilvl w:val="3"/><w:numId w:val="0"/></w:numPr>'),
+    ).toBeUndefined();
+    expect(numberingOf('<w:numPr><w:ilvl w:val="1"/></w:numPr>')).toBeUndefined();
+    expect(numberingOf("")).toBeUndefined();
   });
 });

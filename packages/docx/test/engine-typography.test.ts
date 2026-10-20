@@ -115,7 +115,12 @@ describe("inserted quotes take the style of the paragraph", () => {
     ["double quote after a space", 'say "a"', "say", "say \u201Ca\u201D"],
     ["double quote after an opening bracket", '("a")', "", "(\u201Ca\u201D)"],
     ["double quote after punctuation closes", 'a."', "x", "a.\u201D"],
-    ["double quote after an opening curly one opens a nested one", `\u201C"a"`, "", "\u201C\u201Ca\u201D"],
+    [
+      "double quote after an opening curly one opens a nested one",
+      `\u201C"a"`,
+      "",
+      "\u201C\u201Ca\u201D",
+    ],
   ])("%s", (_, inserted, before, expected) => {
     expect(curlyQuotes(inserted, before)).toBe(expected);
   });

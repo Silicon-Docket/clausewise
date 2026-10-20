@@ -13,6 +13,7 @@ import {
   onlyRules,
   run,
   viewDocx,
+  withAbsence,
   type DocxView,
 } from "./pipeline-support.js";
 
@@ -266,10 +267,11 @@ describe("reviewContract on the aggressive NDA", () => {
     whole("[LOW] Governing law and venue", 20);
   });
 
-  it("anchors a comment with no clause on the document's first clause", () => {
+  it("anchors a comment with no clause on the first numbered clause, not on the preamble", () => {
     const comment = commentFor("[MEDIUM] Disclosure required by law");
-    expect(comment.paragraph).toBe(1);
-    expect(comment.anchored).toBe(before.paragraphs[1]?.accepted);
+    expect(comment.paragraph).toBe(4);
+    expect(comment.anchored).toBe(before.paragraphs[4]?.accepted);
+    expect(before.paragraphs[4]?.accepted).toMatch(/^1\.1 /);
   });
 
   it("sends one start event and then one event per rule", () => {
@@ -306,8 +308,9 @@ describe("reviewContract on the aggressive NDA", () => {
 describe("reviewContract on the balanced NDA", () => {
   it("finds nothing to do and returns the input bytes untouched", async () => {
     const input = fixture("nda-balanced.docx");
+    // The restrictive covenants rule forbids something, so a contract without it passes.
     const { report, redlined } = await reviewContract(
-      { docx: input, playbook },
+      { docx: input, playbook: withAbsence(playbook, "restrictive-covenants") },
       createOracleGenerator(balancedScript()),
     );
     expect(report.document).toBeUndefined();
@@ -409,6 +412,11 @@ describe("reviewContract when the redline engine refuses an edit", () => {
           run(" annually, payable monthly in arrears."),
       },
       { xml: run("1.2 Fees are payable within thirty days of invoice.") },
+      {
+        xml: run(
+          "1.3 Late payments accrue interest at the rate the parties agree in writing before the invoice date.",
+        ),
+      },
     ]);
     const rules = onlyRules(playbook, "term", "permitted-use");
     const { report, redlined } = await reviewContract(
@@ -448,7 +456,7 @@ describe("reviewContract when the redline engine refuses an edit", () => {
     expect(report.stats.editsApplied).toBe(1);
 
     const view = await viewDocx(redlined);
-    expect(view.paragraphs.map((p) => p.tracked)).toEqual([false, true]);
+    expect(view.paragraphs.map((p) => p.tracked)).toEqual([false, true, false]);
     expect(view.paragraphs[1]?.accepted).toBe("1.2 Fees are payable within sixty days of invoice.");
     expect(view.paragraphs[1]?.rejected).toBe(
       "1.2 Fees are payable within thirty days of invoice.",

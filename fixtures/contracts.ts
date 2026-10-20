@@ -204,8 +204,8 @@ export const contracts: Contract[] = [
         heading: "5. Availability",
         clauses: [
           "5.1 Vendor shall make the Services available at least 99.9 percent of the time in each calendar month, excluding scheduled maintenance announced at least five days in advance.",
-          "5.2 If availability in a month is below 99.9 percent, Vendor shall credit Customer with the service credits set out in Schedule A.",
-          "5.3 If availability is below 99 percent in any two months of a rolling six-month period, Customer may terminate this Agreement by written notice and receive a refund of prepaid fees for the remainder of the Subscription Term.",
+          "5.2 If availability in a month is below 99.9 percent, Vendor shall credit Customer ten percent (10%) of the fees for that month, or twenty-five percent (25%) of them if availability is below 99 percent.",
+          "5.3 If availability is below 99 percent in any two months of a rolling six-month period, Customer may terminate this Agreement by written notice.",
         ],
       },
       {
@@ -248,9 +248,11 @@ export const contracts: Contract[] = [
       "liability-cap": "deviation",
       "ip-indemnity": "deviation",
       "data-ownership": "deviation",
-      "security-and-breach": "deviation",
+      "security-controls": "deviation",
+      "breach-notice": "deviation",
       availability: "compliant",
       "term-renewal": "deviation",
+      "price-increase": "deviation",
       "termination-refund": "deviation",
       suspension: "compliant",
       "data-return": "missing",

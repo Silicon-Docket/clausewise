@@ -121,7 +121,17 @@ describe("text XML cannot carry never reaches the package", () => {
   });
 
   it("strips bidi override and isolate characters from inserted and comment text", async () => {
-    const bidi = ["\u202A", "\u202B", "\u202C", "\u202D", "\u202E", "\u2066", "\u2067", "\u2068", "\u2069"];
+    const bidi = [
+      "\u202A",
+      "\u202B",
+      "\u202C",
+      "\u202D",
+      "\u202E",
+      "\u2066",
+      "\u2067",
+      "\u2068",
+      "\u2069",
+    ];
     const buf = await redline(`two${bidi.join("")}`, `note${bidi.join("")}`);
     const parts = await zipParts(buf);
     for (const name of ["word/document.xml", "word/comments.xml"]) {
@@ -182,17 +192,43 @@ describe("the writer's last line of defence", () => {
     expect(zip.file("word/document.xml")).toBeNull();
   });
 
-  it("applyRedline fails closed when the contract itself carries such a reference", async () => {
-    const buf = await buildDocx(
-      para('<w:r><w:t xml:space="preserve">Bad&#1; text here.</w:t></w:r>'),
-    );
-    await expect(
-      applyRedline(
+  it("drops a numeric reference to a forbidden character before anything reads it, so edits still work", async () => {
+    const refs = [
+      "&#1;",
+      "&#x0;",
+      "&#xFFFE;",
+      "&#65535;",
+      "&#xD800;",
+      "&#x110000;",
+      "&#00000000000001;",
+    ];
+    for (const ref of refs) {
+      const buf = await buildDocx(
+        para(`<w:r><w:t xml:space="preserve">Bad${ref} text here.</w:t></w:r>`),
+      );
+      const text = (await parseDocx(buf)).paragraphs[0]!.text;
+      expect(forbiddenCodePoints(text), ref).toEqual([]);
+      const result = await applyRedline(
         buf,
-        { edits: [{ paragraphId: "p:0", start: 0, end: 3, replacement: "Good" }] },
+        {
+          edits: [{ paragraphId: "p:0", start: 1, end: 3, replacement: "OO" }],
+          comments: [{ paragraphId: "p:0", text: "note" }],
+        },
         { date },
+      );
+      expect(result.edits, ref).toEqual([{ applied: true }]);
+      expect(result.comments, ref).toEqual([{ applied: true }]);
+      await expectReadableXml(result.buffer);
+    }
+  });
+
+  it("keeps a reference to a legitimate character, tab, line feed, carriage return and U+FFFD included", async () => {
+    const buf = await buildDocx(
+      para(
+        '<w:r><w:t xml:space="preserve">a&#9;b&#xA;c&#13;d&#xFFFD;e&#x1F600;f&#133;g</w:t></w:r>',
       ),
-    ).rejects.toThrow(DocxError);
+    );
+    expect((await parseDocx(buf)).paragraphs[0]!.text).toBe("a\tb\nc\rd\uFFFDe\u{1F600}f\u0085g");
   });
 
   it("sets text through the same filter wherever the engine creates a text node", () => {
@@ -202,7 +238,9 @@ describe("the writer's last line of defence", () => {
     ) as unknown as Document;
     const t = createW(doc, "t");
     setText(doc, t, "a\u0000b\r\nc");
-    expect(t.textContent).toBe("ab\nc");
+    // Text that is already in the contract keeps its line ends, so a cut piece equals its source.
+    expect(t.textContent).toBe("ab\r\nc");
+    expect(xmlSafe("a\u0000b\r\nc\rd")).toBe("ab\nc\nd");
     const author = createW(doc, "ins", { author: "x\u0001\ty\n" });
     expect(
       author.getAttributeNS(

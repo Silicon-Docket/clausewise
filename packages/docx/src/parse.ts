@@ -175,7 +175,9 @@ const named = (el: Element, local: string): boolean => isW(el, local);
  * ends is not trusted: it would otherwise cover the rest of the contract.
  */
 function tocFieldParagraphs(paragraphs: readonly Element[]): Set<number> {
-  const covered = new Set<number>();
+  // Ranges are marked on a difference array: a file can nest thousands of TOC fields over
+  // thousands of paragraphs, and visiting every paragraph of every range would take minutes.
+  const opened = new Int32Array(paragraphs.length + 1);
   const open: OpenField[] = [];
   const decide = (field: OpenField): boolean =>
     (field.toc ??= TOC_INSTRUCTION.test(field.instruction));
@@ -192,17 +194,26 @@ function tocFieldParagraphs(paragraphs: readonly Element[]): Set<number> {
         } else if (type === "end") {
           const field = open.pop();
           if (field && decide(field)) {
-            for (let i = field.from; i <= index; i++) covered.add(i);
+            opened[field.from]!++;
+            opened[index + 1]!--;
           }
         }
       } else if (named(el, "instrText")) {
         const field = open[open.length - 1];
         if (field && field.toc === undefined) field.instruction += el.textContent ?? "";
       } else if (named(el, "fldSimple") && TOC_INSTRUCTION.test(getW(el, "instr") ?? "")) {
-        covered.add(index);
+        opened[index]!++;
+        opened[index + 1]!--;
       }
     });
   });
+
+  const covered = new Set<number>();
+  let depth = 0;
+  for (let index = 0; index < paragraphs.length; index++) {
+    depth += opened[index]!;
+    if (depth > 0) covered.add(index);
+  }
   return covered;
 }
 

@@ -29,10 +29,40 @@ const INLINE_MARKUP = /[\\`*_[\]<>|#~]/g;
 // Characters that make a line a list item, a setext heading underline or a thematic break when
 // they come first. The other starts, such as # and >, are escaped wherever they are.
 const LINE_START = /^(?:([-+=])|(\d{1,9})([.)]))/;
-const EN_OR_EM_DASH = /[ \t]*[\u2013\u2014][ \t]*/g;
+
+const isBlank = (code: number): boolean => code === 0x20 || code === 0x09;
+
+/**
+ * Replaces each en or em dash, with the spaces and tabs around it, by " - " when there were any
+ * and by "-" when there were none. One pass: every character is looked at a constant number of
+ * times, whereas the equivalent regular expression rescans a long run of blanks from every start.
+ */
+function plainDashes(value: string): string {
+  const parts: string[] = [];
+  let copied = 0;
+  let i = 0;
+  while (i < value.length) {
+    const code = value.charCodeAt(i);
+    if (code !== 0x2013 && code !== 0x2014) {
+      i += 1;
+      continue;
+    }
+    let from = i;
+    while (from > copied && isBlank(value.charCodeAt(from - 1))) from -= 1;
+    let to = i + 1;
+    while (to < value.length && isBlank(value.charCodeAt(to))) to += 1;
+    parts.push(value.slice(copied, from), from < i || to > i + 1 ? " - " : "-");
+    copied = to;
+    i = to;
+  }
+  parts.push(value.slice(copied));
+  return parts.join("");
+}
 
 const clean = (text: string): string => text.replace(CONTROL, " ").replace(EXTRA_BREAKS, "\n");
-const flatten = (text: string): string => clean(text).replace(/\s+/g, " ").trim();
+// The dashes are replaced before the escaping, so a line that begins with one is seen by the
+// line-start escape as the hyphen it has become, instead of turning into a list marker after it.
+const flatten = (text: string): string => plainDashes(clean(text).replace(/\s+/g, " ")).trim();
 
 const escapeInline = (value: string): string => value.replace(INLINE_MARKUP, "\\$&");
 
@@ -51,16 +81,20 @@ const paragraph = (value: string): string => escapeLineStart(text(value));
 
 /** Several lines of such text as a block quote, so a list or heading inside cannot escape it. */
 function block(value: string): string {
-  const lines = clean(value)
-    .split(/\r\n|\r|\n/)
-    .map((line) => escapeLineStart(escapeInline(line.trim())));
-  return lines
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim()
-    .split("\n")
-    .map((line) => (line === "" ? ">" : `> ${line}`))
-    .join("\n");
+  const quoted: string[] = [];
+  let gap = false;
+  for (const raw of clean(value).split(/\r\n|\r|\n/)) {
+    const line = plainDashes(raw.trim()).trim();
+    if (line === "") {
+      gap = quoted.length > 0;
+      continue;
+    }
+    // Any run of blank lines is one blank line, and none comes first or last.
+    if (gap) quoted.push(">");
+    gap = false;
+    quoted.push(`> ${escapeLineStart(escapeInline(line))}`);
+  }
+  return quoted.length === 0 ? ">" : quoted.join("\n");
 }
 
 /** Words quoted from the contract or proposed for it, exactly as they are. */
@@ -75,7 +109,56 @@ function code(value: string): string {
 
 const plural = (count: number, one: string, many: string): string => (count === 1 ? one : many);
 const capitalise = (value: string): string => value.charAt(0).toUpperCase() + value.slice(1);
-const withoutFinalStop = (value: string): string => value.trim().replace(/[.\s]+$/, "");
+
+// A pattern such as /[.\s]+$/ is quadratic on a long run of dots or spaces that is not at the end,
+// and a model can write one, so the end is found with a plain walk back.
+function withoutFinalStop(value: string): string {
+  const trimmed = value.trim();
+  let end = trimmed.length;
+  while (end > 0 && /[.\s]/.test(trimmed.charAt(end - 1))) end -= 1;
+  return trimmed.slice(0, end);
+}
+
+type NotShown = NonNullable<ReviewReport["notShown"]>;
+
+// Tracked insertions are left out here: the model did read their text, as if accepted.
+const UNSEEN: [keyof NotShown, string, string][] = [
+  ["trackedDeletions", "tracked deletion", "tracked deletions"],
+  ["comments", "comment", "comments"],
+  ["footnotes", "footnote", "footnotes"],
+  ["endnotes", "endnote", "endnotes"],
+  ["headerFooterParts", "header or footer", "headers or footers"],
+  ["hiddenRuns", "run of hidden text", "runs of hidden text"],
+  ["images", "image", "images"],
+];
+
+function count(notShown: NotShown, key: keyof NotShown): number {
+  const value: unknown = notShown[key];
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 ? value : 0;
+}
+
+function joinList(items: string[]): string {
+  if (items.length <= 1) return items.join("");
+  return `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+}
+
+/** One sentence on what the file holds that the model did not see, or undefined if nothing. */
+function notShownSentence(notShown: NotShown | undefined): string | undefined {
+  if (notShown === undefined) return undefined;
+  const unseen = UNSEEN.flatMap(([key, one, many]) => {
+    const n = count(notShown, key);
+    return n === 0 ? [] : [`${n} ${plural(n, one, many)}`];
+  });
+  const accepted = count(notShown, "trackedInsertions");
+  const readAs =
+    accepted === 0
+      ? undefined
+      : `${accepted} tracked ${plural(accepted, "insertion", "insertions")} as accepted text`;
+  if (unseen.length === 0 && readAs === undefined) return undefined;
+  if (readAs === undefined) return `The model was not shown ${joinList(unseen)}.`;
+  if (unseen.length === 0) return `The model read ${readAs}.`;
+  return `The model was not shown ${joinList(unseen)}, and it read ${readAs}.`;
+}
 
 function clauseLabel(result: RuleResult): string | undefined {
   // Ids are the fallback for clauses that carry no number in the contract.
@@ -166,6 +249,17 @@ export function renderMarkdown(report: ReviewReport): string {
     "",
   ];
 
+  const unseen = notShownSentence(report.notShown);
+  if (unseen !== undefined) lines.push(unseen, "");
+
+  // A bullet is a list item of its own, so a note that starts like a list or a heading is
+  // escaped as a paragraph is, and a note that is only whitespace is not a note.
+  const notes = (report.warnings ?? [])
+    .map(paragraph)
+    .filter((note) => note !== "")
+    .map((note) => `- ${note}`);
+  if (notes.length > 0) lines.push(...section("Notes", notes, ""));
+
   // Results are already in playbook order and the sort is stable, so ties keep that order.
   const attention = report.results
     .filter((result) => result.status === "deviation" || result.status === "missing")
@@ -184,12 +278,5 @@ export function renderMarkdown(report: ReviewReport): string {
   lines.push(...section("Not applicable", listed("not_applicable").map(listItem), "None."));
   lines.push(...section("Could not be checked", listed("error").map(errorItem), "None."));
 
-  // Quoted text and model prose are rendered as they are, apart from these two characters, which
-  // the project does not print.
-  return (
-    lines
-      .join("\n")
-      .trimEnd()
-      .replace(EN_OR_EM_DASH, (run) => (/[ \t]/.test(run) ? " - " : "-")) + "\n"
-  );
+  return `${lines.join("\n").trimEnd()}\n`;
 }

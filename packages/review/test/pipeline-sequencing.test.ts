@@ -1,6 +1,7 @@
 import { ModelOutputError } from "@clausewise/llm";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { reviewContract } from "../src/pipeline.js";
+import { buildRulePrompt } from "../src/prompt.js";
 import type { Clause, ProgressEvent, ReviewReport } from "../src/types.js";
 import {
   budgetFor,
@@ -10,19 +11,22 @@ import {
   gatedGenerator,
   loadPlaybook,
   onlyRules,
+  padded,
   tick,
   type Gate,
 } from "./pipeline-support.js";
 
-const input = fixture("nda-aggressive.docx");
 const playbook = loadPlaybook();
 const ruleIds = playbook.rules.map((r) => r.id);
 
+// A context limit has to leave room for a clause or two, so the contract is padded until it splits.
+let input: Uint8Array;
 let clauses: Clause[];
 let manyWindows: number;
 let windowCount: number;
 
 beforeAll(async () => {
+  input = await padded(fixture("nda-aggressive.docx"));
   clauses = await clausesOf(input);
   manyWindows = budgetFor(playbook, clauses, 3);
   windowCount = expectedWindows(playbook, clauses, manyWindows).length;
@@ -146,6 +150,93 @@ describe("a generator that caches the shared prefix", () => {
   });
 });
 
+describe("a generator that caches only a long enough prefix", () => {
+  const prefixLength = (): number =>
+    buildRulePrompt({ playbook, rule: playbook.rules[0]!, clauses }).sharedPrefix.length;
+
+  it("starts every call at once when the prefix is shorter than the provider can cache", async () => {
+    const gate = gatedGenerator({
+      cachesSharedPrefix: true,
+      minCacheableChars: prefixLength() + 1,
+    });
+    const review = reviewContract({ docx: input, playbook }, gate, { concurrency: 16 });
+    await vi.waitFor(() => expect(gate.calls).toHaveLength(10));
+    await tick(30);
+    expect(started(gate)).toEqual(ruleIds);
+    await settleAll(gate, review);
+    await review;
+  });
+
+  it("still finishes the first call first when the prefix is exactly long enough", async () => {
+    const gate = gatedGenerator({ cachesSharedPrefix: true, minCacheableChars: prefixLength() });
+    const review = reviewContract({ docx: input, playbook }, gate, { concurrency: 16 });
+    await vi.waitFor(() => expect(gate.calls).toHaveLength(1));
+    await tick(30);
+    expect(started(gate)).toEqual(["mutuality"]);
+    gate.calls[0]!.resolve();
+    await vi.waitFor(() => expect(gate.calls).toHaveLength(10));
+    await settleAll(gate, review);
+    await review;
+  });
+
+  it("treats a missing minimum as zero", async () => {
+    const gate = gatedGenerator({ cachesSharedPrefix: true });
+    expect(gate.minCacheableChars).toBeUndefined();
+    const review = reviewContract({ docx: input, playbook }, gate, { concurrency: 16 });
+    await vi.waitFor(() => expect(gate.calls).toHaveLength(1));
+    await tick(30);
+    expect(gate.calls).toHaveLength(1);
+    await settleAll(gate, review);
+    await review;
+  });
+
+  it("does not wait for a generator that does not cache, whatever its minimum", async () => {
+    const gate = gatedGenerator({ cachesSharedPrefix: false, minCacheableChars: 0 });
+    const review = reviewContract({ docx: input, playbook }, gate, { concurrency: 16 });
+    await vi.waitFor(() => expect(gate.calls).toHaveLength(10));
+    await settleAll(gate, review);
+    await review;
+  });
+
+  it("decides window by window, because windows have prefixes of different lengths", async () => {
+    // A pilot run tells how long each window's shared prefix is.
+    const lengths = new Map<string, number>();
+    const probe = gatedGenerator();
+    const probing = reviewContract({ docx: input, playbook: onlyRules(playbook, "term") }, probe, {
+      concurrency: 16,
+      maxContextTokens: manyWindows,
+    });
+    await vi.waitFor(() => expect(probe.calls).toHaveLength(windowCount));
+    for (const call of probe.calls)
+      lengths.set(call.window, call.request.sharedPrefix?.length ?? 0);
+    await settleAll(probe, probing);
+    await probing;
+
+    const sorted = [...lengths.values()].sort((a, b) => a - b);
+    const floor = (sorted[0] ?? 0) + 1;
+    const short = sorted.filter((length) => length < floor).length;
+    expect(short).toBeGreaterThan(0);
+    expect(short).toBeLessThan(windowCount);
+
+    const gate = gatedGenerator({ cachesSharedPrefix: true, minCacheableChars: floor });
+    const review = reviewContract({ docx: input, playbook }, gate, {
+      concurrency: 200,
+      maxContextTokens: manyWindows,
+    });
+    const expected = short * 10 + (windowCount - short);
+    await vi.waitFor(() => expect(gate.calls).toHaveLength(expected));
+    await tick(30);
+    expect(gate.calls).toHaveLength(expected);
+    // A window under the minimum runs every rule at once, the others only their first rule.
+    for (const [window, length] of lengths) {
+      const calls = gate.calls.filter((call) => call.window === window);
+      expect(calls).toHaveLength(length < floor ? 10 : 1);
+    }
+    await settleAll(gate, review);
+    await review;
+  });
+});
+
 describe("a generator that does not cache", () => {
   it("overlaps calls up to the limit, in playbook order", async () => {
     const gate = gatedGenerator();
@@ -266,7 +357,7 @@ describe("progress", () => {
     gate.calls[0]!.reject(new ModelOutputError("no"));
     const { report } = await review;
     expect(events).toEqual([
-      { type: "start", rules: 1, clauses: 16, windows: 1 },
+      { type: "start", rules: 1, clauses: clauses.length, windows: 1 },
       { type: "rule", ruleId: "term", status: "error", done: 1, total: 1 },
     ]);
     expect((report as ReviewReport).counts.error).toBe(1);

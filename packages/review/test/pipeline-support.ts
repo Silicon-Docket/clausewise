@@ -4,7 +4,8 @@ import { parseDocx } from "@clausewise/docx";
 import type { GenerateObjectRequest, ObjectGenerator } from "@clausewise/llm";
 import { parsePlaybook, type Playbook } from "@clausewise/playbook";
 import JSZip from "jszip";
-import { buildRulePrompt, estimateTokens, renderClauses, windowClauses } from "../src/prompt.js";
+import { contextFloor, windowReserve } from "../src/pipeline.js";
+import { estimateTokens, renderClauses, windowClauses } from "../src/prompt.js";
 import { segment } from "../src/segment.js";
 import type { OracleRule } from "../src/testing.js";
 import type { Clause, RuleCheck } from "../src/types.js";
@@ -46,6 +47,19 @@ export function onlyRules(playbook: Playbook, ...ids: string[]): Playbook {
   };
 }
 
+/**
+ * The same playbook with some rules turned into absence rules, whose standard forbids something,
+ * so a contract that lacks it passes without pointing at a clause.
+ */
+export function withAbsence(playbook: Playbook, ...ids: string[]): Playbook {
+  return {
+    ...playbook,
+    rules: playbook.rules.map((rule) =>
+      ids.includes(rule.id) ? { ...rule, kind: "absence" as const, required: false } : rule,
+    ),
+  };
+}
+
 /** A run of plain text, escaped. */
 export const run = (text: string): string =>
   `<w:r><w:t xml:space="preserve">${text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</w:t></w:r>`;
@@ -56,6 +70,8 @@ export const run = (text: string): string =>
  */
 export async function buildDocx(
   paragraphs: ({ text: string; style?: string } | { xml: string })[],
+  /** More parts of the package, such as word/footnotes.xml, by their path. */
+  extraParts: Record<string, string> = {},
 ): Promise<Uint8Array> {
   const body = paragraphs
     .map((paragraph) => {
@@ -82,7 +98,46 @@ export async function buildDocx(
     "word/document.xml",
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}</w:body></w:document>`,
   );
+  for (const [path, xml] of Object.entries(extraParts)) zip.file(path, xml);
   return zip.generateAsync({ type: "uint8array" });
+}
+
+const FILLER =
+  "The parties have agreed that nothing in this paragraph changes what the clause above provides. ";
+
+/**
+ * The same contract with every body paragraph padded to about `chars` characters of filler that
+ * shares no word with the quotes the scripts use, so the clauses stay the same for the oracle and
+ * the anchoring. The signature block is dropped, because it sits in a table that buildDocx cannot
+ * make. A context limit has to leave room for a clause or two, so a contract must be long before
+ * it splits into windows.
+ */
+export async function padded(docx: Uint8Array, chars = 3600): Promise<Uint8Array> {
+  const { paragraphs } = await parseDocx(docx);
+  const filler = FILLER.repeat(Math.ceil(chars / FILLER.length));
+  const lastClause = paragraphs.findLastIndex((p) => /^\d+\.\d+ /.test(p.text));
+  return buildDocx(
+    paragraphs.slice(0, lastClause + 1).map((p) => {
+      const heading = p.style !== undefined && /^(heading|title)/i.test(p.style);
+      return {
+        text: heading || p.text === "" ? p.text : `${p.text} ${filler}`,
+        ...(p.style === undefined ? {} : { style: p.style }),
+      };
+    }),
+  );
+}
+
+/**
+ * A contract of `count` clauses, each padded to about `chars` characters, for tests of limits that
+ * only a long contract reaches.
+ */
+export function longContract(count: number, chars = 3600): Promise<Uint8Array> {
+  const filler = FILLER.repeat(Math.ceil(chars / FILLER.length));
+  return buildDocx(
+    Array.from({ length: count }, (_, i) => ({
+      text: `${i + 1}.1 Clause number ${i + 1}. ${filler}`,
+    })),
+  );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -396,6 +451,16 @@ export function firstClauseId(request: Request): string {
   return id;
 }
 
+/** The calls grouped by the window they were for, which the first clause in the prompt tells. */
+export function byWindow(calls: readonly Request[]): Map<string, Request[]> {
+  const groups = new Map<string, Request[]>();
+  for (const call of calls) {
+    const id = firstClauseId(call);
+    groups.set(id, [...(groups.get(id) ?? []), call]);
+  }
+  return groups;
+}
+
 /** Runs `before` ahead of each call to `inner`, which can delay it or make it fail. */
 export function intercept(
   inner: ObjectGenerator,
@@ -407,6 +472,9 @@ export function intercept(
     model: inner.model,
     disclosure: inner.disclosure,
     cachesSharedPrefix: inner.cachesSharedPrefix === true,
+    ...(inner.minCacheableChars === undefined
+      ? {}
+      : { minCacheableChars: inner.minCacheableChars }),
     calls,
     async generate<T>(request: GenerateObjectRequest<T>): Promise<T> {
       calls.push(request as Request);
@@ -420,7 +488,7 @@ export const tick = (ms = 0): Promise<void> => new Promise((resolve) => setTimeo
 
 export const compliantAnswer = (overrides: Partial<RuleCheck> = {}): RuleCheck => ({
   status: "compliant",
-  clauseIds: [],
+  clauseIds: ["c1"],
   explanation: "Fine.",
   comment: "",
   edit: null,
@@ -434,29 +502,33 @@ export const compliantAnswer = (overrides: Partial<RuleCheck> = {}): RuleCheck =
 
 /**
  * A maxContextTokens that makes each window hold about `perWindow` clauses, worked out the same
- * way as the pipeline's reservation so the tests do not depend on a magic number.
+ * way as the pipeline's reservation so the tests do not depend on a magic number. It never goes
+ * below the smallest limit the pipeline accepts, so a contract of small clauses is not split.
  */
-export function budgetFor(playbook: Playbook, clauses: Clause[], perWindow: number): number {
-  const empty = playbook.rules.map((rule) => buildRulePrompt({ playbook, rule, clauses: [] }));
-  const reserved =
-    estimateTokens(empty[0]?.system ?? "") +
-    Math.max(...empty.map((built) => estimateTokens(built.prompt))) +
-    2000;
+export function budgetFor(
+  playbook: Playbook,
+  clauses: Clause[],
+  perWindow: number,
+  client?: string,
+): number {
   const dearest = Math.max(...clauses.map((c) => estimateTokens(renderClauses([c]))));
-  return reserved + perWindow * dearest;
+  return Math.max(
+    contextFloor(playbook, client) + 1,
+    windowReserve(playbook, client) + perWindow * dearest,
+  );
 }
 
 export function expectedWindows(
   playbook: Playbook,
   clauses: Clause[],
   maxContextTokens: number,
+  client?: string,
 ): Clause[][] {
-  const empty = playbook.rules.map((rule) => buildRulePrompt({ playbook, rule, clauses: [] }));
-  const reservedTokens =
-    estimateTokens(empty[0]?.system ?? "") +
-    Math.max(...empty.map((built) => estimateTokens(built.prompt))) +
-    2000;
-  return windowClauses(clauses, { maxTokens: maxContextTokens, reservedTokens, overlap: 1 });
+  return windowClauses(clauses, {
+    maxTokens: maxContextTokens,
+    reservedTokens: windowReserve(playbook, client),
+    overlap: 1,
+  });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -486,7 +558,11 @@ export interface Gate extends ObjectGenerator {
  * aborts, as a real adapter does.
  */
 export function gatedGenerator(
-  options: { cachesSharedPrefix?: boolean; honourSignal?: boolean } = {},
+  options: {
+    cachesSharedPrefix?: boolean;
+    honourSignal?: boolean;
+    minCacheableChars?: number;
+  } = {},
 ): Gate {
   const calls: GatedCall[] = [];
   const counts = { inFlight: 0, maxInFlight: 0 };
@@ -495,6 +571,9 @@ export function gatedGenerator(
     model: "gate-model",
     disclosure: "a gated test generator (nothing is sent anywhere)",
     cachesSharedPrefix: options.cachesSharedPrefix === true,
+    ...(options.minCacheableChars === undefined
+      ? {}
+      : { minCacheableChars: options.minCacheableChars }),
     calls,
     get inFlight() {
       return counts.inFlight;

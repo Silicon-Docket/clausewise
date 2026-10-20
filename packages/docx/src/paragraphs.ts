@@ -138,6 +138,14 @@ function blockerOfContainer(localName: string): Blocker | undefined {
   }
 }
 
+/** A field mark seen in a paragraph, in the order Word reads them. */
+interface FieldMark {
+  node: Element;
+  type: string;
+}
+
+const NO_MARKS: ReadonlySet<Element> = new Set();
+
 /**
  * Reads a paragraph the way the review sees it. `entryDepth` is how many fields are open when
  * the paragraph starts; left out, it is looked up from the document, which tracks fields across
@@ -148,10 +156,20 @@ export function scanParagraph(
   entryDepth?: number,
   limits: DocxLimits = p.ownerDocument ? limitsOf(p.ownerDocument) : DEFAULT_LIMITS,
 ): ParagraphScan {
+  return scan(p, entryDepth ?? entryFieldDepth(p), limits, unpairedMarks(p.ownerDocument));
+}
+
+function scan(
+  p: Element,
+  entryDepth: number,
+  limits: DocxLimits,
+  unpaired: ReadonlySet<Element>,
+  marks?: FieldMark[],
+): ParagraphScan {
   const atoms: Atom[] = [];
   const barriers: Barrier[] = [];
   let pos = 0;
-  let fieldDepth = entryDepth ?? entryFieldDepth(p);
+  let fieldDepth = entryDepth;
   let runCount = 0;
   let hiddenRuns = 0;
 
@@ -164,6 +182,8 @@ export function scanParagraph(
     for (const c of childElements(run)) {
       if (isW(c, "fldChar")) {
         const type = getW(c, "fldCharType");
+        marks?.push({ node: c, type: type ?? "" });
+        if (unpaired.has(c)) continue;
         if (type === "begin") fieldDepth++;
         else if (type === "end") fieldDepth = Math.max(0, fieldDepth - 1);
         continue;
@@ -253,7 +273,43 @@ export function scanParagraph(
   };
 }
 
+/**
+ * The limits for reading a paragraph again after its runs were cut apart. Cutting leaves more runs
+ * than the file had, and the run limit is there to guard the file as it arrives.
+ */
+export function limitsAfterCutting(doc: Document): DocxLimits {
+  return { ...limitsOf(doc), maxRunsPerParagraph: Number.MAX_SAFE_INTEGER };
+}
+
 const entryDepths = new WeakMap<Document, Map<Element, number>>();
+const unpairedByDocument = new WeakMap<Document, ReadonlySet<Element>>();
+
+/**
+ * The field marks that have no partner: a begin that is never ended, or an end with nothing to
+ * end. They are left out of the count, because one stray mark would otherwise turn the rest of
+ * the story into field result and make every edit after it a comment.
+ */
+function findUnpairedMarks(list: Element[], limits: DocxLimits): Set<Element> {
+  const unpaired = new Set<Element>();
+  const open = new Map<Node | null, Element[]>();
+  for (const p of list) {
+    const marks: FieldMark[] = [];
+    scan(p, 0, limits, NO_MARKS, marks);
+    const story = storyOf(p);
+    let stack = open.get(story);
+    if (!stack) open.set(story, (stack = []));
+    for (const mark of marks) {
+      if (mark.type === "begin") stack.push(mark.node);
+      else if (mark.type === "end" && stack.pop() === undefined) unpaired.add(mark.node);
+    }
+  }
+  for (const stack of open.values()) for (const node of stack) unpaired.add(node);
+  return unpaired;
+}
+
+function unpairedMarks(doc: Document | null): ReadonlySet<Element> {
+  return (doc && unpairedByDocument.get(doc)) || NO_MARKS;
+}
 
 /**
  * Field state is a property of the whole story, not of one paragraph: a table of contents opens
@@ -261,13 +317,15 @@ const entryDepths = new WeakMap<Document, Map<Element, number>>();
  */
 function computeEntryDepths(doc: Document, list: Element[]): Map<Element, number> {
   const limits = limitsOf(doc);
+  const unpaired = findUnpairedMarks(list, limits);
+  unpairedByDocument.set(doc, unpaired);
   const map = new Map<Element, number>();
   const open = new Map<Node | null, number>();
   for (const p of list) {
     const story = storyOf(p);
     const entry = open.get(story) ?? 0;
     map.set(p, entry);
-    open.set(story, scanParagraph(p, entry, limits).exitDepth);
+    open.set(story, scan(p, entry, limits, unpaired).exitDepth);
   }
   entryDepths.set(doc, map);
   return map;

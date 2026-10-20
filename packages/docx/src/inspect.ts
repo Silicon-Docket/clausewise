@@ -1,13 +1,5 @@
 import type JSZip from "jszip";
-import {
-  MC_NS,
-  W_NS,
-  isNs,
-  isW,
-  parseXml,
-  resolveLimits,
-  type DocxLimits,
-} from "./ooxml.js";
+import { MC_NS, W_NS, isNs, isW, parseXml, resolveLimits, type DocxLimits } from "./ooxml.js";
 import {
   DOCUMENT_PART,
   documentRelationships,
@@ -104,7 +96,11 @@ function hasText(doc: Document): boolean {
  * Reads one optional part. A part that is damaged or too large only costs the count for that
  * part: the report is a courtesy, and it must not stop a contract that can be reviewed.
  */
-async function readSidePart(zip: JSZip, path: string, kind: SideKind): Promise<Document | undefined> {
+async function readSidePart(
+  zip: JSZip,
+  path: string,
+  kind: SideKind,
+): Promise<Document | undefined> {
   try {
     const real = entryName(zip, path);
     if (real === undefined) return undefined;
@@ -140,11 +136,7 @@ function sidePaths(zip: JSZip, rels: Relationship[], kind: SideKind): string[] {
   return [...found.values()];
 }
 
-async function sideParts(
-  zip: JSZip,
-  rels: Relationship[],
-  kind: SideKind,
-): Promise<Document[]> {
+async function sideParts(zip: JSZip, rels: Relationship[], kind: SideKind): Promise<Document[]> {
   const docs: Document[] = [];
   for (const path of sidePaths(zip, rels, kind)) {
     const doc = await readSidePart(zip, path, kind);

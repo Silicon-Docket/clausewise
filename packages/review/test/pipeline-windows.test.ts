@@ -1,26 +1,34 @@
 import { ModelOutputError } from "@clausewise/llm";
+import { createScriptedGenerator } from "@clausewise/llm/testing";
 import { beforeAll, describe, expect, it } from "vitest";
-import { reviewContract } from "../src/pipeline.js";
+import { ReviewError } from "../src/errors.js";
+import { contextFloor, reviewContract, windowReserve } from "../src/pipeline.js";
 import { estimateTokens } from "../src/prompt.js";
 import { createOracleGenerator, type OracleRule } from "../src/testing.js";
-import type { Clause, ProgressEvent, ReviewReport } from "../src/types.js";
+import type { Clause, ProgressEvent, ReviewReport, RuleCheck } from "../src/types.js";
 import {
   aggressiveScript,
   budgetFor,
+  byWindow,
   clausesOf,
+  compliantAnswer,
   expectedWindows,
   firstClauseId,
   fixture,
   intercept,
   loadPlaybook,
+  longContract,
+  onlyRules,
+  padded,
   ruleIdOf,
   viewDocx,
 } from "./pipeline-support.js";
 
-const input = fixture("nda-aggressive.docx");
 const playbook = loadPlaybook();
 const DATE = new Date("2026-03-02T09:30:00Z");
 
+// A context limit has to leave room for a clause or two, so the contract is padded until it splits.
+let input: Uint8Array;
 let clauses: Clause[];
 let maxContextTokens: number;
 let windows: Clause[][];
@@ -33,6 +41,7 @@ const review = (script: Record<string, OracleRule>, tokens = maxContextTokens) =
   });
 
 beforeAll(async () => {
+  input = await padded(fixture("nda-aggressive.docx"));
   clauses = await clausesOf(input);
   maxContextTokens = budgetFor(playbook, clauses, 3);
   windows = expectedWindows(playbook, clauses, maxContextTokens);
@@ -254,5 +263,208 @@ describe("a clause bigger than the budget", () => {
       expect(oracle.calls.some((call) => call.prompt.includes(clause.text))).toBe(true);
     }
     expect(report.results).toEqual(whole.report.results);
+  });
+});
+
+describe("the window budget", () => {
+  const floor = contextFloor(playbook);
+  const oneRule = onlyRules(playbook, "term");
+
+  it("refuses a limit with no room for contract text, and says how large it must be", async () => {
+    for (const tooSmall of [1, 2048, 3000, windowReserve(playbook), floor]) {
+      const oracle = createOracleGenerator(aggressiveScript());
+      const failure = await reviewContract({ docx: input, playbook }, oracle, {
+        maxContextTokens: tooSmall,
+      }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(ReviewError);
+      const message = (failure as Error).message;
+      expect(message).toContain(`${tooSmall} tokens is too small`);
+      expect(message).toContain(`must be above ${floor}`);
+      expect(message).toContain(`about ${windowReserve(playbook)} tokens`);
+      expect(message).toContain("CLAUSEWISE_MAX_CONTEXT_TOKENS");
+      expect(oracle.calls).toHaveLength(0);
+    }
+  });
+
+  it("accepts a limit one above that, which leaves room for a clause or two", async () => {
+    const { report } = await reviewContract(
+      { docx: input, playbook: oneRule },
+      createOracleGenerator(aggressiveScript()),
+      { maxContextTokens: floor + 1 },
+    );
+    expect(report.stats.windows).toBeGreaterThan(0);
+  });
+
+  it("refuses a plan of more than 2000 model calls before making any", async () => {
+    const docx = await longContract(201);
+    const oracle = createOracleGenerator(aggressiveScript());
+    const failure = await reviewContract({ docx, playbook }, oracle, {
+      maxContextTokens: floor + 1,
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ReviewError);
+    const message = (failure as Error).message;
+    expect(message).toMatch(/too small for this contract/);
+    expect(message).toContain("201 parts");
+    expect(message).toContain("2010 model calls");
+    expect(message).toContain("10 rules");
+    expect(oracle.calls).toHaveLength(0);
+  });
+
+  it("allows a plan of exactly 2000 model calls", async () => {
+    const docx = await longContract(200);
+    const generator = createScriptedGenerator(() => compliantAnswer());
+    const { report } = await reviewContract({ docx, playbook }, generator, {
+      maxContextTokens: floor + 1,
+      concurrency: 16,
+    });
+    expect(report.stats.windows).toBe(200);
+    expect(generator.calls).toHaveLength(2000);
+  });
+
+  // The estimate is whatever estimateTokens says, so the size of the contract is found with it.
+  const sample = "The parties have agreed that nothing in this paragraph changes the clause. ";
+  const charsFor = (tokens: number): number =>
+    Math.ceil((tokens * sample.length * 100) / estimateTokens(sample.repeat(100)));
+  const sized = (tokens: number): Promise<Uint8Array> =>
+    longContract(Math.ceil(charsFor(tokens) / 3600), 3600);
+
+  it("warns, and still sends the whole contract, when an unwindowed prompt is over 500,000 tokens", async () => {
+    const docx = await sized(540_000);
+    const generator = createScriptedGenerator(() => compliantAnswer());
+    const { report } = await reviewContract({ docx, playbook: oneRule }, generator);
+    expect(generator.calls).toHaveLength(1);
+    expect(report.stats.windows).toBe(1);
+    expect(report.warnings).toHaveLength(1);
+    expect(report.warnings?.[0]).toMatch(
+      /^The contract is about \d+ tokens \(estimated\) and goes to the model whole with every rule/,
+    );
+    expect(report.warnings?.[0]).toContain("CLAUSEWISE_MAX_CONTEXT_TOKENS");
+    expect(Number(/about (\d+) tokens/.exec(report.warnings?.[0] ?? "")?.[1])).toBeGreaterThan(
+      500_000,
+    );
+  });
+
+  it("does not warn for a prompt under that size, or when the review is windowed", async () => {
+    const under = await sized(440_000);
+    const quiet = await reviewContract(
+      { docx: under, playbook: oneRule },
+      createScriptedGenerator(() => compliantAnswer()),
+    );
+    expect(quiet.report.warnings).toBeUndefined();
+
+    const over = await sized(540_000);
+    const windowed = await reviewContract(
+      { docx: over, playbook: oneRule },
+      createScriptedGenerator(() => compliantAnswer()),
+      { maxContextTokens: 300_000 },
+    );
+    expect(windowed.report.stats.windows).toBeGreaterThan(1);
+    expect(windowed.report.warnings).toBeUndefined();
+  });
+});
+
+describe("the start of a window's prompt", () => {
+  it("is byte for byte the same for every rule, so a provider can cache it", async () => {
+    const oracle = createOracleGenerator(aggressiveScript());
+    await reviewContract({ docx: input, playbook }, oracle, { maxContextTokens });
+    const groups = byWindow(oracle.calls);
+    expect(groups.size).toBe(windows.length);
+    for (const calls of groups.values()) {
+      expect(calls).toHaveLength(playbook.rules.length);
+      const [first] = calls;
+      expect(first?.sharedPrefix).toBeTypeOf("string");
+      expect(first?.sharedPrefix?.length).toBeGreaterThan(0);
+      for (const call of calls) {
+        expect(call.sharedPrefix).toBe(first?.sharedPrefix);
+        expect(call.prompt.startsWith(call.sharedPrefix ?? "\u0000")).toBe(true);
+        expect(call.system).toBe(first?.system);
+      }
+      // The rules differ after the prefix, and only there.
+      expect(new Set(calls.map((call) => call.prompt)).size).toBe(playbook.rules.length);
+    }
+  });
+
+  it("stays the same across rules when a client is named", async () => {
+    const oracle = createOracleGenerator(aggressiveScript());
+    await reviewContract({ docx: input, playbook }, oracle, {
+      maxContextTokens: budgetFor(playbook, clauses, 3, "Fabrikam Labs LLC, the Recipient"),
+      client: "Fabrikam Labs LLC, the Recipient",
+    });
+    const groups = byWindow(oracle.calls);
+    for (const calls of groups.values()) {
+      expect(new Set(calls.map((call) => call.sharedPrefix)).size).toBe(1);
+    }
+  });
+});
+
+describe("a window that says compliant without naming a clause", () => {
+  const MESSAGE =
+    "The model reported this rule as met without pointing at a clause, so it could not be checked.";
+  const missing = (): RuleCheck => ({
+    status: "missing",
+    clauseIds: [],
+    explanation: "Nothing here covers it.",
+    comment: "Add a clause.",
+    edit: null,
+    suggestedClause: "New wording.",
+  });
+
+  /** Windows named by their position answer as the function says; every other rule is compliant. */
+  const answering = (answer: (window: number) => RuleCheck) =>
+    createScriptedGenerator((request) => {
+      if (ruleIdOf(request) !== "exclusions") return compliantAnswer();
+      return answer(windows.findIndex((w) => w[0]?.id === firstClauseId(request)));
+    });
+
+  it("cannot outrank the other windows' missing; the rule is an error instead of a pass", async () => {
+    const generator = answering((w) => (w === 0 ? compliantAnswer({ clauseIds: [] }) : missing()));
+    const { report, redlined } = await reviewContract({ docx: input, playbook }, generator, {
+      maxContextTokens,
+    });
+    const exclusions = report.results.find((r) => r.ruleId === "exclusions");
+    expect(exclusions).toMatchObject({ status: "error" });
+    expect(exclusions?.error).toBe(
+      `1 of ${windows.length} parts of the contract could not be checked, and none of the others showed a deviation. ${MESSAGE}`,
+    );
+    expect(report.counts.compliant).toBe(9);
+    expect(
+      (await viewDocx(redlined)).comments.some((c) => c.text.includes("Standard exclusions")),
+    ).toBe(false);
+  });
+
+  it("is an error too when every window answers that way", async () => {
+    const generator = answering(() => compliantAnswer({ clauseIds: ["c999"] }));
+    const { report } = await reviewContract({ docx: input, playbook }, generator, {
+      maxContextTokens,
+    });
+    expect(report.results.find((r) => r.ruleId === "exclusions")?.error).toBe(
+      `${windows.length} of ${windows.length} parts of the contract could not be checked. ${MESSAGE}`,
+    );
+  });
+
+  it("does not hide a deviation another window found", async () => {
+    const generator = answering((w) =>
+      w === 0
+        ? compliantAnswer({ clauseIds: [] })
+        : compliantAnswer({ status: "deviation", clauseIds: ["c5"], explanation: "Short." }),
+    );
+    const { report } = await reviewContract({ docx: input, playbook }, generator, {
+      maxContextTokens,
+    });
+    expect(report.results.find((r) => r.ruleId === "exclusions")).toMatchObject({
+      status: "deviation",
+      clauseIds: ["c5"],
+    });
+  });
+
+  it("is accepted from a window that names a clause, as before", async () => {
+    const generator = answering(() => compliantAnswer({ clauseIds: ["c5"] }));
+    const { report } = await reviewContract({ docx: input, playbook }, generator, {
+      maxContextTokens,
+    });
+    expect(report.results.find((r) => r.ruleId === "exclusions")).toMatchObject({
+      status: "compliant",
+      clauseIds: ["c5"],
+    });
   });
 });
