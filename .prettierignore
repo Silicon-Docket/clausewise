@@ -3,3 +3,7 @@ pnpm-lock.yaml
 dist
 node_modules
 fixtures/*.docx
+apps/server/drizzle
+apps/web/dist
+test-results
+playwright-report

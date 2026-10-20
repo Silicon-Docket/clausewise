@@ -57,6 +57,9 @@ importers:
 
   apps/server:
     dependencies:
+      '@clausewise/api':
+        specifier: workspace:*
+        version: link:../../packages/api
       '@clausewise/docx':
         specifier: workspace:*
         version: link:../../packages/docx
@@ -103,6 +106,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@clausewise/api':
+        specifier: workspace:*
+        version: link:../../packages/api
       react:
         specifier: ^19.3.1
         version: 19.3.1
@@ -158,6 +164,8 @@ importers:
       zod:
         specifier: ^4.6.7
         version: 4.6.7
+
+  packages/api: {}
 
   packages/docx:
     dependencies:

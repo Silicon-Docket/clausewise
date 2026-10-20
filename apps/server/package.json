@@ -13,6 +13,7 @@
     "start": "tsx src/main.ts"
   },
   "dependencies": {
+    "@clausewise/api": "workspace:*",
     "@clausewise/docx": "workspace:*",
     "@clausewise/llm": "workspace:*",
     "@clausewise/playbook": "workspace:*",

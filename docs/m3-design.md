@@ -118,19 +118,19 @@ if the server needs them (it should not: it stores the report as JSON it wrote i
 
 ### 3.2 Configuration (environment)
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `HOST` | `127.0.0.1` | Bind address. In the container image it is set to `0.0.0.0`. |
-| `PORT` | `8787` | |
-| `DATABASE_URL` | unset | Postgres URL. Unset: embedded PGlite in the data directory. |
-| `CLAUSEWISE_DATA_DIR` | `./data` | Documents and the embedded database. |
-| `CLAUSEWISE_PLAYBOOKS_DIR` | `./playbooks` | Built-in, read-only playbooks (`*.yaml`). |
-| `CLAUSEWISE_ACCESS_TOKEN` | unset | If set, every `/api` request must carry it. At least 16 characters. |
-| `CLAUSEWISE_ALLOWED_HOSTS` | unset | Comma separated extra `Host` values, for a reverse proxy. |
-| `CLAUSEWISE_MAX_UPLOAD_MB` | `25` | Upload cap. |
-| `CLAUSEWISE_REVIEW_CONCURRENCY` | `1` | Reviews running at once. Others wait in the queue. |
-| `CLAUSEWISE_MAX_QUEUED` | `20` | More than this many waiting reviews: 429. |
-| model variables | | All the variables `loadLlmConfig` reads. |
+| Variable                        | Default       | Meaning                                                             |
+| ------------------------------- | ------------- | ------------------------------------------------------------------- |
+| `HOST`                          | `127.0.0.1`   | Bind address. In the container image it is set to `0.0.0.0`.        |
+| `PORT`                          | `8787`        |                                                                     |
+| `DATABASE_URL`                  | unset         | Postgres URL. Unset: embedded PGlite in the data directory.         |
+| `CLAUSEWISE_DATA_DIR`           | `./data`      | Documents and the embedded database.                                |
+| `CLAUSEWISE_PLAYBOOKS_DIR`      | `./playbooks` | Built-in, read-only playbooks (`*.yaml`).                           |
+| `CLAUSEWISE_ACCESS_TOKEN`       | unset         | If set, every `/api` request must carry it. At least 16 characters. |
+| `CLAUSEWISE_ALLOWED_HOSTS`      | unset         | Comma separated extra `Host` values, for a reverse proxy.           |
+| `CLAUSEWISE_MAX_UPLOAD_MB`      | `25`          | Upload cap.                                                         |
+| `CLAUSEWISE_REVIEW_CONCURRENCY` | `1`           | Reviews running at once. Others wait in the queue.                  |
+| `CLAUSEWISE_MAX_QUEUED`         | `20`          | More than this many waiting reviews: 429.                           |
+| model variables                 |               | All the variables `loadLlmConfig` reads.                            |
 
 The model configuration is read when the server starts, but a missing or wrong key must not stop
 the server: the web app shows the problem on its start screen and the review endpoints answer
@@ -209,6 +209,10 @@ an applied edit, the full text of the paragraph that holds it. Storing it means 
 not change if the segmenter changes later.
 
 ### 3.5 API
+
+The TypeScript in `packages/api/src/index.ts` is the source of truth for every request and
+response shape below; the server and the web app both import it. If the prose and the types
+disagree, fix the prose.
 
 All paths are under `/api` except `/healthz`. Bodies are JSON unless said. Timestamps are ISO 8601
 strings. Ids are UUIDs except playbook ids.
@@ -369,7 +373,7 @@ can inject one.
 - `docker-compose.yml`: `app` (builds from the Dockerfile, publishes `127.0.0.1:8787:8787` only,
   `env_file: .env` optional, `depends_on` postgres healthy, volume `clausewise-data:/data`,
   `read_only: true` with `tmpfs: /tmp`, `cap_drop: [ALL]`, `security_opt:
-  [no-new-privileges:true]`) and `postgres` (`postgres:17-alpine`, not published, volume,
+[no-new-privileges:true]`) and `postgres` (`postgres:17-alpine`, not published, volume,
   `POSTGRES_PASSWORD` required with `${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}`,
   healthcheck with `pg_isready`). The plan said a pgvector image; vectors are unused until a later
   milestone, so the plain image is used and the README notes the switch.
@@ -388,7 +392,8 @@ can inject one.
   through `app.request()` with PGlite and a scripted generator, the job runner, security
   middleware, the web components and diff.
 - `pnpm e2e` runs Playwright (Chromium from `PLAYWRIGHT_BROWSERS_PATH`, never downloaded by the
-  scripts here) against a real server started by `apps/server/e2e/start.ts` with the scripted
+  scripts here) against a real server started by `e2e/start.ts` (a root folder, not a workspace
+  package) with the scripted
   oracle generator from `evals` (built from `fixtures/expected.json`). The scenario: upload
   `fixtures/nda-aggressive.docx`, pick the NDA playbook, wait for the review, accept exactly
   one finding with an applied edit, download, and check with JSZip that the file has exactly one
