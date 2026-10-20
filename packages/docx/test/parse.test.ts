@@ -108,6 +108,34 @@ describe("parseDocx", () => {
     ]);
   });
 
+  it("tells the rows of a table apart, nested tables included", async () => {
+    const cell = (text: string, inner = ""): string => `<w:tc>${para(run(text))}${inner}</w:tc>`;
+    const row = (...cells: string[]): string => `<w:tr>${cells.join("")}</w:tr>`;
+    const buf = await buildDocx(
+      para(run("Before")) +
+        `<w:tbl>${row(cell("1.1"), cell("Text of 1.1"))}${row(
+          cell("1.2"),
+          cell(
+            "Outer",
+            `<w:tbl>${row(cell("Inner a"), cell("Inner b"))}</w:tbl>${para(run("Tail"))}`,
+          ),
+        )}</w:tbl>` +
+        para(run("After")),
+    );
+    const ps = (await parseDocx(buf)).paragraphs;
+    expect(ps.map((p) => [p.text, p.tableRow])).toEqual([
+      ["Before", undefined],
+      ["1.1", 0],
+      ["Text of 1.1", 0],
+      ["1.2", 1],
+      ["Outer", 1],
+      ["Inner a", 2],
+      ["Inner b", 2],
+      ["Tail", 1],
+      ["After", undefined],
+    ]);
+  });
+
   it("does not report a paragraph with numId 0 as numbered", async () => {
     const buf = await buildDocx(
       para(

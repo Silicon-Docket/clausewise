@@ -42,10 +42,18 @@ export const run = (text: string, rPr = ""): string =>
 export const para = (inner: string, pPr = ""): string =>
   `<w:p>${pPr ? `<w:pPr>${pPr}</w:pPr>` : ""}${inner}</w:p>`;
 
+/**
+ * A reader of its own, so the tests do not lean on the library's. Only the line-end rule of
+ * XML 1.0 is applied: the parser's default also rewrites U+0085, U+2028 and U+2029.
+ */
+export function parseXmlForTest(xml: string): Document {
+  const parser = new DOMParser({ normalizeLineEndings: (s: string) => s.replace(/\r\n?/g, "\n") });
+  return parser.parseFromString(xml, "text/xml") as unknown as Document;
+}
+
 async function documentDoc(buf: Uint8Array): Promise<Document> {
   const zip = await JSZip.loadAsync(buf);
-  const xml = await zip.file("word/document.xml")!.async("string");
-  return new DOMParser().parseFromString(xml, "text/xml") as unknown as Document;
+  return parseXmlForTest(await zip.file("word/document.xml")!.async("string"));
 }
 
 export async function readPartText(buf: Uint8Array, path: string): Promise<string | undefined> {

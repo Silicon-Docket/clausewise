@@ -64,6 +64,8 @@ interface CaseStats {
 /** What the contract looked like before the run, taken from the tree the engine is about to change. */
 interface Snapshot {
   paragraphs: string[];
+  /** What Word shows of each paragraph, with the whitespace it ignores left out. */
+  rendered: string[];
   ids: string[];
   /** For each paragraph, the paragraphs that contain it (a text box sits inside its host). */
   hosts: number[][];
@@ -73,6 +75,7 @@ function snapshot(dom: Document): Snapshot {
   const paras = paragraphsOf(dom);
   return {
     paragraphs: paras.map(ser),
+    rendered: paras.map((p) => viewText(p, "accepted", OUR_AUTHOR, true)),
     ids: revisionIds(dom),
     hosts: paras.map((p) => {
       const out: number[] = [];
@@ -132,6 +135,12 @@ function verifyOutput(
     const original = genText(gp);
     const p = paras[i]!;
     checkEqual(viewText(p, "rejected"), original, `reject-all text of paragraph ${i}`);
+    // Spacing Word ignored before must not start to show, nor spacing it showed disappear.
+    checkEqual(
+      viewText(p, "rejected", OUR_AUTHOR, true),
+      before.rendered[i],
+      `reject-all rendering of paragraph ${i}`,
+    );
     const mine = refs
       .map((r, k) => ({ r, k }))
       .filter(({ r, k }) => r.applied && ops.edits[k]!.paragraphId === `p:${i}`)

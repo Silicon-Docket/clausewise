@@ -1,12 +1,13 @@
 import type JSZip from "jszip";
 import { childElements, getW, isW, parseXml, wChild } from "./ooxml.js";
-import { openPackage, readDocumentXml, readPart } from "./package.js";
+import { documentRelationships, openPackage, readDocumentXml, readPart } from "./package.js";
 import { resolveNumbering } from "./numbering.js";
 import { bodyParagraphs, isInTable, paragraphStyle, paragraphText } from "./paragraphs.js";
 import { StyleSheet, effectiveOutlineLevel } from "./styles.js";
 
 const STYLES_PART = "word/styles.xml";
 const NUMBERING_PART = "word/numbering.xml";
+const REL_BASE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
 
 export interface DocxParagraph {
   /** `p:<index>`, where index counts every body paragraph in document order, tables included. */
@@ -23,6 +24,12 @@ export interface DocxParagraph {
   numbering: { id: string; level: number } | undefined;
   inTable: boolean;
   /**
+   * Which table row the paragraph sits in, so that the cells of one row can be told from the next
+   * row's: paragraphs with equal values share the innermost row, and the numbers have no other
+   * meaning. Undefined outside a table.
+   */
+  tableRow: number | undefined;
+  /**
    * The number Word displays before the paragraph, such as "3.1", "(a)", "iv." or "Article IV".
    * Undefined for a paragraph that is not numbered, a bullet, a level that shows nothing, a number
    * typed into the text, and anything the numbering data does not let us resolve.
@@ -34,7 +41,8 @@ export interface DocxParagraph {
   /**
    * The w:name of the paragraph style, found through styles.xml ("heading 1", "Title", "toc 1"),
    * so a localised style id still resolves. A paragraph without a style has the document's
-   * default one. Undefined when styles.xml does not define the style.
+   * default one. Undefined when styles.xml does not define the style. Word writes its built-in
+   * names in lower case and other producers do not ("Heading 1"), so compare without case.
    */
   styleName: string | undefined;
   /** The effective w:outlineLvl, 0 to 8, from the paragraph or its style chain. */
@@ -51,23 +59,50 @@ export function paragraphId(index: number): string {
   return `p:${index}`;
 }
 
-/** Styles and numbering are optional, and a broken one must not stop the contract being read. */
-async function optionalXml(zip: JSZip, path: string): Promise<Document | undefined> {
+async function relationshipTargets(zip: JSZip): Promise<Map<string, string>> {
+  const targets = new Map<string, string>();
   try {
-    const xml = await readPart(zip, path);
-    return xml === undefined ? undefined : parseXml(xml, path);
+    for (const rel of await documentRelationships(zip)) {
+      if (rel.path !== undefined && !targets.has(rel.type)) targets.set(rel.type, rel.path);
+    }
   } catch {
-    return undefined;
+    // The default part names below still work for a package whose relationships are damaged.
   }
+  return targets;
+}
+
+/**
+ * Styles and numbering are optional, and a broken one must not stop the contract being read. The
+ * relationship names where the part lives; Word and every converter use the default name.
+ */
+async function optionalXml(
+  zip: JSZip,
+  targets: ReadonlyMap<string, string>,
+  type: string,
+  fallback: string,
+): Promise<Document | undefined> {
+  const named = targets.get(REL_BASE + type);
+  for (const path of named === undefined || named === fallback ? [fallback] : [named, fallback]) {
+    try {
+      const xml = await readPart(zip, path);
+      if (xml !== undefined) return parseXml(xml, path);
+    } catch {
+      // An unreadable part is as good as an absent one.
+    }
+  }
+  return undefined;
 }
 
 export async function parseDocx(buf: Uint8Array): Promise<ParsedDocx> {
   const zip = await openPackage(buf);
   const doc = parseXml(await readDocumentXml(zip), "word/document.xml");
-  const styles = new StyleSheet(await optionalXml(zip, STYLES_PART));
+  const targets = await relationshipTargets(zip);
+  const styles = new StyleSheet(await optionalXml(zip, targets, "styles", STYLES_PART));
   const elements = bodyParagraphs(doc);
-  const lists = resolveNumbering(elements, styles, await optionalXml(zip, NUMBERING_PART));
+  const numbering = await optionalXml(zip, targets, "numbering", NUMBERING_PART);
+  const lists = resolveNumbering(elements, styles, numbering);
   const inTocField = tocFieldParagraphs(elements);
+  const rows = tableRows(elements);
 
   return {
     paragraphs: elements.map((p, index) => {
@@ -81,6 +116,7 @@ export async function parseDocx(buf: Uint8Array): Promise<ParsedDocx> {
         style,
         numbering: list.numbering,
         inTable: isInTable(p),
+        tableRow: rows[index],
         label: list.label,
         level: list.numbering?.level,
         isBullet: list.isBullet,
@@ -90,6 +126,23 @@ export async function parseDocx(buf: Uint8Array): Promise<ParsedDocx> {
       };
     }),
   };
+}
+
+/** A number per paragraph for the table row it sits in, handed out in order of first sight. */
+function tableRows(paragraphs: readonly Element[]): (number | undefined)[] {
+  const ids = new Map<Node, number>();
+  return paragraphs.map((p) => {
+    for (let n = p.parentNode; n; n = n.parentNode) {
+      if (!isW(n, "tr")) continue;
+      let id = ids.get(n);
+      if (id === undefined) {
+        id = ids.size;
+        ids.set(n, id);
+      }
+      return id;
+    }
+    return undefined;
+  });
 }
 
 function inTocContentControl(p: Element): boolean {

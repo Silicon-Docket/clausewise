@@ -27,8 +27,8 @@ const FORBIDDEN: Array<[string, string]> = [
   ["SO", "\u000e"],
   ["ESC", "\u001b"],
   ["US", "\u001f"],
-  ["U+FFFE", "￾"],
-  ["U+FFFF", "￿"],
+  ["U+FFFE", "\uFFFE"],
+  ["U+FFFF", "\uFFFF"],
   ["lone high surrogate", "\ud800"],
   ["lone low surrogate", "\udfff"],
 ];
@@ -94,7 +94,7 @@ describe("text XML cannot carry never reaches the package", () => {
 
   it("turns a lone surrogate into the replacement character", async () => {
     const buf = await redline("t\ud800o", "ok");
-    expect((await views(buf, "accepted"))[0]).toBe("The term is t�o years.");
+    expect((await views(buf, "accepted"))[0]).toBe("The term is t\uFFFDo years.");
   });
 
   it("refuses a replacement made only of characters that cannot be written, instead of deleting the text", async () => {
@@ -121,7 +121,7 @@ describe("text XML cannot carry never reaches the package", () => {
   });
 
   it("strips bidi override and isolate characters from inserted and comment text", async () => {
-    const bidi = ["‪", "‫", "‬", "‭", "‮", "⁦", "⁧", "⁨", "⁩"];
+    const bidi = ["\u202A", "\u202B", "\u202C", "\u202D", "\u202E", "\u2066", "\u2067", "\u2068", "\u2069"];
     const buf = await redline(`two${bidi.join("")}`, `note${bidi.join("")}`);
     const parts = await zipParts(buf);
     for (const name of ["word/document.xml", "word/comments.xml"]) {
@@ -132,8 +132,8 @@ describe("text XML cannot carry never reaches the package", () => {
   });
 
   it("leaves legitimate characters alone: tab, accented letters, astral characters and U+0085", async () => {
-    const buf = await redline("té\t\u{1f600}\u0085", "ok \u{1d49c}");
-    expect((await views(buf, "accepted"))[0]).toContain("té");
+    const buf = await redline("t\u00E9\t\u{1f600}\u0085", "ok \u{1d49c}");
+    expect((await views(buf, "accepted"))[0]).toContain("t\u00E9");
     expect((await parseDocx(buf)).paragraphs[0]?.text).toContain("\u{1f600}\u0085");
     await expectReadableXml(buf);
   });

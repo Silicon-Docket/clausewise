@@ -546,6 +546,7 @@ describe("the other fields of a paragraph", () => {
         style: undefined,
         numbering: undefined,
         inTable: false,
+        tableRow: undefined,
         label: undefined,
         level: undefined,
         isBullet: false,
@@ -560,6 +561,7 @@ describe("the other fields of a paragraph", () => {
         style: "Heading1",
         numbering: undefined,
         inTable: false,
+        tableRow: undefined,
         label: undefined,
         level: undefined,
         isBullet: false,
@@ -568,5 +570,62 @@ describe("the other fields of a paragraph", () => {
         isTocEntry: false,
       },
     ]);
+  });
+});
+
+describe("where the styles and numbering parts live", () => {
+  const numbering =
+    `<w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum>` +
+    `<w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num>`;
+  const styles = `<w:style w:type="paragraph" w:styleId="Titre1"><w:name w:val="heading 1"/></w:style>`;
+  const REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
+  const rels = (...entries: [type: string, target: string][]): string =>
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${entries
+      .map(
+        ([type, target], i) =>
+          `<Relationship Id="rId${i + 1}" Type="${REL}${type}" Target="${target}"/>`,
+      )
+      .join("")}</Relationships>`;
+  const body = numbered("Clause", 1, 0) + styled("Heading", "Titre1");
+
+  it("follows the document's relationships to a part that has an unusual name", async () => {
+    const buf = await buildDocx(body, {
+      "word/_rels/document.xml.rels": rels(
+        ["styles", "parts/look.xml"],
+        ["numbering", "/word/parts/lists.xml"],
+      ),
+      "word/parts/look.xml": part("styles", styles),
+      "word/parts/lists.xml": part("numbering", numbering),
+    });
+    const ps = (await parseDocx(buf)).paragraphs;
+    expect(ps.map((p) => [p.label, p.styleName])).toEqual([
+      ["1.", undefined],
+      [undefined, "heading 1"],
+    ]);
+  });
+
+  it("uses the default part name when the relationship points nowhere", async () => {
+    const buf = await buildDocx(body, {
+      "word/_rels/document.xml.rels": rels(
+        ["styles", "gone/styles.xml"],
+        ["numbering", "../../outside.xml"],
+      ),
+      "word/styles.xml": part("styles", styles),
+      "word/numbering.xml": part("numbering", numbering),
+    });
+    const ps = (await parseDocx(buf)).paragraphs;
+    expect(ps.map((p) => [p.label, p.styleName])).toEqual([
+      ["1.", undefined],
+      [undefined, "heading 1"],
+    ]);
+  });
+
+  it("copes with relationships that are not XML", async () => {
+    const buf = await buildDocx(body, {
+      "word/_rels/document.xml.rels": "<Relationships",
+      "word/styles.xml": part("styles", styles),
+      "word/numbering.xml": part("numbering", numbering),
+    });
+    expect((await parseDocx(buf)).paragraphs.map((p) => p.label)).toEqual(["1.", undefined]);
   });
 });

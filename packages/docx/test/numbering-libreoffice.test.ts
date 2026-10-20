@@ -222,6 +222,72 @@ const DOCS: Doc[] = [
   },
 ];
 
+/** A small seeded generator, so the random documents are the same on every run. */
+function seeded(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 2 ** 32;
+  };
+}
+
+const RANDOM_FORMATS = [
+  "decimal",
+  "decimal",
+  "lowerLetter",
+  "upperLetter",
+  "lowerRoman",
+  "upperRoman",
+  "decimalZero",
+  "ordinal",
+];
+
+/**
+ * A multilevel list with random formats, separators, start values, legal numbering and level
+ * sequences. Every level may show the counters of the levels above it, which is where a
+ * hand-written case is most likely to be too tidy. Two nums share the list in half of them.
+ */
+function randomListDoc(seed: number): Doc {
+  const random = seeded(seed);
+  const between = (low: number, high: number): number =>
+    low + Math.floor(random() * (high - low + 1));
+  const levelCount = between(2, 5);
+  const levelDefs: string[] = [];
+  for (let ilvl = 0; ilvl < levelCount; ilvl++) {
+    const shown = Array.from({ length: ilvl + 1 }, (_, j) => `%${j + 1}`);
+    const parts = ilvl > 0 && random() < 0.5 ? shown : [`%${ilvl + 1}`];
+    const text =
+      random() < 0.3
+        ? `(${parts.join(".")})`
+        : `Sec ${parts.join(".")}${random() < 0.5 ? "." : ""}`;
+    levelDefs.push(
+      lvl(
+        ilvl,
+        RANDOM_FORMATS[between(0, RANDOM_FORMATS.length - 1)]!,
+        text,
+        ilvl > 0 && random() < 0.2 ? "<w:isLgl/>" : "",
+        random() < 0.25 ? between(2, 4) : 1,
+      ),
+    );
+  }
+  const shared = random() < 0.5;
+  const body: string[] = [];
+  for (let n = 0; n < 24; n++) {
+    if (random() < 0.12) body.push(p("", `Plain ${n}`));
+    else
+      body.push(
+        item(shared && random() < 0.4 ? 2 : 1, between(0, random() < 0.6 ? 1 : levelCount - 1)),
+      );
+  }
+  return {
+    name: `random-list-${seed}`,
+    numbering: abs(1, levelDefs) + num(1, 1) + (shared ? num(2, 1) : ""),
+    body: body.join(""),
+  };
+}
+
+const RANDOM_DOCS = Array.from({ length: 14 }, (_, i) => randomListDoc(i + 1));
+
 /** What docx-js writes for a multilevel numbering config, the way the shipped fixtures are made. */
 async function docxJsMultilevel(): Promise<Uint8Array> {
   const level = (
@@ -337,7 +403,7 @@ async function pack(doc: Doc): Promise<Uint8Array> {
 
 const GENERATED = [{ name: "docx-js-multilevel", build: docxJsMultilevel }];
 const FROM_HTML = [{ name: "libreoffice-from-html", html: HTML_NESTED_LISTS }];
-const NAMES = [...DOCS, ...GENERATED, ...FROM_HTML].map((d) => d.name);
+const NAMES = [...DOCS, ...RANDOM_DOCS, ...GENERATED, ...FROM_HTML].map((d) => d.name);
 
 async function soffice(dir: string, args: string[]): Promise<void> {
   // A private profile, so a running LibreOffice or a locked user profile cannot interfere.
@@ -356,7 +422,9 @@ describe.skipIf(!hasSoffice)("list labels agree with what LibreOffice prints", (
 
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), "clausewise-numbering-"));
-    for (const doc of DOCS) await writeFile(join(dir, `${doc.name}.docx`), await pack(doc));
+    for (const doc of [...DOCS, ...RANDOM_DOCS]) {
+      await writeFile(join(dir, `${doc.name}.docx`), await pack(doc));
+    }
     for (const doc of GENERATED) await writeFile(join(dir, `${doc.name}.docx`), await doc.build());
     const htmlFiles: string[] = [];
     for (const doc of FROM_HTML) {

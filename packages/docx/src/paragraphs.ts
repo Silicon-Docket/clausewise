@@ -332,6 +332,7 @@ export function paragraphNumbering(p: Element): { id: string; level: number } | 
   const id = wChild(numPr, "numId");
   const lvl = wChild(numPr, "ilvl");
   const idVal = id && getW(id, "val");
-  if (!idVal) return undefined;
+  // numId 0 is how Word and LibreOffice say "no list", whatever level is left beside it.
+  if (!idVal || Number(idVal) === 0) return undefined;
   return { id: idVal, level: Number((lvl && getW(lvl, "val")) || 0) };
 }

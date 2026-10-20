@@ -19,6 +19,8 @@ export const DOCUMENT_PART = "word/document.xml";
 const DOCUMENT_RELS_PART = "word/_rels/document.xml.rels";
 
 const OLE_SIGNATURE = [0xd0, 0xcf, 0x11, 0xe0];
+const END_OF_CENTRAL_DIRECTORY = 0x06054b50;
+const CENTRAL_DIRECTORY_ENTRY = 0x02014b50;
 
 interface PackageState {
   limits: DocxLimits;
@@ -39,6 +41,39 @@ function declaredSize(file: JSZip.JSZipObject): number | undefined {
   return typeof size === "number" ? size : undefined;
 }
 
+function u16At(bytes: Uint8Array, at: number): number {
+  return (bytes[at] ?? 0) | ((bytes[at + 1] ?? 0) << 8);
+}
+
+function u32At(bytes: Uint8Array, at: number): number {
+  return (u16At(bytes, at) | (u16At(bytes, at + 2) << 16)) >>> 0;
+}
+
+/**
+ * Counts the entries in the zip's central directory by walking its headers, stopping once the
+ * count passes `stopAfter`. Zip readers allocate an object per entry before they let anyone look
+ * at the count, and the count in the end record is only a claim, so the walk is what bounds the
+ * work. Returns 0 when the layout is not the plain one, which leaves the check to the reader.
+ */
+function centralDirectoryEntries(buf: Uint8Array, stopAfter: number): number {
+  let end = -1;
+  const lowest = Math.max(0, buf.length - 22 - 0xffff);
+  for (let i = buf.length - 22; i >= lowest; i--) {
+    if (u32At(buf, i) === END_OF_CENTRAL_DIRECTORY) {
+      end = i;
+      break;
+    }
+  }
+  if (end < 0) return 0;
+  let at = u32At(buf, end + 16);
+  let count = 0;
+  while (at + 46 <= buf.length && u32At(buf, at) === CENTRAL_DIRECTORY_ENTRY) {
+    if (++count > stopAfter) return count;
+    at += 46 + u16At(buf, at + 28) + u16At(buf, at + 30) + u16At(buf, at + 32);
+  }
+  return count;
+}
+
 export async function openPackage(buf: Uint8Array, limits?: Partial<DocxLimits>): Promise<JSZip> {
   const resolved = resolveLimits(limits);
   if (buf.length > resolved.maxInputBytes) {
@@ -50,11 +85,14 @@ export async function openPackage(buf: Uint8Array, limits?: Partial<DocxLimits>)
         "(encrypted). Open it in Word, remove the password or save it as a normal .docx, and try again.",
     );
   }
+  if (centralDirectoryEntries(buf, resolved.maxZipEntries) > resolved.maxZipEntries) {
+    throw limitError("The file", "maxZipEntries", resolved);
+  }
   let zip: JSZip;
   try {
     zip = await JSZip.loadAsync(buf);
   } catch {
-    throw new DocxError("Not a .docx file: its contents are not a readable zip archive");
+    throw new DocxError("Not a .docx file: it is not a valid zip archive");
   }
   const entries = Object.values(zip.files);
   if (entries.length > resolved.maxZipEntries) {
@@ -188,8 +226,13 @@ export async function readPart(zip: JSZip, path: string): Promise<string | undef
   return decodeXml(bytes, path);
 }
 
+/** The root element declares the Strict namespace as its own, which is how Strict files differ. */
+const STRICT_ROOT = new RegExp(
+  `<(?:[\\w.-]+:)?document\\b[^>]*\\bxmlns(?::[\\w.-]+)?\\s*=\\s*["']${W_STRICT_NS.replace(/[.]/g, "\\.")}["']`,
+);
+
 function assertTransitional(xml: string): void {
-  if (xml.slice(0, 20_000).includes(W_STRICT_NS)) throw strictFormatError();
+  if (STRICT_ROOT.test(xml.slice(0, 20_000))) throw strictFormatError();
 }
 
 export async function readDocumentXml(zip: JSZip): Promise<string> {

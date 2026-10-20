@@ -1,10 +1,12 @@
 const TOKEN = /\s+|\S+/g;
 
-// Each fold maps one UTF-16 unit to one unit, so offsets in folded text are offsets in the original.
-const SINGLE_QUOTES = /[‘-‛ʼ′‵]/g;
-const DOUBLE_QUOTES = /[“-‟″‶]/g;
-const DASHES = /[‐-―−]/g;
-const SPACES = /[   -   　]/g;
+// Each fold maps one UTF-16 unit to one unit, so offsets in folded text are offsets in the
+// original. The sets match the ones the anchoring step folds, so a quote it found is a quote the
+// trimming also treats as the same.
+const SINGLE_QUOTES = /[\u2018-\u201B\u2039\u203A\u02BC\u2032\u2035\uFF07]/g;
+const DOUBLE_QUOTES = /[\u201C-\u201F\u00AB\u00BB\u2033\u2036\uFF02]/g;
+const DASHES = /[\u2010-\u2015\u2212]/g;
+const SPACES = /[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g;
 
 /**
  * Makes curly and straight quotes, the dashes and the no-break spaces compare equal. Word turns
@@ -49,12 +51,14 @@ export function trimEdit(
   };
 }
 
+/** True when the text has curly quotes, which is how Word writes them unless autocorrect is off. */
 export function usesTypographicQuotes(text: string): boolean {
-  return /[‘’“”]/.test(text);
+  return /[\u2018\u2019\u201C\u201D]/.test(text);
 }
 
-// What may stand just before an opening quote: nothing, a space, an opening bracket, a dash or another opening quote.
-const OPENS_QUOTE = /^$|[\s([{<–—‘“]$/;
+// What may stand just before an opening quote: nothing, a space, an opening bracket, a dash or
+// another opening quote.
+const OPENS_QUOTE = /^$|[\s([{<\u2013\u2014\u2018\u201C]$/;
 
 function lastCodePoint(text: string): string {
   const tail = text.slice(-2);
@@ -71,10 +75,10 @@ export function curlyQuotes(inserted: string, before: string): string {
   for (const ch of inserted) {
     let next = ch;
     if (ch === "'") {
-      if (/[\p{L}\p{N}]$/u.test(prev)) next = "’";
-      else next = OPENS_QUOTE.test(prev) ? "‘" : "’";
+      if (/[\p{L}\p{N}]$/u.test(prev)) next = "\u2019";
+      else next = OPENS_QUOTE.test(prev) ? "\u2018" : "\u2019";
     } else if (ch === '"') {
-      next = OPENS_QUOTE.test(prev) ? "“" : "”";
+      next = OPENS_QUOTE.test(prev) ? "\u201C" : "\u201D";
     }
     out += next;
     prev = next;

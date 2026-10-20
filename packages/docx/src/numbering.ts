@@ -1,5 +1,5 @@
-import { W_NS, childElements, getW, isW, wChild } from "./ooxml.js";
-import { paragraphStyle } from "./paragraphs.js";
+import { MC_NS, childElements, getW, isNs, isW, wChild } from "./ooxml.js";
+import { isInTextBox, paragraphStyle } from "./paragraphs.js";
 import { parseCount, valueCount, type StyleDef, type StyleSheet } from "./styles.js";
 
 /**
@@ -339,17 +339,9 @@ function isNoList(numId: string): boolean {
   return /^\s*0*\s*$/.test(numId);
 }
 
-const MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006";
-
-function insideElement(node: Node, ns: string, local: string): boolean {
+function inAlternateFallback(node: Node): boolean {
   for (let n = node.parentNode; n; n = n.parentNode) {
-    if (
-      n.nodeType === 1 &&
-      (n as Element).namespaceURI === ns &&
-      (n as Element).localName === local
-    ) {
-      return true;
-    }
+    if (isNs(n, MC_NS, "Fallback")) return true;
   }
   return false;
 }
@@ -360,7 +352,7 @@ function insideElement(node: Node, ns: string, local: string): boolean {
  * None of them takes part in the numbering of the body.
  */
 function takesPartInBodyNumbering(p: Element): boolean {
-  if (insideElement(p, W_NS, "txbxContent") || insideElement(p, MC_NS, "Fallback")) return false;
+  if (isInTextBox(p) || inAlternateFallback(p)) return false;
   const pPr = wChild(p, "pPr");
   const rPr = pPr && wChild(pPr, "rPr");
   return !rPr || (!wChild(rPr, "del") && !wChild(rPr, "moveFrom"));

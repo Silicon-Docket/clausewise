@@ -3,7 +3,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { crc32, deflateRawSync } from "node:zlib";
+import { crc32, createDeflateRaw, deflateRawSync } from "node:zlib";
 import JSZip from "jszip";
 
 const execFileAsync = promisify(execFile);
@@ -176,11 +176,37 @@ export async function libreOfficeText(
 
 export interface CraftedEntry {
   name: string;
-  data: Uint8Array;
+  /** The uncompressed bytes. */
+  data?: Uint8Array;
   /** 0 stores, 8 deflates. */
   method?: 0 | 8;
+  /** Already-compressed content, for something too large to hold uncompressed. */
+  packed?: PackedContent;
   /** What the headers claim the uncompressed size is, when it should differ from the truth. */
   claimedSize?: number;
+}
+
+export interface PackedContent {
+  bytes: Uint8Array;
+  crc: number;
+  /** The real uncompressed size. */
+  size: number;
+}
+
+/** Deflates `total` zero bytes without ever holding them all, which is how a small file inflates to a huge one. */
+export async function deflateZeros(total: number): Promise<PackedContent> {
+  const chunk = Buffer.alloc(1024 * 1024);
+  const deflater = createDeflateRaw({ level: 9 });
+  const out: Buffer[] = [];
+  deflater.on("data", (piece: Buffer) => out.push(piece));
+  let crc = 0;
+  for (let done = 0; done < total; done += chunk.length) {
+    const part = chunk.subarray(0, Math.min(chunk.length, total - done));
+    crc = crc32(part, crc);
+    if (!deflater.write(part)) await new Promise((resolve) => deflater.once("drain", resolve));
+  }
+  await new Promise<void>((resolve) => deflater.end(resolve));
+  return { bytes: Buffer.concat(out), crc, size: total };
 }
 
 function u16(n: number): number[] {
@@ -192,19 +218,27 @@ function u32(n: number): number[] {
 }
 
 /**
- * Writes a zip by hand so a test can state sizes in the headers that are not the real ones, which
- * JSZip never produces. Entries are written as-is.
+ * Writes a zip by hand so a test can state sizes and counts in the headers that are not the real
+ * ones, which JSZip never produces. Entries are written as they are given.
  */
-export function craftZip(entries: CraftedEntry[]): Uint8Array {
+export function craftZip(
+  entries: CraftedEntry[],
+  options: { claimedEntries?: number } = {},
+): Uint8Array {
   const chunks: Uint8Array[] = [];
   const central: Uint8Array[] = [];
   let offset = 0;
   for (const entry of entries) {
     const name = Buffer.from(entry.name, "utf8");
-    const method = entry.method ?? 8;
-    const body = method === 8 ? deflateRawSync(entry.data, { level: 9 }) : entry.data;
-    const size = entry.claimedSize ?? entry.data.length;
-    const crc = crc32(entry.data);
+    const method = entry.packed ? 8 : (entry.method ?? 8);
+    const data = entry.data ?? new Uint8Array();
+    const body = entry.packed
+      ? entry.packed.bytes
+      : method === 8
+        ? deflateRawSync(data, { level: 9 })
+        : data;
+    const size = entry.claimedSize ?? entry.packed?.size ?? data.length;
+    const crc = entry.packed ? entry.packed.crc : crc32(data);
     const local = Uint8Array.from([
       ...u32(0x04034b50),
       ...u16(20),
@@ -244,12 +278,13 @@ export function craftZip(entries: CraftedEntry[]): Uint8Array {
     offset += local.length + name.length + body.length;
   }
   const centralSize = central.reduce((n, c) => n + c.length, 0);
+  const claimed = options.claimedEntries ?? entries.length;
   const end = Uint8Array.from([
     ...u32(0x06054b50),
     ...u16(0),
     ...u16(0),
-    ...u16(entries.length),
-    ...u16(entries.length),
+    ...u16(claimed),
+    ...u16(claimed),
     ...u32(centralSize),
     ...u32(offset),
     ...u16(0),
@@ -267,3 +302,75 @@ export function craftZip(entries: CraftedEntry[]): Uint8Array {
 export const utf8 = (text: string): Uint8Array => new TextEncoder().encode(text);
 
 export const W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+/** word/document.xml exactly as written in the package, without any parsing. */
+export async function rawDocumentXml(buf: Uint8Array): Promise<string> {
+  const part = (await zipParts(buf))["word/document.xml"];
+  if (!part) throw new Error("no word/document.xml");
+  return new TextDecoder().decode(part);
+}
+
+/** The raw text of every `w:p` element that has no `w:p` inside it. */
+export function rawParagraphs(xml: string): string[] {
+  return xml.match(/<w:p[ >](?:(?!<w:p[ >])[\s\S])*?<\/w:p>/g) ?? [];
+}
+
+/** The package's other parts, as written, keyed by part name. */
+export async function otherParts(
+  buf: Uint8Array,
+  except: string[] = ["word/document.xml"],
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const [name, bytes] of Object.entries(await zipParts(buf))) {
+    if (!except.includes(name)) out[name] = Buffer.from(bytes).toString("base64");
+  }
+  return out;
+}
+
+export const REL_TYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
+
+export interface RelSpec {
+  id: string;
+  /** The last part of the relationship type, such as "comments" or "header". */
+  type: string;
+  target: string;
+  external?: boolean;
+}
+
+/** A word/_rels/document.xml.rels with exactly these relationships. */
+export function relsXml(rels: RelSpec[]): string {
+  const items = rels
+    .map(
+      (r) =>
+        `<Relationship Id="${r.id}" Type="${REL_TYPE}${r.type}" Target="${r.target}"${r.external ? ' TargetMode="External"' : ""}/>`,
+    )
+    .join("");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${items}</Relationships>`;
+}
+
+/** A copy of the package with one part replaced, added (content given) or removed (null). */
+export async function withPart(
+  buf: Uint8Array,
+  path: string,
+  content: string | Uint8Array | null,
+): Promise<Uint8Array> {
+  const zip = await JSZip.loadAsync(buf);
+  if (content === null) zip.remove(path);
+  else zip.file(path, content);
+  return zip.generateAsync({ type: "uint8array" });
+}
+
+/** A part's bytes as stored, or undefined when the package has none by that name. */
+export async function partBytes(buf: Uint8Array, path: string): Promise<Uint8Array | undefined> {
+  const entry = (await JSZip.loadAsync(buf)).file(path);
+  return entry ? entry.async("uint8array") : undefined;
+}
+
+export const W_DECL = `xmlns:w="${W}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`;
+export const MC_DECL = 'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"';
+export const M_DECL = 'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"';
+
+/** A complete document.xml around the body. */
+export function documentXml(body: string, declaration = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'): string {
+  return `${declaration}<w:document ${W_DECL}><w:body>${body}</w:body></w:document>`;
+}

@@ -194,9 +194,9 @@ export function serializeXml(doc: Document): string {
 }
 
 /** Every code point XML 1.0 can carry, which excludes most controls, U+FFFE, U+FFFF and lone surrogates. */
-const NOT_XML_CHAR = /[^\t\n\r -퟿-�\u{10000}-\u{10FFFF}]/gu;
-const HAS_NOT_XML_CHAR = /[^\t\n\r -퟿-�\u{10000}-\u{10FFFF}]/u;
-const BIDI_CONTROL = /[‪-‮⁦-⁩]/g;
+const NOT_XML_CHAR = /[^\t\n\r\u0020-\uD7FF\uE000-\uFFFD\u{10000}-\u{10FFFF}]/gu;
+const HAS_NOT_XML_CHAR = /[^\t\n\r\u0020-\uD7FF\uE000-\uFFFD\u{10000}-\u{10FFFF}]/u;
+const BIDI_CONTROL = /[\u202A-\u202E\u2066-\u2069]/g;
 
 /**
  * Makes text safe to put in a text node or attribute: line ends become LF, characters XML cannot
@@ -206,7 +206,7 @@ const BIDI_CONTROL = /[‪-‮⁦-⁩]/g;
 export function xmlSafe(text: string): string {
   return text.replace(/\r\n?/g, "\n").replace(NOT_XML_CHAR, (ch) => {
     const cp = ch.codePointAt(0) ?? 0;
-    if (cp >= 0xd800 && cp <= 0xdfff) return "�";
+    if (cp >= 0xd800 && cp <= 0xdfff) return "\uFFFD";
     return cp === 0x0b || cp === 0x0c ? " " : "";
   });
 }

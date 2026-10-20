@@ -1,6 +1,6 @@
-import { DOMParser } from "@xmldom/xmldom";
 import type { Comment, Edit } from "../src/index.js";
 import { Rng } from "./engine-support.js";
+import { parseXmlForTest } from "./helpers.js";
 
 const W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const MC = "http://schemas.openxmlformats.org/markup-compatibility/2006";
@@ -48,8 +48,8 @@ const WORDS = [
   "x<y",
   "\u{1F600}",
   "\u{1D49C}z",
-  "été",
-  "漢字",
+  "\u00E9t\u00E9",
+  "\u6F22\u5B57",
   "-",
   "Section 4.2",
 ];
@@ -83,7 +83,7 @@ function phrase(rng: Rng): string {
   let out = "";
   for (let i = 0; i < n; i++) {
     out += rng.pick(WORDS);
-    if (i < n - 1) out += rng.pick([" ", " ", " ", "  ", " "]);
+    if (i < n - 1) out += rng.pick([" ", " ", " ", "  ", "\u00A0"]);
   }
   if (rng.chance(0.15)) out = ` ${out}`;
   if (rng.chance(0.15)) out = `${out} `;
@@ -384,7 +384,7 @@ const REPLACEMENTS = [
   " ",
   "new\nline",
   "tab\there",
-  "αβγ",
+  "\u03B1\u03B2\u03B3",
   "\u{1F600}",
   "(4)",
   "",
@@ -606,13 +606,22 @@ function hiddenRun(run: Element): boolean {
   });
 }
 
-function runText(run: Element, countT: boolean, countDel: boolean): string {
+const XML_SPACE_NS = "http://www.w3.org/XML/1998/namespace";
+
+/** What Word shows of a w:t: whitespace at its edges is ignored unless xml:space says to keep it. */
+function shown(el: Element, render: boolean): string {
+  const raw = el.textContent ?? "";
+  if (!render || el.getAttributeNS(XML_SPACE_NS, "space") === "preserve") return raw;
+  return raw.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, "");
+}
+
+function runText(run: Element, countT: boolean, countDel: boolean, render: boolean): string {
   if (hiddenRun(run)) return "";
   let out = "";
   for (const c of kids(run)) {
     if (c.namespaceURI !== W) continue;
-    if (c.localName === "t" && countT) out += c.textContent ?? "";
-    else if (c.localName === "delText" && countDel) out += c.textContent ?? "";
+    if (c.localName === "t" && countT) out += shown(c, render);
+    else if (c.localName === "delText" && countDel) out += shown(c, render);
     else if (c.localName === "tab") out += "\t";
     else if (c.localName === "br" || c.localName === "cr") out += "\n";
     else if (c.localName === "noBreakHyphen") out += "-";
@@ -620,14 +629,18 @@ function runText(run: Element, countT: boolean, countDel: boolean): string {
   return out;
 }
 
-/** The text of a node's subtree as Word shows it with every one of our changes accepted or rejected. */
-export function viewText(node: Element, mode: Mode, ours = OUR_AUTHOR): string {
+/**
+ * The text of a node's subtree as Word shows it with every one of our changes accepted or
+ * rejected. With `render`, whitespace that Word ignores at the edges of a w:t is left out, which
+ * is how the text actually looks; without it the text is the one the review reads.
+ */
+export function viewText(node: Element, mode: Mode, ours = OUR_AUTHOR, render = false): string {
   let out = "";
   for (const c of kids(node)) {
     if (c.namespaceURI === MC) {
       if (c.localName === "AlternateContent") {
         const choice = kids(c).find((k) => is(k, MC, "Choice"));
-        if (choice) out += viewText(choice, mode, ours);
+        if (choice) out += viewText(choice, mode, ours, render);
       }
       continue;
     }
@@ -635,16 +648,16 @@ export function viewText(node: Element, mode: Mode, ours = OUR_AUTHOR): string {
     const mine = c.getAttributeNS(W, "author") === ours;
     switch (c.localName) {
       case "r":
-        out += runText(c, true, false);
+        out += runText(c, true, false, render);
         break;
       case "ins":
       case "moveTo":
         if (c.localName === "ins" && mine && mode === "rejected") break;
-        out += viewText(c, mode, ours);
+        out += viewText(c, mode, ours, render);
         break;
       case "del":
         if (mine && mode === "rejected") {
-          for (const r of kids(c)) if (is(r, W, "r")) out += runText(r, true, true);
+          for (const r of kids(c)) if (is(r, W, "r")) out += runText(r, true, true, render);
         }
         break;
       case "hyperlink":
@@ -653,11 +666,11 @@ export function viewText(node: Element, mode: Mode, ours = OUR_AUTHOR): string {
       case "customXml":
       case "bdo":
       case "dir":
-        out += viewText(c, mode, ours);
+        out += viewText(c, mode, ours, render);
         break;
       case "sdt": {
         const content = kids(c).find((k) => is(k, W, "sdtContent"));
-        if (content) out += viewText(content, mode, ours);
+        if (content) out += viewText(content, mode, ours, render);
         break;
       }
       default:
@@ -681,8 +694,7 @@ export function paragraphsOf(doc: Document): Element[] {
   return out;
 }
 
-export const parseDom = (xml: string): Document =>
-  new DOMParser().parseFromString(xml, "text/xml") as unknown as Document;
+export const parseDom = (xml: string): Document => parseXmlForTest(xml);
 
 /** The text between a comment's range markers in the paragraph, as it reads with our changes rejected. */
 export function commentCoverage(p: Element, id: string): string | undefined {
