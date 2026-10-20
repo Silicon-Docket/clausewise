@@ -13,3 +13,11 @@ evals/results/*
 *.redlined.docx
 *.report.json
 *.summary.md
+
+# Server data: uploaded contracts and the embedded database must never be committed
+data
+apps/server/data
+
+# Playwright
+test-results
+playwright-report

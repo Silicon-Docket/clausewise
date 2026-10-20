@@ -17,7 +17,9 @@
     "test": "vitest run",
     "fixtures": "tsx tools/make-fixtures.ts",
     "clausewise": "node apps/cli/bin/clausewise.mjs",
-    "eval": "tsx evals/src/run.ts"
+    "eval": "tsx evals/src/run.ts",
+    "server": "tsx apps/server/src/main.ts",
+    "dev": "tsx apps/server/src/main.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",

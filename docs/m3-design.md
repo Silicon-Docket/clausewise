@@ -87,6 +87,13 @@ Behaviour:
   `start..end` of the paragraph equals `edit.original`. If it does not (wrong file, changed
   file), throw `ReviewError("The document does not match the report ...")`. Never write a span
   that does not match.
+- **Choices made while building it (all tested):** a refused edit moves its comment to the whole
+  paragraph that holds the edit (the report has no clause boundaries). Whitespace at either end of
+  a replacement is dropped, as anchoring does for the model's wording, so a trailing newline from
+  a text area cannot enter the contract. A replacement counts as "equal to the span" after
+  typographic normalisation. A replacement for a result that is included but has no tracked change
+  is ignored with a warning. Selecting no result returns a copy of the input bytes without opening
+  the file. Spans are checked only for the results that are included.
 - **Equality property, tested:** with the same author and date, `renderRedline` with
   `include: "all"` and no replacements produces a file whose XML parts are identical to the
   `redlined` that `reviewContract` returned. The simplest way to guarantee it is to make
@@ -118,19 +125,20 @@ if the server needs them (it should not: it stores the report as JSON it wrote i
 
 ### 3.2 Configuration (environment)
 
-| Variable                        | Default       | Meaning                                                             |
-| ------------------------------- | ------------- | ------------------------------------------------------------------- |
-| `HOST`                          | `127.0.0.1`   | Bind address. In the container image it is set to `0.0.0.0`.        |
-| `PORT`                          | `8787`        |                                                                     |
-| `DATABASE_URL`                  | unset         | Postgres URL. Unset: embedded PGlite in the data directory.         |
-| `CLAUSEWISE_DATA_DIR`           | `./data`      | Documents and the embedded database.                                |
-| `CLAUSEWISE_PLAYBOOKS_DIR`      | `./playbooks` | Built-in, read-only playbooks (`*.yaml`).                           |
-| `CLAUSEWISE_ACCESS_TOKEN`       | unset         | If set, every `/api` request must carry it. At least 16 characters. |
-| `CLAUSEWISE_ALLOWED_HOSTS`      | unset         | Comma separated extra `Host` values, for a reverse proxy.           |
-| `CLAUSEWISE_MAX_UPLOAD_MB`      | `25`          | Upload cap.                                                         |
-| `CLAUSEWISE_REVIEW_CONCURRENCY` | `1`           | Reviews running at once. Others wait in the queue.                  |
-| `CLAUSEWISE_MAX_QUEUED`         | `20`          | More than this many waiting reviews: 429.                           |
-| model variables                 |               | All the variables `loadLlmConfig` reads.                            |
+| Variable                        | Default           | Meaning                                                             |
+| ------------------------------- | ----------------- | ------------------------------------------------------------------- |
+| `HOST`                          | `127.0.0.1`       | Bind address. In the container image it is set to `0.0.0.0`.        |
+| `PORT`                          | `8787`            |                                                                     |
+| `DATABASE_URL`                  | unset             | Postgres URL. Unset: embedded PGlite in the data directory.         |
+| `CLAUSEWISE_DATA_DIR`           | `./data`          | Documents and the embedded database.                                |
+| `CLAUSEWISE_PLAYBOOKS_DIR`      | `./playbooks`     | Built-in, read-only playbooks (`*.yaml`).                           |
+| `CLAUSEWISE_WEB_DIR`            | `./apps/web/dist` | The built web app. A missing folder means the API runs alone.       |
+| `CLAUSEWISE_ACCESS_TOKEN`       | unset             | If set, every `/api` request must carry it. At least 16 characters. |
+| `CLAUSEWISE_ALLOWED_HOSTS`      | unset             | Comma separated extra `Host` values, for a reverse proxy.           |
+| `CLAUSEWISE_MAX_UPLOAD_MB`      | `25`              | Upload cap.                                                         |
+| `CLAUSEWISE_REVIEW_CONCURRENCY` | `1`               | Reviews running at once. Others wait in the queue.                  |
+| `CLAUSEWISE_MAX_QUEUED`         | `20`              | More than this many waiting reviews: 429.                           |
+| model variables                 |                   | All the variables `loadLlmConfig` reads.                            |
 
 The model configuration is read when the server starts, but a missing or wrong key must not stop
 the server: the web app shows the problem on its start screen and the review endpoints answer
@@ -142,7 +150,8 @@ the server: the web app shows the problem on its start screen and the review end
    set, log one clear warning at startup.
 2. **DNS rebinding.** When no access token is set, reject a request whose `Host` header is not
    `localhost`, `127.0.0.1`, `[::1]` (with or without the port) or in `CLAUSEWISE_ALLOWED_HOSTS`:
-   `421`. (With a token, the token is the defence.)
+   `421`. (With a token, the token is the defence.) A reverse proxy must pass the original `Host`
+   header through, because the origin check in item 3 compares it with `Origin`.
 3. **Cross-site requests.** No CORS headers at all. For every request with a method other than
    GET, HEAD or OPTIONS: if an `Origin` header is present and its host differs from the `Host`
    header, answer `403`. `POST` and `PATCH` bodies must be `application/json` or
@@ -163,8 +172,11 @@ the server: the web app shows the problem on its start screen and the review end
    `X-Frame-Options: DENY`, and for the web app a CSP of
    `default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`.
    API responses carry `Cache-Control: no-store`.
-8. **Playbook YAML.** At most 256 KB. Parsed by `parsePlaybook` (it must refuse YAML alias
-   bombs and custom tags; add that to the playbook package if it does not already, with a test).
+8. **Playbook YAML.** At most 256 KB, enforced by the server (the parser does not). Parsed by
+   `parsePlaybook`, which refuses every alias, every tag and any nesting deeper than 64 levels,
+   does not read merge keys, reads the YAML 1.2 core schema whatever a `%YAML` line says, and
+   reports a repeated key in one mapping as an error, with a line number, in linear time. Each of
+   these has a test in `packages/playbook/test/hardening.test.ts`.
 9. **Errors.** Every error is `{ "error": { "code": string, "message": string } }`. Messages are
    written for a person and never contain document text, stack traces, file system paths, SQL or
    secrets. Unexpected errors are `500 internal_error` with a request id; the detail goes to the

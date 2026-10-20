@@ -59,7 +59,10 @@ export interface ApiError {
 export interface ModelInfo {
   provider: string;
   model: string;
-  /** One sentence saying where document text is sent. */
+  /**
+   * Where document text is sent, as a destination phrase such as `Anthropic API
+   * (api.anthropic.com)`. The screens build their own sentences around it.
+   */
   disclosure: string;
 }
 
