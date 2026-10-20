@@ -20,6 +20,7 @@
     "eval": "tsx evals/src/run.ts"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@types/node": "^22.10.0",
     "docx": "^9.12.0",
     "prettier": "^3.4.0",
