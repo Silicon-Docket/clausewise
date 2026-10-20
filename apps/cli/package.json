@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
-    "clausewise": "./src/bin.ts"
+    "clausewise": "./bin/clausewise.mjs"
   },
   "exports": {
     ".": "./src/index.ts"

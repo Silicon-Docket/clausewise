@@ -799,7 +799,7 @@ describe("mergeWindowChecks", () => {
       expect(merged).toEqual({ ...only, suggestedClause: null });
     });
 
-    it("takes comment and explanation from the first deviation in window order", () => {
+    it("takes comment and explanation from the first deviation when none of them proposes an edit", () => {
       const merged = mergeWindowChecks(required, [
         check({ status: "compliant", explanation: "ok", clauseIds: ["c1"] }),
         check({ status: "deviation", explanation: "first", comment: "A", clauseIds: ["c2"] }),
@@ -808,6 +808,29 @@ describe("mergeWindowChecks", () => {
       expect(merged.status).toBe("deviation");
       expect(merged.explanation).toBe("first");
       expect(merged.comment).toBe("A");
+    });
+
+    it("takes comment, explanation and edit together from the first deviation that proposes an edit", () => {
+      const merged = mergeWindowChecks(required, [
+        check({ status: "deviation", explanation: "first", comment: "A", clauseIds: ["c2"] }),
+        check({
+          status: "deviation",
+          explanation: "second",
+          comment: "B",
+          clauseIds: ["c3"],
+          edit: edit("c3"),
+        }),
+        check({
+          status: "deviation",
+          explanation: "third",
+          comment: "C",
+          clauseIds: ["c4"],
+          edit: edit("c4"),
+        }),
+      ]);
+      expect(merged).toMatchObject({ explanation: "second", comment: "B", edit: edit("c3") });
+      // Every deviating clause is still listed, the first window's first.
+      expect(merged.clauseIds).toEqual(["c2", "c3", "c4"]);
     });
 
     it("keeps the base comment even when it is empty", () => {
@@ -830,7 +853,7 @@ describe("mergeWindowChecks", () => {
       expect(merged.clauseIds).toEqual(["c5", "c2", "c7", "c1"]);
     });
 
-    it("prefers the base edit", () => {
+    it("takes the edit of the first deviation that proposes one, and no other edit", () => {
       const merged = mergeWindowChecks(required, [
         check({ status: "deviation", edit: edit("c1", "a", "b") }),
         check({ status: "deviation", edit: edit("c2", "c", "d") }),
@@ -838,7 +861,7 @@ describe("mergeWindowChecks", () => {
       expect(merged.edit).toEqual(edit("c1", "a", "b"));
     });
 
-    it("falls back to the first deviation edit found", () => {
+    it("passes over deviations that propose no edit to the first one that does", () => {
       const merged = mergeWindowChecks(required, [
         check({ status: "deviation", edit: null }),
         check({ status: "deviation", edit: null }),
@@ -1076,7 +1099,7 @@ describe("RuleCheckSchema", () => {
     comment: "Clause 3.1 should end after three years.",
     edit: {
       clauseId: "c2",
-      quote: "perpetual and shall continue indefinitely",
+      quote: "are perpetual and shall continue indefinitely",
       replacement: "end three (3) years after the date of disclosure",
     },
     suggestedClause: null,

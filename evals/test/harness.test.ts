@@ -188,6 +188,26 @@ describe("a fatal error from the provider", () => {
     expect(stderr).toContain(`HTTP ${status}`);
   });
 
+  it.each([301, 307])(
+    "stops on a refused redirect (HTTP %i) and names the base URL",
+    async (status) => {
+      const model = routedModel(fixtures, {
+        before: () => {
+          throw new ModelRequestError("The endpoint answered with a redirect.", status, true);
+        },
+      });
+      const { code, stderr, stdout } = await run(["--yes"], { dir, generatorFactory: () => model });
+      expect(code).toBe(1);
+      expect(stderr).toContain(
+        `The model provider answered HTTP ${status}, so no rule can be checked.`,
+      );
+      expect(stderr).toContain("Check CLAUSEWISE_BASE_URL");
+      expect(stderr).not.toContain("Check the API key");
+      expect(stdout).toBe("");
+      expect(model.requests).toHaveLength(1);
+    },
+  );
+
   it("does not treat a rate limit as fatal", async () => {
     const model = routedModel(fixtures, {
       before: ({ ruleId }) => {
@@ -419,7 +439,7 @@ describe("what is written", () => {
       }
     }
     // A report holds the words an edit changes, and so may the results.
-    expect(json).toContain("perpetual and shall continue indefinitely");
+    expect(json).toContain("are perpetual and shall continue indefinitely");
   });
 
   it("holds the settings of a real run but neither the key nor the address", async () => {
@@ -427,7 +447,8 @@ describe("what is written", () => {
     const out = `${dir}/settings.json`;
     const env = {
       ANTHROPIC_API_KEY: "sk-test-secret-key",
-      CLAUSEWISE_BASE_URL: "https://user:password@gateway.example.com/v1",
+      // The configuration refuses an address with credentials in it, so this one has none.
+      CLAUSEWISE_BASE_URL: "https://gateway.example.com/v1",
       CLAUSEWISE_MAX_CONTEXT_TOKENS: "100000",
       CLAUSEWISE_CONCURRENCY: "2",
       CLAUSEWISE_EFFORT: "low",
@@ -448,7 +469,9 @@ describe("what is written", () => {
       fallback: null,
     });
     expect(json).not.toContain("sk-test-secret-key");
-    expect(json).not.toContain("password");
+    // The model here is injected, so no address reaches the file: not the host, not the path.
+    expect(json).not.toContain("gateway.example.com");
+    expect(json).not.toContain("/v1");
   });
 
   it("creates the results directory and names the file by UTC time", async () => {

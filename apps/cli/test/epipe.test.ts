@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  LAUNCHER,
   TIMEOUT,
   cleanUpChildren,
   fakeModelServer,
@@ -15,7 +16,7 @@ import { listing, playbookPath, root, stage, tempDirs } from "./support.js";
 cleanUpChildren();
 
 const PLAYBOOK = playbookPath("nda-mutual.yaml");
-const TSX = ["--import", "tsx", "apps/cli/src/bin.ts"];
+const LAUNCH = [LAUNCHER];
 const hasBash = spawnSync("bash", ["--version"]).status === 0;
 
 const OUTPUTS = [
@@ -38,7 +39,7 @@ async function reviewWithClosedPipes(options: {
   const run = start(
     process.execPath,
     [
-      ...TSX,
+      ...LAUNCH,
       ...["review", input, "--playbook", PLAYBOOK],
       ...(options.gate === undefined ? [] : ["--fail-on", options.gate]),
     ],
@@ -123,7 +124,7 @@ describe("a pipe whose reader has gone", () => {
   });
 
   it("does not crash on --help when stdout is closed", { timeout: TIMEOUT }, async () => {
-    const run = start(process.execPath, [...TSX, "--help"], modelEnv(1));
+    const run = start(process.execPath, [...LAUNCH, "--help"], modelEnv(1));
     run.child.stdout.destroy();
 
     const outcome = await run.done;
@@ -141,7 +142,7 @@ describe("a pipe whose reader has gone", () => {
       const { port } = await fakeModelServer("deviation");
       const input = await stage(dir, "nda-balanced.docx");
       const script = [
-        `"${process.execPath}" --import tsx apps/cli/src/bin.ts review "$1" --playbook "$2" ` +
+        `"${process.execPath}" "${LAUNCHER}" review "$1" --playbook "$2" ` +
           '--fail-on high 2> "$3" | true',
         'echo "${PIPESTATUS[0]}" > "$4"',
       ].join("\n");

@@ -118,6 +118,12 @@ export interface RuleResult {
   clauseIds: string[];
   /** The numbers of those clauses as written in the contract, where they have one. */
   clauseNumbers: string[];
+  /**
+   * The opening words of each of those clauses that has no number, in the order of `clauseIds`,
+   * on one line. It is how a reader is told which clause is meant when the contract gives none.
+   * Absent when every clause the finding refers to has a number.
+   */
+  clauseExcerpts?: string[];
   explanation: string;
   comment: string;
   suggestedClause: string | null;

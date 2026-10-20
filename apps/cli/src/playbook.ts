@@ -42,7 +42,8 @@ export async function playbookCheck(args: string[], io: CliIo): Promise<number> 
       ...aligned(
         playbook.rules.map((rule) => [
           rule.id,
-          `${rule.severity}${rule.required ? ", required" : ""}`,
+          // An absence rule passes when its clause is not there, so it is marked to be told apart.
+          `${rule.severity}${rule.required ? ", required" : ""}${rule.kind === "absence" ? ", absence" : ""}`,
         ]),
       ),
       "",

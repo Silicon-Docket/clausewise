@@ -151,12 +151,12 @@ describe("a contract that cannot be reviewed", () => {
     await expectRejected(async (dir) => dir, /is not a file\./);
   });
 
-  it("says so when the file is not a zip, and suggests saving an old .doc as .docx", async () => {
+  it("says so, in the Word engine's words, when the file is not Word at all", async () => {
     await expectRejected(async (dir) => {
       const path = join(dir, "notes.docx");
       await writeFile(path, "just some text, not a Word file");
       return path;
-    }, /notes\.docx is not a \.docx file: it is not a zip archive\. If it is an older \.doc file/);
+    }, /^Error: Cannot open .*notes\.docx: Not a \.docx file: it is not a valid zip archive\.$/m);
   });
 
   it("says so when the file is empty", async () => {
@@ -164,7 +164,36 @@ describe("a contract that cannot be reviewed", () => {
       const path = join(dir, "empty.docx");
       await writeFile(path, "");
       return path;
-    }, /empty\.docx is not a \.docx file/);
+    }, /^Error: Cannot open .*empty\.docx: Not a \.docx file: it is not a valid zip archive\.$/m);
+  });
+
+  it("says an old .doc file, or a password protected one, is exactly that and not a zip", async () => {
+    // Both are an OLE compound file, which starts with these eight bytes.
+    const ole = Uint8Array.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0, 0, 0, 0]);
+    const { stderr } = await expectRejected(async (dir) => {
+      const path = join(dir, "old.docx");
+      await writeFile(path, ole);
+      return path;
+    }, /Error: Cannot open .*old\.docx: This file is not a \.docx: it is an old-format Word document or it is password protected \(encrypted\)\./);
+
+    expect(stderr).toContain("save it as a normal .docx");
+    expect(stderr).not.toMatch(/not a (valid )?zip/);
+  });
+
+  it("says a password protected zip archive is password protected", async () => {
+    await expectRejected(async (dir) => {
+      const zip = new JSZip();
+      zip.file("word/document.xml", "x");
+      const bytes = Buffer.from(await zip.generateAsync({ type: "uint8array" }));
+      for (let i = 0; i + 10 < bytes.length; i++) {
+        // Bit 0 of the general purpose flags marks an entry as encrypted, in both kinds of header.
+        if (bytes.readUInt32LE(i) === 0x04034b50) bytes[i + 6] = (bytes[i + 6] ?? 0) | 1;
+        if (bytes.readUInt32LE(i) === 0x02014b50) bytes[i + 8] = (bytes[i + 8] ?? 0) | 1;
+      }
+      const path = join(dir, "locked.docx");
+      await writeFile(path, bytes);
+      return path;
+    }, /Error: Cannot open .*locked\.docx: .*password protected/);
   });
 
   it("explains a zip that is not a Word document, before saying anything is sent", async () => {
@@ -174,7 +203,7 @@ describe("a contract that cannot be reviewed", () => {
       const path = join(dir, "sheet.docx");
       await writeFile(path, await zip.generateAsync({ type: "uint8array" }));
       return path;
-    }, "Error: Not a .docx file: word/document.xml is missing");
+    }, /Error: Cannot open .*sheet\.docx: Not a \.docx file: word\/document\.xml is missing\./);
   });
 
   it("explains a damaged zip", async () => {
@@ -182,7 +211,18 @@ describe("a contract that cannot be reviewed", () => {
       const path = join(dir, "damaged.docx");
       await writeFile(path, Buffer.from("PK\u0003\u0004 and then nothing a zip reader can use"));
       return path;
-    }, "Error: Not a .docx file: it is not a valid zip archive");
+    }, /Error: Cannot open .*damaged\.docx: Not a \.docx file: it is not a valid zip archive\./);
+  });
+
+  it("does not guess from the first bytes: a file called .docx is judged by the Word engine alone", async () => {
+    // Starts like a zip and like nothing else the old check knew, and is neither a zip nor Word.
+    const { stderr } = await expectRejected(async (dir) => {
+      const path = join(dir, "pk.docx");
+      await writeFile(path, "PK is how a note to a friend might begin");
+      return path;
+    }, /Error: Cannot open .*pk\.docx: Not a \.docx file: it is not a valid zip archive\./);
+
+    expect(stderr).not.toContain("older .doc");
   });
 
   it("explains a document with nothing to review", async () => {
@@ -344,8 +384,10 @@ describe("a model provider that refuses the key", () => {
     const code = await run(["review", input, "--playbook", PLAYBOOK], io);
 
     expect(code).toBe(1);
-    expect(stderr()).toContain(`Error: The model provider answered HTTP ${status}`);
-    expect(stderr()).toContain("failing-model");
+    // The pipeline words this and may change the words; what is fixed is the status and that the
+    // provider's own text, which can quote the prompt, is not repeated.
+    expect(stderr()).toMatch(new RegExp(`^Error: .*HTTP ${status}`, "m"));
+    expect(stderr()).not.toContain("nope");
     expect(stdout()).toBe("");
     expect(await listing(dir)).toEqual(["nda-balanced.docx"]);
   });
@@ -371,7 +413,7 @@ describe("a model provider that refuses the key", () => {
 
     expect(code).toBe(1);
     expect(stderr()).toContain("[1/10]");
-    expect(stderr()).toContain("Error: The model provider answered HTTP 401");
+    expect(stderr()).toMatch(/^Error: .*HTTP 401/m);
     expect(stdout()).toBe("");
     expect(await listing(dir)).toEqual(["nda-balanced.docx"]);
   });

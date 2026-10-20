@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { BASE_ENV, TIMEOUT, cleanUpChildren, cli, start } from "./child.js";
+import { BASE_ENV, LAUNCHER, TIMEOUT, cleanUpChildren, cli, start } from "./child.js";
 import { listing, playbookPath, stage, tempDirs } from "./support.js";
 
 cleanUpChildren();
@@ -80,10 +80,7 @@ describe("Ctrl-C on the real command", () => {
       const input = await stage(dir, "nda-aggressive.docx");
       const run = start(
         process.execPath,
-        [
-          ...["--import", "tsx", "apps/cli/src/bin.ts"],
-          ...["review", input, "--playbook", playbookPath("nda-mutual.yaml")],
-        ],
+        [LAUNCHER, ...["review", input, "--playbook", playbookPath("nda-mutual.yaml")]],
         {
           ...BASE_ENV,
           CLAUSEWISE_PROVIDER: "openai-compatible",

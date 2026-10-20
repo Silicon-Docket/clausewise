@@ -185,3 +185,64 @@ describe("parseDocx", () => {
     await expect(parseDocx(new TextEncoder().encode("hello"))).rejects.toThrow(DocxError);
   });
 });
+
+describe("parseDocx limits", () => {
+  const W_NS = `xmlns:w="${W}"`;
+  const body = para(run("First paragraph.")) + para(run("Second paragraph."));
+  const styles =
+    `<?xml version="1.0"?><w:styles ${W_NS}><w:style w:type="paragraph" w:styleId="Heading1">` +
+    `<w:name w:val="heading 1"/></w:style></w:styles>`;
+  const headed = para(run("Heading"), '<w:pStyle w:val="Heading1"/>');
+
+  const message = async (buf: Uint8Array, limits: Record<string, number>): Promise<string> =>
+    parseDocx(buf, limits).then(
+      () => "no error",
+      (e: unknown) => (e instanceof DocxError ? e.message : `unexpected ${String(e)}`),
+    );
+
+  it("changes nothing when no limits, or an empty set, are given", async () => {
+    const buf = await buildDocx(body);
+    expect(await parseDocx(buf, {})).toEqual(await parseDocx(buf));
+    expect(await parseDocx(buf, undefined)).toEqual(await parseDocx(buf));
+  });
+
+  it.each([
+    ["maxInputBytes", 100],
+    ["maxZipEntries", 2],
+    ["maxUncompressedBytes", 100],
+    ["maxDocumentXmlBytes", 100],
+    ["maxParagraphs", 1],
+    ["maxRunsPerParagraph", 0],
+    ["maxNestingDepth", 3],
+  ])("refuses a file over %s and names the limit", async (name, value) => {
+    const text = await message(await buildDocx(body), { [name]: value });
+    expect(text).toContain(`(${name})`);
+    expect(text).toMatch(/over the limit/);
+    expect(text).not.toContain("paragraph.");
+  });
+
+  it("reads the file with the limits it was given, not with the defaults", async () => {
+    const buf = await buildDocx(body);
+    expect((await parseDocx(buf, { maxParagraphs: 2 })).paragraphs).toHaveLength(2);
+    expect(await message(buf, { maxParagraphs: 1 })).toContain("(maxParagraphs)");
+  });
+
+  it("applies the size limit to the optional parts it reads, which then count as absent", async () => {
+    const buf = await buildDocx(headed, { "word/styles.xml": styles });
+    expect((await parseDocx(buf)).paragraphs[0]?.styleName).toBe("heading 1");
+    const limited = await parseDocx(buf, { maxPartBytes: 50 });
+    expect(limited.paragraphs[0]).toMatchObject({ text: "Heading", styleName: undefined });
+  });
+
+  it("applies the structure limits to the optional parts it parses", async () => {
+    const buf = await buildDocx(headed, {
+      "word/styles.xml": styles.replace(
+        "<w:name",
+        "<w:pPr><w:pBdr><w:top><w:x>1</w:x></w:top></w:pBdr></w:pPr><w:name",
+      ),
+    });
+    expect((await parseDocx(buf)).paragraphs[0]?.styleName).toBe("heading 1");
+    const limited = await parseDocx(buf, { maxNestingDepth: 5 });
+    expect(limited.paragraphs[0]).toMatchObject({ text: "Heading", styleName: undefined });
+  });
+});

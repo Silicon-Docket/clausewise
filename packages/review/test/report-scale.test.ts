@@ -103,6 +103,38 @@ const SHAPES: { name: string; make: (size: number) => ReviewReport }[] = [
     make: (n) => reportOf({}, { warnings: [`${". ".repeat(n / 2)}x ${EM_DASH}`] }),
   },
   {
+    name: "at signs in an explanation",
+    make: (n) => reportOf({ explanation: `${"@".repeat(n)}.x` }),
+  },
+  {
+    name: "letters and at signs, with a dot at the end, in an explanation",
+    make: (n) => reportOf({ explanation: `${"a@".repeat(n / 2)}.x` }),
+  },
+  {
+    name: "a long local part with no at sign in an explanation",
+    make: (n) => reportOf({ explanation: `${"a.".repeat(n / 2)}b` }),
+  },
+  {
+    name: "repeated www names in one word",
+    make: (n) => reportOf({ explanation: "www.".repeat(n / 4) }),
+  },
+  {
+    name: "repeated scheme separators in one word",
+    make: (n) => reportOf({ explanation: "://".repeat(n / 3) }),
+  },
+  {
+    name: "many short addresses in a suggested clause",
+    make: (n) => reportOf({ status: "missing", suggestedClause: "a@b.co ".repeat(n / 7) }),
+  },
+  {
+    name: "backticks inside an address",
+    make: (n) => reportOf({ explanation: `https://x.test/${"`".repeat(n)}` }),
+  },
+  {
+    name: "a long opening excerpt of a clause",
+    make: (n) => reportOf({ clauseIds: ["c1"], clauseExcerpts: ["word ".repeat(n / 5)] }),
+  },
+  {
     name: "a long title with a list marker",
     make: (n) => reportOf({ title: `- ${"word ".repeat(n / 5)}` }),
   },

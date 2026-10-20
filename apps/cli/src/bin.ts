@@ -1,4 +1,3 @@
-#!/usr/bin/env -S node --import tsx
 import { run } from "./index.js";
 import { guardedWriter } from "./streams.js";
 

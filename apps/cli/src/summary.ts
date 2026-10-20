@@ -34,8 +34,8 @@ function openItem(result: RuleResult): string {
   return `  [${result.severity}] ${plain(result.title)}: ${result.status}${where}`;
 }
 
+// Tracked insertions are not in this list: the model read their text, as if it were accepted.
 const NOT_SHOWN: [keyof NonNullable<ReviewReport["notShown"]>, string, string][] = [
-  ["trackedInsertions", "tracked insertion", "tracked insertions"],
   ["trackedDeletions", "tracked deletion", "tracked deletions"],
   ["comments", "comment", "comments"],
   ["footnotes", "footnote", "footnotes"],
@@ -45,13 +45,23 @@ const NOT_SHOWN: [keyof NonNullable<ReviewReport["notShown"]>, string, string][]
   ["images", "picture", "pictures"],
 ];
 
-function notShownLine(report: ReviewReport): string | undefined {
+/** One line on what the file holds that the model did not see, or undefined when nothing. */
+export function notShownLine(report: ReviewReport): string | undefined {
   const seen = report.notShown;
   if (seen === undefined) return undefined;
-  const parts = NOT_SHOWN.flatMap(([key, one, many]) =>
+  const unseen = NOT_SHOWN.flatMap(([key, one, many]) =>
     seen[key] > 0 ? [`${seen[key]} ${plural(seen[key], one, many)}`] : [],
   );
-  return parts.length === 0 ? undefined : `Not shown to the model: ${parts.join(", ")}.`;
+  const accepted = seen.trackedInsertions;
+  const sentences = [
+    ...(unseen.length === 0 ? [] : [`Not shown to the model: ${unseen.join(", ")}.`]),
+    ...(accepted > 0
+      ? [
+          `${accepted} tracked ${plural(accepted, "insertion was", "insertions were")} read as accepted text.`,
+        ]
+      : []),
+  ];
+  return sentences.length === 0 ? undefined : sentences.join(" ");
 }
 
 /**
@@ -111,12 +121,6 @@ export function formatSummary(
       );
     }
   }
-
-  const warnings = (report.warnings ?? []).map(plain).filter((warning) => warning !== "");
-  if (warnings.length > 0)
-    lines.push("", "Warnings:", ...warnings.map((warning) => `  ${warning}`));
-  const notShown = notShownLine(report);
-  if (notShown !== undefined) lines.push("", notShown);
 
   lines.push(
     "",

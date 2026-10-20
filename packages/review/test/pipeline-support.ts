@@ -344,7 +344,7 @@ export function aggressiveScript(): Record<string, OracleRule> {
       comment: "Replace the perpetual term with three years from disclosure.",
       edit: {
         clauseNumber: "3.1",
-        quote: "perpetual and shall continue indefinitely",
+        quote: "are perpetual and shall continue indefinitely",
         replacement: "end three (3) years after the date of disclosure",
       },
     },

@@ -208,6 +208,31 @@ describe("a fatal failure", () => {
       expected: [/^The model provider answered HTTP 429, /, /spend limit/],
     },
     {
+      name: "a refused redirect (301) that the provider marked fatal",
+      error: () => new ModelRequestError(`moved: ${CONTRACT_TEXT}`, 301, true, "other"),
+      expected: [
+        /^The model provider answered HTTP 301, so no rule can be checked\./,
+        /answered with a redirect, which is never followed/,
+        /Check CLAUSEWISE_BASE_URL/,
+        /\(model: oracle\)/,
+      ],
+    },
+    {
+      name: "a redirect (307) that a stand-in did not mark fatal",
+      error: () => new ModelRequestError(`moved: ${CONTRACT_TEXT}`, 307),
+      expected: [/^The model provider answered HTTP 307, /, /Check CLAUSEWISE_BASE_URL/],
+    },
+    {
+      name: "the first redirect status (300)",
+      error: () => new ModelRequestError("multiple", 300),
+      expected: [/^The model provider answered HTTP 300, /, /Check CLAUSEWISE_BASE_URL/],
+    },
+    {
+      name: "the last redirect status (399)",
+      error: () => new ModelRequestError("odd", 399),
+      expected: [/^The model provider answered HTTP 399, /, /Check CLAUSEWISE_BASE_URL/],
+    },
+    {
       name: "a failure the provider marked fatal without saying why",
       error: () => new ModelRequestError(`rejected: ${CONTRACT_TEXT}`, 418, true),
       expected: [/HTTP 418/, /Check the API key, its permissions and the model name \(oracle\)/],
@@ -237,6 +262,45 @@ describe("a fatal failure", () => {
     // The first call was fatal, so nothing else was launched.
     expect(generator.calls).toHaveLength(1);
   });
+
+  it("sends the user to the base URL for a redirect, not to the key", async () => {
+    const generator = intercept(createOracleGenerator(aggressiveScript()), () => {
+      throw new ModelRequestError("moved", 302, true);
+    });
+    const failure = await reviewContract({ docx: input, playbook }, generator, {
+      concurrency: 1,
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ReviewError);
+    expect((failure as Error).message).not.toMatch(/API key|permissions|model name/);
+  });
+
+  it("never repeats the address a redirect points to", async () => {
+    const generator = intercept(createOracleGenerator(aggressiveScript()), () => {
+      throw new ModelRequestError(
+        "HTTP 301 Location: https://elsewhere.example/v1/messages?token=abc",
+        301,
+        true,
+      );
+    });
+    const failure = await reviewContract({ docx: input, playbook }, generator, {
+      concurrency: 1,
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ReviewError);
+    expect((failure as Error).message).not.toMatch(/elsewhere\.example|token=abc|Location:/);
+  });
+
+  it.each([299, 400])(
+    "HTTP %i is neither a redirect nor fatal, and does not point at the base URL",
+    async (status) => {
+      const generator = failingTerm(() => new ModelRequestError("no", status));
+      const { report } = await reviewContract({ docx: input, playbook }, generator);
+      expect(resultFor(report, "term")).toMatchObject({
+        status: "error",
+        error: `The request to the model failed (HTTP ${status}).`,
+      });
+      expect(report.counts.error).toBe(1);
+    },
+  );
 
   it("goes by the provider's flag, not by the status", async () => {
     // A 401 that the provider says is worth another try, and a 503 that it says is not.

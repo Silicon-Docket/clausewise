@@ -22,6 +22,7 @@ import {
   padded,
   ruleIdOf,
   viewDocx,
+  withAbsence,
 } from "./pipeline-support.js";
 
 const playbook = loadPlaybook();
@@ -134,6 +135,37 @@ describe("a contract reviewed in several windows", () => {
     });
   });
 
+  it("puts the comment of a merged result on the clause its edit names, not on an earlier window's", async () => {
+    const script = aggressiveScript();
+    script["term"] = {
+      status: "deviation",
+      clauseNumbers: ["1.1", "7.1"],
+      explanation: "Two clauses fall short.",
+      comment: "Fix both.",
+      // The quote is not in clause 7.1, so the edit becomes a comment on the clause it names.
+      edit: { clauseNumber: "7.1", quote: "no such words anywhere", replacement: "x" },
+    };
+    const first = windows.findIndex((w) => w.some((c) => c.number === "1.1"));
+    const last = windows.findLastIndex((w) => w.some((c) => c.number === "7.1"));
+    expect(last).toBeGreaterThan(first);
+    // The merged answer takes its wording from the window that proposed the edit, which is a
+    // later window than the one that cited 1.1, and lists 1.1 first.
+    expect(windows[last]?.some((c) => c.number === "1.1")).toBe(false);
+
+    const { report, redlined } = await review(script);
+    const term = report.results.find((r) => r.ruleId === "term");
+    expect(term).toMatchObject({
+      status: "deviation",
+      clauseNumbers: ["1.1", "7.1"],
+      edit: { kind: "comment-only", proposed: { quote: "no such words anywhere" } },
+    });
+    const comment = (await viewDocx(redlined)).comments.find((c) => c.text.includes("Fix both."));
+    const view = await viewDocx(input);
+    expect(comment?.paragraph).toBe(20);
+    expect(view.paragraphs[20]?.accepted).toMatch(/^7\.1 /);
+    expect(comment?.anchored).toBe(view.paragraphs[20]?.accepted);
+  });
+
   it("lets a window that finds the clause compliant outweigh the ones that cannot see it", async () => {
     const script = aggressiveScript();
     script["exclusions"] = {
@@ -226,7 +258,7 @@ describe("a window that fails", () => {
     const term = report.results.find((r) => r.ruleId === "term");
     expect(term).toMatchObject({
       status: "deviation",
-      edit: { kind: "applied", original: "perpetual and shall continue indefinitely" },
+      edit: { kind: "applied", original: "are perpetual and shall continue indefinitely" },
     });
     expect(term?.error).toBeUndefined();
     expect(report.counts.error).toBe(0);
@@ -466,5 +498,87 @@ describe("a window that says compliant without naming a clause", () => {
       status: "compliant",
       clauseIds: ["c5"],
     });
+  });
+});
+
+describe("a rule that forbids something, across windows", () => {
+  const forbid = (required = false): typeof playbook => {
+    const single = withAbsence(
+      onlyRules(playbook, "restrictive-covenants"),
+      "restrictive-covenants",
+    );
+    return { ...single, rules: single.rules.map((rule) => ({ ...rule, required })) };
+  };
+  const presence: typeof playbook = {
+    ...forbid(true),
+    rules: forbid(true).rules.map((rule) => ({ ...rule, kind: "presence" as const })),
+  };
+
+  const answering = (answer: (window: number) => RuleCheck) =>
+    createScriptedGenerator((request) =>
+      answer(windows.findIndex((w) => w[0]?.id === firstClauseId(request))),
+    );
+  const run = async (rules: typeof playbook, answer: (window: number) => RuleCheck) => {
+    const { report, redlined } = await reviewContract(
+      { docx: input, playbook: rules },
+      answering(answer),
+      { maxContextTokens: budgetFor(rules, clauses, 3) },
+    );
+    expect(report.stats.windows).toBeGreaterThan(1);
+    return { result: report.results[0]!, report, redlined };
+  };
+  const uncited = (status: RuleCheck["status"]): RuleCheck =>
+    compliantAnswer({ status, clauseIds: [], explanation: "Nothing like it here." });
+
+  it.each(["missing", "not_applicable"] as const)(
+    "is compliant when every window says %s, whether or not the rule is marked required",
+    async (status) => {
+      for (const required of [false, true]) {
+        const { result, report, redlined } = await run(forbid(required), () => uncited(status));
+        expect(result).toMatchObject({ status: "compliant", clauseIds: [], comment: "" });
+        expect(result.error).toBeUndefined();
+        expect(report.counts).toMatchObject({
+          compliant: 1,
+          missing: 0,
+          not_applicable: 0,
+          error: 0,
+        });
+        expect((await viewDocx(redlined)).comments).toEqual([]);
+      }
+    },
+  );
+
+  it("needs no clause for a window that says compliant, where a presence rule would be an error", async () => {
+    const answer = (w: number): RuleCheck => (w === 0 ? uncited("compliant") : uncited("missing"));
+    const { result } = await run(forbid(), answer);
+    expect(result).toMatchObject({ status: "compliant", clauseIds: [] });
+    expect(result.error).toBeUndefined();
+
+    const strict = await run(presence, answer);
+    expect(strict.result.status).toBe("error");
+    expect(strict.result.error).toContain("without pointing at a clause");
+  });
+
+  it("still reports the deviation one window found, whatever the others say", async () => {
+    const { result, report } = await run(forbid(true), (w) =>
+      w === 1
+        ? compliantAnswer({ status: "deviation", clauseIds: ["c5"], explanation: "It is there." })
+        : uncited("missing"),
+    );
+    expect(result).toMatchObject({ status: "deviation", clauseIds: ["c5"] });
+    expect(report.open).toMatchObject({ high: 1 });
+  });
+
+  it("is an error, not a pass, when a window could not be checked and none showed a deviation", async () => {
+    const generator = createScriptedGenerator((request) => {
+      if (windows.findIndex((w) => w[0]?.id === firstClauseId(request)) === 1) {
+        throw new ModelOutputError("bad");
+      }
+      return uncited("missing");
+    });
+    const { report } = await reviewContract({ docx: input, playbook: forbid() }, generator, {
+      maxContextTokens: budgetFor(forbid(), clauses, 3),
+    });
+    expect(report.results[0]?.status).toBe("error");
   });
 });

@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 import {
   ModelRequestError,
   createObjectGenerator,
@@ -7,11 +7,13 @@ import {
   type LlmConfig,
   type ObjectGenerator,
 } from "@clausewise/llm";
-import type { ReviewReport } from "@clausewise/review";
+import { loadPlaybookFile } from "@clausewise/playbook/node";
+import { contextFloor, type ReviewReport } from "@clausewise/review";
 import { createOracleGenerator } from "@clausewise/review/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { run } from "../src/index.js";
 import {
+  buildDocx,
   compliantScript,
   expectedScript,
   listing,
@@ -121,34 +123,6 @@ describe("a model built from the environment", () => {
     expect(defaulted.peak).toBe(4);
   });
 
-  // The review refuses a limit with no room for a clause and says how much it needs, so the
-  // smallest limit that splits this contract is read from that refusal.
-  async function smallestWorkableLimit(): Promise<number> {
-    const dir = await makeDir();
-    const input = await stage(dir, "nda-balanced.docx");
-    build.mockReturnValue(measured());
-    const { io, stderr } = makeIo({ env: { ...ENV, CLAUSEWISE_MAX_CONTEXT_TOKENS: "1" } });
-
-    expect(await run(["review", input, "--playbook", PLAYBOOK], io)).toBe(1);
-
-    const floor = /must be above (\d+)/.exec(stderr())?.[1];
-    expect(floor).toBeDefined();
-    return Number(floor) + 1;
-  }
-
-  it("splits the contract into parts when CLAUSEWISE_MAX_CONTEXT_TOKENS is small", async () => {
-    const whole = await review(ENV, measured(expectedScript("nda-balanced.docx")));
-    const parts = await review(
-      { ...ENV, CLAUSEWISE_MAX_CONTEXT_TOKENS: String(await smallestWorkableLimit()) },
-      measured(expectedScript("nda-balanced.docx")),
-    );
-
-    expect(whole.report.stats.windows).toBe(1);
-    expect(whole.stderr).not.toContain("overlapping parts");
-    expect(parts.report.stats.windows).toBeGreaterThan(1);
-    expect(parts.stderr).toMatch(/Checking \d+ clauses against 10 rules, in \d+ overlapping parts/);
-  });
-
   it("prefers a factory that is passed in over the environment", async () => {
     const dir = await makeDir();
     const input = await stage(dir, "nda-balanced.docx");
@@ -160,6 +134,121 @@ describe("a model built from the environment", () => {
     expect(await run(["review", input, "--playbook", PLAYBOOK], io)).toBe(0);
 
     expect(build).not.toHaveBeenCalled();
+  });
+});
+
+describe("a context limit", () => {
+  const makeDir = tempDirs();
+  const ENV = { ANTHROPIC_API_KEY: "sk-test-not-a-real-key" };
+
+  beforeEach(() => {
+    build.mockReset();
+  });
+
+  /** The largest number the review refuses: with a limit above it a call has room for a clause. */
+  const floor = async (): Promise<number> => contextFloor(await loadPlaybookFile(PLAYBOOK));
+
+  async function review(file: string | Uint8Array, limit: number, generator: ObjectGenerator) {
+    const dir = await makeDir();
+    const input = typeof file === "string" ? await stage(dir, file) : join(dir, "long.docx");
+    if (typeof file !== "string") await writeFile(input, file);
+    build.mockReturnValue(generator);
+    const { io, stderr, stdout } = makeIo({
+      env: { ...ENV, CLAUSEWISE_MAX_CONTEXT_TOKENS: String(limit) },
+    });
+
+    const code = await run(["review", input, "--playbook", PLAYBOOK], io);
+
+    const reportPath = join(dir, `${basename(input, ".docx")}.report.json`);
+    const report: ReviewReport | undefined = await readFile(reportPath, "utf8").then(
+      (text) => JSON.parse(text),
+      () => undefined,
+    );
+    return { code, report, dir, stderr: stderr(), stdout: stdout() };
+  }
+
+  /** Three clauses of about 700 tokens each: one fits in a call at the smallest limit, two do not. */
+  const longContract = (): Promise<Uint8Array> => {
+    const words = (n: number): string =>
+      Array.from({ length: 260 }, (_, i) => `term${n}x${i}`).join(" ");
+    return buildDocx([
+      `1.1 Confidentiality. ${words(1)}.`,
+      `1.2 Use of information. ${words(2)}.`,
+      `1.3 Return of materials. ${words(3)}.`,
+    ]);
+  };
+
+  it("splits a contract that does not fit and says how many parts the report counts", async () => {
+    const result = await review(
+      "nda-balanced.docx",
+      (await floor()) + 1,
+      measured(expectedScript("nda-balanced.docx")),
+    );
+
+    expect(result.code).toBe(0);
+    const windows = result.report?.stats.windows ?? 0;
+    expect(windows).toBeGreaterThan(1);
+    expect(result.stderr).toMatch(
+      new RegExp(
+        `^Checking \\d+ clauses against 10 rules, in ${windows} parts of the contract\\.$`,
+        "m",
+      ),
+    );
+  });
+
+  it("says nothing about parts when the whole contract fits", async () => {
+    const result = await review("nda-balanced.docx", 1_000_000, measured(compliantScript()));
+
+    expect(result.report?.stats.windows).toBe(1);
+    expect(result.stderr).toMatch(/^Checking \d+ clauses against 10 rules\.$/m);
+    expect(result.stderr).not.toContain("parts");
+  });
+
+  it("does not call the parts overlapping when each clause is a part of its own", async () => {
+    const result = await review(
+      await longContract(),
+      (await floor()) + 1,
+      measured(compliantScript()),
+    );
+
+    // Three clauses in three parts share nothing, so there is no overlap to speak of.
+    expect(result.report?.stats.clauses).toBe(3);
+    expect(result.report?.stats.windows).toBe(3);
+    expect(result.stderr).toContain(
+      "Checking 3 clauses against 10 rules, in 3 parts of the contract.",
+    );
+    expect(result.stderr).not.toContain("overlapping");
+  });
+
+  it.each([
+    ["is the smallest it refuses", 0],
+    ["is below it", -1000],
+  ])(
+    "refuses a limit that %s, before any model call, naming the number to go above",
+    async (_, shift) => {
+      const limit = (await floor()) + shift;
+      const generator = createOracleGenerator(compliantScript());
+
+      const result = await review("nda-balanced.docx", limit, generator);
+
+      expect(result.code).toBe(1);
+      expect(result.stderr).toMatch(/^Error: .*CLAUSEWISE_MAX_CONTEXT_TOKENS/m);
+      expect(result.stderr).toContain(`${await floor()}`);
+      expect(result.stderr).not.toContain("    at ");
+      expect(generator.calls).toHaveLength(0);
+      expect(result.stdout).toBe("");
+      expect(await listing(result.dir)).toEqual(["nda-balanced.docx"]);
+    },
+  );
+
+  it("accepts the limit one above the smallest it refuses", async () => {
+    const result = await review(
+      "nda-balanced.docx",
+      (await floor()) + 1,
+      measured(compliantScript()),
+    );
+
+    expect(result.code).toBe(0);
   });
 });
 
@@ -269,7 +358,7 @@ describe("the tokens a review used", () => {
     const { code, stderr, dir } = await review(ENV);
 
     expect(code).toBe(1);
-    expect(stderr()).toContain("Error: The model provider answered HTTP 401");
+    expect(stderr()).toMatch(/^Error: .*HTTP 401/m);
     expect(stderr()).toMatch(/^Tokens: [\d,]+ input \([\d,]+ from cache\), [\d,]+ output$/m);
     expect(await listing(dir)).toEqual(["nda-balanced.docx"]);
   });

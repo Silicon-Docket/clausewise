@@ -29,18 +29,29 @@ function doc(...items: (string | Spec)[]): DocxParagraph[] {
   return docOf(items);
 }
 
+/** A parsed paragraph with every field parseDocx sets, so a test names only what it cares about. */
+function paragraph(index: number, spec: Spec): DocxParagraph {
+  return {
+    id: `p:${index}`,
+    index,
+    text: spec.text,
+    style: spec.style,
+    numbering: spec.level === undefined ? undefined : { id: "1", level: spec.level },
+    inTable: spec.table ?? false,
+    tableRow: undefined,
+    label: undefined,
+    level: spec.level,
+    isBullet: false,
+    styleName: undefined,
+    outlineLevel: undefined,
+    isTocEntry: false,
+  };
+}
+
 function docOf(items: (string | Spec)[]): DocxParagraph[] {
-  return items.map((item, index) => {
-    const spec: Spec = typeof item === "string" ? { text: item } : item;
-    return {
-      id: `p:${index}`,
-      index,
-      text: spec.text,
-      style: spec.style,
-      numbering: spec.level === undefined ? undefined : { id: "1", level: spec.level },
-      inTable: spec.table ?? false,
-    };
-  });
+  return items.map((item, index) =>
+    paragraph(index, typeof item === "string" ? { text: item } : item),
+  );
 }
 
 const shape = (clauses: Clause[]) =>

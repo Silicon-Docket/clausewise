@@ -1,54 +1,130 @@
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { access, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { BASE_ENV, TIMEOUT, cleanUpChildren, start } from "./child.js";
+import { BASE_ENV, LAUNCHER, TIMEOUT, cleanUpChildren, start } from "./child.js";
 import { root, tempDirs } from "./support.js";
 
 cleanUpChildren();
 
-const BIN = join(root, "apps", "cli", "src", "bin.ts");
+const SOURCE = join(root, "apps", "cli", "src", "bin.ts");
 const exists = (path: string): Promise<boolean> =>
   access(path).then(
     () => true,
     () => false,
   );
 
-/** What the kernel does with a shebang line: hands env the rest of the line as one argument. */
-async function shebangCommand(): Promise<string[]> {
-  const [first = ""] = (await readFile(BIN, "utf8")).split("\n");
-  const match = /^#!\/usr\/bin\/env -S (.+)$/.exec(first);
-  if (match === null) throw new Error(`unexpected shebang: ${first}`);
-  return ["-S", match[1] ?? ""];
-}
+const zodEntry = pathToFileURL(
+  join(dirname(createRequire(import.meta.url).resolve("zod/package.json")), "index.js"),
+).href;
 
-describe("the executable's shebang", () => {
-  const makeDir = tempDirs();
+/** The tsx of the project, started from another folder the way a global shim would. */
+const PROJECT_TSX = join(root, "node_modules", ".bin", "tsx");
 
-  it("runs node with tsx and does not go through the package manager", async () => {
-    const [first] = (await readFile(BIN, "utf8")).split("\n");
+describe("the executable", () => {
+  it("is the launcher that package.json names, a file the shell can run", async () => {
+    const manifest = JSON.parse(await readFile(join(root, "apps", "cli", "package.json"), "utf8"));
 
-    expect(first).toBe("#!/usr/bin/env -S node --import tsx");
+    expect(join(root, "apps", "cli", manifest.bin.clausewise)).toBe(LAUNCHER);
+    expect((await stat(LAUNCHER)).mode & 0o111).not.toBe(0);
+    expect((await readFile(LAUNCHER, "utf8")).split("\n")[0]).toBe("#!/usr/bin/env node");
+  });
+
+  it("is not the source file, which carries no shebang of its own", async () => {
+    expect(await readFile(SOURCE, "utf8")).not.toMatch(/^#!/);
   });
 
   it("starts the command in the project", { timeout: TIMEOUT }, async () => {
-    const run = start("/usr/bin/env", [...(await shebangCommand()), BIN, "--version"], BASE_ENV);
-
-    const outcome = await run.done;
+    const outcome = await start(LAUNCHER, ["--version"], BASE_ENV).done;
 
     expect(outcome.code).toBe(0);
     expect(outcome.stdout).toBe("0.0.0\n");
+    expect(outcome.stderr).toBe("");
   });
+});
+
+describe("a folder the command is started from", () => {
+  const makeDir = tempDirs();
 
   it(
-    "does not run a script of the package.json in the folder it is started from",
+    "cannot supply the tsx that runs the command",
+    {
+      timeout: TIMEOUT,
+    },
+    async () => {
+      const dir = await makeDir();
+      const marker = join(dir, "TSX-PLANTED");
+      // What a folder of unpacked documents could hold: a package of the name the loader is
+      // looked up under, which runs as soon as it is imported.
+      await mkdir(join(dir, "node_modules", "tsx"), { recursive: true });
+      await writeFile(
+        join(dir, "node_modules", "tsx", "package.json"),
+        JSON.stringify({ name: "tsx", type: "module", exports: { ".": "./index.js" } }),
+      );
+      await writeFile(
+        join(dir, "node_modules", "tsx", "index.js"),
+        `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "ran");\n`,
+      );
+
+      // The way the command used to be started, which is how the plant is shown to work at all.
+      await start(process.execPath, ["--import", "tsx", SOURCE, "--version"], BASE_ENV, {
+        cwd: dir,
+      }).done;
+      expect(await exists(marker), "control: the plant runs under --import tsx").toBe(true);
+      await rm(marker);
+
+      const outcome = await start(LAUNCHER, ["--version"], BASE_ENV, { cwd: dir }).done;
+
+      expect(await exists(marker)).toBe(false);
+      expect(outcome.code).toBe(0);
+      expect(outcome.stdout).toBe("0.0.0\n");
+    },
+  );
+
+  it(
+    "cannot redirect the imports of the command with a tsconfig.json",
+    {
+      timeout: TIMEOUT,
+    },
+    async () => {
+      const dir = await makeDir();
+      const marker = join(dir, "TSCONFIG-PLANTED");
+      // A module that runs, then hands on the real one, so that nothing looks wrong afterwards.
+      await writeFile(
+        join(dir, "stand-in.mjs"),
+        `import { writeFileSync } from "node:fs";\n` +
+          `export * from ${JSON.stringify(zodEntry)};\n` +
+          `writeFileSync(${JSON.stringify(marker)}, "ran");\n`,
+      );
+      await writeFile(
+        join(dir, "tsconfig.json"),
+        JSON.stringify({
+          compilerOptions: { baseUrl: ".", paths: { zod: ["./stand-in.mjs"] } },
+          include: [`${root}/**/*`],
+        }),
+      );
+
+      await start(PROJECT_TSX, [SOURCE, "--version"], BASE_ENV, { cwd: dir }).done;
+      expect(await exists(marker), "control: the plant runs under a plain tsx").toBe(true);
+      await rm(marker);
+
+      const outcome = await start(LAUNCHER, ["--version"], BASE_ENV, { cwd: dir }).done;
+
+      expect(await exists(marker)).toBe(false);
+      expect(outcome.code).toBe(0);
+      expect(outcome.stdout).toBe("0.0.0\n");
+    },
+  );
+
+  it(
+    "cannot run a script of its package.json or a tsx shim of its own",
     {
       timeout: TIMEOUT,
     },
     async () => {
       const dir = await makeDir();
       const marker = join(dir, "PWNED");
-      // What a folder of unpacked documents could hold: a script named like the tool, and the shim
-      // a package manager would put in .bin.
       await writeFile(
         join(dir, "package.json"),
         JSON.stringify({
@@ -61,12 +137,10 @@ describe("the executable's shebang", () => {
         mode: 0o755,
       });
 
-      const run = start("/usr/bin/env", [...(await shebangCommand()), BIN, "--version"], BASE_ENV, {
-        cwd: dir,
-      });
-      await run.done;
+      const outcome = await start(LAUNCHER, ["--version"], BASE_ENV, { cwd: dir }).done;
 
       expect(await exists(marker)).toBe(false);
+      expect(outcome.stdout).toBe("0.0.0\n");
     },
   );
 });

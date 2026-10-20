@@ -24,9 +24,33 @@ describe("playbook check on the shipped playbooks", () => {
       const rows = out.split("\n").filter((line) => line.startsWith("  "));
       expect(rows).toHaveLength(playbook.rules.length);
       playbook.rules.forEach((rule, i) => {
-        const suffix = rule.required ? `${rule.severity}, required` : rule.severity;
+        const suffix = [
+          rule.severity,
+          ...(rule.required ? ["required"] : []),
+          ...(rule.kind === "absence" ? ["absence"] : []),
+        ].join(", ");
         expect(rows[i]).toMatch(new RegExp(`^ {2}${rule.id} +${suffix}$`));
       });
+    },
+  );
+
+  it.each(["nda-mutual.yaml", "saas-customer.yaml"])(
+    "marks the absence rules of %s, which a clean contract passes, and no other",
+    async (file) => {
+      const playbook = await loadPlaybookFile(playbookPath(file));
+      const expected = playbook.rules.filter((r) => r.kind === "absence").map((r) => r.id);
+      const { io, stdout } = makeIo();
+
+      await run(["playbook", "check", playbookPath(file)], io);
+
+      const rows = stdout()
+        .split("\n")
+        .filter((line) => line.startsWith("  "));
+      expect(expected.length).toBeGreaterThan(0);
+      expect(
+        rows.filter((row) => row.endsWith(", absence")).map((row) => row.trim().split(/\s+/)[0]),
+      ).toEqual(expected);
+      expect(rows.filter((row) => row.includes("absence"))).toHaveLength(expected.length);
     },
   );
 

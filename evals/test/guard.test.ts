@@ -1,5 +1,5 @@
 import { readFile, readdir } from "node:fs/promises";
-import { estimateTokens } from "@clausewise/review";
+import { contextFloor, estimateTokens } from "@clausewise/review";
 import { createOracleGenerator } from "@clausewise/review/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Fixture } from "../src/fixtures.js";
@@ -177,22 +177,57 @@ describe("the plan", () => {
   it("makes as many calls as a selftest then makes when the contract is split into windows", async () => {
     const oracles: ReturnType<typeof createOracleGenerator>[] = [];
     const out = `${dir}/plan-windows.json`;
-    const { code, stderr } = await run(["--selftest", "--out", out], {
-      dir,
-      env: { CLAUSEWISE_MAX_CONTEXT_TOKENS: "4500" },
-      generatorFactory: ({ fixture }) => {
-        const oracle = createOracleGenerator(oracleScripts(fixture));
-        oracles.push(oracle);
-        return oracle;
+    // Every call spends about 4,800 tokens before the first clause: the instructions, the rule and
+    // room for the answer. The pipeline refuses a limit without room for a clause or two on top of
+    // that, so the smallest limit it accepts for all three playbooks leaves about 1,000 tokens for
+    // the contract. The two longer fixtures hold 1,300 and 1,400 and split in two. The shortest
+    // holds 1,030, so it sits too close to that limit to say how many windows it gets.
+    const limit = Math.max(...fixtures.map((fixture) => contextFloor(fixture.playbook))) + 1;
+    const { code, stderr } = await run(
+      [
+        "--selftest",
+        "--fixture",
+        "nda-balanced.docx",
+        "--fixture",
+        "saas-vendor-friendly.docx",
+        "--out",
+        out,
+      ],
+      {
+        dir,
+        env: { CLAUSEWISE_MAX_CONTEXT_TOKENS: String(limit) },
+        generatorFactory: ({ fixture }) => {
+          const oracle = createOracleGenerator(oracleScripts(fixture));
+          oracles.push(oracle);
+          return oracle;
+        },
       },
-    });
+    );
     expect(code).toBe(0);
     const result = await readResult(out);
-    // Two windows per fixture, so twice the calls of an unsplit contract.
-    expect(result.plan.fixtures.map((item) => item.windows)).toEqual([2, 2, 2]);
-    expect(result.plan.calls).toBe(64);
-    expect(oracles.reduce((sum, oracle) => sum + oracle.calls.length, 0)).toBe(64);
-    expect(stderr).toContain("windows of at most 4,500 estimated tokens");
+    // Two windows each, and every window is checked against every rule of its playbook: 2 x 10
+    // and 2 x 12, which is twice the 22 calls of two unsplit contracts.
+    expect(result.plan.fixtures.map((item) => item.windows)).toEqual([2, 2]);
+    expect(result.plan.fixtures.map((item) => item.rules)).toEqual([10, 12]);
+    expect(result.plan.fixtures.map((item) => item.callsPerRun)).toEqual([20, 24]);
+    expect(result.plan.calls).toBe(44);
+    expect(oracles.reduce((sum, oracle) => sum + oracle.calls.length, 0)).toBe(44);
+    expect(stderr).toContain(
+      `windows of at most ${limit.toLocaleString("en-US")} estimated tokens`,
+    );
+  });
+
+  it("refuses a context limit with no room for the clauses, before any call", async () => {
+    const factory = forbiddenFactory();
+    const floor = Math.max(...fixtures.map((fixture) => contextFloor(fixture.playbook)));
+    const { code, stderr } = await run(["--selftest", "--out", `${dir}/too-small.json`], {
+      dir,
+      env: { CLAUSEWISE_MAX_CONTEXT_TOKENS: String(floor) },
+      generatorFactory: factory,
+    });
+    expect(code).toBe(1);
+    expect(factory.used()).toBe(false);
+    expect(stderr).toContain(`must be above ${floor}`);
   });
 
   it("makes as many calls as a real run then makes, several reviews included", async () => {

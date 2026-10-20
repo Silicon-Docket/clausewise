@@ -67,7 +67,9 @@ Environment variables:
   CLAUSEWISE_EFFORT               Anthropic only: low, medium, high, xhigh or max.
   CLAUSEWISE_CONCURRENCY          How many rule checks run at once. Default 4.
   CLAUSEWISE_MAX_CONTEXT_TOKENS   Largest prompt, in estimated tokens. Longer contracts are reviewed
-                                  in overlapping windows. Default: the whole contract every time.
+                                  in parts. It must leave room for a clause or two above the
+                                  roughly 4,800 tokens that the instructions, the rule and the
+                                  answer take in every call. Default: the whole contract every time.
   CLAUSEWISE_MAX_RETRIES          Retries after a network error or an unusable reply. Default 2.
   CLAUSEWISE_FALLBACK             Anthropic only: "default" lets the API rerun a declined request
                                   on its fallback model. Off unless set.

@@ -23,6 +23,7 @@ import {
   renderClauses,
   windowClauses,
 } from "./prompt.js";
+import { clausePhrase } from "./report.js";
 import { segment } from "./segment.js";
 import {
   RuleCheckSchema,
@@ -121,8 +122,14 @@ function describeFailures(failures: Failure[], windowCount: number): string {
   return `${failures.length} of ${windowCount} parts of the contract could not be checked${rest}. ${reason}`;
 }
 
+// The transport hands a 3xx answer back instead of following it, so that the contract only goes
+// to the address that was configured. The same address answers every call the same way.
+const isRedirect = (error: ModelRequestError): boolean =>
+  error.statusCode !== undefined && error.statusCode >= 300 && error.statusCode < 400;
+
 // What a request error stands for when it carries no kind of its own.
 function kindOf(error: ModelRequestError): string | undefined {
+  if (isRedirect(error)) return "redirect";
   if (typeof error.kind === "string") return error.kind;
   switch (error.statusCode) {
     case 401:
@@ -140,11 +147,13 @@ function kindOf(error: ModelRequestError): string | undefined {
 
 /**
  * The error that stops a review, when the provider's answer means every other call would fail the
- * same way. The provider decides what is fatal; this only words what the user should check, and
- * never repeats the provider's own text, which can quote the prompt.
+ * same way. The provider decides what is fatal, except that any redirect is: the address is the
+ * same for every call. This only words what the user should check, and never repeats the
+ * provider's own text, which can quote the prompt, or the address a redirect points to.
  */
 function fatalError(error: unknown, model: string): ReviewError | undefined {
-  if (!(error instanceof ModelRequestError) || error.fatal !== true) return undefined;
+  if (!(error instanceof ModelRequestError)) return undefined;
+  if (error.fatal !== true && !isRedirect(error)) return undefined;
   const shown = safeLabel(model) ?? "the configured model";
   const lead =
     error.statusCode === undefined
@@ -162,6 +171,10 @@ function fatalError(error: unknown, model: string): ReviewError | undefined {
     case "not_found":
       return new ReviewError(
         `${lead} Check the model name (${shown}) and, for a local server, the base URL: the provider could not find the model.`,
+      );
+    case "redirect":
+      return new ReviewError(
+        `${lead} The address answered with a redirect, which is never followed so that the contract goes only to the address you configured. Check CLAUSEWISE_BASE_URL: set it to the address that answers directly, not one that forwards the request elsewhere (model: ${shown}).`,
       );
     case "billing":
       return new ReviewError(
@@ -183,6 +196,8 @@ interface Finding {
   status: Exclude<RuleStatus, "error">;
   clauseIds: string[];
   clauseNumbers: string[];
+  /** The opening words of the cited clauses that have no number, in the order of `clauseIds`. */
+  clauseExcerpts: string[];
   explanation: string;
   comment: string;
   suggestedClause: string | null;
@@ -194,6 +209,15 @@ type Verdict = { kind: "finding"; finding: Finding } | { kind: "error"; message:
 
 const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim();
 const unique = <T>(values: T[]): T[] => [...new Set(values)];
+const capitalise = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
+
+const BLANK_TITLE = /^[\p{Z}\p{Cc}\p{Cf}]*$/u;
+
+/** The rule's title on one line, or its id when the title has nothing a reader could see. */
+function titleOf(rule: Rule): string {
+  const title = oneLine(rule.title);
+  return BLANK_TITLE.test(title) ? rule.id : title;
+}
 
 /** The clauses of the document, found by what a model is likely to call them. */
 interface ClauseIndex {
@@ -221,6 +245,94 @@ function numberKey(text: string): string {
     .replace(NUMBER_PREFIX, "")
     .replace(TRAILING_PUNCTUATION, "")
     .toLowerCase();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Naming clauses for a lawyer
+// ---------------------------------------------------------------------------------------------
+
+const EXCERPT_WORDS = 6;
+const MAX_EXCERPT_CHARS = 80;
+const EXCERPT_WINDOW_CHARS = 640;
+const SPACING = /[\s\p{Cc}\p{Zl}\p{Zp}]+/gu;
+// The excerpt is shown between double quotation marks, so any inside it become single ones.
+const DOUBLE_QUOTES = /["\u201c\u201d\u201e\u201f\u00ab\u00bb]/g;
+
+const hasNumber = (clause: Clause): boolean =>
+  clause.number !== undefined && clause.number.trim() !== "";
+
+/** The first words of a clause on one line, for naming a clause that the contract does not number. */
+function excerptOf(clause: Clause): string {
+  const words = clause.text
+    .slice(0, EXCERPT_WINDOW_CHARS)
+    .replace(SPACING, " ")
+    .trim()
+    .split(" ")
+    .slice(0, EXCERPT_WORDS);
+  return [...words.join(" ").replace(DOUBLE_QUOTES, "'")]
+    .slice(0, MAX_EXCERPT_CHARS)
+    .join("")
+    .trim();
+}
+
+function namesOf(clauses: Clause[]): { numbers: string[]; excerpts: string[] } {
+  const numbers = clauses.flatMap((clause) =>
+    hasNumber(clause) ? [oneLine(clause.number ?? "")] : [],
+  );
+  const excerpts = clauses
+    .filter((clause) => !hasNumber(clause))
+    .map(excerptOf)
+    .filter((excerpt) => excerpt !== "");
+  return { numbers: unique(numbers), excerpts };
+}
+
+// The prompt forbids ids in the model's wording, but a model still writes "[c7]" or "clause c7"
+// now and then, and the lawyer cannot see what c7 is. Only these two shapes are touched: a bare
+// "c7" can be text of the contract. The separators leave no whitespace run that two alternatives
+// could split in many ways, so the pattern stays linear on any input.
+const CLAUSE_ID = String.raw`c[1-9]\d{0,5}`;
+const ID_SEPARATOR = String.raw`(?:\s*[,;]\s*(?:(?:and|or)\s+)?|\s+(?:and|or|&)\s+)`;
+const ID_LIST = `${CLAUSE_ID}(?:${ID_SEPARATOR}${CLAUSE_ID})*`;
+const ID_REFERENCE = new RegExp(
+  String.raw`\[\s*(${ID_LIST})\s*\]|\b(?:(the)\s+)?(clauses?)\s+(${ID_LIST})(?!\w)`,
+  "gi",
+);
+const ID_IN_LIST = /c[1-9]\d{0,5}/gi;
+
+function withoutTrailingBlanks(text: string): string {
+  let end = text.length;
+  while (end > 0 && (text.charAt(end - 1) === " " || text.charAt(end - 1) === "\t")) end -= 1;
+  return text.slice(0, end);
+}
+
+/**
+ * The model's words with every clause id in them turned into what the lawyer can see: the number
+ * the contract gives the clause, or its opening words in quotation marks. An id that names no
+ * clause is dropped.
+ */
+function withoutIds(text: string, index: ClauseIndex): string {
+  if (!/c[1-9]/i.test(text)) return text;
+  const parts: string[] = [];
+  let copied = 0;
+  for (const match of text.matchAll(ID_REFERENCE)) {
+    const [whole, bracketed, , , named] = match;
+    const ids = (bracketed ?? named ?? "").match(ID_IN_LIST) ?? [];
+    const known = unique(ids.map((id) => id.toLowerCase())).flatMap((id) => {
+      const clause = index.byId.get(id);
+      return clause === undefined ? [] : [clause];
+    });
+    const phrase = clausePhrase(namesOf(known));
+    const before = text.slice(copied, match.index);
+    copied = match.index + whole.length;
+    if (bracketed !== undefined) {
+      parts.push(phrase === undefined ? withoutTrailingBlanks(before) : `${before}(${phrase})`);
+      continue;
+    }
+    const wording = phrase ?? "a clause";
+    parts.push(before, /^\p{Lu}/u.test(whole) ? capitalise(wording) : wording);
+  }
+  parts.push(text.slice(copied));
+  return parts.join("");
 }
 
 /**
@@ -280,7 +392,7 @@ function pickAnchor(first: Clause, clauses: Clause[], labels: ReadonlyMap<string
 
 // A finding that asks the lawyer to act must say why, whatever the model wrote.
 function fallbackExplanation(rule: Rule, status: Finding["status"]): string {
-  const title = oneLine(rule.title);
+  const title = titleOf(rule);
   if (status === "deviation") {
     return `The contract does not meet the playbook standard for "${title}".`;
   }
@@ -315,16 +427,25 @@ function normalize(rule: Rule, check: RuleCheck, index: ClauseIndex): Finding {
     }),
   );
 
-  const explanation = check.explanation.trim();
-  const suggested = status === "missing" ? (check.suggestedClause?.trim() ?? "") : "";
+  const clauseExcerpts = clauseIds.flatMap((id) => {
+    const clause = index.byId.get(id);
+    if (clause === undefined || hasNumber(clause)) return [];
+    const excerpt = excerptOf(clause);
+    return excerpt === "" ? [] : [excerpt];
+  });
+
+  const said = (text: string): string => withoutIds(text.trim(), index).trim();
+  const explanation = said(check.explanation);
+  const suggested = status === "missing" ? said(check.suggestedClause ?? "") : "";
   const flagged = status === "deviation" || status === "missing";
   const edit = check.edit;
   return {
     status,
     clauseIds,
     clauseNumbers,
+    clauseExcerpts,
     explanation: explanation === "" ? fallbackExplanation(rule, status) : explanation,
-    comment: flagged ? check.comment.trim() : "",
+    comment: flagged ? said(check.comment) : "",
     suggestedClause: suggested === "" ? null : suggested,
     // An id that resolves to no clause is left as written, so that the edit is refused for it.
     proposed:
@@ -643,7 +764,7 @@ const isFlagged = (draft: Draft): draft is Flagged =>
 function commentText(draft: Flagged): string {
   const { rule, finding } = draft;
   const body = finding.comment === "" ? finding.explanation : finding.comment;
-  let text = `[${rule.severity.toUpperCase()}] ${oneLine(rule.title)}\n${body}`;
+  let text = `[${rule.severity.toUpperCase()}] ${titleOf(rule)}\n${body}`;
   if (finding.status === "missing" && finding.suggestedClause !== null) {
     text += `\n\nSuggested clause:\n${finding.suggestedClause}`;
   }
@@ -660,8 +781,10 @@ function toComment(draft: Flagged, index: ClauseIndex): Comment {
   if (anchor !== undefined && draft.blocked === undefined) {
     return { paragraphId: anchor.paragraphId, start: anchor.start, end: anchor.end, text };
   }
-  const named = draft.finding.clauseIds
-    .map((id) => index.byId.get(id))
+  // The comment was written for the clause the edit names. When merged windows disagree, the first
+  // clause cited can belong to another window's check.
+  const named = [draft.finding.proposed?.clauseId, ...draft.finding.clauseIds]
+    .map((id) => (id === undefined ? undefined : index.byId.get(id)))
     .find((c) => c !== undefined);
   const paragraphId = (named ?? index.anchor).paragraphs[0]?.id;
   if (paragraphId === undefined) {
@@ -804,6 +927,7 @@ function toResult(draft: Draft): RuleResult {
     status: finding.status,
     clauseIds: finding.clauseIds,
     clauseNumbers: finding.clauseNumbers,
+    ...(finding.clauseExcerpts.length === 0 ? {} : { clauseExcerpts: finding.clauseExcerpts }),
     explanation: finding.explanation,
     comment: finding.comment,
     suggestedClause: finding.suggestedClause,

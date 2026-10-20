@@ -5,8 +5,19 @@ import { createOracleGenerator } from "@clausewise/review/testing";
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import { run } from "../src/index.js";
-import { formatSummary } from "../src/summary.js";
+import { formatSummary, notShownLine } from "../src/summary.js";
 import { compliantScript, fixturePath, makeIo, playbookPath, tempDirs } from "./support.js";
+
+const NOTHING_SHOWN: NonNullable<ReviewReport["notShown"]> = {
+  trackedInsertions: 0,
+  trackedDeletions: 0,
+  comments: 0,
+  footnotes: 0,
+  endnotes: 0,
+  headerFooterParts: 0,
+  hiddenRuns: 0,
+  images: 0,
+};
 
 const WRITTEN = { redlined: "r.docx", report: "r.json", summary: "r.md" };
 
@@ -38,25 +49,25 @@ function report(overrides: Partial<ReviewReport> = {}): ReviewReport {
 }
 
 describe("the summary of a report", () => {
-  it("prints the warnings of the report under the results", () => {
+  it("holds the results alone: the notes about the file go to stderr, not into the summary", () => {
     const text = formatSummary(
-      report({ warnings: ["The contract is big.", "  Two\nlines \u001b[31m here  "] }),
+      report({
+        warnings: ["The contract is big."],
+        notShown: { ...NOTHING_SHOWN, comments: 2, trackedInsertions: 1 },
+      }),
       WRITTEN,
     );
 
-    expect(text).toContain("\nWarnings:\n  The contract is big.\n  Two lines [31m here\n");
-    expect(text.indexOf("Warnings:")).toBeLessThan(text.indexOf("Written:"));
-    expect(text).not.toContain(String.fromCharCode(27));
+    expect(text).not.toContain("big");
+    expect(text).not.toContain("Warning");
+    expect(text).not.toContain("Not shown");
   });
+});
 
-  it("prints no warnings block when there are none", () => {
-    expect(formatSummary(report({ warnings: [] }), WRITTEN)).not.toContain("Warnings:");
-    expect(formatSummary(report(), WRITTEN)).not.toContain("Warnings:");
-  });
-
-  it("mentions in one line what the model never saw, only the counts that are not zero", () => {
+describe("the line about what the model never saw", () => {
+  it("names in one line the counts that are not zero", () => {
     const notShown = {
-      trackedInsertions: 2,
+      trackedInsertions: 0,
       trackedDeletions: 1,
       comments: 1,
       footnotes: 0,
@@ -66,25 +77,27 @@ describe("the summary of a report", () => {
       images: 4,
     };
 
-    const text = formatSummary(report({ notShown }), WRITTEN);
-
-    expect(text).toContain(
-      "\nNot shown to the model: 2 tracked insertions, 1 tracked deletion, 1 comment, " +
-        "3 header or footer parts, 4 pictures.\n",
+    expect(notShownLine(report({ notShown }))).toBe(
+      "Not shown to the model: 1 tracked deletion, 1 comment, 3 header or footer parts, 4 pictures.",
     );
-    expect(text.match(/Not shown to the model/g)).toHaveLength(1);
   });
 
-  it("says nothing about what was not shown when there is none", () => {
-    const zero = Object.fromEntries(
-      ["trackedInsertions", "trackedDeletions", "comments", "footnotes", "endnotes"]
-        .concat(["headerFooterParts", "hiddenRuns", "images"])
-        .map((key) => [key, 0]),
-    ) as NonNullable<ReviewReport["notShown"]>;
-
-    expect(formatSummary(report({ notShown: zero }), WRITTEN)).not.toContain("Not shown");
+  it("says that tracked insertions were read, as accepted text, and not that they were hidden", () => {
+    expect(notShownLine(report({ notShown: { ...NOTHING_SHOWN, trackedInsertions: 2 } }))).toBe(
+      "2 tracked insertions were read as accepted text.",
+    );
+    expect(
+      notShownLine(report({ notShown: { ...NOTHING_SHOWN, trackedInsertions: 1, footnotes: 5 } })),
+    ).toBe("Not shown to the model: 5 footnotes. 1 tracked insertion was read as accepted text.");
   });
 
+  it("says nothing when there is nothing, or when the report has no such field", () => {
+    expect(notShownLine(report({ notShown: NOTHING_SHOWN }))).toBeUndefined();
+    expect(notShownLine(report())).toBeUndefined();
+  });
+});
+
+describe("the summary of a review that could not check every rule", () => {
   it("never says there are no deviations when a rule was not checked", () => {
     const base = report();
     const [first, second] = base.results;
@@ -116,8 +129,7 @@ describe("the summary of a report", () => {
 describe("a review of a contract with markup the model does not see", () => {
   const makeDir = tempDirs();
 
-  it("prints the report's warnings and the line about what was not shown", async () => {
-    const dir = await makeDir();
+  async function markedContract(dir: string): Promise<string> {
     const input = join(dir, "marked.docx");
     const zip = await JSZip.loadAsync(await readFile(fixturePath("nda-balanced.docx")));
     const xml = (await zip.file("word/document.xml")?.async("string")) ?? "";
@@ -126,13 +138,54 @@ describe("a review of a contract with markup the model does not see", () => {
       "<w:r><w:rPr><w:vanish/></w:rPr><w:t>hidden</w:t></w:r></w:p>";
     zip.file("word/document.xml", xml.replace("</w:p>", inserted));
     await writeFile(input, await zip.generateAsync({ type: "uint8array" }));
-    const { io, stdout } = makeIo({ generator: createOracleGenerator(compliantScript()) });
+    return input;
+  }
+
+  it("prints the report's warnings and the line about what was not shown on stderr", async () => {
+    const dir = await makeDir();
+    const input = await markedContract(dir);
+    const log: string[] = [];
+    const { io, stdout, stderr } = makeIo({
+      generator: createOracleGenerator(compliantScript()),
+      log,
+    });
 
     expect(await run(["review", input, "--playbook", playbookPath("nda-mutual.yaml")], io)).toBe(0);
 
-    expect(stdout()).toContain("Warnings:\n  The document has 1 tracked change");
-    expect(stdout()).toMatch(
-      /\nNot shown to the model: 1 tracked insertion, 1 run of hidden text\.\n/,
+    expect(stderr()).toMatch(/^Warning: The document has 1 tracked change/m);
+    expect(stderr()).toMatch(
+      /^Not shown to the model: 1 run of hidden text\. 1 tracked insertion was read as accepted text\.$/m,
     );
+    expect(stdout()).not.toMatch(/Warning|Not shown/);
+    // Under the summary: the notes come after it.
+    const summary = log.findIndex((entry) => entry.startsWith("stdout: Reviewed"));
+    const note = log.findIndex((entry) => entry.startsWith("stderr: Warning: The document has"));
+    expect(summary).toBeGreaterThan(-1);
+    expect(note).toBeGreaterThan(summary);
+  });
+
+  it("still prints them with --quiet, which only silences the progress lines", async () => {
+    const dir = await makeDir();
+    const input = await markedContract(dir);
+    const { io, stderr } = makeIo({ generator: createOracleGenerator(compliantScript()) });
+
+    expect(
+      await run(["review", input, "--playbook", playbookPath("nda-mutual.yaml"), "--quiet"], io),
+    ).toBe(0);
+
+    expect(stderr()).not.toContain("[1/10]");
+    expect(stderr()).toMatch(/^Warning: The document has 1 tracked change/m);
+    expect(stderr()).toContain("Not shown to the model:");
+  });
+
+  it("prints nothing of the kind for a clean contract", async () => {
+    const dir = await makeDir();
+    const input = join(dir, "nda-balanced.docx");
+    await writeFile(input, await readFile(fixturePath("nda-balanced.docx")));
+    const { io, stderr } = makeIo({ generator: createOracleGenerator(compliantScript()) });
+
+    expect(await run(["review", input, "--playbook", playbookPath("nda-mutual.yaml")], io)).toBe(0);
+
+    expect(stderr()).not.toMatch(/^Warning:|Not shown to the model/m);
   });
 });

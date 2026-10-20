@@ -112,7 +112,7 @@ describe("renderMarkdown for the aggressive NDA", () => {
 
   it("shows an applied change as before and after", () => {
     expect(markdown).toContain(
-      "Changed: `perpetual and shall continue indefinitely` => `end three (3) years after the date of disclosure`",
+      "Changed: `are perpetual and shall continue indefinitely` => `end three (3) years after the date of disclosure`",
     );
     expect(markdown).toContain(
       "Changed: `disclosed by or on behalf of Discloser to Recipient` => `disclosed by or on behalf of either party to the other`",
@@ -292,7 +292,7 @@ describe("renderMarkdown with hostile text", () => {
       "\\# Injected heading - injected item 1. injected number \\| a \\| b \\| --- === \\> injected quote",
     );
     expect(attention).toContain(
-      "\\<script\\>alert(1)\\</script\\> \\[link\\](https://example.com) !\\[img\\](x)",
+      "\\<script\\>alert(1)\\</script\\> \\[link\\](`https://example.com`) !\\[img\\](x)",
     );
     expect(attention).toContain("\\`code\\` \\*bold\\* \\_it\\_ \\~\\~strike\\~\\~");
   });
@@ -311,7 +311,7 @@ describe("renderMarkdown with hostile text", () => {
       "> \\> injected quote",
       "> \\`\\`\\`",
       "> \\~\\~\\~",
-      "> \\<script\\>alert(1)\\</script\\> \\[link\\](https://example.com) !\\[img\\](x) \\`code\\` \\*bold\\* \\_it\\_ \\~\\~strike\\~\\~",
+      "> \\<script\\>alert(1)\\</script\\> \\[link\\](`https://example.com`) !\\[img\\](x) \\`code\\` \\*bold\\* \\_it\\_ \\~\\~strike\\~\\~",
       "> indented code",
     ]);
   });
@@ -481,9 +481,19 @@ describe("renderMarkdown details", () => {
     expect(markdown).not.toContain("Suggested wording");
   });
 
-  it("falls back to clause ids when the clauses have no numbers", () => {
-    const markdown = renderMarkdown(reportOf([result({ clauseIds: ["c2", "c5"] })]));
-    expect(markdown).toContain("**High** severity, deviation. Clauses c2, c5.");
+  it("names clauses that have no number by their opening words, never by their ids", () => {
+    const markdown = renderMarkdown(
+      reportOf([
+        result({
+          clauseIds: ["c2", "c5"],
+          clauseExcerpts: ["Customer shall not", "The Vendor may"],
+        }),
+      ]),
+    );
+    expect(markdown).toContain(
+      '**High** severity, deviation. The clauses beginning "Customer shall not", "The Vendor may".',
+    );
+    expect(markdown).not.toMatch(/\bc[25]\b/);
   });
 
   it("orders items by severity and keeps playbook order within a severity", () => {
@@ -526,7 +536,11 @@ describe("renderMarkdown details", () => {
     expect(section(markdown, "Could not be checked")).toContain(
       "- **Broken** (`bad`): The model declined to check this rule (refusal category: cyber).",
     );
-    expect(section(markdown, "Needs attention")).toContain("Nothing needs attention.");
+    // One rule could not be checked, so an empty list is not the same as a clean contract.
+    expect(section(markdown, "Needs attention")).toContain(
+      "No deviations or missing clauses among the 2 rules that were checked.",
+    );
+    expect(section(markdown, "Needs attention")).not.toContain("Nothing needs attention.");
   });
 
   it("copes with a report that has no document name and no results", () => {

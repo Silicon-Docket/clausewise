@@ -2,8 +2,12 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach } from "vitest";
 import { root } from "./support.js";
+
+/** The executable that package.json names. It loads tsx from the project and runs src/bin.ts. */
+export const LAUNCHER = join(root, "apps", "cli", "bin", "clausewise.mjs");
 
 // Starting tsx takes a second or two, and a loaded machine takes longer.
 export const TIMEOUT = 90_000;
@@ -58,9 +62,9 @@ export function start(
   return { child, done, stderr: () => stderr };
 }
 
-/** The real command, started through tsx the way `pnpm clausewise` does. */
+/** The real command, started through its launcher. */
 export const cli = (args: string[], env: Record<string, string> = BASE_ENV) =>
-  start("pnpm", ["tsx", "apps/cli/src/bin.ts", ...args], env).done;
+  start(LAUNCHER, args, env).done;
 
 /** What a model that follows the OpenAI chat protocol answers: the same finding for every rule. */
 export type Verdict = "compliant" | "deviation";

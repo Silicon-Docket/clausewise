@@ -5,10 +5,10 @@ import type { Fixture } from "./fixtures.js";
 import { costOf, type Price } from "./prices.js";
 
 /**
- * The pipeline's estimate is one token per three UTF-16 units, which suits a script that needs one
- * byte per character. A script that needs three bytes (Chinese, Japanese, Korean) also needs about
- * one token per character, three times as many, so the bound takes the larger of the estimate and
- * a third of the UTF-8 bytes.
+ * The pipeline's estimate is one token per three characters for Latin text and one per character
+ * for every other script, which already covers a script of two or three bytes per character. A
+ * character outside the basic plane, an emoji for one, is counted once there and takes four bytes,
+ * so the bound also takes a third of the UTF-8 bytes, which is the larger of the two for it.
  */
 export function boundTokens(text: string): number {
   return Math.max(estimateTokens(text), Math.ceil(Buffer.byteLength(text) / 3));

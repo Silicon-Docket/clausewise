@@ -8,3 +8,8 @@ coverage
 out
 evals/results/*
 !evals/results/.gitkeep
+
+# What a review writes next to the contract: a redline of a real contract must not be committed
+*.redlined.docx
+*.report.json
+*.summary.md

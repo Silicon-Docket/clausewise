@@ -1,7 +1,7 @@
 import type { Stats } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
-import { parseDocx } from "@clausewise/docx";
+import { DocxError, parseDocx } from "@clausewise/docx";
 import { createObjectGenerator, loadLlmConfig, type ObjectGenerator } from "@clausewise/llm";
 import { SEVERITIES, type Severity } from "@clausewise/playbook";
 import {
@@ -24,7 +24,7 @@ import {
 import type { CliIo } from "./io.js";
 import { outputMode, probeFolders, writeOutputs } from "./output.js";
 import { loadPlaybook } from "./playbook.js";
-import { atOrAbove, formatSummary } from "./summary.js";
+import { atOrAbove, formatSummary, notShownLine } from "./summary.js";
 import { createTokenMeter, type TokenMeter } from "./tokens.js";
 import { plain, plural, visible } from "./text.js";
 import { USAGE } from "./usage.js";
@@ -117,15 +117,25 @@ async function readInput(
   } catch (error) {
     throw new CliError(`Cannot read ${visible(path)}: ${fsReason(error)}.`);
   }
-  // Every .docx is a zip, and a zip starts with PK. Anything else is the wrong kind of file, most
-  // often an old .doc, which Word can save again as .docx.
-  if (bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
+  await checkReadable(path, bytes);
+  return { path, stats, bytes };
+}
+
+/**
+ * Opens the contract before anything else is asked of the user, so that a file that is not Word
+ * at all, an old .doc, a password protected file or a damaged one is refused first, in the words
+ * of the Word engine, which knows which of them it is. No file is sniffed here.
+ */
+async function checkReadable(path: string, bytes: Uint8Array): Promise<void> {
+  try {
+    await parseDocx(bytes);
+  } catch (error) {
+    if (!(error instanceof DocxError)) throw error;
+    const reason = plain(error.message);
     throw new CliError(
-      `${visible(path)} is not a .docx file: it is not a zip archive. ` +
-        "If it is an older .doc file, open it in Word and save it as .docx.",
+      `Cannot open ${visible(path)}: ${/[.!?]$/.test(reason) ? reason : `${reason}.`}`,
     );
   }
-  return { path, stats, bytes };
 }
 
 function buildGenerator(
@@ -156,8 +166,9 @@ function buildGenerator(
 
 function reportProgress(io: CliIo, event: ProgressEvent): void {
   if (event.type === "start") {
-    const windows =
-      event.windows > 1 ? `, in ${event.windows} overlapping parts of the contract` : "";
+    // Windows overlap by a clause when the limit leaves room for it and not at all when it does
+    // not, so only their number is certain.
+    const windows = event.windows > 1 ? `, in ${event.windows} parts of the contract` : "";
     io.stderr(
       `Checking ${event.clauses} ${plural(event.clauses, "clause", "clauses")} against ` +
         `${event.rules} ${plural(event.rules, "rule", "rules")}${windows}.\n`,
@@ -224,6 +235,20 @@ function warnUnchecked(io: CliIo, report: ReviewReport, failOn: Severity | undef
   );
 }
 
+/**
+ * What the review itself says about the file, under the summary: the notes of the report, and in
+ * one line what the model never saw. They are on stderr with the other warnings, so a script that
+ * reads the summary from stdout gets the results alone.
+ */
+function warnAboutFile(io: CliIo, report: ReviewReport): void {
+  for (const warning of report.warnings ?? []) {
+    const text = plain(warning);
+    if (text !== "") io.stderr(`Warning: ${text}\n`);
+  }
+  const notShown = notShownLine(report);
+  if (notShown !== undefined) io.stderr(`${notShown}\n`);
+}
+
 /** The exit code of the gate, with the reason on stderr when it is not 0. */
 function gate(io: CliIo, report: ReviewReport, failOn: Severity | undefined): number {
   if (failOn === undefined) return 0;
@@ -266,9 +291,6 @@ export async function reviewCommand(args: string[], io: CliIo): Promise<number> 
   const meter = createTokenMeter();
   const { generator, limits } = buildGenerator(io, meter);
 
-  // A damaged file is reported before the notice below, so the notice is never printed for text
-  // that cannot be sent.
-  await parseDocx(input.bytes);
   io.stderr(`Sending the contract text to: ${plain(generator.disclosure)}\n`);
 
   try {
@@ -334,5 +356,6 @@ async function reviewAndWrite(
     ),
   );
   warnUnchecked(io, report, options.failOn);
+  warnAboutFile(io, report);
   return gate(io, report, options.failOn);
 }

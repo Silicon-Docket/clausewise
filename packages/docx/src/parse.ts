@@ -1,5 +1,5 @@
 import type JSZip from "jszip";
-import { childElements, getW, isW, parseXml, wChild } from "./ooxml.js";
+import { childElements, getW, isW, parseXml, wChild, type DocxLimits } from "./ooxml.js";
 import { documentRelationships, openPackage, readDocumentXml, readPart } from "./package.js";
 import { resolveNumbering } from "./numbering.js";
 import { bodyParagraphs, isInTable, paragraphStyle, paragraphText } from "./paragraphs.js";
@@ -80,12 +80,13 @@ async function optionalXml(
   targets: ReadonlyMap<string, string>,
   type: string,
   fallback: string,
+  limits: Partial<DocxLimits> | undefined,
 ): Promise<Document | undefined> {
   const named = targets.get(REL_BASE + type);
   for (const path of named === undefined || named === fallback ? [fallback] : [named, fallback]) {
     try {
       const xml = await readPart(zip, path);
-      if (xml !== undefined) return parseXml(xml, path);
+      if (xml !== undefined) return parseXml(xml, path, limits);
     } catch {
       // An unreadable part is as good as an absent one.
     }
@@ -93,13 +94,16 @@ async function optionalXml(
   return undefined;
 }
 
-export async function parseDocx(buf: Uint8Array): Promise<ParsedDocx> {
-  const zip = await openPackage(buf);
-  const doc = parseXml(await readDocumentXml(zip), "word/document.xml");
+export async function parseDocx(
+  buf: Uint8Array,
+  limits?: Partial<DocxLimits>,
+): Promise<ParsedDocx> {
+  const zip = await openPackage(buf, limits);
+  const doc = parseXml(await readDocumentXml(zip), "word/document.xml", limits);
   const targets = await relationshipTargets(zip);
-  const styles = new StyleSheet(await optionalXml(zip, targets, "styles", STYLES_PART));
+  const styles = new StyleSheet(await optionalXml(zip, targets, "styles", STYLES_PART, limits));
   const elements = bodyParagraphs(doc);
-  const numbering = await optionalXml(zip, targets, "numbering", NUMBERING_PART);
+  const numbering = await optionalXml(zip, targets, "numbering", NUMBERING_PART, limits);
   const lists = resolveNumbering(elements, styles, numbering);
   const inTocField = tocFieldParagraphs(elements);
   const rows = tableRows(elements);

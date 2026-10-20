@@ -33,8 +33,8 @@ const EDITS: Record<string, Record<string, ScriptedEdit>> = {
     },
     term: {
       clauseNumber: "3.1",
-      quote: "perpetual and shall continue indefinitely",
-      replacement: "limited to three (3) years after the date of disclosure",
+      quote: "are perpetual and shall continue indefinitely",
+      replacement: "end three (3) years after the date of disclosure",
     },
     "permitted-use": {
       clauseNumber: "2.2",

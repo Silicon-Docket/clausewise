@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import { buildDocx, check, doc, editedReview, mutate, para, run, text } from "./raw-docx.js";
 
 const FIRST = "1.1 Recipient shall keep the Confidential Information secret for a perpetual term.";
+// The review refuses a document with under 200 characters of clause text, and the shortest first
+// clause here has 56, so the second clause carries the rest.
 const second = text(
-  "1.2 The obligations of confidence do not apply to information that is public.",
+  "1.2 The obligations of confidence do not apply to information that is public, that the Recipient already knew, or that a third party who owes the Discloser no duty of confidence gave to the Recipient.",
 );
 const edit = { clauseId: "c1", quote: "perpetual term", replacement: "term of three years" };
 
