@@ -109,7 +109,10 @@ jobs:
           grep -q '<div id="root">' index.html
 
           # The database is the PostgreSQL of the stack, and it is not published.
-          docker compose logs app | grep -q '"database":"postgres"'
+          # Not piped into grep -q: with pipefail, grep exiting at its first match can kill the
+          # writer with SIGPIPE and fail the step even though the line was found.
+          docker compose logs --no-color app > app.log
+          grep -q '"database":"postgres"' app.log
           test -z "$(docker compose port postgres 5432 2>/dev/null)"
 
           # A request addressed to another name is refused (DNS rebinding).
