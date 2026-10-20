@@ -108,6 +108,16 @@ export type EditOutcome =
   /** An edit was proposed but could not be anchored or applied, so only a comment was written. */
   | { kind: "comment-only"; proposed: ProposedEdit; reason: string };
 
+/**
+ * Where a comment sits in the document. With `start` and `end` it covers that span of the
+ * paragraph's text, without them the whole paragraph.
+ */
+export interface CommentAnchor {
+  paragraphId: string;
+  start?: number;
+  end?: number;
+}
+
 export interface RuleResult {
   ruleId: string;
   title: string;
@@ -128,6 +138,12 @@ export interface RuleResult {
   comment: string;
   suggestedClause: string | null;
   edit: EditOutcome;
+  /**
+   * Where this finding's comment was written, so a redline can be rebuilt without the model. Set
+   * for every result with status `deviation` or `missing`, and for no other. It is the span of the
+   * tracked change when there is one, else the paragraph of the clause the comment is about.
+   */
+  commentAnchor?: CommentAnchor;
   /** Set when status is `error`: why this rule could not be checked. */
   error?: string;
 }

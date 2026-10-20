@@ -1,0 +1,95 @@
+/*
+ * Design tokens. Every colour in the app comes from a variable here, so the dark theme is a second
+ * set of values and nothing else. Every pair of text and background reaches at least 4.5:1, and
+ * the border of a control at least 3:1, in both themes (calculated, not checked with a tool).
+ * Severity is also told by a word and a shape in the markup; the colours only support them.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* The contract's own words are set in a serif, so that they read as the document and not as the app. */
+  --font-doc: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --surface-2: #eceff4;
+  --ink: #18202c;
+  --ink-muted: #526074;
+  --line: #d4dae3;
+  --line-strong: #78849a;
+
+  --accent: #1d4d8f;
+  --accent-ink: #ffffff;
+  --accent-hover: #163d73;
+  --focus: #0b63d1;
+
+  --high-ink: #9a1b1b;
+  --high-bg: #fdecec;
+  --high-line: #e3a3a3;
+  --medium-ink: #7d4a00;
+  --medium-bg: #fff2d9;
+  --medium-line: #dcb56a;
+  --low-ink: #285679;
+  --low-bg: #e7f0f8;
+  --low-line: #9fc0d8;
+
+  --good-ink: #17653a;
+  --good-bg: #e5f3ea;
+  --good-line: #8cc7a1;
+  --neutral-ink: #4a5568;
+  --neutral-bg: #eceff4;
+  --neutral-line: #a9b4c4;
+
+  --del-ink: #9a1b1b;
+  --del-bg: #fdecec;
+  --ins-ink: #17653a;
+  --ins-bg: #e5f3ea;
+
+  --radius: 8px;
+  --radius-small: 6px;
+  --shadow: 0 1px 2px rgb(24 32 44 / 8%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #11151b;
+    --surface: #1a2029;
+    --surface-2: #232b38;
+    --ink: #e8ecf2;
+    --ink-muted: #a7b2c3;
+    --line: #2f3a4a;
+    --line-strong: #74849e;
+
+    --accent: #8db8f5;
+    --accent-ink: #0c1a30;
+    --accent-hover: #a6caf8;
+    --focus: #9cc4fb;
+
+    --high-ink: #ffb8b8;
+    --high-bg: #3b1d21;
+    --high-line: #7c3c43;
+    --medium-ink: #f4cb82;
+    --medium-bg: #392a10;
+    --medium-line: #7c5c20;
+    --low-ink: #a6cfee;
+    --low-bg: #182a3a;
+    --low-line: #36627f;
+
+    --good-ink: #95deae;
+    --good-bg: #16301f;
+    --good-line: #3b7a53;
+    --neutral-ink: #b9c3d2;
+    --neutral-bg: #232b38;
+    --neutral-line: #4b5a72;
+
+    --del-ink: #ffb8b8;
+    --del-bg: #3b1d21;
+    --ins-ink: #9be3b4;
+    --ins-bg: #16301f;
+
+    --shadow: none;
+  }
+}

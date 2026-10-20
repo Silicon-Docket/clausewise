@@ -10,7 +10,8 @@
   "scripts": {
     "typecheck": "tsc -p .",
     "dev": "tsx watch src/main.ts",
-    "start": "tsx src/main.ts"
+    "start": "tsx src/main.ts",
+    "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
     "@clausewise/api": "workspace:*",

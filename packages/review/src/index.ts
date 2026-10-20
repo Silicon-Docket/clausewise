@@ -8,12 +8,14 @@ export {
   renderClauses,
   windowClauses,
 } from "./prompt.js";
+export { renderRedline, type RenderRedlineInput, type RenderRedlineResult } from "./redline.js";
 export { renderMarkdown } from "./report.js";
 export { segment } from "./segment.js";
 export {
   RuleCheckSchema,
   type Clause,
   type ClauseParagraph,
+  type CommentAnchor,
   type EditOutcome,
   type ProgressEvent,
   type ProposedEdit,

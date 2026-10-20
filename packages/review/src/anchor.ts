@@ -227,7 +227,7 @@ function scan(paragraph: ClauseParagraph, quote: string): Scan {
 }
 
 // Removes whitespace from the sides where the quote lost it, and nothing else.
-function trimEdges(text: string, leading: boolean, trailing: boolean): string {
+export function trimEdges(text: string, leading: boolean, trailing: boolean): string {
   let start = 0;
   let end = text.length;
   while (leading && start < end && isSpace(text.charCodeAt(start))) start++;

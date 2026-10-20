@@ -1,11 +1,4 @@
-import {
-  applyRedline,
-  inspectDocx,
-  parseDocx,
-  type Comment,
-  type DocxInspection,
-  type Edit,
-} from "@clausewise/docx";
+import { inspectDocx, parseDocx, type DocxInspection } from "@clausewise/docx";
 import {
   ModelOutputError,
   ModelRefusalError,
@@ -23,11 +16,21 @@ import {
   renderClauses,
   windowClauses,
 } from "./prompt.js";
+import {
+  DEFAULT_AUTHOR,
+  anchorOf,
+  oneLine,
+  safeLabel,
+  titleOf,
+  writeRedline,
+  type Piece,
+} from "./redline.js";
 import { clausePhrase } from "./report.js";
 import { segment } from "./segment.js";
 import {
   RuleCheckSchema,
   type Clause,
+  type CommentAnchor,
   type EditOutcome,
   type ProposedEdit,
   type ReviewOptions,
@@ -38,7 +41,6 @@ import {
 } from "./types.js";
 
 const DEFAULT_CONCURRENCY = 4;
-const DEFAULT_AUTHOR = "Clausewise";
 const WINDOW_OVERLAP = 1;
 // The window budget has to leave room for the model's answer as well as for the prompt.
 const OUTPUT_SLACK_TOKENS = 2000;
@@ -54,7 +56,6 @@ const SCAN_MAX_CHARS = 2000;
 const SCAN_MIN_IMAGES = 3;
 // Shorter than this, a paragraph is more likely a title, a stamp or a date than a clause.
 const MIN_ANCHOR_CHARS = 40;
-const UNSAFE_EDIT = "the document could not be edited safely";
 // Only used to size the room the window note takes, so the digits are the widest a plan can need.
 const WIDEST_WINDOW = { index: MAX_MODEL_CALLS - 1, total: MAX_MODEL_CALLS };
 
@@ -72,14 +73,6 @@ type Failure =
   | { kind: "other"; name: string };
 
 type CallOutcome = { ok: true; check: RuleCheck } | { ok: false; failure: Failure };
-
-// The category and the error name come from outside, so only short plain labels are repeated.
-const SAFE_LABEL = /^[\w .:-]{1,64}$/;
-
-function safeLabel(value: string | undefined): string | undefined {
-  const label = value?.trim();
-  return label !== undefined && SAFE_LABEL.test(label) ? label : undefined;
-}
 
 function classify(error: unknown): Failure {
   if (error instanceof ModelRefusalError) {
@@ -207,17 +200,8 @@ interface Finding {
 
 type Verdict = { kind: "finding"; finding: Finding } | { kind: "error"; message: string };
 
-const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim();
 const unique = <T>(values: T[]): T[] => [...new Set(values)];
 const capitalise = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
-
-const BLANK_TITLE = /^[\p{Z}\p{Cc}\p{Cf}]*$/u;
-
-/** The rule's title on one line, or its id when the title has nothing a reader could see. */
-function titleOf(rule: Rule): string {
-  const title = oneLine(rule.title);
-  return BLANK_TITLE.test(title) ? rule.id : title;
-}
 
 /** The clauses of the document, found by what a model is likely to call them. */
 interface ClauseIndex {
@@ -755,129 +739,54 @@ interface Draft {
   blocked: string | undefined;
 }
 
-type Flagged = Draft & { finding: Finding };
+type Flagged = Draft & { finding: Finding & { status: "deviation" | "missing" } };
 
 const isFlagged = (draft: Draft): draft is Flagged =>
   draft.finding !== undefined &&
   (draft.finding.status === "deviation" || draft.finding.status === "missing");
 
-function commentText(draft: Flagged): string {
-  const { rule, finding } = draft;
-  const body = finding.comment === "" ? finding.explanation : finding.comment;
-  let text = `[${rule.severity.toUpperCase()}] ${titleOf(rule)}\n${body}`;
-  if (finding.status === "missing" && finding.suggestedClause !== null) {
-    text += `\n\nSuggested clause:\n${finding.suggestedClause}`;
-  }
-  const wording = draft.blocked === undefined ? "" : (finding.proposed?.replacement.trim() ?? "");
-  if (wording !== "") {
-    text += `\n\nSuggested wording (could not be applied automatically): ${wording}`;
-  }
-  return text;
-}
-
-function toComment(draft: Flagged, index: ClauseIndex): Comment {
-  const text = commentText(draft);
-  const { anchor } = draft;
-  if (anchor !== undefined && draft.blocked === undefined) {
-    return { paragraphId: anchor.paragraphId, start: anchor.start, end: anchor.end, text };
-  }
-  // The comment was written for the clause the edit names. When merged windows disagree, the first
-  // clause cited can belong to another window's check.
+// The comment goes on the clause the edit names. When merged windows disagree, the first clause
+// cited can belong to another window's check.
+function clauseParagraph(draft: Flagged, index: ClauseIndex): string | undefined {
   const named = [draft.finding.proposed?.clauseId, ...draft.finding.clauseIds]
     .map((id) => (id === undefined ? undefined : index.byId.get(id)))
     .find((c) => c !== undefined);
-  const paragraphId = (named ?? index.anchor).paragraphs[0]?.id;
-  if (paragraphId === undefined) {
-    throw new ReviewError("The document has no paragraph to comment on.");
-  }
-  return { paragraphId, text };
+  return (named ?? index.anchor).paragraphs[0]?.id;
 }
 
-const errorLabel = (error: unknown): string => {
-  const label = error instanceof Error ? safeLabel(error.name) : undefined;
-  return label === undefined ? "" : ` (${label})`;
-};
-
-/**
- * Writes every edit and comment in one call. Only the redline engine knows which edits it
- * refuses, and a refused edit changes its comment: the comment moves to the clause and gains the
- * wording the lawyer would otherwise have to retype. So when an edit is refused the call is
- * repeated from the original bytes without it, until none is. Each repeat drops at least one edit,
- * so it ends, and in practice a refusal costs one more call.
- *
- * The review is paid for by now, so a writer that throws must not lose it. The edits are given up
- * first and the comments written alone; if even that throws, the original bytes go back unchanged.
- * Either way every finding is still in the report, and a warning says what the file lacks.
- */
-async function writeRedline(args: {
-  docx: Uint8Array;
-  drafts: Draft[];
-  index: ClauseIndex;
-  options: ReviewOptions;
-}): Promise<{ buffer: Uint8Array; warning: string | undefined }> {
-  const { docx, drafts, index, options } = args;
-  const flagged = drafts.filter(isFlagged);
-  const redlineOptions = {
-    author: options.author ?? DEFAULT_AUTHOR,
-    ...(options.date === undefined ? {} : { date: options.date }),
+/** A flagged rule as the redline writer takes it, with the writer's own record of what became of it. */
+function pieceOf(draft: Flagged, index: ClauseIndex): Piece {
+  const { rule, finding, anchor } = draft;
+  const paragraphId = clauseParagraph(draft, index);
+  const onClause = paragraphId === undefined ? undefined : { paragraphId };
+  return {
+    source: {
+      ruleId: rule.id,
+      title: rule.title,
+      severity: rule.severity,
+      status: finding.status,
+      comment: finding.comment,
+      explanation: finding.explanation,
+      suggestedClause: finding.suggestedClause,
+    },
+    wording: finding.proposed?.replacement.trim() ?? "",
+    edit:
+      anchor === undefined
+        ? undefined
+        : {
+            paragraphId: anchor.paragraphId,
+            start: anchor.start,
+            end: anchor.end,
+            replacement: anchor.replacement,
+          },
+    blocked: draft.blocked,
+    placed:
+      anchor === undefined
+        ? onClause
+        : { paragraphId: anchor.paragraphId, start: anchor.start, end: anchor.end },
+    moved: onClause,
+    commentRefused: undefined,
   };
-
-  const pass = async (): Promise<{ buffer: Uint8Array; refused: boolean }> => {
-    const live = drafts.flatMap((draft) =>
-      draft.anchor !== undefined && draft.blocked === undefined
-        ? [{ draft, anchor: draft.anchor }]
-        : [],
-    );
-    const edits: Edit[] = live.map(({ anchor }) => ({
-      paragraphId: anchor.paragraphId,
-      start: anchor.start,
-      end: anchor.end,
-      replacement: anchor.replacement,
-    }));
-    const comments = flagged.map((draft) => toComment(draft, index));
-    const result = await applyRedline(docx, { edits, comments }, redlineOptions);
-
-    let refused = false;
-    live.forEach(({ draft }, i) => {
-      const outcome = result.edits[i];
-      if (outcome !== undefined && !outcome.applied) {
-        draft.blocked = outcome.reason;
-        refused = true;
-      }
-    });
-    const touched = [...result.edits, ...result.comments].some((outcome) => outcome.applied);
-    return { buffer: touched ? result.buffer : docx, refused };
-  };
-
-  const settled = async (): Promise<Uint8Array> => {
-    for (;;) {
-      const { buffer, refused } = await pass();
-      if (!refused) return buffer;
-    }
-  };
-
-  const giveUpEdits = (): void => {
-    for (const draft of drafts) {
-      if (draft.anchor !== undefined && draft.blocked === undefined) draft.blocked = UNSAFE_EDIT;
-    }
-  };
-
-  try {
-    return { buffer: await settled(), warning: undefined };
-  } catch (failure) {
-    giveUpEdits();
-    try {
-      return {
-        buffer: await settled(),
-        warning: `The Word file could not be edited with tracked changes${errorLabel(failure)}, so the suggested edits are written as comments and no text of the contract was changed.`,
-      };
-    } catch (second) {
-      return {
-        buffer: docx,
-        warning: `The Word file could not be edited safely${errorLabel(second)}, so the redlined file is a copy of the original with no tracked changes and no comments. Every finding is in the report.`,
-      };
-    }
-  }
 }
 
 function editOutcome(draft: Draft): EditOutcome {
@@ -901,7 +810,7 @@ function editOutcome(draft: Draft): EditOutcome {
   };
 }
 
-function toResult(draft: Draft): RuleResult {
+function toResult(draft: Draft, commentAnchor: CommentAnchor | undefined): RuleResult {
   const { rule, finding } = draft;
   const base = {
     ruleId: rule.id,
@@ -932,6 +841,7 @@ function toResult(draft: Draft): RuleResult {
     comment: finding.comment,
     suggestedClause: finding.suggestedClause,
     edit: editOutcome(draft),
+    ...(commentAnchor === undefined ? {} : { commentAnchor }),
   };
 }
 
@@ -1094,9 +1004,22 @@ export async function reviewContract(
     else draft.blocked = anchored.reason;
   }
 
-  const written = await writeRedline({ docx, drafts, index, options });
+  const flagged = drafts
+    .filter(isFlagged)
+    .map((draft) => ({ draft, piece: pieceOf(draft, index) }));
+  const written = await writeRedline({
+    docx,
+    pieces: flagged.map(({ piece }) => piece),
+    author: options.author ?? DEFAULT_AUTHOR,
+    date: options.date,
+  });
   if (written.warning !== undefined) warnings.push(written.warning);
-  const results = drafts.map(toResult);
+  // The writer decides which edits the engine takes, and the report says what it decided.
+  for (const { draft, piece } of flagged) draft.blocked = piece.blocked;
+  const anchors = new Map<Draft, CommentAnchor | undefined>(
+    flagged.map(({ draft, piece }) => [draft, anchorOf(piece)]),
+  );
+  const results = drafts.map((draft) => toResult(draft, anchors.get(draft)));
 
   const counts: Record<RuleStatus, number> = {
     compliant: 0,
