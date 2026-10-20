@@ -85,7 +85,13 @@ const EDITS: Record<string, Record<string, ScriptedEdit>> = {
       replacement:
         "a limited licence to use Customer Data solely to provide the Services to Customer",
     },
-    "security-and-breach": {
+    "security-controls": {
+      clauseNumber: "4.1",
+      quote: "Vendor shall use commercially reasonable efforts to protect Customer Data",
+      replacement:
+        "Vendor shall maintain industry-standard security controls and an independent SOC 2 Type II audit report, and shall protect Customer Data accordingly",
+    },
+    "breach-notice": {
       clauseNumber: "4.1",
       quote:
         "Vendor may, at its discretion, notify Customer of any unauthorised access to Customer Data",
@@ -96,6 +102,12 @@ const EDITS: Record<string, Record<string, ScriptedEdit>> = {
       clauseNumber: "2.2",
       quote: "one hundred twenty (120) days",
       replacement: "thirty (30) days",
+    },
+    "price-increase": {
+      clauseNumber: "2.3",
+      quote: "by any amount",
+      replacement:
+        "by no more than the lesser of five percent (5%) and the annual change in a named consumer price index",
     },
     "termination-refund": {
       clauseNumber: "7.3",

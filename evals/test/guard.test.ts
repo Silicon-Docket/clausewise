@@ -39,9 +39,9 @@ describe("the spend guard", () => {
     expect(stderr).toContain("Evaluation plan (nothing has been sent yet)");
     expect(stderr).toContain("nda-aggressive.docx");
     expect(stderr).toContain("saas-vendor-friendly.docx");
-    expect(stderr).toContain("Model calls in total: 30");
+    expect(stderr).toContain("Model calls in total: 32");
     expect(stderr).toMatch(/Input tokens, upper bound: [\d,]+/);
-    expect(stderr).toContain("Output tokens, upper bound: 45,000");
+    expect(stderr).toContain("Output tokens, upper bound: 48,000");
     expect(stderr).toMatch(/Cost upper bound: \$0\.\d{4}/);
     expect(stderr).toContain("Add --yes to run it.");
     expect(stderr).toContain("current price list");
@@ -93,7 +93,7 @@ describe("the spend guard", () => {
       generatorFactory: () => model,
     });
     expect(code).toBe(0);
-    expect(model.requests).toHaveLength(30);
+    expect(model.requests).toHaveLength(32);
     expect(stderr).toContain("Sending the contract text to: a scripted test model");
     const result = await readResult(out);
     expect(result.options.maxCostUsd).toBe(2);
@@ -115,7 +115,7 @@ describe("the spend guard", () => {
       },
     );
     expect(accepted.code).toBe(0);
-    expect(equal.requests.length).toBe(30);
+    expect(equal.requests.length).toBe(32);
 
     const below = forbiddenFactory();
     const refused = await run(
@@ -169,7 +169,7 @@ describe("the plan", () => {
     expect(code).toBe(0);
     const made = oracles.reduce((sum, oracle) => sum + oracle.calls.length, 0);
     const result = await readResult(out);
-    expect(made).toBe(30);
+    expect(made).toBe(32);
     expect(result.plan.calls).toBe(made);
     expect(result.usage.totalCalls).toBe(made);
   });
@@ -190,8 +190,8 @@ describe("the plan", () => {
     const result = await readResult(out);
     // Two windows per fixture, so twice the calls of an unsplit contract.
     expect(result.plan.fixtures.map((item) => item.windows)).toEqual([2, 2, 2]);
-    expect(result.plan.calls).toBe(60);
-    expect(oracles.reduce((sum, oracle) => sum + oracle.calls.length, 0)).toBe(60);
+    expect(result.plan.calls).toBe(64);
+    expect(oracles.reduce((sum, oracle) => sum + oracle.calls.length, 0)).toBe(64);
     expect(stderr).toContain("windows of at most 4,500 estimated tokens");
   });
 
@@ -204,10 +204,10 @@ describe("the plan", () => {
     });
     expect(code).toBe(0);
     const result = await readResult(out);
-    expect(result.plan.calls).toBe(60);
-    expect(model.requests).toHaveLength(60);
+    expect(result.plan.calls).toBe(64);
+    expect(model.requests).toHaveLength(64);
     expect(result.runs).toHaveLength(6);
-    expect(result.runs.map((record) => record.calls)).toEqual([10, 10, 10, 10, 10, 10]);
+    expect(result.runs.map((record) => record.calls)).toEqual([10, 10, 10, 10, 12, 12]);
   });
 
   it("bounds the input by the prompts the pipeline really sends", async () => {

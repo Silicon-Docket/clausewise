@@ -17,7 +17,7 @@ afterAll(async () => {
 });
 
 // The earlier run, made by hand: every rule right except nda-aggressive term, which it called
-// compliant. Its accuracy is 29 of 30 and its flag F1 is 34/35 (17 flags right, 1 missed).
+// compliant. Its accuracy is 31 of 32 and its flag F1 is 38/39 (19 flags right, 1 missed).
 function previousFile(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     schemaVersion: 1,
@@ -25,8 +25,8 @@ function previousFile(overrides: Record<string, unknown> = {}): Record<string, u
     startedAt: "2026-10-01T09:00:00.000Z",
     model: { provider: "anthropic", model: "claude-sonnet-5-5" },
     score: {
-      accuracy: 29 / 30,
-      flag: { f1: 34 / 35 },
+      accuracy: 31 / 32,
+      flag: { f1: 38 / 39 },
       rules: [
         ...rulesOf("nda-aggressive.docx", {
           mutuality: "deviation",
@@ -56,9 +56,11 @@ function previousFile(overrides: Record<string, unknown> = {}): Record<string, u
           "liability-cap": "deviation",
           "ip-indemnity": "deviation",
           "data-ownership": "deviation",
-          "security-and-breach": "deviation",
+          "security-controls": "deviation",
+          "breach-notice": "deviation",
           availability: "compliant",
           "term-renewal": "deviation",
+          "price-increase": "deviation",
           "termination-refund": "deviation",
           suspension: "compliant",
           "data-return": "missing",
@@ -113,12 +115,12 @@ describe("--compare", () => {
     expect(code).toBe(0);
     const today = JSON.parse(await readFile(out, "utf8")) as EvalResult;
 
-    // 3 of 30 are wrong today, so 27 are right: 90.0%. The mutuality and ip-indemnity slips cost
+    // 3 of 32 are wrong today, so 29 are right: 90.6%. The mutuality and ip-indemnity slips cost
     // one flag each and compelled-disclosure stays flagged (as a deviation instead of missing):
-    //   flags right: 18 - 1 (ip-indemnity missed) = 17, false alarms: 1 (nda-balanced mutuality)
-    //   F1 = 2 x 17 / (2 x 17 + 1 + 1) = 34/36
-    expect(today.score.accuracy).toBeCloseTo(27 / 30, 12);
-    expect(today.score.flag.f1).toBeCloseTo(34 / 36, 12);
+    //   flags right: 20 - 1 (ip-indemnity missed) = 19, false alarms: 1 (nda-balanced mutuality)
+    //   F1 = 2 x 19 / (2 x 19 + 1 + 1) = 38/40
+    expect(today.score.accuracy).toBeCloseTo(29 / 32, 12);
+    expect(today.score.flag.f1).toBeCloseTo(38 / 40, 12);
 
     const regressions = stdout.indexOf("### Regressions (3)");
     const improvements = stdout.indexOf("### Improvements (1)");
@@ -138,10 +140,10 @@ describe("--compare", () => {
       "| nda-aggressive.docx | term | deviation | compliant (0.0%) | deviation (100.0%) |",
     );
 
-    // 29/30 => 27/30 is minus 6.7 points, and F1 from 34/35 (97.1%) to 34/36 (94.4%).
-    expect(stdout).toContain("| Exact status accuracy | 96.7% | 90.0% | -6.7 points |");
-    expect(stdout).toContain("| Flag F1 | 97.1% | 94.4% | -2.7 points |");
-    expect(stdout).toContain("Unchanged: 26. Only in this run: 0. Only in the earlier run: 0.");
+    // 31/32 => 29/32 is minus 6.3 points, and F1 from 38/39 (97.4%) to 38/40 (95.0%).
+    expect(stdout).toContain("| Exact status accuracy | 96.9% | 90.6% | -6.3 points |");
+    expect(stdout).toContain("| Flag F1 | 97.4% | 95.0% | -2.4 points |");
+    expect(stdout).toContain("Unchanged: 28. Only in this run: 0. Only in the earlier run: 0.");
   });
 
   it("separates a rule that gives a different wrong answer from one that got worse", () => {
@@ -182,9 +184,9 @@ describe("--compare", () => {
     expect(comparison.regressions.map((item) => item.ruleId)).toEqual(["mutuality"]);
     expect(comparison.improvements).toEqual([]);
     expect(comparison.onlyNow).toBe(1);
-    expect(comparison.onlyBefore).toBe(28);
-    expect(comparison.accuracyDelta).toBeCloseTo(0.5 - 29 / 30, 12);
-    expect(comparison.f1Delta).toBeCloseTo(0.5 - 34 / 35, 12);
+    expect(comparison.onlyBefore).toBe(30);
+    expect(comparison.accuracyDelta).toBeCloseTo(0.5 - 31 / 32, 12);
+    expect(comparison.f1Delta).toBeCloseTo(0.5 - 38 / 39, 12);
   });
 
   it("has no delta when either side has no figure", () => {
@@ -234,6 +236,6 @@ describe("--compare", () => {
     const previous = await loadPrevious(out);
     expect(previous.selftest).toBe(true);
     expect(previous.score.accuracy).toBe(1);
-    expect(previous.score.rules).toHaveLength(30);
+    expect(previous.score.rules).toHaveLength(32);
   });
 });

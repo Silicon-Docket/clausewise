@@ -58,11 +58,11 @@ describe("a rule that cannot be checked", () => {
     const result = await readResult(out);
     // term, remedies and mutuality exist in both NDAs, and in neither is there more than one.
     expect(result.score.errored).toBe(6);
-    expect(result.score).toMatchObject({ total: 30, correct: 24 });
+    expect(result.score).toMatchObject({ total: 32, correct: 26 });
     // Three of the six were expected to be deviations, so those are misses. The other three were
     // expected to be compliant, and a rule that was not checked raises no false alarm.
-    expect(result.score.flag).toMatchObject({ truePositives: 15, misses: 3, falseAlarms: 0 });
-    expect(result.score.flag.f1).toBeCloseTo(30 / 33, 12);
+    expect(result.score.flag).toMatchObject({ truePositives: 17, misses: 3, falseAlarms: 0 });
+    expect(result.score.flag.f1).toBeCloseTo(34 / 37, 12);
     expect(stdout).toContain("| Rules that errored | 6 |");
     // Two fixtures, three causes, each rule in both.
     expect(result.score.errorReasons).toEqual([
@@ -110,7 +110,7 @@ describe("a run in which nothing could be checked", () => {
     });
     expect(code).toBe(0);
     expect(stdout.startsWith("**EVERY RULE ERRORED.**")).toBe(true);
-    expect(stdout).toContain("| The request to the model failed. | 30 |");
+    expect(stdout).toContain("| The request to the model failed. | 32 |");
   });
 });
 
@@ -248,16 +248,16 @@ describe("usage and cache accounting", () => {
     const result = await readResult(out);
     expect(result.usage.available).toBe(true);
     expect(result.usage.total).toEqual({
-      responses: 30,
-      inputTokens: 9000,
-      outputTokens: 6000,
-      cacheReadTokens: 270_000,
+      responses: 32,
+      inputTokens: 9600,
+      outputTokens: 6400,
+      cacheReadTokens: 290_000,
       cacheWriteTokens: 30_000,
     });
     expect(result.usage.byFixture.map((item) => [item.fixture, item.calls])).toEqual([
       ["nda-aggressive.docx", 10],
       ["nda-balanced.docx", 10],
-      ["saas-vendor-friendly.docx", 10],
+      ["saas-vendor-friendly.docx", 12],
     ]);
     expect(result.usage.byFixture[0]?.usage).toEqual({
       responses: 10,
@@ -266,8 +266,8 @@ describe("usage and cache accounting", () => {
       cacheReadTokens: 90_000,
       cacheWriteTokens: 10_000,
     });
-    // 9,000 x 2 + 6,000 x 10 + 270,000 x 0.2 + 30,000 x 2.5 = 18,000 + 60,000 + 54,000 + 75,000
-    expect(result.cost.actualUsd).toBeCloseTo(0.207, 12);
+    // 9,600 x 2 + 6,400 x 10 + 290,000 x 0.2 + 30,000 x 2.5 = 19,200 + 64,000 + 58,000 + 75,000
+    expect(result.cost.actualUsd).toBeCloseTo(0.2162, 12);
     expect(result.cost.actualUsd).toBeLessThan(result.cost.upperBoundUsd ?? 0);
   });
 
@@ -279,17 +279,17 @@ describe("usage and cache accounting", () => {
     expect(stdout).toContain(
       "| nda-aggressive.docx | 1 | 10 | 3,000 | 2,000 | 90,000 | 10,000 | $0.0690 |",
     );
-    expect(stdout).toContain("| **Total** | 3 | 30 | 9,000 | 6,000 | 270,000 | 30,000 | $0.2070 |");
-    // 270,000 of 309,000 prompt tokens were read. Without the cache they would have cost
-    // 309,000 x 2 + 60,000 = 678,000 micro-dollars, against 207,000 with it.
+    expect(stdout).toContain("| **Total** | 3 | 32 | 9,600 | 6,400 | 290,000 | 30,000 | $0.2162 |");
+    // 290,000 of 329,600 prompt tokens were read. Without the cache they would have cost
+    // 329,600 x 2 + 64,000 = 723,200 micro-dollars, against 216,200 with it.
     expect(stdout).toContain(
-      "Cache effectiveness: 87.4% of 309,000 prompt tokens were read from the cache.",
+      "Cache effectiveness: 88.0% of 329,600 prompt tokens were read from the cache.",
     );
-    expect(stdout).toContain("would have cost $0.6780, so the cache saved 69.5%.");
+    expect(stdout).toContain("would have cost $0.7232, so the cache saved 70.1%.");
     expect(stdout).toContain("Check evals/prices.json against the provider's current price list");
-    expect(stdout).toMatch(/\| Cost \| \$0\.2070 \(upper bound \$0\.\d{4}\) \|/);
+    expect(stdout).toMatch(/\| Cost \| \$0\.2162 \(upper bound \$0\.\d{4}\) \|/);
     expect(stderr).toContain(
-      "Spent: 9,000 input, 6,000 output, 270,000 cache read and 30,000 cache write",
+      "Spent: 9,600 input, 6,400 output, 290,000 cache read and 30,000 cache write",
     );
   });
 
@@ -338,16 +338,16 @@ describe("usage and cache accounting", () => {
     const result = await readResult(out);
     expect(result.usage).toMatchObject({
       available: false,
-      totalCalls: 30,
+      totalCalls: 32,
       total: null,
       cache: null,
     });
     expect(result.cost.actualUsd).toBeNull();
     expect(result.cost.upperBoundUsd).not.toBeNull();
     expect(stdout).toContain("Token usage is not reported for the openai provider");
-    expect(stdout).toContain("Model calls made: 30.");
+    expect(stdout).toContain("Model calls made: 32.");
     expect(stderr).toContain(
-      "Model calls made: 30. Token usage is not reported for the openai provider",
+      "Model calls made: 32. Token usage is not reported for the openai provider",
     );
     for (const text of [stdout, stderr, JSON.stringify(result)]) {
       expect(text).not.toContain("sk-test-secret-key");
