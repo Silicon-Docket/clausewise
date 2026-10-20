@@ -11,6 +11,11 @@ export const RuleSchema = z.strictObject({
     ),
   title: z.string().min(1),
   severity: z.enum(SEVERITIES),
+  /**
+   * "presence" (the default): the contract should contain a clause that meets the standard.
+   * "absence": the standard forbids something, so a contract that does not contain it passes.
+   */
+  kind: z.enum(["presence", "absence"]).optional(),
   /** When true, a contract with no clause on this topic is reported as missing. */
   required: z.boolean().default(false),
   /** The position we want to see. */
@@ -35,6 +40,13 @@ export const PlaybookSchema = z
   .superRefine((playbook, ctx) => {
     const seen = new Set<string>();
     playbook.rules.forEach((rule, i) => {
+      if (rule.kind === "absence" && rule.required) {
+        ctx.addIssue({
+          code: "custom",
+          message: `rule "${rule.id}" is an absence rule, which passes when the clause is not there, so it cannot be required`,
+          path: ["rules", i, "required"],
+        });
+      }
       if (seen.has(rule.id)) {
         ctx.addIssue({
           code: "custom",

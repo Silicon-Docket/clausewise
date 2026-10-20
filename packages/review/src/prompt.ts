@@ -64,7 +64,15 @@ const SYSTEM_PROMPT = [
 
 const yesNo = (value: boolean): string => (value ? "yes" : "no");
 
-export function buildRulePrompt(args: { playbook: Playbook; rule: Rule; clauses: Clause[] }): {
+export function buildRulePrompt(args: {
+  playbook: Playbook;
+  rule: Rule;
+  clauses: Clause[];
+  /** Which party of the contract the lawyer acts for, in their words. */
+  client?: string;
+  /** Set when the contract is reviewed in several parts, so the model knows it sees one of them. */
+  window?: { index: number; total: number };
+}): {
   system: string;
   prompt: string;
   /**

@@ -125,6 +125,19 @@ export interface ReviewReport {
   /** Number of deviations and missing clauses by severity. */
   open: Record<Severity, number>;
   results: RuleResult[];
+  /** Things the lawyer should know about this review that are not findings about a rule. */
+  warnings?: string[];
+  /** What the file holds that the model never saw: markup, notes, headers, hidden text. */
+  notShown?: {
+    trackedInsertions: number;
+    trackedDeletions: number;
+    comments: number;
+    footnotes: number;
+    endnotes: number;
+    headerFooterParts: number;
+    hiddenRuns: number;
+    images: number;
+  };
   stats: { paragraphs: number; clauses: number; windows: number; editsApplied: number };
 }
 
