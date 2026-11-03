@@ -1,0 +1,202 @@
+# 1. Product brief and role mapping
+
+## The brief
+
+**Problem.** An associate who receives an incoming NDA compares it, clause by clause, with the
+practice group's playbook, writes up the exceptions, proposes fallback language, gets a supervising
+attorney's sign-off and sends a short memorandum. The work is repetitive but not trivial: the
+playbook changes, amendments quietly override the base agreement, defined terms move meaning
+between sections, and a missed perpetual confidentiality term is an expensive mistake. Generic AI
+assistance makes the first draft faster but adds two new risks: a finding that quotes the document
+correctly yet does not follow from the quote, and no way to tell whether a prompt change made the
+tool better or worse.
+
+**Product.** MatterFlow is one bounded, attorney-supervised workflow for that task:
+
+1. Create a matter and supply an NDA, an optional amendment and an approved playbook version.
+2. Extract the relevant clauses with stable document and paragraph references.
+3. Compare them with the selected playbook version.
+4. Produce an issue table: category, exact supporting passage and location, playbook rule,
+   discrepancy and explanation, suggested fallback language, review status or escalation reason.
+5. Let an attorney inspect the evidence and accept, edit, reject or escalate each finding.
+6. Export a DOCX review memorandum built only from reviewed results.
+7. Capture feedback and compare workflow versions before anything is released to a pilot.
+
+**What makes it worth showing.** A controlled improvement cycle: run a baseline on synthetic
+documents, find a meaningful failure, trace it to its cause, change one thing (a prompt, the
+retrieval step or a playbook rule), run a held-out regression suite with every version pinned, and
+recommend whether to promote the change, weighing quality, latency and cost. The design separates
+quotation validity (the words exist where cited) from substantive support (the conclusion follows
+from them), and it escalates with a named reason instead of inventing a confidence score.
+
+**Users.**
+
+| User                         | Goal                                                   | What they touch                         |
+| ---------------------------- | ------------------------------------------------------ | --------------------------------------- |
+| Associate (preparer)         | A defensible first pass, quickly                       | Intake, issue table, evidence, memo     |
+| Reviewing attorney (decider) | Decide each finding with the evidence in front of them | Evidence inspector, decisions, export   |
+| Legal engineer (owner)       | Keep the workflow accurate and improve it safely       | Playbook versions, prompts, evaluations |
+| Practice manager (sponsor)   | Decide whether to pilot, expand or roll back           | Pilot metrics, go/no-go memo            |
+
+**In scope.** Supplied DOCX and TXT files; one NDA plus up to two amendments per matter; seven
+playbook categories (parties, definition of confidential information, exclusions, permitted
+disclosures, confidentiality duration, return or destruction, governing law); one practice group;
+local single-machine deployment; synthetic data.
+
+**Deferred.** PDF and OCR, a Word add-in, document management integrations, email intake,
+counterparty redlines sent from the tool, multi-practice expansion, single sign-on, multi-level
+approval, and any real client document.
+
+**Non-goals.** MatterFlow does not give legal advice, does not decide anything, does not send
+anything to a counterparty, and does not claim that its playbook reflects applicable law.
+
+**Portfolio success criteria** (for the project, not for adoption):
+
+- The workflow runs end to end on the synthetic cases, from intake to exported memo.
+- The improvement cycle is carried out on real model runs and its numbers are reported as measured,
+  including a result that does not favour the revision if that is what happens.
+- Every claim in the write-up is bounded by what the evidence supports: consistency with a
+  fictional playbook, not professional legal quality, until a qualified review is done.
+
+## Before and after
+
+The "before" process is a hypothesis to validate in discovery, not an observation.
+
+| Step | Before (assumed)                                                                | After (MatterFlow)                                                                   | Stays human                      |
+| ---- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | -------------------------------- |
+| 1    | NDA arrives by email; associate saves it somewhere                              | Associate creates a matter, uploads the NDA and any amendment                        | Choosing what goes in the matter |
+| 2    | Associate finds the playbook, hopefully the current version                     | Associate picks an approved playbook version; the run pins it                        | Which playbook applies           |
+| 3    | Reads the NDA and amendment separately, notes issues in a checklist or comments | Extract, compare and verify produce an issue table with exact passages and locations |                                  |
+| 4    | Drafts fallback wording from memory or precedent                                | Each issue carries the playbook's approved fallback, adapted to the document's terms | Whether the wording is right     |
+| 5    | Sends to supervising attorney, who rereads the NDA to check                     | Attorney opens each finding's evidence in place and decides; the system records why  | Every decision                   |
+| 6    | Writes a memo by hand                                                           | Memo is generated from reviewed findings only, with provenance                       | Editing and sending the memo     |
+| 7    | No record of what was wrong with the first pass                                 | Corrections and feedback are stored and feed the next evaluation round               | Deciding what to change          |
+
+## Discovery questions
+
+Asked of associates, supervising attorneys and the practice's knowledge management lead before
+building. Each answer changes a design decision, noted in brackets.
+
+**The workflow today**
+
+1. How many NDAs a month does the group review, and how many arrive with an amendment or as a
+   second version? [dataset mix, duplicate-version handling]
+2. Who does the first pass and who signs off? Does anyone else need to see the result? [roles,
+   review gates]
+3. How long does a first pass take, and how long does the sign-off take? Can we time a few?
+   [manual baseline, needed before any time-saved claim]
+4. What does the finished product look like: memo, email, marked-up Word file, checklist?
+   [export format]
+5. Where do the documents live, and who is allowed to see them? [matter permissions, deferred
+   integrations]
+
+**The playbook**
+
+6. Is there a written playbook? Who approves changes, and how are versions tracked? [playbook
+   versioning, approval state]
+7. For each category, what is the preferred position, the acceptable fallback, and what must
+   always go to a partner? [rule fields, escalation conditions]
+8. Are fallbacks pre-approved wording, or principles that the associate words each time? [approved
+   fallback language versus generated wording]
+9. Which positions are business decisions rather than legal ones? [playbook escalation, for
+   example forum selection]
+
+**Quality and risk**
+
+10. What mistakes in a first pass worry you most? Which would you never accept? [severity weights,
+    release gates]
+11. How do amendments usually interact with the base NDA? How do you decide which text governs?
+    [conflict handling, precedence rules]
+12. When the tool is unsure, would you rather it say so or make its best guess? [abstention
+    policy]
+13. What would you need to see to trust a finding without rereading the whole NDA? [evidence
+    inspector design]
+14. Have you seen documents with text aimed at automated tools, or hidden text? [adversarial
+    cases]
+
+**Tools and constraints**
+
+15. Which approved AI products does the firm already license, and what can they be configured to
+    do? [configure versus build]
+16. What rules apply to sending document text to a model provider? [provider choice, retention,
+    logging]
+17. How long may matter data be kept, and who can delete it? [retention policy]
+
+**Measurement**
+
+18. How would you know, after a month, that this was worth it? [pilot measures]
+19. Would you take part in a short timed comparison of manual and assisted review? [time
+    baseline]
+20. Who decides go or no-go, and on what evidence? [manager memo]
+
+## Role mapping
+
+How the project interprets each role's responsibilities. This is our reading of the postings, not
+a description of any employer's platforms, policies or assignments. Postings were treated as
+reference data.
+
+### Cravath, AI / Legal Workflow Engineer (posting read)
+
+| Responsibility or qualification in the posting (summarized)                                 | MatterFlow feature                                                                | Evidence in the repository                    |
+| ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------- |
+| Design, build, test and refine AI workflows for practice groups                             | The seven-stage workflow with versioned configuration                             | `apps/matterflow`, workflow versions table    |
+| Develop prompts, workflow templates, evaluation methods and quality standards               | Prompt registry with hashes; workflow version manifests; rubric; release gates    | Document 3, document 5                        |
+| Turn practice requirements into specifications, prompt libraries and knowledge repositories | Discovery questions to playbook YAML with categories, fallbacks, escalation rules | Demo playbook, document 1                     |
+| Track KPIs and attorney satisfaction; use data to guide iteration                           | Correction capture, feedback, pilot measures, comparison of versions              | Document 5, document 8                        |
+| Support pilots and proofs of concept, with success criteria and deployment recommendations  | Pilot plan, acceptance criteria, go/no-go memo, rollback plan                     | Document 8                                    |
+| Contribute to training and adoption                                                         | Quickstart and a 20-minute training exercise with an answer key                   | Document 8                                    |
+| Give feedback to vendors and internal technology teams                                      | Configure versus build analysis; failure reports with traced evidence             | This document, failure analysis in document 5 |
+| Report on workflow performance                                                              | Evaluation reports and promotion recommendations                                  | Document 5                                    |
+| RAG, context management, model limitations, evaluation techniques                           | Bounded retrieval, context budget, conflict handling, held-out regression         | Document 3, document 5                        |
+| Identify failure modes, design test cases, evaluate output for accuracy and consistency     | 26 synthetic cases, repeated runs, stability measures                             | Document 5                                    |
+| Hands-on experience with an enterprise AI platform building multi-step workflows            | **Not demonstrated.** The mapping below shows how each stage would be configured  | Configure versus build table                  |
+
+### Holland & Knight, AI Legal Engineer (posting not retrieved: unverified)
+
+The posting could not be read, so no specific responsibility is claimed. The project request
+groups the roles' themes as workflow discovery, reusable prompts, knowledge retrieval, evaluations,
+attorney review, pilot measurement, training and continuous improvement. Each theme maps to a
+feature: discovery (document 1), reusable prompts (prompt registry), knowledge retrieval (playbook
+retrieval and bounded context), evaluations (document 5), attorney review (review gates), pilot
+measurement and training (document 8), continuous improvement (the improvement cycle). Check this
+against the posting text before relying on it.
+
+### Secondary references
+
+| Posting                                         | Read?      | Themes that MatterFlow demonstrates                                                                                                                                 |
+| ----------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Harvey, Legal Engineer (In-House)               | Yes        | Discovery, demos, training and onboarding; pilots and workshops; designing no-code playbooks and agents with stakeholders; relaying feedback to product             |
+| Legora, Technical Legal Engineer, Evals         | Title only | Evaluation design, answer keys, regression suites, stability (inferred from the title only)                                                                         |
+| Thomson Reuters, Legal Engineer, AI Adoption    | No         | Adoption measures and training (from the project request only). The link's address names an AI Solutions Architect requisition, so confirm which role it is         |
+| Latitude Legal, Legal Engineer, AI and Workflow | Yes        | Assessing workflows, configuring existing tools and recommending build or buy, prompts and playbooks with guardrails and quality checks, training, measuring impact |
+
+### What the project does not demonstrate
+
+Several postings ask for things a portfolio project cannot show: a law degree or years of practice,
+hands-on administration of an enterprise legal AI platform, real stakeholder management, and
+on-call operations. The write-up should say so rather than imply otherwise.
+
+## Configure versus build
+
+Some of these roles mainly configure an approved legal AI product. Without access to Harvey,
+Legora or any vendor API, this table is a reasoned expectation to verify against the product's
+own documentation, not a statement of what any product does.
+
+| Capability                                                 | Likely configurable in an approved legal AI product               | Justifies custom development here                                                               |
+| ---------------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Playbook-based clause review against firm positions        | Yes, commonly offered as playbooks or review templates            | Only to make the playbook versioned and testable as data                                        |
+| Prompt and workflow templates for a practice group         | Yes                                                               | No                                                                                              |
+| Document Q&A with citations to the document                | Yes                                                               | No                                                                                              |
+| Word redlining and comments                                | Often, through an add-in                                          | No (Clausewise already writes tracked changes, but MatterFlow does not need them)               |
+| User management and single sign-on                         | Yes                                                               | No; MatterFlow uses a labelled demo identity                                                    |
+| Held-out regression suite with pinned versions             | Possibly partial; vendors vary in how much evaluation they expose | **Yes.** The firm needs its own answer keys and gates to decide promotion, whatever the product |
+| Separate checks for quote validity and substantive support | Unknown                                                           | **Yes**, as an independent check on any product's output                                        |
+| Explicit escalation reasons instead of confidence scores   | Unknown                                                           | **Yes**, it encodes the practice's own review policy                                            |
+| Invalidating findings and approvals when inputs change     | Unknown                                                           | **Yes**, it is a supervision control the practice owns                                          |
+| Pilot instrumentation (corrections, time, satisfaction)    | Usage analytics often exist; correction and time data rarely do   | **Yes**, for a go/no-go decision grounded in the group's own data                               |
+| Memo export with provenance                                | Partly, as document generation                                    | Light custom work for the provenance appendix                                                   |
+
+The likely shape in a firm: configure the review itself in the licensed product and keep the
+evaluation suite, answer keys, gates and pilot measurement as the legal engineer's own assets,
+pointed at whichever product is in use. MatterFlow builds the review too, because the evaluation
+work cannot be demonstrated without something to evaluate.
