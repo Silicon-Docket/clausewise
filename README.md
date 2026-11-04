@@ -211,7 +211,7 @@ pnpm eval --selftest # run the evaluation harness against a scripted model
 | `evals/`            | The evaluation harness, for measuring findings against a live model    |
 | `playbooks/`        | Starter playbooks                                                      |
 | `fixtures/`         | Synthetic contracts and the findings a correct review should produce   |
-| `docs/matterflow/`  | MatterFlow design: review workflow and evaluation pilot (not built)    |
+| `docs/parol/`       | Parol design: review workflow and evaluation pilot (not built)         |
 
 Tests use scripted stand-ins for the model (`@clausewise/llm/testing`, `@clausewise/review/testing`),
 so the suite needs no network or key. The contracts in `fixtures/` were written for this project.

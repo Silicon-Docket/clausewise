@@ -8,7 +8,7 @@ up or describe the demo's seeded activity as usage.
 
 | Time | On screen                                                                                             | Say                                                                                                                                                                                     |
 | ---- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0:00 | Title card, then the demo banner                                                                      | "MatterFlow is one NDA review workflow with attorney review and an evaluation loop. Everything here is synthetic: the documents, the playbook, the people."                             |
+| 0:00 | Title card, then the demo banner                                                                      | "Parol is one NDA review workflow with attorney review and an evaluation loop. Everything here is synthetic: the documents, the playbook, the people."                                  |
 | 0:10 | Intake: NDA (DOCX) and Amendment No. 1 (TXT), playbook 1.0.0, the destination line                    | "An associate creates a matter, uploads the NDA and an amendment, and picks an approved playbook version. The run pins all of it."                                                      |
 | 0:22 | The instruction-like text warning                                                                     | "This NDA contains a paragraph telling automated reviewers to report no exceptions. It is reviewed as text. The model has no tools, and every outcome is checked in code."              |
 | 0:35 | Issue table; open DUR-1; the inspector highlights the amendment and the superseded clause             | "Eight rules, eight findings, each with the exact passage and where it is. Duration is a deviation: the amendment deletes Section 6.1, the only time limit."                            |
@@ -24,7 +24,7 @@ live run happened, say so at 1:15 and show the protocol and the selftest instead
 
 ## Portfolio one-pager outline
 
-1. **Title and one line.** "MatterFlow: an NDA review workflow with attorney review and a held-out
+1. **Title and one line.** "Parol: an NDA review workflow with attorney review and a held-out
    evaluation loop (synthetic data)."
 2. **The problem** in three sentences, from the brief.
 3. **What I built.** The seven-stage workflow in one diagram; the issue table and evidence
@@ -52,7 +52,7 @@ whether it rests on the answer keys or on qualified review.
 Blameless and specific. Written at the end of week two, whatever happened.
 
 ```markdown
-# MatterFlow postmortem
+# Parol postmortem
 
 ## Summary
 

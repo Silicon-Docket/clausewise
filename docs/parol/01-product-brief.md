@@ -11,7 +11,8 @@ assistance makes the first draft faster but adds two new risks: a finding that q
 correctly yet does not follow from the quote, and no way to tell whether a prompt change made the
 tool better or worse.
 
-**Product.** MatterFlow is one bounded, attorney-supervised workflow for that task:
+**Product.** Parol (named for the parol evidence rule: only the written documents count) is one
+bounded, attorney-supervised workflow for that task:
 
 1. Create a matter and supply an NDA, an optional amendment and an approved playbook version.
 2. Extract the relevant clauses with stable document and paragraph references.
@@ -47,7 +48,7 @@ local single-machine deployment; synthetic data.
 counterparty redlines sent from the tool, multi-practice expansion, single sign-on, multi-level
 approval, and any real client document.
 
-**Non-goals.** MatterFlow does not give legal advice, does not decide anything, does not send
+**Non-goals.** Parol does not give legal advice, does not decide anything, does not send
 anything to a counterparty, and does not claim that its playbook reflects applicable law.
 
 **Portfolio success criteria** (for the project, not for adoption):
@@ -62,7 +63,7 @@ anything to a counterparty, and does not claim that its playbook reflects applic
 
 The "before" process is a hypothesis to validate in discovery, not an observation.
 
-| Step | Before (assumed)                                                                | After (MatterFlow)                                                                   | Stays human                      |
+| Step | Before (assumed)                                                                | After (Parol)                                                                        | Stays human                      |
 | ---- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | -------------------------------- |
 | 1    | NDA arrives by email; associate saves it somewhere                              | Associate creates a matter, uploads the NDA and any amendment                        | Choosing what goes in the matter |
 | 2    | Associate finds the playbook, hopefully the current version                     | Associate picks an approved playbook version; the run pins it                        | Which playbook applies           |
@@ -137,9 +138,9 @@ reference data.
 
 ### Cravath, AI / Legal Workflow Engineer (posting read)
 
-| Responsibility or qualification in the posting (summarized)                                 | MatterFlow feature                                                                | Evidence in the repository                    |
+| Responsibility or qualification in the posting (summarized)                                 | Parol feature                                                                     | Evidence in the repository                    |
 | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------- |
-| Design, build, test and refine AI workflows for practice groups                             | The seven-stage workflow with versioned configuration                             | `apps/matterflow`, workflow versions table    |
+| Design, build, test and refine AI workflows for practice groups                             | The seven-stage workflow with versioned configuration                             | `apps/parol`, workflow versions table         |
 | Develop prompts, workflow templates, evaluation methods and quality standards               | Prompt registry with hashes; workflow version manifests; rubric; release gates    | Document 3, document 5                        |
 | Turn practice requirements into specifications, prompt libraries and knowledge repositories | Discovery questions to playbook YAML with categories, fallbacks, escalation rules | Demo playbook, document 1                     |
 | Track KPIs and attorney satisfaction; use data to guide iteration                           | Correction capture, feedback, pilot measures, comparison of versions              | Document 5, document 8                        |
@@ -163,7 +164,7 @@ against the posting text before relying on it.
 
 ### Secondary references
 
-| Posting                                         | Read?      | Themes that MatterFlow demonstrates                                                                                                                                 |
+| Posting                                         | Read?      | Themes that Parol demonstrates                                                                                                                                      |
 | ----------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Harvey, Legal Engineer (In-House)               | Yes        | Discovery, demos, training and onboarding; pilots and workshops; designing no-code playbooks and agents with stakeholders; relaying feedback to product             |
 | Legora, Technical Legal Engineer, Evals         | Title only | Evaluation design, answer keys, regression suites, stability (inferred from the title only)                                                                         |
@@ -187,8 +188,8 @@ own documentation, not a statement of what any product does.
 | Playbook-based clause review against firm positions        | Yes, commonly offered as playbooks or review templates            | Only to make the playbook versioned and testable as data                                        |
 | Prompt and workflow templates for a practice group         | Yes                                                               | No                                                                                              |
 | Document Q&A with citations to the document                | Yes                                                               | No                                                                                              |
-| Word redlining and comments                                | Often, through an add-in                                          | No (Clausewise already writes tracked changes, but MatterFlow does not need them)               |
-| User management and single sign-on                         | Yes                                                               | No; MatterFlow uses a labelled demo identity                                                    |
+| Word redlining and comments                                | Often, through an add-in                                          | No (Clausewise already writes tracked changes, but Parol does not need them)                    |
+| User management and single sign-on                         | Yes                                                               | No; Parol uses a labelled demo identity                                                         |
 | Held-out regression suite with pinned versions             | Possibly partial; vendors vary in how much evaluation they expose | **Yes.** The firm needs its own answer keys and gates to decide promotion, whatever the product |
 | Separate checks for quote validity and substantive support | Unknown                                                           | **Yes**, as an independent check on any product's output                                        |
 | Explicit escalation reasons instead of confidence scores   | Unknown                                                           | **Yes**, it encodes the practice's own review policy                                            |
@@ -198,5 +199,5 @@ own documentation, not a statement of what any product does.
 
 The likely shape in a firm: configure the review itself in the licensed product and keep the
 evaluation suite, answer keys, gates and pilot measurement as the legal engineer's own assets,
-pointed at whichever product is in use. MatterFlow builds the review too, because the evaluation
+pointed at whichever product is in use. Parol builds the review too, because the evaluation
 work cannot be demonstrated without something to evaluate.

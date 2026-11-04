@@ -2,14 +2,14 @@
 
 ## User journey
 
-One matter, from intake to memo. "System" lines are what MatterFlow does; everything else is a
+One matter, from intake to memo. "System" lines are what Parol does; everything else is a
 person.
 
 | #   | Who                | Action                                                                                | System                                                                                                  | Matter state |
 | --- | ------------------ | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------ |
 | 1   | Associate          | Creates matter "Lanternfish / Corvane NDA", names the client entity, adds a reviewer  | Creates the matter, grants membership, writes an audit event                                            | `draft`      |
 | 2   | Associate          | Uploads the NDA (DOCX) and Amendment No. 1 (TXT), marks the NDA operative             | Hashes each file, parses paragraphs into source spans, warns about duplicates and instruction-like text | `draft`      |
-| 3   | Associate          | Selects playbook "MF NDA (Recipient)" version 1.0.0                                   | Checks the version is approved; the matter is ready                                                     | `ready`      |
+| 3   | Associate          | Selects playbook "Parol NDA (Recipient)" version 1.0.0                                | Checks the version is approved; the matter is ready                                                     | `ready`      |
 | 4   | Associate          | Starts a run                                                                          | Pins documents, playbook, workflow and model; runs ingest, extract, retrieve, analyze, verify           | `running`    |
 | 5   | Associate          | Opens the issue table; triages; adds notes for the reviewer                           | Shows eight findings with statuses, escalations and evidence links                                      | `in_review`  |
 | 6   | Reviewing attorney | Opens each finding's evidence; accepts, edits, rejects or escalates                   | Records each decision against the exact finding content it saw                                          | `in_review`  |
@@ -28,7 +28,7 @@ Server-rendered pages with a little JavaScript for highlighting. A permanent ban
 
 ```text
 +-----------------------------------------------------------------------------------------+
-| DEMO: synthetic documents, demo identity, not for client work       Signed in as: A. Ruiz|
+| DEMO: synthetic documents, demo identity, not for client work     Signed in as: A. Ruiz |
 +-----------------------------------------------------------------------------------------+
 | New matter                                                                              |
 |   Matter name     [ Lanternfish / Corvane NDA                ]                          |
@@ -42,7 +42,7 @@ Server-rendered pages with a little JavaScript for highlighting. A permanent ban
 |        treated as document text only.                                   [view]          |
 |   [ + Add DOCX or TXT ]                                                                 |
 |                                                                                         |
-| Playbook   [ MF NDA (Recipient)  v1.0.0  approved 2026-10-28  v ]   [ view rules ]      |
+| Playbook   [ Parol NDA (Recipient)  v1.0.0  approved 2026-10-28  v ]   [ view rules ]   |
 |                                                                                         |
 | Text will be sent to: Anthropic API (api.anthropic.com)                                 |
 |                                                      [ Save draft ]  [ Start review ]   |
@@ -55,7 +55,7 @@ The table is the primary view. Selecting a row opens the document pane at the ci
 
 ```text
 +------------------------------------------------+----------------------------------------+
-| Issues  run r_0142  workflow v2  playbook 1.0.0 | Evidence: DUR-1                        |
+| Issues  run r_0142  workflow v2  playbook 1.0.0| Evidence: DUR-1                        |
 | [All 8] [Open 5] [Escalated 2] [Stale 0]       |                                        |
 +----+----------------+-----------+---------+----+ Amendment No. 1 (v1)  para 3  Sec. 2   |
 | Sev| Category       | Status    | Review  | Esc| > "[Section 6.1 of the Agreement is    |
@@ -93,7 +93,7 @@ the evidence pane is the worked example in [document 4](04-worked-example.md).
 |   Standard:     Obligations end 3 years or less after disclosure. Trade secret carve-out|
 |                 acceptable.                                                             |
 |   Fallback:     5 years or less after the agreement ends.                               |
-|   Unacceptable: No stated end for information that is not a trade secret.              |
+|   Unacceptable: No stated end for information that is not a trade secret.               |
 |                                                                                         |
 | Discrepancy  [ Amendment No. 1 deletes Section 6.1, the only time limit on the Section ]|
 |              [ 4 obligations, and Section 9.3 keeps Section 4 in force after           ]|
@@ -103,7 +103,7 @@ the evidence pane is the worked example in [document 4](04-worked-example.md).
 |              Approved text from playbook: [show]   Changes from approved text: [diff]   |
 |                                                                                         |
 | Decision   ( ) Accept  (o) Edit  ( ) Reject  ( ) Escalate                               |
-| Reason     [ The parties agreed two years in February. Propose reinstating it.        ]|
+| Reason     [ The parties agreed two years in February. Propose reinstating it.         ]|
 |                                                                                         |
 | You are deciding finding f_0917 as shown (content hash 51be..). If the documents or     |
 | playbook change, this decision becomes stale.                    [ Save decision ]      |
@@ -114,7 +114,7 @@ the evidence pane is the worked example in [document 4](04-worked-example.md).
 
 ```text
 +-----------------------------------------------------------------------------------------+
-| Compare workflow versions                    Dataset mf-cases v1 (sha 0be1..)  k = 3    |
+| Compare workflow versions                 Dataset parol-cases v1 (sha 0be1..)  k = 3    |
 |   Baseline  v1  (prompts P1, retrieval R1)   Candidate v2 (prompts P1, retrieval R2)    |
 |   Pinned: playbook 1.0.0, model <id>, prices sha 77c2..                                 |
 +-----------------------------------------------------------------------------------------+
@@ -132,7 +132,7 @@ the evidence pane is the worked example in [document 4](04-worked-example.md).
 |   Unauthorized exposure           __               __              0         __         |
 +-----------------------------------------------------------------------------------------+
 | Slots that changed (paired, modal status)                                               |
-|   MF-D05 dur-1   expected deviation   baseline: compliant x3   candidate: __            |
+|   PAROL-D05 dur-1   expected deviation   baseline: compliant x3   candidate: __         |
 |   ...                                                            [ open evidence ]      |
 | [ Draft promotion record ]                                                              |
 +-----------------------------------------------------------------------------------------+
@@ -148,7 +148,7 @@ flowchart LR
     UI[Server-rendered pages<br/>plus small highlight script]
   end
 
-  subgraph Server["apps/matterflow (Node 22, Hono)"]
+  subgraph Server["apps/parol (Node 22, Hono)"]
     AUTH[Demo identity<br/>and matter authorization]
     MAT[Matters and documents]
     RUN[Workflow runner<br/>stage graph]
@@ -170,7 +170,7 @@ flowchart LR
     FS[(Matter files<br/>data/matters/id)]
   end
 
-  EVAL["evals/matterflow<br/>case runner, scoring, compare<br/>(reuses spend guard and prices)"]
+  EVAL["evals/parol<br/>case runner, scoring, compare<br/>(reuses spend guard and prices)"]
   PROV[(Model provider<br/>configured by env)]
 
   UI --> AUTH --> MAT & RUN & REV & EXP & FB
@@ -320,7 +320,7 @@ restart resumes rather than repeats), no background services.
 ### Repository layout
 
 ```text
-apps/matterflow/
+apps/parol/
   src/
     server/        routes, demo identity, authorization middleware, pages (Hono JSX)
     stages/        ingest, extract, retrieve, analyze, verify (pure functions plus a runner)
@@ -331,19 +331,19 @@ apps/matterflow/
   public/          highlight.js, styles.css
   test/            vitest, scripted generators only, never a real model
 playbooks/
-  mf-nda-recipient.yaml        the fictional demo playbook, version 1.0.0
-fixtures/matterflow/
+  parol-nda-recipient.yaml        the fictional demo playbook, version 1.0.0
+fixtures/parol/
   cases.ts                     synthetic documents and answer keys, one entry per case
   (generated .docx and .txt files and answer-keys.json)
-evals/matterflow/
+evals/parol/
   run.ts, score.ts, compare.ts reuses evals/src prices, budget guard, usage
-docs/matterflow/               these documents
+docs/parol/               these documents
 ```
 
-Small, tested changes to existing packages that MatterFlow needs:
+Small, tested changes to existing packages that Parol needs:
 
 1. `@clausewise/playbook`: optional `version`, `category`, `fallbackLanguage` and `escalateWhen`
    fields. Optional, so `nda-mutual.yaml` and `saas-customer.yaml` still validate unchanged.
-2. `@clausewise/review`: export the pure helpers MatterFlow reuses (status settlement for required
+2. `@clausewise/review`: export the pure helpers Parol reuses (status settlement for required
    and absence rules, clause reference resolution) instead of copying them.
 3. A TXT reader that produces the same paragraph shape as `parseDocx`, so `segment` works on both.

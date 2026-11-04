@@ -5,7 +5,7 @@ project; any resemblance to a real entity is coincidental. The model outputs bel
 **illustrations of the contract shapes and of the hypothesised baseline failure**, written by hand.
 No model has produced them.
 
-The example is evaluation case `MF-D05` ([document 5](05-evaluation.md#dataset)), and it is the case
+The example is evaluation case `PAROL-D05` ([document 5](05-evaluation.md#dataset)), and it is the case
 the improvement cycle is built around: an amendment deletes the NDA's only time limit, and a
 correct, verifiable quote from the deleted clause supports the wrong conclusion.
 
@@ -18,7 +18,7 @@ correct, verifiable quote from the deleted clause supports the wrong conclusion.
 | Counterparty | Corvane Data Systems LLC                                        |
 | D1           | Mutual NDA (DOCX), version 1, stated date 2 February 2026       |
 | D2           | Amendment No. 1 (TXT), version 1, stated date 15 September 2026 |
-| Playbook     | `mf-nda-recipient` 1.0.0 (approved)                             |
+| Playbook     | `parol-nda-recipient` 1.0.0 (approved)                          |
 | Associate    | A. Ruiz (demo identity)                                         |
 | Reviewer     | D. Whitfield (demo identity)                                    |
 
@@ -187,7 +187,7 @@ Verify under v2:
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Issue category               | Confidentiality duration                                                                                                                                                                                                                                                                                                                                                                   |
 | Supporting passage, location | "Section 6.1 of the Agreement is deleted in its entirety" (Amendment No. 1 (v1), Section 2, paragraph 3), governing. "shall continue for two (2) years from the date of each disclosure" (Mutual NDA (v1), Section 6.1, paragraph 19), superseded. "Sections 4, 5 and 8 survive any termination or expiration of this Agreement" (Mutual NDA (v1), Section 9.3, paragraph 29), supporting. |
-| Applicable playbook rule     | DUR-1, MF NDA (Recipient) 1.0.0. Standard: three years or less after each disclosure. Unacceptable: no stated end for non-trade-secret information.                                                                                                                                                                                                                                        |
+| Applicable playbook rule     | DUR-1, Parol NDA (Recipient) 1.0.0. Standard: three years or less after each disclosure. Unacceptable: no stated end for non-trade-secret information.                                                                                                                                                                                                                                     |
 | Discrepancy and explanation  | As in the analysis output above.                                                                                                                                                                                                                                                                                                                                                           |
 | Suggested fallback language  | As in the analysis output above. Basis: approved playbook text, adapted.                                                                                                                                                                                                                                                                                                                   |
 | Review status or escalation  | Verified; no escalation. Awaiting review.                                                                                                                                                                                                                                                                                                                                                  |
@@ -219,7 +219,7 @@ a list of open escalations, and a provenance appendix. The DUR-1 section reads:
 
 > **MEMORANDUM: DRAFT FOR ATTORNEY REVIEW. SYNTHETIC DEMONSTRATION, NOT LEGAL ADVICE.**
 >
-> **Re:** Lanternfish / Corvane Mutual NDA and Amendment No. 1, review against MF NDA (Recipient)
+> **Re:** Lanternfish / Corvane Mutual NDA and Amendment No. 1, review against Parol NDA (Recipient)
 > playbook 1.0.0
 >
 > **4. Confidentiality duration (DUR-1, high severity): deviation.** Decided by D. Whitfield on
@@ -245,7 +245,7 @@ a list of open escalations, and a provenance appendix. The DUR-1 section reads:
 
 From the provenance appendix:
 
-> Run r_0142, workflow v2 (sha 4d1e...), playbook mf-nda-recipient 1.0.0 (sha a90c...), model as
+> Run r_0142, workflow v2 (sha 4d1e...), playbook parol-nda-recipient 1.0.0 (sha a90c...), model as
 > reported by the provider: `<model id>`. Inputs: Mutual NDA v1 (sha 3f2a...), Amendment No. 1 v1
 > (sha 9c04...). Findings: 8; decided: 8 (accepted 5, edited 2, escalated 1). Exported by
 > D. Whitfield, 3 November 2026. Each quotation above was checked against the stored document text
@@ -253,14 +253,14 @@ From the provenance appendix:
 
 ## The demo playbook
 
-The full fictional playbook, `playbooks/mf-nda-recipient.yaml`. It uses the four optional fields
+The full fictional playbook, `playbooks/parol-nda-recipient.yaml`. It uses the four optional fields
 proposed for `@clausewise/playbook` (`version`, `category`, `fallbackLanguage`, `escalateWhen`);
 everything else is the existing format.
 
 ```yaml
-name: MF NDA (Recipient)
+name: Parol NDA (Recipient)
 version: 1.0.0
-description: Fictional practice-group playbook for the MatterFlow demonstration. It is invented
+description: Fictional practice-group playbook for the Parol demonstration. It is invented
   client policy, not a statement of law, and must not be used for a real matter.
 contractTypes: [nda]
 perspective: We act for the party that expects to receive most of the information under a mutual

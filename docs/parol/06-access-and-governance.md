@@ -130,7 +130,7 @@ the stochastic limits in [document 5](05-evaluation.md#pinning-and-repeatability
 
 ## Demo identity
 
-- Enabled only when `MATTERFLOW_DEMO_IDENTITY=1`. The user picks a seeded identity (associate,
+- Enabled only when `PAROL_DEMO_IDENTITY=1`. The user picks a seeded identity (associate,
   reviewer, legal engineer, admin); the server sets an HMAC-signed, `HttpOnly`, `SameSite=Strict`
   cookie with that user id.
 - **It is not authentication.** Anyone at the keyboard can be anyone. A banner on every page says

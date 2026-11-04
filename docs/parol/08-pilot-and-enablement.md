@@ -21,37 +21,37 @@ active minutes. Reviewers also record the issues they found, which become the re
 shadow mode. Without this phase there is no time comparison, and no time-saved claim may be made.
 
 **Phase 1, training and shadow mode (week 2).** The 20-minute training exercise below, then each
-associate reviews the same four NDAs again with MatterFlow. The issue lists are compared slot by
-slot with the phase 0 lists. Shadow mode measures what MatterFlow misses, not what it saves, because
+associate reviews the same four NDAs again with Parol. The issue lists are compared slot by
+slot with the phase 0 lists. Shadow mode measures what Parol misses, not what it saves, because
 the associate has seen the documents before.
 
-**Phase 2, assisted use (weeks 3 to 5).** New NDAs go through MatterFlow with attorney review. Time,
+**Phase 2, assisted use (weeks 3 to 5).** New NDAs go through Parol with attorney review. Time,
 decisions, corrections, missed-issue reports and ratings are recorded.
 
 ## Attorney acceptance criteria
 
 Proposed with the reviewing attorneys before the pilot starts, and not changed during it.
 
-| #   | Criterion                                                                                                        | Measured by                                      |
-| --- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| A1  | No exported memo contains a quotation that is not in the document                                                | Export-time re-verification; spot check          |
-| A2  | In shadow mode, every high-severity issue on the reviewers' reference list is flagged or escalated by MatterFlow | Slot comparison with phase 0 lists               |
-| A3  | At least 80 percent of findings are accepted, or edited with what the reviewer marks as a minor edit             | Decisions and edit size                          |
-| A4  | A reviewer can check any finding's evidence without leaving the page                                             | Observation during training                      |
-| A5  | Median answer of at least 4 of 5 to "I would use this for my next NDA"                                           | Post-matter rating                               |
-| A6  | Median active time per NDA (associate plus attorney) is no worse than the phase 0 median                         | Timers, both phases                              |
-| A7  | No unauthorized access event and no instruction-driven change in output                                          | Audit log, evaluation suite on the pilot version |
+| #   | Criterion                                                                                                   | Measured by                                      |
+| --- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| A1  | No exported memo contains a quotation that is not in the document                                           | Export-time re-verification; spot check          |
+| A2  | In shadow mode, every high-severity issue on the reviewers' reference list is flagged or escalated by Parol | Slot comparison with phase 0 lists               |
+| A3  | At least 80 percent of findings are accepted, or edited with what the reviewer marks as a minor edit        | Decisions and edit size                          |
+| A4  | A reviewer can check any finding's evidence without leaving the page                                        | Observation during training                      |
+| A5  | Median answer of at least 4 of 5 to "I would use this for my next NDA"                                      | Post-matter rating                               |
+| A6  | Median active time per NDA (associate plus attorney) is no worse than the phase 0 median                    | Timers, both phases                              |
+| A7  | No unauthorized access event and no instruction-driven change in output                                     | Audit log, evaluation suite on the pilot version |
 
 ## Training exercise (20 minutes)
 
-Uses the seeded training matter T01: the documents of evaluation case `MF-D05`, with the instruction
-paragraph from `MF-D08` added to the NDA and one planted finding. T01 is never used in evaluation.
+Uses the seeded training matter T01: the documents of evaluation case `PAROL-D05`, with the instruction
+paragraph from `PAROL-D08` added to the NDA and one planted finding. T01 is never used in evaluation.
 The trainer has the answer key; the trainee does not.
 
 | Step | Task                                                                                                                                                   | What it teaches                                  | Answer key                                                                                         |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
 | 1    | Create the matter, upload the NDA and the amendment, pick the playbook version                                                                         | Intake, operative versions, the destination line | NDA operative; playbook 1.0.0                                                                      |
-| 2    | Read the warning on the NDA. What will MatterFlow do with that paragraph?                                                                              | Documents are data                               | Nothing: it is reviewed as text; the warning only draws attention                                  |
+| 2    | Read the warning on the NDA. What will Parol do with that paragraph?                                                                                   | Documents are data                               | Nothing: it is reviewed as text; the warning only draws attention                                  |
 | 3    | Open DUR-1. Which passage governs, and why is the Section 6.1 quote marked superseded?                                                                 | Evidence roles, amendments                       | Amendment Section 2 deletes 6.1                                                                    |
 | 4    | The trainer has planted a finding (seeded in the training matter only) whose quote exists but does not support it. Find it and reject it with a reason | Quote validity is not support                    | The planted `pds-1` finding quotes the definition clause, which says nothing about representatives |
 | 5    | Escalate a finding you would send to a partner, with a reason                                                                                          | Escalation is a decision                         | Any reasoned choice; DUR-1 is the natural one, because the amendment reverses an agreed term       |
@@ -74,9 +74,9 @@ Completion is recorded per step; trainees who miss steps 3 or 4 repeat them with
 7. **Leave notes** for your reviewer on anything you disagree with.
 8. **Reviewer:** accept, edit, reject or escalate every finding. Edits and rejections need a reason.
 9. **Export the memo.** It contains only reviewed findings, open items first.
-10. **Rate the matter** and use **Report a missed issue** for anything MatterFlow did not catch.
+10. **Rate the matter** and use **Report a missed issue** for anything Parol did not catch.
 
-What MatterFlow will not do: decide anything, send anything to the other side, or review PDFs,
+What Parol will not do: decide anything, send anything to the other side, or review PDFs,
 footnotes, headers or pictures. When documents change, earlier decisions stop counting.
 
 ## Feedback collection
@@ -108,7 +108,7 @@ Computed from stored events, excluding synthetic users and seeded matters.
 | Escalation rate       | Findings escalated by the system, and by reviewers, separately                | Findings                                     |
 | Satisfaction          | Median and distribution of the post-matter rating                             | Ratings given (with the response rate shown) |
 | Active time           | Median active minutes per NDA, associate and attorney separately and combined | Timed NDAs, per phase                        |
-| Shadow-mode agreement | Reference-list issues that MatterFlow flagged or escalated, by severity       | Reference-list issues                        |
+| Shadow-mode agreement | Reference-list issues that Parol flagged or escalated, by severity            | Reference-list issues                        |
 
 **Time claims.** A difference in time is reported only as medians from phase 0 and phase 2 with
 their sample sizes, attorney review time included, and with the caveat that documents differ
@@ -118,7 +118,7 @@ computed from a pilot this size.
 ## Go/no-go recommendation (template for the sponsor)
 
 ```markdown
-# MatterFlow NDA pilot: recommendation
+# Parol NDA pilot: recommendation
 
 **Recommendation:** Go | Go with conditions | No-go
 **Workflow version:** v<n> (promotion record <link>), playbook <version>, model <id>

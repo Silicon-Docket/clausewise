@@ -2,12 +2,12 @@
 
 ## Vocabulary
 
-These terms are used identically in every MatterFlow document.
+These terms are used identically in every Parol document.
 
 **Categories** (the seven playbook categories): `parties`, `ci-definition`, `exclusions`,
 `permitted-disclosures`, `duration`, `return-destruction`, `governing-law`.
 
-**Rules** in the demo playbook `mf-nda-recipient` version 1.0.0 (full text in
+**Rules** in the demo playbook `parol-nda-recipient` version 1.0.0 (full text in
 [document 4](04-worked-example.md#the-demo-playbook)):
 
 | Rule    | Category              | Title                                   | Severity | Required |
@@ -29,7 +29,7 @@ produces eight findings, one per rule.
 will not state a status; always carries at least one escalation). The first four are the
 Clausewise statuses; `undetermined` is new.
 
-**Escalation reasons** (the only way MatterFlow expresses doubt; there are no confidence scores):
+**Escalation reasons** (the only way Parol expresses doubt; there are no confidence scores):
 
 | Code                      | Raised by                  | Meaning for the reviewer                                                                                 | Forces `undetermined`? |
 | ------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------- | ---------------------- |
@@ -183,7 +183,7 @@ CREATE TABLE span_annotations (            -- deterministic, derived at ingest
 -- Playbooks, prompts, workflow versions ---------------------------------------------------
 CREATE TABLE playbook_versions (
   id             TEXT PRIMARY KEY,
-  playbook_slug  TEXT NOT NULL,             -- mf-nda-recipient
+  playbook_slug  TEXT NOT NULL,             -- parol-nda-recipient
   version        TEXT NOT NULL,             -- 1.0.0
   yaml           TEXT NOT NULL,
   sha256         TEXT NOT NULL,
@@ -369,7 +369,7 @@ CREATE TABLE feedback (
 -- Evaluation ------------------------------------------------------------------------------
 CREATE TABLE eval_datasets (
   id              TEXT PRIMARY KEY,
-  label           TEXT NOT NULL,           -- mf-cases v1
+  label           TEXT NOT NULL,           -- parol-cases v1
   dev_sha256      TEXT NOT NULL,
   heldout_sha256  TEXT NOT NULL,           -- committed before the first baseline run
   created_at      TEXT NOT NULL
@@ -391,7 +391,7 @@ CREATE TABLE eval_runs (
 
 CREATE TABLE eval_slot_results (
   eval_run_id      TEXT NOT NULL REFERENCES eval_runs(id),
-  case_key         TEXT NOT NULL,          -- MF-D05
+  case_key         TEXT NOT NULL,          -- PAROL-D05
   rule_key         TEXT NOT NULL,
   repeat           INTEGER NOT NULL,
   run_id           TEXT NOT NULL REFERENCES runs(id),
@@ -766,7 +766,7 @@ not by the model's preference:
 
 The model labels evidence roles (`governing`, `superseded`, `conflicting`); verify compares those
 labels with what the rules above say. A conflict the rules cannot settle produces `undetermined`
-with `conflicting_sources`, and both passages are shown side by side. MatterFlow never picks one
+with `conflicting_sources`, and both passages are shown side by side. Parol never picks one
 silently.
 
 ## Deterministic checks and model judgment
@@ -843,7 +843,7 @@ issue table counts it, and export lists it under open items.
 
 ## Escalation instead of confidence
 
-MatterFlow shows no confidence percentages. A model's own estimate of its confidence is not
+Parol shows no confidence percentages. A model's own estimate of its confidence is not
 calibrated against this playbook, and a number such as "87%" invites a reviewer to skip reading.
 Instead, each finding is either verified (every check passed) or carries escalation reasons, and
 each reason tells the reviewer what to look at: which passage, which check failed, what was

@@ -1,19 +1,24 @@
-# MatterFlow: NDA Review and Workflow Evaluation Pilot
+# Parol: NDA Review and Workflow Evaluation Pilot
 
 **Status: design only.** Nothing in this folder is implemented yet, no model has been run against
 the cases described here, and every number in these documents is a proposed gate, an estimate or a
 placeholder. Where a result will exist later, the documents leave an empty cell and say so.
 
-MatterFlow is a portfolio project that demonstrates the work of an internal AI / Legal Workflow
+Parol is a portfolio project that demonstrates the work of an internal AI / Legal Workflow
 Engineer: discovering a legal workflow, encoding a practice group's playbook, building one bounded
 AI-assisted workflow with attorney review, measuring it with a held-out evaluation suite, and
 deciding with evidence whether a revision is ready for a pilot. The legal task is NDA review
 against a fictional practice-group playbook.
 
-It is designed as a web application inside Clausewise (`apps/matterflow`), because Clausewise
+**The name.** Under the parol evidence rule, evidence from outside a written agreement cannot
+vary its terms. Parol applies the same discipline to its model: the only sources a finding may
+rely on are the documents in the matter, every conclusion must cite them, and text in those
+documents is evidence, never instruction.
+
+It is designed as a web application inside Clausewise (`apps/parol`), because Clausewise
 already holds most of the engine this needs: Word parsing, clause segmentation, a validated playbook
 format, a model layer with structured output and bounded retries, contract text fenced off as data,
-exact-quote anchoring, and an evaluation harness with a spend guard. MatterFlow adds what turns a
+exact-quote anchoring, and an evaluation harness with a spend guard. Parol adds what turns a
 review command into a supervised workflow: matters and permissions, versioned inputs, an evidence
 model, a verify stage, attorney review, invalidation, a DOCX memorandum, and an evaluation suite
 that compares workflow versions.
@@ -43,7 +48,7 @@ These were made so the design could proceed. None of them blocks it, and each is
    purpose matches: it reviews NDAs against playbooks. PinCite (case citation checking) and
    citation-engine (Rust citation extraction) solve a different problem; NDAs rarely cite
    authority, so neither is used. Clausewise had no `docs/` folder, so this one was created.
-2. **Stack.** MatterFlow stays in TypeScript on Node 22 to reuse the Clausewise packages, rather
+2. **Stack.** Parol stays in TypeScript on Node 22 to reuse the Clausewise packages, rather
    than starting a Python application that would reimplement them. The reasoning and the new
    dependencies are in [document 2](02-experience-and-architecture.md#stack-decision).
 3. **Synthetic data only.** Every party, document and playbook rule is written for this project.
