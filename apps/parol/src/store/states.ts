@@ -63,4 +63,7 @@ export function canRunTransition(from: RunStatus, to: RunStatus): boolean {
 }
 
 export const isTerminalRunStatus = (status: RunStatus): boolean =>
-  status === "succeeded" || status === "failed" || status === "cancelled" || status === "superseded";
+  status === "succeeded" ||
+  status === "failed" ||
+  status === "cancelled" ||
+  status === "superseded";

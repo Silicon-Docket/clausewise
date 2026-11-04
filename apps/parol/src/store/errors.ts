@@ -1,19 +1,18 @@
+import { MATTER_STATUSES, RUN_STATUSES } from "../contracts.js";
+
 /**
- * Errors the store throws. Their messages carry ids, codes and counts and never text from a
- * document, a quote, a review reason or a client name, because callers log them.
+ * Errors the store throws. Their messages name a kind of thing, a rule that was broken or a closed
+ * vocabulary value (a status, a decision), and never a string the caller supplied: not text from a
+ * document, a quote, a review reason or a client name, and not an id either, because an id arrives
+ * in a request and can be anything an attacker types. Callers log these messages, so a message that
+ * repeated its input would carry that input into the logs.
+ *
+ * Where a caller needs an id back (the run that is already active), it is a field of the error, and
+ * it is an id the store read from its own rows.
  *
  * The HTTP layer maps them: NotFoundError to 404, ValidationError to 400, ConflictError and its
  * subclasses to 409.
  */
-const ID_LIKE = /^[A-Za-z0-9_.:/-]{1,128}$/;
-
-/**
- * Ids go into error messages so a person can find the row; anything that is not shaped like an id
- * does not, because a value that is not an id may be text that came out of a document or a model.
- */
-export function safeId(value: unknown): string {
-  return typeof value === "string" && ID_LIKE.test(value) ? value : "(malformed id)";
-}
 
 export class StoreError extends Error {
   override name = "StoreError";
@@ -27,13 +26,32 @@ export class StoreError extends Error {
 
 /**
  * The row does not exist, or belongs to another matter. The two cases are deliberately the same
- * error with the same message, so a caller probing ids learns nothing about other matters.
+ * error with the same message, so a caller probing ids learns nothing about other matters. It does
+ * not keep the id it was asked for: the caller has it already, and an error object is serialised
+ * whole by loggers.
  */
+export type EntityKind =
+  | "user"
+  | "matter"
+  | "document"
+  | "document version"
+  | "span"
+  | "playbook version"
+  | "workflow version"
+  | "prompt version"
+  | "run"
+  | "run stage"
+  | "finding"
+  | "evidence"
+  | "eval dataset"
+  | "eval run";
+
 export class NotFoundError extends StoreError {
   override name = "NotFoundError";
-  readonly entity: string;
-  constructor(entity: string, id: string) {
-    super("not_found", `${entity} ${safeId(id)} not found`);
+  /** A closed set, so a value from a request cannot be passed here by mistake. */
+  readonly entity: EntityKind;
+  constructor(entity: EntityKind) {
+    super("not_found", `${entity} not found`);
     this.entity = entity;
   }
 }
@@ -51,12 +69,15 @@ export class ConflictError extends StoreError {
   override name = "ConflictError";
 }
 
-/** A matter already has a run in flight. Carries its id so the UI can link to it. */
+/**
+ * A matter already has a run in flight. Carries its id so the UI can link to it; the id is read
+ * from the database, never taken from the request.
+ */
 export class ActiveRunError extends ConflictError {
   override name = "ActiveRunError";
   readonly activeRunId: string;
   constructor(activeRunId: string) {
-    super("active_run", `matter already has an active run ${activeRunId}`);
+    super("active_run", "the matter already has an active run");
     this.activeRunId = activeRunId;
   }
 }
@@ -64,42 +85,61 @@ export class ActiveRunError extends ConflictError {
 /** The run belongs to inputs that have since changed, or it has been superseded. Stop work on it. */
 export class StaleRunError extends ConflictError {
   override name = "StaleRunError";
-  constructor(runId: string | null, why: "superseded" | "inputs_changed") {
-    super("stale_run", `run ${runId ?? "(not started)"} is stale (${why})`);
+  readonly why: "superseded" | "inputs_changed";
+  constructor(why: "superseded" | "inputs_changed") {
+    super("stale_run", `the run is stale (${why})`);
+    this.why = why;
   }
 }
 
 /** The finding is stale, or its run is not the matter's current run. Reload and decide again. */
 export class StaleFindingError extends ConflictError {
   override name = "StaleFindingError";
-  constructor(findingId: string) {
-    super("stale_finding", `finding ${findingId} is stale`);
+  constructor() {
+    super("stale_finding", "the finding is stale");
   }
 }
 
 /** The reviewer decided on content that is no longer the finding's content. */
 export class ContentMismatchError extends ConflictError {
   override name = "ContentMismatchError";
-  constructor(findingId: string) {
-    super("content_mismatch", `finding ${findingId} content hash does not match`);
+  constructor() {
+    super("content_mismatch", "the finding content hash does not match the one decided on");
   }
 }
 
 /** The matter has no complete set of inputs to run on. */
 export class InputsIncompleteError extends ConflictError {
   override name = "InputsIncompleteError";
-  constructor(matterId: string) {
+  constructor() {
     super(
       "inputs_incomplete",
-      `matter ${matterId} needs a playbook version and an operative version of every document, one of them an NDA`,
+      "the matter needs a playbook version and an operative version of every document, one of them an NDA",
     );
   }
 }
 
+/** Every state name a transition can mention. Anything else is not echoed. */
+const KNOWN_STATES: ReadonlySet<string> = new Set([
+  ...MATTER_STATUSES,
+  ...RUN_STATUSES,
+  "candidate",
+  "pilot",
+  "retired",
+  "draft",
+  "approved",
+]);
+const stateName = (value: unknown): string =>
+  typeof value === "string" && KNOWN_STATES.has(value) ? value : "(unknown state)";
+
 export class InvalidTransitionError extends ConflictError {
   override name = "InvalidTransitionError";
+  // `to` can come straight from a request, so it is named only when it is a state that exists.
   constructor(entity: "matter" | "run" | "workflow" | "playbook", from: string, to: string) {
-    super("invalid_transition", `${entity} cannot move from ${from} to ${to}`);
+    super(
+      "invalid_transition",
+      `${entity} cannot move from ${stateName(from)} to ${stateName(to)}`,
+    );
   }
 }
 

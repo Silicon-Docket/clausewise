@@ -91,7 +91,10 @@ export function createEvalApi(
   const listEvalDatasets = (): EvalDatasetRow[] =>
     all<RawDataset>("SELECT * FROM eval_datasets ORDER BY created_at, rowid").map(toDataset);
 
-  function createEvalDataset(input: { label: string; devSha256: string; heldoutSha256: string }): EvalDatasetRow {
+  function createEvalDataset(
+    input: { label: string; devSha256: string; heldoutSha256: string },
+    opts: { actorId?: string | null } = {},
+  ): EvalDatasetRow {
     const label = cleanLabel("dataset label", input.label, 100);
     assertSha256("devSha256", input.devSha256);
     assertSha256("heldoutSha256", input.heldoutSha256);
@@ -105,6 +108,14 @@ export function createEvalApi(
         input.heldoutSha256,
         ctx.now(),
       );
+      ctx.audit({
+        actorId: opts.actorId ?? null,
+        matterId: null,
+        action: "eval.record",
+        targetType: "eval_dataset",
+        targetId: id,
+        detail: { devSha256: input.devSha256, heldoutSha256: input.heldoutSha256 },
+      });
       return getEvalDataset(id) as EvalDatasetRow;
     });
   }
@@ -139,11 +150,11 @@ export function createEvalApi(
     const model = cleanLabel("model", input.model, 200);
     const resultsPath = cleanLabel("results path", input.resultsPath, 200);
     return tx(() => {
-      if (!getEvalDataset(input.datasetId)) throw new NotFoundError("eval dataset", input.datasetId);
+      if (!getEvalDataset(input.datasetId)) throw new NotFoundError("eval dataset");
       if (!playbooks.getWorkflowVersion(input.workflowVersionId))
-        throw new NotFoundError("workflow version", input.workflowVersionId);
+        throw new NotFoundError("workflow version");
       if (!playbooks.getPlaybookVersion(input.playbookVersionId))
-        throw new NotFoundError("playbook version", input.playbookVersionId);
+        throw new NotFoundError("playbook version");
       const id = newId("evr");
       run(
         `INSERT INTO eval_runs
@@ -182,7 +193,7 @@ export function createEvalApi(
   function finishEvalRun(evalRunId: string, opts: { actorId: string | null }): EvalRunRow {
     return tx(() => {
       const existing = getEvalRun(evalRunId);
-      if (!existing) throw new NotFoundError("eval run", evalRunId);
+      if (!existing) throw new NotFoundError("eval run");
       if (existing.finishedAt !== null) return existing;
       run("UPDATE eval_runs SET finished_at = ? WHERE id = ?", ctx.now(), evalRunId);
       ctx.audit({
@@ -227,9 +238,12 @@ export function createEvalApi(
     return tx(() => {
       const matter = requireMatter(matterId);
       if (!matter.synthetic)
-        throw new ValidationError("not_synthetic", "evaluation results are recorded for synthetic matters only");
+        throw new ValidationError(
+          "not_synthetic",
+          "evaluation results are recorded for synthetic matters only",
+        );
       runs.internal.requireRun(matterId, input.runId);
-      if (!getEvalRun(input.evalRunId)) throw new NotFoundError("eval run", input.evalRunId);
+      if (!getEvalRun(input.evalRunId)) throw new NotFoundError("eval run");
       if (
         get<{ n: number }>(
           "SELECT 1 AS n FROM eval_slot_results WHERE eval_run_id = ? AND case_key = ? AND rule_key = ? AND repeat = ?",
@@ -239,7 +253,7 @@ export function createEvalApi(
           input.repeat,
         )
       )
-        throw new ConflictError("slot_exists", `eval run ${input.evalRunId} already has a result for this slot`);
+        throw new ConflictError("slot_exists", "the eval run already has a result for this slot");
       run(
         `INSERT INTO eval_slot_results
            (eval_run_id, case_key, rule_key, repeat, run_id, expected_status, got_status, scores_json)
@@ -259,7 +273,13 @@ export function createEvalApi(
         action: "eval.record",
         targetType: "eval_run",
         targetId: input.evalRunId,
-        detail: { caseKey, ruleKey, repeat: input.repeat, runId: input.runId, matched: input.expectedStatus === input.gotStatus },
+        detail: {
+          caseKey,
+          ruleKey,
+          repeat: input.repeat,
+          runId: input.runId,
+          matched: input.expectedStatus === input.gotStatus,
+        },
       });
       return toSlot(
         get<RawSlot>(

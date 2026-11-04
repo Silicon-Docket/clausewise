@@ -15,7 +15,10 @@ import {
 
 let db: Database;
 let n = 0;
-const append = (detail: Record<string, unknown> = {}, matterId: string | null = "mat_0000000000000001") =>
+const append = (
+  detail: Record<string, unknown> = {},
+  matterId: string | null = "mat_0000000000000001",
+) =>
   appendAudit(db, {
     at: `2026-11-01T09:00:${String(n++ % 60).padStart(2, "0")}.000Z`,
     actorId: "usr_demo_associate",
@@ -32,7 +35,12 @@ const seed = (count: number) => {
 
 /** Lets a test play the attacker: the triggers are what the chain's tamper evidence sits behind. */
 const dropAuditTriggers = () => {
-  for (const name of ["audit_events_no_update", "audit_events_no_delete", "audit_events_no_replace", "audit_events_linked"])
+  for (const name of [
+    "audit_events_no_update",
+    "audit_events_no_delete",
+    "audit_events_no_replace",
+    "audit_events_linked",
+  ])
     db.exec(`DROP TRIGGER ${name}`);
 };
 
@@ -105,14 +113,25 @@ describe("appendAudit", () => {
   });
 
   it("refuses malformed actions, targets and actors", () => {
-    const base = { at: "t", actorId: null, matterId: null, action: "a.b", targetType: "x", targetId: "id" };
+    const base = {
+      at: "t",
+      actorId: null,
+      matterId: null,
+      action: "a.b",
+      targetType: "x",
+      targetId: "id",
+    };
     expect(() => appendAudit(db, { ...base, action: "Review Decide" })).toThrow(ValidationError);
     expect(() => appendAudit(db, { ...base, action: "single" })).toThrow(ValidationError);
     expect(() => appendAudit(db, { ...base, targetType: "Bad Type" })).toThrow(ValidationError);
     // An id is not prose: a target id with spaces is how text would sneak in.
-    expect(() => appendAudit(db, { ...base, targetId: "the indemnity clause" })).toThrow(ValidationError);
+    expect(() => appendAudit(db, { ...base, targetId: "the indemnity clause" })).toThrow(
+      ValidationError,
+    );
     expect(() => appendAudit(db, { ...base, targetId: "x".repeat(201) })).toThrow(ValidationError);
-    expect(() => appendAudit(db, { ...base, actorId: "someone with spaces" })).toThrow(ValidationError);
+    expect(() => appendAudit(db, { ...base, actorId: "someone with spaces" })).toThrow(
+      ValidationError,
+    );
     expect(() => appendAudit(db, { ...base, matterId: "a b" })).toThrow(ValidationError);
     expect(listAuditEvents(db)).toHaveLength(0);
   });
@@ -139,12 +158,24 @@ describe("detail limits", () => {
   });
 
   it("refuses a pasted document broken into many small pieces", () => {
-    expect(() => append({ pieces: Array.from({ length: 65 }, () => "words words words") })).toThrow(AuditDetailError);
-    expect(() => append(Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`k${i}`, 1])))).toThrow(AuditDetailError);
+    expect(() => append({ pieces: Array.from({ length: 65 }, () => "words words words") })).toThrow(
+      AuditDetailError,
+    );
+    expect(() =>
+      append(Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`k${i}`, 1]))),
+    ).toThrow(AuditDetailError);
   });
 
   it("refuses values that are not plain JSON", () => {
-    for (const bad of [new Date(), 10n, () => 1, Number.NaN, Number.POSITIVE_INFINITY, new Map(), Symbol("s")])
+    for (const bad of [
+      new Date(),
+      10n,
+      () => 1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      new Map(),
+      Symbol("s"),
+    ])
       expect(() => append({ bad })).toThrow(AuditDetailError);
     expect(() => append({ list: [undefined] })).toThrow(AuditDetailError);
     class Holder {
@@ -183,7 +214,9 @@ describe("detail limits", () => {
 describe("the append-only triggers", () => {
   it("refuse an update and a delete", () => {
     seed(2);
-    expect(() => db.exec("UPDATE audit_events SET action = 'x.y' WHERE seq = 1")).toThrow(/append-only/);
+    expect(() => db.exec("UPDATE audit_events SET action = 'x.y' WHERE seq = 1")).toThrow(
+      /append-only/,
+    );
     expect(() => db.exec("DELETE FROM audit_events WHERE seq = 1")).toThrow(/append-only/);
     expect(() => db.exec("DELETE FROM audit_events")).toThrow(/append-only/);
   });
@@ -191,12 +224,28 @@ describe("the append-only triggers", () => {
   it("refuse INSERT OR REPLACE and an upsert onto an existing sequence number", () => {
     const first = append({ i: 1 });
     // The link is valid on purpose, so it is the replace guard that has to refuse, not the chain guard.
-    const row = [first.seq, "t", null, null, "a.b", "x", "y", "{}", first.hash, "f".repeat(64)] as const;
-    const insert = "(seq, at, actor_id, matter_id, action, target_type, target_id, detail_json, prev_hash, hash) VALUES (?,?,?,?,?,?,?,?,?,?)";
-    expect(() => db.prepare(`INSERT OR REPLACE INTO audit_events ${insert}`).run(...row)).toThrow(/append-only/);
+    const row = [
+      first.seq,
+      "t",
+      null,
+      null,
+      "a.b",
+      "x",
+      "y",
+      "{}",
+      first.hash,
+      "f".repeat(64),
+    ] as const;
+    const insert =
+      "(seq, at, actor_id, matter_id, action, target_type, target_id, detail_json, prev_hash, hash) VALUES (?,?,?,?,?,?,?,?,?,?)";
+    expect(() => db.prepare(`INSERT OR REPLACE INTO audit_events ${insert}`).run(...row)).toThrow(
+      /append-only/,
+    );
     expect(() =>
       db
-        .prepare(`INSERT INTO audit_events ${insert} ON CONFLICT(seq) DO UPDATE SET action = excluded.action`)
+        .prepare(
+          `INSERT INTO audit_events ${insert} ON CONFLICT(seq) DO UPDATE SET action = excluded.action`,
+        )
         .run(...row),
     ).toThrow(/append-only/);
     expect(listAuditEvents(db)[0]?.action).toBe("review.decide");
@@ -214,7 +263,11 @@ describe("the append-only triggers", () => {
     expect(() => insert("a".repeat(64))).toThrow(/does not extend the chain/);
     expect(() => insert(first.hash)).not.toThrow();
     // The database cannot compute SHA-256, so the forged hash is caught by verification instead.
-    expect(verifyAuditChain(db)).toMatchObject({ ok: false, firstBrokenSeq: 2, reason: "hash_mismatch" });
+    expect(verifyAuditChain(db)).toMatchObject({
+      ok: false,
+      firstBrokenSeq: 2,
+      reason: "hash_mismatch",
+    });
   });
 });
 
@@ -229,7 +282,12 @@ describe("verifyAuditChain", () => {
     seed(6);
     dropAuditTriggers();
     db.exec(`UPDATE audit_events SET detail_json = '{"i":99}' WHERE seq = 3`);
-    expect(verifyAuditChain(db)).toEqual({ ok: false, firstBrokenSeq: 3, reason: "hash_mismatch", events: 2 });
+    expect(verifyAuditChain(db)).toEqual({
+      ok: false,
+      firstBrokenSeq: 3,
+      reason: "hash_mismatch",
+      events: 2,
+    });
   });
 
   it("detects an edit to any column, not only the detail", () => {
@@ -253,13 +311,21 @@ describe("verifyAuditChain", () => {
     seed(6);
     dropAuditTriggers();
     db.exec("DELETE FROM audit_events WHERE seq = 3");
-    expect(verifyAuditChain(db)).toEqual({ ok: false, firstBrokenSeq: 3, reason: "sequence_gap", events: 2 });
+    expect(verifyAuditChain(db)).toEqual({
+      ok: false,
+      firstBrokenSeq: 3,
+      reason: "sequence_gap",
+      events: 2,
+    });
   });
 
   it("detects an edit that recomputes its own hash, one event later", () => {
     seed(5);
     dropAuditTriggers();
-    const row = db.prepare("SELECT * FROM audit_events WHERE seq = 3").get() as Record<string, string | number | null>;
+    const row = db.prepare("SELECT * FROM audit_events WHERE seq = 3").get() as Record<
+      string,
+      string | number | null
+    >;
     const forged = '{"i":42}';
     const hash = sha256Hex(
       String(row.prev_hash) +
@@ -275,16 +341,29 @@ describe("verifyAuditChain", () => {
         }),
     );
     db.prepare("UPDATE audit_events SET detail_json = ?, hash = ? WHERE seq = 3").run(forged, hash);
-    expect(verifyAuditChain(db)).toMatchObject({ ok: false, firstBrokenSeq: 4, reason: "prev_hash_mismatch" });
+    expect(verifyAuditChain(db)).toMatchObject({
+      ok: false,
+      firstBrokenSeq: 4,
+      reason: "prev_hash_mismatch",
+    });
   });
 
   it("detects events cut from the end, which a bare chain cannot", () => {
     seed(5);
     dropAuditTriggers();
     db.exec("DELETE FROM audit_events WHERE seq > 3");
-    expect(verifyAuditChain(db)).toEqual({ ok: false, firstBrokenSeq: 4, reason: "truncated", events: 3 });
+    expect(verifyAuditChain(db)).toEqual({
+      ok: false,
+      firstBrokenSeq: 4,
+      reason: "truncated",
+      events: 3,
+    });
     db.exec("DELETE FROM audit_events");
-    expect(verifyAuditChain(db)).toMatchObject({ ok: false, firstBrokenSeq: 1, reason: "truncated" });
+    expect(verifyAuditChain(db)).toMatchObject({
+      ok: false,
+      firstBrokenSeq: 1,
+      reason: "truncated",
+    });
   });
 
   it("does not reuse the number of a removed last event when the log grows again", () => {
@@ -294,13 +373,20 @@ describe("verifyAuditChain", () => {
     append({ after: true });
     const seqs = listAuditEvents(db).map((e) => e.seq);
     expect(seqs).toEqual([1, 2, 4]);
-    expect(verifyAuditChain(db)).toMatchObject({ ok: false, firstBrokenSeq: 3, reason: "sequence_gap" });
+    expect(verifyAuditChain(db)).toMatchObject({
+      ok: false,
+      firstBrokenSeq: 3,
+      reason: "sequence_gap",
+    });
   });
 
   it("detects a stored detail that breaks the limits", () => {
     seed(3);
     dropAuditTriggers();
-    const row = db.prepare("SELECT * FROM audit_events WHERE seq = 2").get() as Record<string, string | number | null>;
+    const row = db.prepare("SELECT * FROM audit_events WHERE seq = 2").get() as Record<
+      string,
+      string | number | null
+    >;
     const long = JSON.stringify({ text: "q".repeat(500) });
     const hash = sha256Hex(
       String(row.prev_hash) +
@@ -316,6 +402,10 @@ describe("verifyAuditChain", () => {
         }),
     );
     db.prepare("UPDATE audit_events SET detail_json = ?, hash = ? WHERE seq = 2").run(long, hash);
-    expect(verifyAuditChain(db)).toMatchObject({ ok: false, firstBrokenSeq: 2, reason: "bad_detail" });
+    expect(verifyAuditChain(db)).toMatchObject({
+      ok: false,
+      firstBrokenSeq: 2,
+      reason: "bad_detail",
+    });
   });
 });

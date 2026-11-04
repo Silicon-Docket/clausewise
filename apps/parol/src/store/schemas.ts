@@ -16,6 +16,8 @@ import {
  */
 
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/);
+/** A playbook rule key: short, with no spaces, so a sentence of document text cannot pass for one. */
+export const RULE_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const id = z.string().min(1).max(200);
 
 export const RunManifestSchema = z
@@ -38,7 +40,9 @@ export const RunManifestSchema = z
       )
       .min(1)
       .max(3),
-    playbook: z.object({ versionId: id, slug: z.string().min(1), version: z.string().min(1), sha256 }).strict(),
+    playbook: z
+      .object({ versionId: id, slug: z.string().min(1), version: z.string().min(1), sha256 })
+      .strict(),
     workflow: z.object({ versionId: id, label: z.string().min(1), sha256 }).strict(),
     model: z.object({ provider: z.string().min(1), model: z.string().min(1) }).strict(),
   })
@@ -75,7 +79,7 @@ export const RuleJsonSchema = z
   .strict();
 
 export const PlaybookRuleRecordSchema = z.object({
-  key: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/),
+  key: z.string().regex(RULE_KEY_PATTERN),
   category: z.enum(CATEGORY_IDS),
   title: z.string(),
   severity: z.enum(["high", "medium", "low"]),
@@ -163,11 +167,19 @@ export const VerifiedFindingSchema = z.object({
 
 export const CallRecordSchema = z.object({
   stage: z.enum(["extract", "analyze", "support"]),
-  ruleKey: z.string().min(1).nullable(),
+  ruleKey: z.string().regex(RULE_KEY_PATTERN).nullable(),
   promptVersionId: z.string().min(1),
   requestSha256: sha256,
   attempt: z.number().int().min(1),
-  outcome: z.enum(["ok", "schema_error", "semantic_error", "refusal", "cut_off", "transport", "fatal"]),
+  outcome: z.enum([
+    "ok",
+    "schema_error",
+    "semantic_error",
+    "refusal",
+    "cut_off",
+    "transport",
+    "fatal",
+  ]),
   latencyMs: z.number().min(0),
   inputTokens: z.number().int().min(0).nullable(),
   outputTokens: z.number().int().min(0).nullable(),

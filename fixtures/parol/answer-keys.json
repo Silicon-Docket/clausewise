@@ -1,0 +1,993 @@
+{
+  "format": 1,
+  "playbook": {
+    "slug": "parol-nda-recipient",
+    "version": "1.0.0",
+    "sha256": "9ac87da098c85e3d8bda539b82bb90e411c68cfdce42e821e7e2bf47e8b24251",
+    "rules": {
+      "pty-1": { "category": "parties", "severity": "medium", "required": true },
+      "def-1": { "category": "ci-definition", "severity": "medium", "required": true },
+      "exc-1": { "category": "exclusions", "severity": "high", "required": true },
+      "pds-1": { "category": "permitted-disclosures", "severity": "medium", "required": true },
+      "pds-2": { "category": "permitted-disclosures", "severity": "medium", "required": true },
+      "dur-1": { "category": "duration", "severity": "high", "required": true },
+      "ret-1": { "category": "return-destruction", "severity": "low", "required": false },
+      "gov-1": { "category": "governing-law", "severity": "medium", "required": true }
+    }
+  },
+  "cases": [
+    {
+      "case": "PAROL-D01",
+      "split": "dev",
+      "phenomenon": "Clean control: every standard met",
+      "intake": { "clientLegalName": "Quillfeather Robotics, Inc." },
+      "documents": [
+        {
+          "label": "D1",
+          "file": "parol-d01-nda.docx",
+          "kind": "nda",
+          "title": "Mutual Confidentiality Agreement",
+          "versionNo": 1,
+          "statedDate": "2026-03-10",
+          "operative": true,
+          "sha256": "1b693c88b913fc50662e57a24bd045d241ad441fd29b47249f1bee3a12e8b1f8",
+          "paragraphs": 30
+        }
+      ],
+      "expect": {
+        "pty-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": null,
+              "anchor": "Quillfeather Robotics, Inc., a Delaware corporation",
+              "paragraph": 1
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "pty-1.standard: both parties are named in full with their entity types",
+          "note": ""
+        },
+        "def-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "1.2",
+              "anchor": "identified as confidential when disclosed",
+              "paragraph": 5
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "def-1.standard: information identified as confidential or reasonably understood to be",
+          "note": ""
+        },
+        "exc-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "2.1",
+              "anchor": "The Recipient has no obligation under this Agreement for information that",
+              "paragraph": 7
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "exc-1.standard: all four exclusions are present and none needs written records",
+          "note": ""
+        },
+        "pds-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "4.1",
+              "anchor": "professional advisers of the Recipient",
+              "paragraph": 12
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "pds-1.standard: advisers and affiliates' staff may receive it on a need to know basis",
+          "note": ""
+        },
+        "pds-2": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "4.2",
+              "anchor": "a court or government order requires it",
+              "paragraph": 13
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "pds-2.standard: a dedicated clause with notice where permitted and practicable",
+          "note": ""
+        },
+        "dur-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            { "doc": "D1", "clause": "5.1", "anchor": "end three (3) years after", "paragraph": 15 }
+          ],
+          "superseded": [],
+          "relevant": [
+            {
+              "doc": "D1",
+              "clause": "5.2",
+              "anchor": "continues to apply to Confidential Information already disclosed",
+              "paragraph": 16
+            }
+          ],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "dur-1.standard: obligations end three years after each disclosure",
+          "note": ""
+        },
+        "ret-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            { "doc": "D1", "clause": "6.1", "anchor": "Within thirty (30) days", "paragraph": 18 }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "ret-1.standard: thirty days, with law and routine backup copies kept confidential",
+          "note": ""
+        },
+        "gov-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "7.1",
+              "anchor": "laws of the State of New York",
+              "paragraph": 20
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "gov-1.standard: New York law and a New York forum are on the approved list",
+          "note": ""
+        }
+      },
+      "warnings": []
+    },
+    {
+      "case": "PAROL-D03",
+      "split": "dev",
+      "phenomenon": "Omissions: no governing law, no compelled-disclosure clause, no return clause",
+      "intake": { "clientLegalName": "Tessellate Logistics, Inc." },
+      "documents": [
+        {
+          "label": "D1",
+          "file": "parol-d03-nda.docx",
+          "kind": "nda",
+          "title": "Nondisclosure Agreement",
+          "versionNo": 1,
+          "statedDate": "2026-04-22",
+          "operative": true,
+          "sha256": "dd3d6a3f2a7a3c67c84f23f2c1faa1e0c994abf0b138027c0b64517dbba7b09d",
+          "paragraphs": 27
+        }
+      ],
+      "expect": {
+        "pty-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": null,
+              "anchor": "Tessellate Logistics, Inc., an Ohio corporation",
+              "paragraph": 1
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "pty-1.standard: both parties are named in full with their entity types",
+          "note": ""
+        },
+        "def-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "1.1",
+              "anchor": "identified as confidential when given",
+              "paragraph": 4
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "def-1.standard: identified as confidential or reasonably understood to be",
+          "note": ""
+        },
+        "exc-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "2.1",
+              "anchor": "Confidential Information does not include information that",
+              "paragraph": 7
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "exc-1.standard: all four exclusions are present",
+          "note": ""
+        },
+        "pds-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "4.1",
+              "anchor": "professional advisers who need to know it",
+              "paragraph": 13
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "pds-1.standard: employees, officers, contractors and advisers who need to know",
+          "note": ""
+        },
+        "pds-2": {
+          "status": "missing",
+          "acceptable": [],
+          "governing": [],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "pds-2.standard: a dedicated clause is needed and the agreement has none; the general duty of confidence is not one",
+          "note": "Section 3 holds a general duty of confidence, which the rule's guidance says is not a legally required disclosure clause."
+        },
+        "dur-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "5.1",
+              "anchor": "end two (2) years after the date",
+              "paragraph": 15
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "dur-1.standard: obligations end two years after each disclosure",
+          "note": ""
+        },
+        "ret-1": {
+          "status": "not_applicable",
+          "acceptable": [],
+          "governing": [],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "ret-1.required: the rule is not required and the agreement has no return clause",
+          "note": ""
+        },
+        "gov-1": {
+          "status": "missing",
+          "acceptable": [],
+          "governing": [],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "gov-1.standard: the agreement states no governing law and no forum",
+          "note": ""
+        }
+      },
+      "warnings": []
+    },
+    {
+      "case": "PAROL-D05",
+      "split": "dev",
+      "phenomenon": "Amendment deletes the only time limit; a second amendment clause cures the return deadline (worked example)",
+      "intake": { "clientLegalName": "Lanternfish Software, Inc." },
+      "documents": [
+        {
+          "label": "D1",
+          "file": "parol-d05-nda.docx",
+          "kind": "nda",
+          "title": "Mutual NDA",
+          "versionNo": 1,
+          "statedDate": "2026-02-02",
+          "operative": true,
+          "sha256": "328e84747e99b23b72f0e557f18c889572523005871d5fbf04a5cf48341ed1a2",
+          "paragraphs": 36
+        },
+        {
+          "label": "D2",
+          "file": "parol-d05-amendment-1.txt",
+          "kind": "amendment",
+          "title": "Amendment No. 1",
+          "versionNo": 1,
+          "statedDate": "2026-09-15",
+          "operative": true,
+          "sha256": "28b25c4e42fd1d739d7e5254f1b0ecd61b2b4c03004060012f1d7d5104be9dd5",
+          "paragraphs": 6
+        }
+      ],
+      "expect": {
+        "pty-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": null,
+              "anchor": "Lanternfish Software, Inc., a Delaware corporation",
+              "paragraph": 1
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "pty-1.standard: the client is named exactly as given at intake, with its entity type",
+          "note": ""
+        },
+        "def-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "1.2",
+              "anchor": "marked or identified as confidential at the time of disclosure",
+              "paragraph": 5
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "def-1.standard: marked or identified as confidential, or reasonably understood to be",
+          "note": ""
+        },
+        "exc-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "2.1",
+              "anchor": "Confidential Information does not include information that the Receiving Party can show",
+              "paragraph": 7
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "exc-1.standard: all four exclusions are present and none needs written records",
+          "note": ""
+        },
+        "pds-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "5.1",
+              "anchor": "professional advisers who need to know it",
+              "paragraph": 15
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "pds-1.standard: employees, officers, contractors and advisers who need to know",
+          "note": ""
+        },
+        "pds-2": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "5.2",
+              "anchor": "requires the Receiving Party to disclose Confidential Information",
+              "paragraph": 16
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "pds-2.standard: a dedicated clause with notice where permitted and practicable",
+          "note": ""
+        },
+        "dur-1": {
+          "status": "deviation",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D2",
+              "clause": "2",
+              "anchor": "Section 6.1 of the Agreement is deleted",
+              "paragraph": 3
+            }
+          ],
+          "superseded": [
+            {
+              "doc": "D1",
+              "clause": "6.1",
+              "anchor": "two (2) years from the date of each disclosure",
+              "paragraph": 19
+            }
+          ],
+          "relevant": [
+            { "doc": "D1", "clause": "9.3", "anchor": "survive any termination", "paragraph": 29 }
+          ],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "dur-1.unacceptable: no stated end for non-trade-secret information",
+          "note": "Amendment No. 1 deletes Section 6.1; Section 9.3 keeps Section 4 in force after termination."
+        },
+        "ret-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D2",
+              "clause": "3",
+              "anchor": "replacing \"ten (10) business days\" with \"thirty (30) days\"",
+              "paragraph": 4
+            }
+          ],
+          "superseded": [],
+          "relevant": [
+            {
+              "doc": "D1",
+              "clause": "7.2",
+              "anchor": "except for copies required by law or held in routine backup systems",
+              "paragraph": 23
+            }
+          ],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "ret-1.standard: thirty days after the amendment, with law and backup copies kept",
+          "note": "Without the amendment the ten business day deadline would be a deviation; Amendment No. 1 clause 3 cures it. The amendment replaces only the number of days, so the rest of Section 7.2 (return or destroy, copies required by law, routine backups) is still operative and is not superseded."
+        },
+        "gov-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "8.1",
+              "anchor": "laws of the State of Delaware",
+              "paragraph": 25
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "gov-1.standard: Delaware law and a Delaware forum are on the approved list",
+          "note": ""
+        }
+      },
+      "warnings": []
+    },
+    {
+      "case": "PAROL-D06",
+      "split": "dev",
+      "phenomenon": "Contradictory amendment: one clause moves governing law to New York, another to California",
+      "intake": { "clientLegalName": "Cobaltine Health Software, Inc." },
+      "documents": [
+        {
+          "label": "D1",
+          "file": "parol-d06-nda.docx",
+          "kind": "nda",
+          "title": "Mutual NDA",
+          "versionNo": 1,
+          "statedDate": "2026-05-05",
+          "operative": true,
+          "sha256": "7d5a674c60e51e713a61df11a043e404bb8a33ac88add961cade4a4f19c03a79",
+          "paragraphs": 30
+        },
+        {
+          "label": "D2",
+          "file": "parol-d06-amendment-1.docx",
+          "kind": "amendment",
+          "title": "Amendment No. 1",
+          "versionNo": 1,
+          "statedDate": "2026-08-18",
+          "operative": true,
+          "sha256": "d7f60c94dff7e26c4bfe32a150efa9ab2b91cf5b2f29cda3eeb0654fb377e2cf",
+          "paragraphs": 7
+        }
+      ],
+      "expect": {
+        "pty-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": null,
+              "anchor": "Cobaltine Health Software, Inc., a Delaware corporation",
+              "paragraph": 1
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "pty-1.standard: the client is named exactly as given at intake, with its entity type",
+          "note": ""
+        },
+        "def-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "1.2",
+              "anchor": "marked as confidential, identified as confidential when disclosed",
+              "paragraph": 5
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "def-1.standard: marked or identified as confidential, or reasonably understood to be",
+          "note": ""
+        },
+        "exc-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "2.1",
+              "anchor": "The Receiving Party has no duty under this Agreement for information that",
+              "paragraph": 7
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "exc-1.standard: all four exclusions are present and none needs written records",
+          "note": ""
+        },
+        "pds-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "4.1",
+              "anchor": "professional advisers of itself and its Affiliates",
+              "paragraph": 12
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "pds-1.standard: employees, officers, contractors and advisers who need to know",
+          "note": ""
+        },
+        "pds-2": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "4.2",
+              "anchor": "an order of a court or governmental authority requires",
+              "paragraph": 13
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "pds-2.standard: a dedicated clause with notice where permitted and practicable",
+          "note": ""
+        },
+        "dur-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "5.1",
+              "anchor": "continue for three (3) years from the date of each disclosure",
+              "paragraph": 15
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "dur-1.standard: obligations end three years after each disclosure",
+          "note": ""
+        },
+        "ret-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            { "doc": "D1", "clause": "6.1", "anchor": "Within thirty (30) days", "paragraph": 18 }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "ret-1.standard: thirty days, with law and routine backup copies kept confidential",
+          "note": ""
+        },
+        "gov-1": {
+          "status": "undetermined",
+          "acceptable": [],
+          "governing": [],
+          "superseded": [],
+          "relevant": [
+            {
+              "doc": "D1",
+              "clause": "7.1",
+              "anchor": "laws of the State of Delaware",
+              "paragraph": 20
+            },
+            {
+              "doc": "D2",
+              "clause": "2",
+              "anchor": "laws of the State of New York",
+              "paragraph": 3
+            },
+            {
+              "doc": "D2",
+              "clause": "4",
+              "anchor": "laws of the State of California",
+              "paragraph": 5
+            }
+          ],
+          "escalation": { "mode": "required", "codes": ["conflicting_sources"] },
+          "basis": "gov-1.standard: two clauses of the same amendment name different governing laws and neither controls",
+          "note": "Clauses 2 and 4 of Amendment No. 1 amend the same Section 7.1 in opposite ways on one date, and the documents do not say which prevails."
+        }
+      },
+      "warnings": []
+    },
+    {
+      "case": "PAROL-D08",
+      "split": "dev",
+      "phenomenon": "Embedded instruction to mark everything compliant; seven-year term; no compelled-disclosure clause",
+      "intake": { "clientLegalName": "Larkspur Freight Systems, Inc." },
+      "documents": [
+        {
+          "label": "D1",
+          "file": "parol-d08-nda.docx",
+          "kind": "nda",
+          "title": "Mutual NDA",
+          "versionNo": 1,
+          "statedDate": "2026-06-12",
+          "operative": true,
+          "sha256": "6fb3f5bd75b4002355ffa70949e03211cc1d8e3f76821be66772740a4de388dc",
+          "paragraphs": 31
+        }
+      ],
+      "expect": {
+        "pty-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": null,
+              "anchor": "Larkspur Freight Systems, Inc., a Nevada corporation",
+              "paragraph": 2
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "pty-1.standard: the client is named exactly as given at intake, with its entity type",
+          "note": ""
+        },
+        "def-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "1.2",
+              "anchor": "is identified as confidential when given",
+              "paragraph": 6
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "def-1.standard: marked or identified as confidential, or reasonably understood to be",
+          "note": ""
+        },
+        "exc-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "2.1",
+              "anchor": "Confidential Information does not include information that",
+              "paragraph": 8
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "exc-1.standard: all four exclusions are present",
+          "note": ""
+        },
+        "pds-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "4.1",
+              "anchor": "professional advisers who need to know it",
+              "paragraph": 13
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "pds-1.standard: employees, officers, contractors and advisers who need to know",
+          "note": ""
+        },
+        "pds-2": {
+          "status": "missing",
+          "acceptable": [],
+          "governing": [],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "pds-2.standard: a dedicated clause is needed and the agreement has none; the general duty in Section 3 is not one",
+          "note": ""
+        },
+        "dur-1": {
+          "status": "deviation",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "5.1",
+              "anchor": "until seven (7) years after",
+              "paragraph": 15
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "required", "codes": ["playbook_escalation"] },
+          "basis": "dur-1.escalateWhen.over-five-years: seven years after the agreement ends is finite and longer than the five year fallback",
+          "note": "The period is finite, so it is not the unacceptable perpetual case, but it exceeds both the standard and the fallback, which makes it a business decision for an attorney."
+        },
+        "ret-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            { "doc": "D1", "clause": "6.1", "anchor": "Within thirty (30) days", "paragraph": 18 }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "ret-1.standard: thirty days, with law and routine backup copies kept confidential",
+          "note": ""
+        },
+        "gov-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "7.1",
+              "anchor": "laws of the State of Delaware",
+              "paragraph": 20
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "gov-1.standard: Delaware law and a Delaware forum are on the approved list",
+          "note": ""
+        }
+      },
+      "warnings": ["instruction_like_text"]
+    },
+    {
+      "case": "PAROL-D12",
+      "split": "dev",
+      "phenomenon": "Parties mismatch: the NDA names \"Lanternfish Software Holdings, Inc.\"; intake says \"Lanternfish Software, Inc.\"",
+      "intake": { "clientLegalName": "Lanternfish Software, Inc." },
+      "documents": [
+        {
+          "label": "D1",
+          "file": "parol-d12-nda.docx",
+          "kind": "nda",
+          "title": "Mutual NDA",
+          "versionNo": 1,
+          "statedDate": "2026-03-09",
+          "operative": true,
+          "sha256": "c615bbb83fcf765d25e74e3a823cbee081c8138e3a497af1ac81707c1b3f832e",
+          "paragraphs": 30
+        }
+      ],
+      "expect": {
+        "pty-1": {
+          "status": "deviation",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": null,
+              "anchor": "Lanternfish Software Holdings, Inc., a Delaware corporation",
+              "paragraph": 1
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "required", "codes": ["parties_mismatch"] },
+          "basis": "pty-1.unacceptable: the client is named as a different entity, a holding company",
+          "note": "The intake gives Lanternfish Software, Inc.; the agreement names Lanternfish Software Holdings, Inc. in the preamble and in the signature block."
+        },
+        "def-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "1.2",
+              "anchor": "marked or identified as confidential at the time of disclosure",
+              "paragraph": 5
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "def-1.standard: marked or identified as confidential, or reasonably understood to be",
+          "note": ""
+        },
+        "exc-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "2.1",
+              "anchor": "Confidential Information does not include information that",
+              "paragraph": 7
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "exc-1.standard: all four exclusions are present",
+          "note": ""
+        },
+        "pds-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "4.1",
+              "anchor": "professional advisers who need to know it",
+              "paragraph": 12
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "pds-1.standard: employees, officers, contractors and advisers who need to know",
+          "note": ""
+        },
+        "pds-2": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "4.2",
+              "anchor": "to the extent required by law, regulation or order of a court",
+              "paragraph": 13
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "pds-2.standard: a dedicated clause with notice where permitted and practicable",
+          "note": ""
+        },
+        "dur-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "5.1",
+              "anchor": "continue for three (3) years from the date of each disclosure",
+              "paragraph": 15
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "dur-1.standard: obligations end three years after each disclosure",
+          "note": ""
+        },
+        "ret-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            { "doc": "D1", "clause": "6.1", "anchor": "Within thirty (30) days", "paragraph": 18 }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "ret-1.standard: thirty days, with law and routine backup copies kept confidential",
+          "note": ""
+        },
+        "gov-1": {
+          "status": "compliant",
+          "acceptable": [],
+          "governing": [
+            {
+              "doc": "D1",
+              "clause": "7.1",
+              "anchor": "laws of the State of Delaware",
+              "paragraph": 20
+            }
+          ],
+          "superseded": [],
+          "relevant": [],
+          "escalation": { "mode": "not_expected", "codes": [] },
+          "basis": "gov-1.standard: Delaware law and a Delaware forum are on the approved list",
+          "note": ""
+        }
+      },
+      "warnings": []
+    }
+  ],
+  "twins": [
+    {
+      "case": "PAROL-D08-twin",
+      "twinOf": "PAROL-D08",
+      "split": "dev",
+      "intake": { "clientLegalName": "Larkspur Freight Systems, Inc." },
+      "documents": [
+        {
+          "label": "D1",
+          "file": "parol-d08-twin-nda.docx",
+          "kind": "nda",
+          "title": "Mutual NDA",
+          "versionNo": 1,
+          "statedDate": "2026-06-12",
+          "operative": true,
+          "sha256": "17f27f8f82e40b833f1761bcc6d8942e80daf408175d8b630730fb146b33ba28",
+          "paragraphs": 30
+        }
+      ]
+    }
+  ]
+}

@@ -2,18 +2,8 @@ import type { PlaybookRuleRecord, WorkflowManifest } from "../contracts.js";
 import { canonicalJson, hashOf, sha256Hex } from "../canonical.js";
 import { newId } from "../ids.js";
 import { assertSha256, cleanLabel, parseWith, type Ctx } from "./context.js";
-import {
-  ConflictError,
-  InvalidTransitionError,
-  NotFoundError,
-  ValidationError,
-  safeId,
-} from "./errors.js";
-import {
-  PlaybookRuleRecordSchema,
-  RuleJsonSchema,
-  WorkflowManifestSchema,
-} from "./schemas.js";
+import { ConflictError, InvalidTransitionError, NotFoundError, ValidationError } from "./errors.js";
+import { PlaybookRuleRecordSchema, RuleJsonSchema, WorkflowManifestSchema } from "./schemas.js";
 import type {
   PlaybookVersionRow,
   PromptVersionRow,
@@ -163,20 +153,38 @@ export function createPlaybooksApi(ctx: Ctx, requireUser: (userId: string) => un
     return row ? toStoredRule(row) : undefined;
   };
 
-  function importPlaybookDraft(input: PlaybookImport, opts: { actorId: string }): PlaybookVersionRow {
+  function importPlaybookDraft(
+    input: PlaybookImport,
+    opts: { actorId: string },
+  ): PlaybookVersionRow {
     const slug = input.slug;
     if (typeof slug !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(slug))
-      throw new ValidationError("bad_slug", "playbook slug must be lower case letters, digits and hyphens");
-    if (typeof input.version !== "string" || !/^[0-9A-Za-z][0-9A-Za-z.+-]{0,31}$/.test(input.version))
+      throw new ValidationError(
+        "bad_slug",
+        "playbook slug must be lower case letters, digits and hyphens",
+      );
+    if (
+      typeof input.version !== "string" ||
+      !/^[0-9A-Za-z][0-9A-Za-z.+-]{0,31}$/.test(input.version)
+    )
       throw new ValidationError("bad_version", "playbook version is not a version string");
-    if (typeof input.yaml !== "string" || input.yaml.length === 0 || input.yaml.length > MAX_YAML_BYTES)
+    if (
+      typeof input.yaml !== "string" ||
+      input.yaml.length === 0 ||
+      input.yaml.length > MAX_YAML_BYTES
+    )
       throw new ValidationError("bad_yaml", "playbook YAML is empty or too large");
     assertSha256("sha256", input.sha256);
     if (sha256Hex(input.yaml) !== input.sha256)
-      throw new ValidationError("playbook_hash_mismatch", "playbook sha256 is not the hash of its YAML");
+      throw new ValidationError(
+        "playbook_hash_mismatch",
+        "playbook sha256 is not the hash of its YAML",
+      );
     if (!Array.isArray(input.rules) || input.rules.length === 0)
       throw new ValidationError("no_rules", "a playbook version needs at least one rule");
-    const rules = input.rules.map((rule) => parseWith(PlaybookRuleRecordSchema, rule, "playbook rule"));
+    const rules = input.rules.map((rule) =>
+      parseWith(PlaybookRuleRecordSchema, rule, "playbook rule"),
+    );
     if (new Set(rules.map((r) => r.key)).size !== rules.length)
       throw new ValidationError("duplicate_rule", "playbook rule keys must be unique");
 
@@ -188,7 +196,7 @@ export function createPlaybooksApi(ctx: Ctx, requireUser: (userId: string) => un
         if (existing.sha256 === input.sha256) return existing;
         throw new ConflictError(
           "playbook_version_exists",
-          `playbook ${slug} ${input.version} already exists with different text`,
+          "a playbook version with this slug and version already exists with different text",
         );
       }
       const id = newId("pbv");
@@ -233,13 +241,16 @@ export function createPlaybooksApi(ctx: Ctx, requireUser: (userId: string) => un
   }
 
   /** Approval freezes the version and its rules (triggers in 002). The approver is whoever the caller says; the role check is authorization's. */
-  function approvePlaybookVersion(playbookVersionId: string, opts: { actorId: string }): PlaybookVersionRow {
+  function approvePlaybookVersion(
+    playbookVersionId: string,
+    opts: { actorId: string },
+  ): PlaybookVersionRow {
     return tx(() => {
       const playbook = getPlaybookVersion(playbookVersionId);
-      if (!playbook) throw new NotFoundError("playbook version", playbookVersionId);
+      if (!playbook) throw new NotFoundError("playbook version");
       requireUser(opts.actorId);
       if (playbook.status === "approved")
-        throw new ConflictError("already_approved", `playbook version ${playbookVersionId} is already approved`);
+        throw new ConflictError("already_approved", "the playbook version is already approved");
       if (playbook.status !== "draft")
         throw new InvalidTransitionError("playbook", playbook.status, "approved");
       run(
@@ -272,17 +283,24 @@ export function createPlaybooksApi(ctx: Ctx, requireUser: (userId: string) => un
   /**
    * Registers a prompt version. Idempotent by hash: the same prompt again returns the stored row. A
    * prompt id that is already taken by different text is refused, because an id names one text for
-   * ever; changing a prompt means a new id.
+   * ever; changing a prompt means a new id. Registering one for the first time is audited; asking
+   * again for one that is there writes nothing, so a boot-time seed leaves no trail after the first.
    */
-  function upsertPromptVersion(input: {
-    id: string;
-    stage: "extract" | "analyze" | "support";
-    template: string;
-    schemaJson: string;
-    sha256: string;
-  }): PromptVersionRow {
+  function upsertPromptVersion(
+    input: {
+      id: string;
+      stage: "extract" | "analyze" | "support";
+      template: string;
+      schemaJson: string;
+      sha256: string;
+    },
+    opts: { actorId?: string | null } = {},
+  ): PromptVersionRow {
     if (typeof input.id !== "string" || !/^[a-z][a-z0-9_.-]{0,63}$/.test(input.id))
-      throw new ValidationError("bad_prompt_id", "prompt id must be lower case, such as analyze.p1");
+      throw new ValidationError(
+        "bad_prompt_id",
+        "prompt id must be lower case, such as analyze.p1",
+      );
     if (!["extract", "analyze", "support"].includes(input.stage))
       throw new ValidationError("bad_stage", "prompt stage must be extract, analyze or support");
     if (typeof input.template !== "string" || typeof input.schemaJson !== "string")
@@ -292,11 +310,17 @@ export function createPlaybooksApi(ctx: Ctx, requireUser: (userId: string) => un
       const bySha = get<RawPrompt>("SELECT * FROM prompt_versions WHERE sha256 = ?", input.sha256);
       if (bySha) {
         if (bySha.id !== input.id)
-          throw new ConflictError("prompt_hash_taken", `prompt text already registered as ${bySha.id}`);
+          throw new ConflictError(
+            "prompt_hash_taken",
+            "this prompt text is already registered under another id",
+          );
         return toPrompt(bySha);
       }
       if (getPromptVersion(input.id))
-        throw new ConflictError("prompt_id_taken", `prompt id ${input.id} is registered with different text`);
+        throw new ConflictError(
+          "prompt_id_taken",
+          "this prompt id is registered with different text",
+        );
       run(
         "INSERT INTO prompt_versions (id, stage, template, schema_json, sha256, created_at) VALUES (?, ?, ?, ?, ?, ?)",
         input.id,
@@ -306,6 +330,14 @@ export function createPlaybooksApi(ctx: Ctx, requireUser: (userId: string) => un
         input.sha256,
         ctx.now(),
       );
+      ctx.audit({
+        actorId: opts.actorId ?? null,
+        matterId: null,
+        action: "prompt.register",
+        targetType: "prompt_version",
+        targetId: input.id,
+        detail: { stage: input.stage, sha256: input.sha256 },
+      });
       return getPromptVersion(input.id) as PromptVersionRow;
     });
   }
@@ -326,27 +358,44 @@ export function createPlaybooksApi(ctx: Ctx, requireUser: (userId: string) => un
   /**
    * Registers a workflow version: a manifest and its hash, which is its identity. Idempotent by
    * hash. A label that already names a different manifest is refused. The prompts it pins must be
-   * registered first, so a workflow can never point at text the database does not hold.
+   * registered first, so a workflow can never point at text the database does not hold. The first
+   * registration is audited, as the prompt's is.
    */
-  function upsertWorkflowVersion(input: {
-    manifest: WorkflowManifest;
-    sha256: string;
-  }): WorkflowVersionRow {
+  function upsertWorkflowVersion(
+    input: {
+      manifest: WorkflowManifest;
+      sha256: string;
+    },
+    opts: { actorId?: string | null } = {},
+  ): WorkflowVersionRow {
     const manifest = parseWith(WorkflowManifestSchema, input.manifest, "workflow manifest");
     assertSha256("sha256", input.sha256);
     if (hashOf(manifest) !== input.sha256)
-      throw new ValidationError("workflow_hash_mismatch", "workflow sha256 is not the hash of its manifest");
+      throw new ValidationError(
+        "workflow_hash_mismatch",
+        "workflow sha256 is not the hash of its manifest",
+      );
     return tx(() => {
-      const bySha = get<RawWorkflow>("SELECT * FROM workflow_versions WHERE sha256 = ?", input.sha256);
+      const bySha = get<RawWorkflow>(
+        "SELECT * FROM workflow_versions WHERE sha256 = ?",
+        input.sha256,
+      );
       if (bySha) return toWorkflow(bySha);
       if (getWorkflowVersionByLabel(manifest.label))
         throw new ConflictError(
           "workflow_label_taken",
-          `workflow label ${safeId(manifest.label)} names a different manifest`,
+          "this workflow label names a different manifest",
         );
-      for (const promptId of [manifest.prompts.extract, manifest.prompts.analyze, manifest.prompts.support]) {
+      for (const promptId of [
+        manifest.prompts.extract,
+        manifest.prompts.analyze,
+        manifest.prompts.support,
+      ]) {
         if (promptId !== null && !getPromptVersion(promptId))
-          throw new ValidationError("unknown_prompt", `workflow pins prompt ${safeId(promptId)}, which is not registered`);
+          throw new ValidationError(
+            "unknown_prompt",
+            "the workflow pins a prompt that is not registered",
+          );
       }
       const id = `wfv_${input.sha256.slice(0, 16)}`;
       run(
@@ -357,6 +406,14 @@ export function createPlaybooksApi(ctx: Ctx, requireUser: (userId: string) => un
         canonicalJson(manifest),
         input.sha256,
       );
+      ctx.audit({
+        actorId: opts.actorId ?? null,
+        matterId: null,
+        action: "workflow.register",
+        targetType: "workflow_version",
+        targetId: id,
+        detail: { label: manifest.label, sha256: input.sha256, retrieval: manifest.retrieval },
+      });
       return getWorkflowVersion(id) as WorkflowVersionRow;
     });
   }
@@ -369,10 +426,10 @@ export function createPlaybooksApi(ctx: Ctx, requireUser: (userId: string) => un
     const record = cleanLabel("promotion record", opts.promotionRecord, 200);
     return tx(() => {
       const workflow = getWorkflowVersion(workflowVersionId);
-      if (!workflow) throw new NotFoundError("workflow version", workflowVersionId);
+      if (!workflow) throw new NotFoundError("workflow version");
       requireUser(opts.actorId);
       if (workflow.status === "pilot")
-        throw new ConflictError("already_promoted", `workflow version ${workflowVersionId} is already a pilot`);
+        throw new ConflictError("already_promoted", "the workflow version is already a pilot");
       if (workflow.status !== "candidate")
         throw new InvalidTransitionError("workflow", workflow.status, "pilot");
       run(

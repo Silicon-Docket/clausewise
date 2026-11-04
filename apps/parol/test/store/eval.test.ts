@@ -9,11 +9,25 @@ beforeEach(() => {
 
 const sha = (c: string) => c.repeat(64);
 const evalRun = (over: object = {}) => {
-  const dataset = w.repo.createEvalDataset({ label: "parol-cases v1", devSha256: sha("a"), heldoutSha256: sha("b") });
+  const dataset = w.repo.createEvalDataset({
+    label: "parol-cases v1",
+    devSha256: sha("a"),
+    heldoutSha256: sha("b"),
+  });
   return {
     dataset,
     run: w.repo.createEvalRun(
-      { datasetId: dataset.id, split: "dev", workflowVersionId: w.workflow.id, playbookVersionId: w.playbook.id, model: "scripted-1", repeats: 3, priceTableSha256: sha("c"), resultsPath: "evals/results/dev-1.json", ...over },
+      {
+        datasetId: dataset.id,
+        split: "dev",
+        workflowVersionId: w.workflow.id,
+        playbookVersionId: w.playbook.id,
+        model: "scripted-1",
+        repeats: 3,
+        priceTableSha256: sha("c"),
+        resultsPath: "evals/results/dev-1.json",
+        ...over,
+      },
       { actorId: ACTORS.legalEngineer },
     ),
   };
@@ -22,17 +36,32 @@ const evalRun = (over: object = {}) => {
 describe("evaluation tables", () => {
   it("stores and lists datasets", () => {
     const { dataset } = evalRun();
-    expect(dataset).toMatchObject({ label: "parol-cases v1", devSha256: sha("a"), heldoutSha256: sha("b") });
+    expect(dataset).toMatchObject({
+      label: "parol-cases v1",
+      devSha256: sha("a"),
+      heldoutSha256: sha("b"),
+    });
     expect(w.repo.getEvalDataset(dataset.id)).toEqual(dataset);
     expect(w.repo.listEvalDatasets()).toEqual([dataset]);
     expect(w.repo.getEvalDataset("eds_nope")).toBeUndefined();
-    expect(() => w.repo.createEvalDataset({ label: "", devSha256: sha("a"), heldoutSha256: sha("b") })).toThrow(ValidationError);
-    expect(() => w.repo.createEvalDataset({ label: "x", devSha256: "nope", heldoutSha256: sha("b") })).toThrow(ValidationError);
+    expect(() =>
+      w.repo.createEvalDataset({ label: "", devSha256: sha("a"), heldoutSha256: sha("b") }),
+    ).toThrow(ValidationError);
+    expect(() =>
+      w.repo.createEvalDataset({ label: "x", devSha256: "nope", heldoutSha256: sha("b") }),
+    ).toThrow(ValidationError);
   });
 
   it("stores a run, audits it, and finishes it once", () => {
     const { dataset, run } = evalRun();
-    expect(run).toMatchObject({ datasetId: dataset.id, split: "dev", repeats: 3, model: "scripted-1", finishedAt: null, workflowVersionId: w.workflow.id });
+    expect(run).toMatchObject({
+      datasetId: dataset.id,
+      split: "dev",
+      repeats: 3,
+      model: "scripted-1",
+      finishedAt: null,
+      workflowVersionId: w.workflow.id,
+    });
     w.clock.tick();
     const done = w.repo.finishEvalRun(run.id, { actorId: ACTORS.legalEngineer });
     expect(done.finishedAt).toBe(w.clock.iso());
@@ -42,15 +71,38 @@ describe("evaluation tables", () => {
     expect(w.repo.listEvalRuns("eds_other")).toEqual([]);
     expect(w.repo.listEvalRuns()).toHaveLength(1);
     const events = w.repo.listAuditEvents({ action: "eval.record" });
-    expect(events.map((e) => e.detail.finished ?? e.detail.split)).toEqual(["dev", true]);
+    // The dataset's creation is the first event; the run's two follow it.
+    expect(events.map((e) => e.targetType)).toEqual(["eval_dataset", "eval_run", "eval_run"]);
+    expect(events.slice(1).map((e) => e.detail.finished ?? e.detail.split)).toEqual(["dev", true]);
     expect(events.every((e) => e.matterId === null)).toBe(true);
+  });
+
+  it("audits a dataset with its hashes and nothing else", () => {
+    const { dataset } = evalRun();
+    const [event] = w.repo.listAuditEvents({ action: "eval.record" });
+    expect(event).toMatchObject({
+      targetType: "eval_dataset",
+      targetId: dataset.id,
+      detail: { devSha256: dataset.devSha256, heldoutSha256: dataset.heldoutSha256 },
+    });
+    expect(Object.keys(event?.detail ?? {}).sort()).toEqual(["devSha256", "heldoutSha256"]);
   });
 
   it("validates a run and the things it points at", () => {
     const { dataset } = evalRun();
     const make = (over: object) =>
       w.repo.createEvalRun(
-        { datasetId: dataset.id, split: "heldout", workflowVersionId: w.workflow.id, playbookVersionId: w.playbook.id, model: "m", repeats: 1, priceTableSha256: sha("c"), resultsPath: "r.json", ...over } as never,
+        {
+          datasetId: dataset.id,
+          split: "heldout",
+          workflowVersionId: w.workflow.id,
+          playbookVersionId: w.playbook.id,
+          model: "m",
+          repeats: 1,
+          priceTableSha256: sha("c"),
+          resultsPath: "r.json",
+          ...over,
+        } as never,
         { actorId: null },
       );
     expect(() => make({ split: "test" })).toThrow(ValidationError);
@@ -69,7 +121,20 @@ describe("evaluation tables", () => {
     const m = addMatter(w, { name: "case D05" });
     const matterRun = startRun(w, m);
     const slot = (caseKey: string, ruleKey: string, repeat: number, got = "compliant") =>
-      w.repo.recordEvalSlotResult(m.id, { evalRunId: er.id, caseKey, ruleKey, repeat, runId: matterRun.id, expectedStatus: "deviation", gotStatus: got, scores: { status_match: got === "deviation", nested: { n: 1 } } }, { actorId: null });
+      w.repo.recordEvalSlotResult(
+        m.id,
+        {
+          evalRunId: er.id,
+          caseKey,
+          ruleKey,
+          repeat,
+          runId: matterRun.id,
+          expectedStatus: "deviation",
+          gotStatus: got,
+          scores: { status_match: got === "deviation", nested: { n: 1 } },
+        },
+        { actorId: null },
+      );
     slot("PAROL-D05", "dur-1", 1);
     slot("PAROL-D05", "dur-1", 0);
     slot("PAROL-D01", "pty-1", 0, "deviation");
@@ -79,7 +144,12 @@ describe("evaluation tables", () => {
       ["PAROL-D05", "dur-1", 0],
       ["PAROL-D05", "dur-1", 1],
     ]);
-    expect(listed[0]).toMatchObject({ expectedStatus: "deviation", gotStatus: "deviation", runId: matterRun.id, scores: { status_match: true, nested: { n: 1 } } });
+    expect(listed[0]).toMatchObject({
+      expectedStatus: "deviation",
+      gotStatus: "deviation",
+      runId: matterRun.id,
+      scores: { status_match: true, nested: { n: 1 } },
+    });
     expect(w.repo.listAuditEvents({ matterId: m.id, action: "eval.record" })).toHaveLength(3);
   });
 
@@ -88,7 +158,21 @@ describe("evaluation tables", () => {
     const m = addMatter(w);
     const matterRun = startRun(w, m);
     const slot = (over: object = {}) =>
-      w.repo.recordEvalSlotResult(m.id, { evalRunId: er.id, caseKey: "C", ruleKey: "dur-1", repeat: 0, runId: matterRun.id, expectedStatus: "compliant", gotStatus: "compliant", scores: {}, ...over } as never, { actorId: null });
+      w.repo.recordEvalSlotResult(
+        m.id,
+        {
+          evalRunId: er.id,
+          caseKey: "C",
+          ruleKey: "dur-1",
+          repeat: 0,
+          runId: matterRun.id,
+          expectedStatus: "compliant",
+          gotStatus: "compliant",
+          scores: {},
+          ...over,
+        } as never,
+        { actorId: null },
+      );
     slot();
     expect(() => slot()).toThrow(ConflictError);
     expect(() => slot({ repeat: 1, gotStatus: "fine" })).toThrow(ValidationError);
@@ -104,7 +188,20 @@ describe("evaluation tables", () => {
     const real = addMatter(w, { synthetic: false, name: "real" });
     const realRun = startRun(w, real);
     expect(() =>
-      w.repo.recordEvalSlotResult(real.id, { evalRunId: er.id, caseKey: "C", ruleKey: "dur-1", repeat: 0, runId: realRun.id, expectedStatus: "compliant", gotStatus: "compliant", scores: {} }, { actorId: null }),
+      w.repo.recordEvalSlotResult(
+        real.id,
+        {
+          evalRunId: er.id,
+          caseKey: "C",
+          ruleKey: "dur-1",
+          repeat: 0,
+          runId: realRun.id,
+          expectedStatus: "compliant",
+          gotStatus: "compliant",
+          scores: {},
+        },
+        { actorId: null },
+      ),
     ).toThrow(/synthetic/);
     expect(w.repo.listEvalSlotResults(er.id)).toEqual([]);
   });

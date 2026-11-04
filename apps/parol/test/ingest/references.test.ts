@@ -103,9 +103,9 @@ describe("the verb an amendment applies to a clause", () => {
       [ref("4A", "deletes")],
     ],
     [
-      "both ends of a range",
+      "every clause of a range",
       "Sections 4 through 6 are deleted.",
-      [ref("4", "deletes"), ref("6", "deletes")],
+      [ref("4", "deletes"), ref("5", "deletes"), ref("6", "deletes")],
     ],
     ["the section sign", "\u00a7 7.2 is deleted.", [ref("7.2", "deletes")]],
     ["Sec.", "Sec. 3 is deleted.", [ref("3", "deletes")]],
@@ -220,6 +220,313 @@ describe("the verb an amendment applies to a clause", () => {
     ["a lettered target", "Section A is deleted."],
   ])("finds nothing in %s", (_name, text) => {
     expect(inAmendment(text)).toEqual([]);
+  });
+});
+
+describe("a clause the amendment leaves alone", () => {
+  it.each<[string, string, CrossReference[]]>([
+    [
+      "nothing in this amendment deletes",
+      "Nothing in this Amendment deletes Section 6.1.",
+      [ref("6.1", "refers")],
+    ],
+    [
+      "nothing deletes or replaces",
+      "Nothing in this Amendment deletes or replaces Section 6.1.",
+      [ref("6.1", "refers")],
+    ],
+    [
+      "do not intend to delete",
+      "The parties do not intend to delete Section 6.1.",
+      [ref("6.1", "refers")],
+    ],
+    [
+      "neither nor",
+      "Neither Section 6.1 nor Section 6.2 is deleted.",
+      [ref("6.1", "refers"), ref("6.2", "refers")],
+    ],
+    [
+      "one clause is not deleted, the other is",
+      "Section 6.1 is not deleted but Section 6.2 is deleted.",
+      [ref("6.1", "refers"), ref("6.2", "deletes")],
+    ],
+    [
+      "one clause is deleted, the other is not",
+      "Section 6.1 is deleted but Section 6.2 is not.",
+      [ref("6.1", "deletes"), ref("6.2", "refers")],
+    ],
+    ["a contraction", "This Amendment doesn't delete Section 6.1.", [ref("6.1", "refers")]],
+    [
+      "a negation far from the operation does not reach across a comma",
+      "Section 6.1 of the Agreement, which shall not apply to Affiliates, is deleted.",
+      [ref("6.1", "deletes")],
+    ],
+  ])("%s", (_name, text, expected) => {
+    expect(inAmendment(text)).toEqual(expected);
+  });
+});
+
+describe("a conforming amendment edits a reference and not the clause it names", () => {
+  it.each<[string, string, CrossReference[]]>([
+    [
+      "deleting the reference to a clause",
+      "Section 9.3 is amended by deleting the reference to Section 6.1.",
+      [ref("9.3", "amends"), ref("6.1", "refers")],
+    ],
+    [
+      "replacing one reference with another",
+      "Section 9.3 is amended by replacing the reference to Section 6.1 with a reference to Section 6.2.",
+      [ref("9.3", "amends"), ref("6.1", "refers"), ref("6.2", "refers")],
+    ],
+    [
+      "deleting one and inserting another",
+      "Section 9.3 is amended by deleting the reference to Section 6.1 and inserting a reference to Section 6.2.",
+      [ref("9.3", "amends"), ref("6.1", "refers"), ref("6.2", "refers")],
+    ],
+    [
+      "references in the plural",
+      "Section 9.3 is amended by deleting the references to Sections 6.1 and 6.2.",
+      [ref("9.3", "amends"), ref("6.1", "refers"), ref("6.2", "refers")],
+    ],
+  ])("%s", (_name, text, expected) => {
+    expect(inAmendment(text)).toEqual(expected);
+  });
+});
+
+describe("a sentence with two operations", () => {
+  it.each<[string, string, CrossReference[]]>([
+    [
+      "shall be amended and shall be deleted",
+      "Section 6.1 shall be amended and Section 7.2 shall be deleted.",
+      [ref("6.1", "amends"), ref("7.2", "deletes")],
+    ],
+    [
+      "deleted and a renumbered clause",
+      "Section 6.1 is deleted and Section 6.2 is renumbered as 6.1.",
+      [ref("6.1", "deletes"), ref("6.2", "refers")],
+    ],
+    [
+      "deleted and a clause read as another",
+      "Section 6.1 is deleted and Section 6.2 shall be read as Section 6.1.",
+      [ref("6.1", "deletes"), ref("6.2", "refers")],
+    ],
+    [
+      "the same sentence with is amended and is deleted",
+      "Section 6.1 is amended and Section 7.2 is deleted.",
+      [ref("6.1", "amends"), ref("7.2", "deletes")],
+    ],
+    [
+      "two separate references share one passive verb",
+      "Section 4 and Section 5 are deleted.",
+      [ref("4", "deletes"), ref("5", "deletes")],
+    ],
+    [
+      "three separate references share one passive verb",
+      "Section 3, Section 4 and Section 5 are replaced.",
+      [ref("3", "replaces"), ref("4", "replaces"), ref("5", "replaces")],
+    ],
+    [
+      "two separate references share one active verb",
+      "Delete Section 4 and Section 5.",
+      [ref("4", "deletes"), ref("5", "deletes")],
+    ],
+    [
+      "a clause that survives next to a deleted one",
+      "Section 6.1 survives, and Section 6.2 is deleted.",
+      [ref("6.1", "refers"), ref("6.2", "deletes")],
+    ],
+  ])("%s", (_name, text, expected) => {
+    expect(inAmendment(text)).toEqual(expected);
+  });
+});
+
+describe("a full stop that does not end the sentence", () => {
+  it.each<[string, string, CrossReference[]]>([
+    [
+      "Sept.",
+      "Section 6.1 of the Agreement dated Sept. 1, 2025 is deleted.",
+      [ref("6.1", "deletes")],
+    ],
+    [
+      "Feb.",
+      "Section 6.1 of the Agreement dated Feb. 2, 2026 is replaced as follows.",
+      [ref("6.1", "replaces")],
+    ],
+    [
+      "Pty.",
+      "Section 6.1 of the Agreement between Acme Pty. Ltd. and Beta is deleted.",
+      [ref("6.1", "deletes")],
+    ],
+    [
+      "Dec. and Bhd.",
+      "Section 6.1 of the Agreement made on Dec. 12, 2025 with Orion Sdn. Bhd. is deleted.",
+      [ref("6.1", "deletes")],
+    ],
+    [
+      "a sentence that really ends at a month name still ends",
+      "Section 6.1 is deleted in December. Section 6.2 survives.",
+      [ref("6.1", "deletes"), ref("6.2", "refers")],
+    ],
+  ])("%s", (_name, text, expected) => {
+    expect(inAmendment(text)).toEqual(expected);
+  });
+});
+
+describe("other ways to delete, replace or amend a clause", () => {
+  it.each<[string, string, CrossReference[]]>([
+    ["imperative delete", "Delete Section 6.1 in its entirety.", [ref("6.1", "deletes")]],
+    ["imperative delete after a list number", "2. Delete Section 6.1.", [ref("6.1", "deletes")]],
+    [
+      "imperative delete after a list marker",
+      "(a) Delete Section 6.1 in its entirety.",
+      [ref("6.1", "deletes")],
+    ],
+    ["imperative replace", "Replace Section 6.1 with the following:", [ref("6.1", "replaces")]],
+    ["imperative amend", "Amend Section 6.1 to read as follows:", [ref("6.1", "amends")]],
+    [
+      "imperative delete, plural",
+      "Delete Sections 4 and 5.",
+      [ref("4", "deletes"), ref("5", "deletes")],
+    ],
+    ["revoked", "Section 6.1 is hereby revoked.", [ref("6.1", "deletes")]],
+    ["repealed", "Section 6.1 is hereby repealed.", [ref("6.1", "deletes")]],
+    ["rescinded", "Section 6.1 is rescinded.", [ref("6.1", "deletes")]],
+    ["cancelled", "Section 6.1 is cancelled.", [ref("6.1", "deletes")]],
+    ["canceled", "Section 6.1 is canceled.", [ref("6.1", "deletes")]],
+    ["withdrawn", "Section 6.1 is withdrawn.", [ref("6.1", "deletes")]],
+    [
+      "of no further force or effect",
+      "Section 6.1 is of no further force or effect.",
+      [ref("6.1", "deletes")],
+    ],
+    ["null and void", "Section 6.1 is null and void.", [ref("6.1", "deletes")]],
+    ["changed to", "Section 6.1 shall be changed to ten years.", [ref("6.1", "amends")]],
+    [
+      "extended to",
+      "The term set forth in Section 6.1 is extended to ten (10) years.",
+      [ref("6.1", "amends")],
+    ],
+    [
+      "a third person verb with a comma before the clause",
+      "This Amendment hereby deletes, in its entirety, Section 5.",
+      [ref("5", "deletes")],
+    ],
+    [
+      "a negated revocation",
+      "Nothing in this Amendment revokes Section 6.1.",
+      [ref("6.1", "refers")],
+    ],
+  ])("%s", (_name, text, expected) => {
+    expect(inAmendment(text)).toEqual(expected);
+  });
+});
+
+describe("ranges and parentheticals", () => {
+  it.each<[string, string, CrossReference[]]>([
+    [
+      "a dotted range",
+      "Sections 6.1 through 6.3 are deleted.",
+      [ref("6.1", "deletes"), ref("6.2", "deletes"), ref("6.3", "deletes")],
+    ],
+    [
+      "a dotted range with to",
+      "Sections 6.1 to 6.3 are deleted.",
+      [ref("6.1", "deletes"), ref("6.2", "deletes"), ref("6.3", "deletes")],
+    ],
+    [
+      "a range with a hyphen",
+      "Sections 4-6 are deleted.",
+      [ref("4", "deletes"), ref("5", "deletes"), ref("6", "deletes")],
+    ],
+    [
+      "a range among a list",
+      "Sections 2, 4 through 6 and 9 are deleted.",
+      [
+        ref("2", "deletes"),
+        ref("4", "deletes"),
+        ref("5", "deletes"),
+        ref("6", "deletes"),
+        ref("9", "deletes"),
+      ],
+    ],
+    [
+      "a range whose ends have different prefixes names only its ends",
+      "Sections 6.1 through 7.3 are deleted.",
+      [ref("6.1", "deletes"), ref("7.3", "deletes")],
+    ],
+    [
+      "a backwards range names only its ends",
+      "Sections 6 through 4 are deleted.",
+      [ref("6", "deletes"), ref("4", "deletes")],
+    ],
+    [
+      "a parenthetical exception does not cancel the operation",
+      "Sections 6.1 and 6.2 (but not 6.3) are deleted.",
+      [ref("6.1", "deletes"), ref("6.2", "deletes")],
+    ],
+    [
+      "a parenthetical note with a negation",
+      "Section 6.1 (which does not apply to Affiliates) is deleted.",
+      [ref("6.1", "deletes")],
+    ],
+  ])("%s", (_name, text, expected) => {
+    expect(inAmendment(text)).toEqual(expected);
+  });
+
+  it("expands a range only up to a bound", () => {
+    // 99 clauses lie between 1 and 101 and 100 between 1 and 102: both are expanded. 101 between
+    // 1 and 103 is one too many, and a range of that size names its ends.
+    expect(inAmendment("Sections 1 through 101 are deleted.")).toHaveLength(101);
+    expect(inAmendment("Sections 1 through 102 are deleted.")).toHaveLength(102);
+    const ends = inAmendment("Sections 1 through 103 are deleted.");
+    expect(ends.map((r) => r.target)).toEqual(["1", "103"]);
+    expect(inAmendment("Sections 1 through 999 are deleted.").map((r) => r.target)).toEqual([
+      "1",
+      "999",
+    ]);
+    expect(ends.every((r) => r.verb === "deletes")).toBe(true);
+  });
+
+  it("does not expand ranges of roman numerals, letters or numbers with a suffix", () => {
+    expect(inAmendment("Articles II through V are deleted.").map((r) => r.target)).toEqual([
+      "II",
+      "V",
+    ]);
+    expect(inAmendment("Sections 4A through 4D are deleted.").map((r) => r.target)).toEqual([
+      "4A",
+      "4D",
+    ]);
+    expect(inAmendment("Sections 6.01 to 6.04 are deleted.").map((r) => r.target)).toEqual([
+      "6.01",
+      "6.04",
+    ]);
+  });
+});
+
+describe("a bare verb that is not an operation on a clause", () => {
+  it.each<[string, string, CrossReference[]]>([
+    [
+      "agrees to remove copies",
+      "The Receiving Party agrees to remove all copies of Confidential Information in accordance with Section 7.2.",
+      [ref("7.2", "refers")],
+    ],
+    [
+      "may require to delete information",
+      "The Disclosing Party may require the Receiving Party to delete Confidential Information in accordance with Section 7.2.",
+      [ref("7.2", "refers")],
+    ],
+    [
+      "shall hereby supplement the schedule",
+      "The Recipient shall hereby supplement the Schedule as required by Section 4.",
+      [ref("4", "refers")],
+    ],
+    [
+      "the words are deleted from the clause",
+      'The parties agree to delete the words "ten days" from Section 4.',
+      [ref("4", "refers")],
+    ],
+  ])("%s", (_name, text, expected) => {
+    expect(inAmendment(text)).toEqual(expected);
   });
 });
 

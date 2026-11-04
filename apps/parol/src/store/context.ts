@@ -2,7 +2,7 @@ import type { StatementSync } from "node:sqlite";
 import { z } from "zod";
 import { appendAudit, type AuditEvent, type AuditInput } from "./audit.js";
 import { transaction, type Database } from "./db.js";
-import { ValidationError } from "./errors.js";
+import { ConflictError, ValidationError } from "./errors.js";
 
 export type SqlParam = string | number | bigint | null | Uint8Array;
 
@@ -22,7 +22,11 @@ export interface Ctx {
   tx<T>(fn: () => T): T;
   get<T>(sql: string, ...params: SqlParam[]): T | undefined;
   all<T>(sql: string, ...params: SqlParam[]): T[];
-  /** Runs a write and returns the number of rows it changed. */
+  /**
+   * Runs a write and returns the number of rows it changed. A text parameter holding a NUL
+   * character is refused: SQLite would cut the stored value at the NUL without an error, and the
+   * stored text would then no longer match the hash that was computed over the whole of it.
+   */
   run(sql: string, ...params: SqlParam[]): number;
   audit(input: Omit<AuditInput, "at">): AuditEvent;
 }
@@ -46,7 +50,10 @@ export function createContext(db: Database, options: RepositoryOptions = {}): Ct
     get: <T>(sql: string, ...params: SqlParam[]) =>
       stmt(sql).get(...params) as unknown as T | undefined,
     all: <T>(sql: string, ...params: SqlParam[]) => stmt(sql).all(...params) as unknown as T[],
-    run: (sql, ...params) => Number(stmt(sql).run(...params).changes),
+    run: (sql, ...params) => {
+      rejectNul(params);
+      return Number(stmt(sql).run(...params).changes);
+    },
     audit: (input) => appendAudit(db, { ...input, at: now() }),
   };
 }
@@ -54,6 +61,12 @@ export function createContext(db: Database, options: RepositoryOptions = {}): Ct
 // ---------------------------------------------------------------------------------------------
 // Validation helpers. Messages name the field and the rule and never echo the value.
 // ---------------------------------------------------------------------------------------------
+
+function rejectNul(params: readonly SqlParam[]): void {
+  for (const param of params)
+    if (typeof param === "string" && param.includes("\u0000"))
+      throw new ValidationError("nul_character", "text must not contain a NUL character");
+}
 
 export const SHA256 = /^[0-9a-f]{64}$/;
 /** A short machine code: a stale reason, an error kind, a reason code. */
@@ -73,8 +86,7 @@ export function assertShortCode(field: string, value: unknown): asserts value is
 
 /** A one-line label such as a matter name: trimmed, non-empty, no control characters. */
 export function cleanLabel(field: string, value: unknown, max = 200): string {
-  if (typeof value !== "string")
-    throw new ValidationError("bad_text", `${field} must be a string`);
+  if (typeof value !== "string") throw new ValidationError("bad_text", `${field} must be a string`);
   const text = value.trim();
   if (text.length === 0) throw new ValidationError("bad_text", `${field} must not be empty`);
   if (text.length > max)
@@ -86,8 +98,7 @@ export function cleanLabel(field: string, value: unknown, max = 200): string {
 
 /** Free text from a person (a reason, a comment). Multi-line is fine; control characters other than line breaks are not. */
 export function cleanProse(field: string, value: unknown, max: number): string {
-  if (typeof value !== "string")
-    throw new ValidationError("bad_text", `${field} must be a string`);
+  if (typeof value !== "string") throw new ValidationError("bad_text", `${field} must be a string`);
   if (value.length > max)
     throw new ValidationError("bad_text", `${field} must be at most ${max} characters`);
   // eslint-disable-next-line no-control-regex
@@ -113,7 +124,11 @@ export function cleanStatedDate(value: unknown): string | null {
 }
 
 /** Reports which fields failed and why, never what they held. */
-export function parseWith<S extends z.ZodType>(schema: S, value: unknown, label: string): z.infer<S> {
+export function parseWith<S extends z.ZodType>(
+  schema: S,
+  value: unknown,
+  label: string,
+): z.infer<S> {
   const parsed = schema.safeParse(value);
   if (parsed.success) return parsed.data;
   const where = parsed.error.issues
@@ -133,5 +148,26 @@ export function assertStoragePath(matterId: string, value: unknown): asserts val
     !value.startsWith(`${matterId}/`) ||
     !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value.slice(matterId.length + 1))
   )
-    throw new ValidationError("bad_storage_path", "storage path must sit in the matter's own folder");
+    throw new ValidationError(
+      "bad_storage_path",
+      "storage path must sit in the matter's own folder",
+    );
+}
+
+/**
+ * One stored file belongs to one row, across document versions and memos alike. Two rows naming
+ * one file would hand a caller deleting the first row's file a path the second row still needs.
+ * The database refuses it as well (002_integrity.sql); this gives the caller a clear error first.
+ */
+export function assertStoragePathFree(ctx: Pick<Ctx, "get">, storagePath: string): void {
+  const taken = ctx.get<{ n: number }>(
+    `SELECT 1 AS n FROM document_versions WHERE storage_path = ?1
+     UNION ALL SELECT 1 AS n FROM memos WHERE storage_path = ?1 LIMIT 1`,
+    storagePath,
+  );
+  if (taken !== undefined)
+    throw new ConflictError(
+      "storage_path_in_use",
+      "the stored file already belongs to another row",
+    );
 }

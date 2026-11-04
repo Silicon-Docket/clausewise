@@ -40,7 +40,10 @@ describe("the demo playbook loads", () => {
     expect(demo.rules.filter((r) => r.category === "permitted-disclosures")).toHaveLength(2);
     for (const category of CATEGORY_IDS) {
       if (category === "permitted-disclosures") continue;
-      expect(demo.rules.filter((r) => r.category === category), category).toHaveLength(1);
+      expect(
+        demo.rules.filter((r) => r.category === category),
+        category,
+      ).toHaveLength(1);
     }
   });
 
@@ -48,7 +51,7 @@ describe("the demo playbook loads", () => {
     // Version 1.0.0 is approved once and then immutable in the store, and every run records this
     // hash. If this test fails after an edit to the YAML, the edit needs a new version number and
     // a new pinned value here, not a quiet update of this line.
-    expect(demo.sha256).toBe("e3c5e4431b15834c1fbedb2a0c7f813497d548bb4d81a456addcfd9bb8de6a0c");
+    expect(demo.sha256).toBe("9ac87da098c85e3d8bda539b82bb90e411c68cfdce42e821e7e2bf47e8b24251");
   });
 
   it("changes hash when one character of the file changes", () => {
@@ -62,7 +65,10 @@ describe("the demo playbook loads", () => {
 });
 
 describe("the demo playbook matches the rules table in document 3", () => {
-  const doc = readFileSync(join(repoRoot, "docs", "parol", "03-data-model-and-contracts.md"), "utf8");
+  const doc = readFileSync(
+    join(repoRoot, "docs", "parol", "03-data-model-and-contracts.md"),
+    "utf8",
+  );
   const tableRows = doc
     .split("\n")
     .filter((line) => /^\| `[a-z]+-\d+` \|/.test(line))
@@ -99,16 +105,18 @@ describe("every field of the demo rules maps", () => {
       kind: "presence",
       standard:
         "Obligations end three years or less after each disclosure. Continued protection of trade secrets for as long as they remain trade secrets is acceptable.",
-      fallback: "Obligations end five years or less after the agreement ends.",
+      fallback:
+        "Obligations end five years or less after each disclosure, or five years or less after the agreement ends.",
       unacceptable:
         "Obligations that are perpetual or have no stated end, for information that is not a trade secret.",
-      guidance: null,
+      guidance:
+        "Copies kept under the return or destruction clause are covered. Protection of them for as long as they are held, with no end, is the unacceptable case, while copies that remain subject to the agreement stay subject to its own period.",
       fallbackLanguage:
         "The obligations of each Receiving Party under this Agreement shall continue for three (3) years from the date of each disclosure of Confidential Information, except that obligations with respect to any trade secret shall continue for so long as it remains a trade secret under applicable law.",
       escalateWhen: [
         {
           id: "over-five-years",
-          text: "The stated period is longer than the fallback but finite, which is a business decision.",
+          text: "The stated period is longer than five years, counted from whichever event the clause uses, but finite, which is a business decision.",
         },
       ],
     });
@@ -117,7 +125,7 @@ describe("every field of the demo rules maps", () => {
   it("keeps ret-1 optional, the one rule that can be not applicable", () => {
     expect(demo.rules.filter((r) => !r.required).map((r) => r.key)).toEqual(["ret-1"]);
     expect(rule("ret-1").guidance).toBe(
-      "An officer's certificate of destruction is not a deviation on its own.",
+      "An officer's certificate of destruction is not a deviation on its own. How long retained copies stay protected is tested under dur-1, not here.",
     );
   });
 
@@ -129,6 +137,7 @@ describe("every field of the demo rules maps", () => {
     expect(demo.rules.filter((r) => r.guidance !== null).map((r) => r.key)).toEqual([
       "pty-1",
       "pds-2",
+      "dur-1",
       "ret-1",
     ]);
     expect(demo.rules.filter((r) => r.unacceptable === null)).toEqual([]);
@@ -139,7 +148,9 @@ describe("every field of the demo rules maps", () => {
   it("maps the escalation conditions to the rules that state them", () => {
     expect(
       Object.fromEntries(
-        demo.rules.filter((r) => r.escalateWhen.length > 0).map((r) => [r.key, r.escalateWhen.map((e) => e.id)]),
+        demo.rules
+          .filter((r) => r.escalateWhen.length > 0)
+          .map((r) => [r.key, r.escalateWhen.map((e) => e.id)]),
       ),
     ).toEqual({
       "pty-1": ["entity-differs"],
@@ -237,7 +248,11 @@ describe("the demo playbook is coherent", () => {
   const MUST: Record<string, { include: RegExp[]; exclude?: RegExp[] }> = {
     "pty-1": { include: [/legal name/i, /\[jurisdiction\]/, /\[entity type\]/, /Short name/] },
     "def-1": {
-      include: [/non-public information/, /marked or identified as confidential/, /reasonable person/],
+      include: [
+        /non-public information/,
+        /marked or identified as confidential/,
+        /reasonable person/,
+      ],
       exclude: [/whether or not/i],
     },
     "exc-1": {
@@ -273,7 +288,12 @@ describe("the demo playbook is coherent", () => {
       exclude: [/perpetual/i, /indefinite/i, /\b(four|five|six|seven|ten)\b/i],
     },
     "ret-1": {
-      include: [/thirty \(30\) days/, /return or destroy/, /routine backup/, /remain subject to this Agreement/],
+      include: [
+        /thirty \(30\) days/,
+        /return or destroy/,
+        /routine backup/,
+        /remain subject to this Agreement/,
+      ],
       exclude: [/\b(ten|five|seven|fourteen|twenty)\b/i, /\bpurge\b/i],
     },
     "gov-1": {
@@ -285,7 +305,8 @@ describe("the demo playbook is coherent", () => {
     expect(Object.keys(MUST).sort()).toEqual(demo.rules.map((r) => r.key).sort());
     for (const { key, wording } of withWording) {
       const expectation = MUST[key];
-      for (const pattern of expectation?.include ?? []) expect(wording, `${key} ${pattern}`).toMatch(pattern);
+      for (const pattern of expectation?.include ?? [])
+        expect(wording, `${key} ${pattern}`).toMatch(pattern);
       for (const pattern of expectation?.exclude ?? [])
         expect(wording, `${key} must not match ${pattern}`).not.toMatch(pattern);
     }
@@ -322,6 +343,84 @@ describe("the demo playbook is coherent", () => {
     }
     // The id names a number, so the rule must give that number somewhere the reviewer can see.
     expect(rule("dur-1").fallback).toMatch(/five years/);
+  });
+
+  it("does not ask a one-way NDA to bind both parties, which it cannot", () => {
+    // The playbook covers a mutual or a one-way NDA, so "equally" can only be a condition of a
+    // mutual one. Each sentence that says it must also say when it applies.
+    expect(demo.perspective).toMatch(/mutual or one-way NDA/);
+    const sentences = demo.perspective.split(/(?<=\.) /);
+    const equal = sentences.filter((sentence) => /\bequally\b/.test(sentence));
+    expect(equal).toHaveLength(1);
+    expect(equal[0]).toMatch(/\b(where|if|when)\b[^.]*\bmutual\b/);
+  });
+
+  it("gives def-1 a fallback that concedes ground, between the standard and the unacceptable case", () => {
+    const { standard, fallback, unacceptable } = rule("def-1");
+    // The standard is the narrowest definition we want and the unacceptable case the widest. A
+    // fallback is what we accept when the standard is refused, so it reaches further than the
+    // standard (it covers information that is not marked) without being the unacceptable case
+    // (which takes information of any kind, public or not).
+    expect(standard).not.toMatch(/\bwhether or not\b/i);
+    expect(fallback).toMatch(/\bwhether or not\b[^.]*\bmarked\b/i);
+    expect(fallback).toMatch(/\bnon-public\b/i);
+    expect(fallback).not.toMatch(/\bonly\b/i);
+    expect(unacceptable).toMatch(/\bwhether or not\b[^.]*\bmarked\b/i);
+    expect(unacceptable).not.toMatch(/\bnon-public\b/i);
+    expect(fallback).not.toBe(unacceptable);
+  });
+
+  it("measures dur-1's standard, fallback and escalation from the same events", () => {
+    const { standard, fallback } = rule("dur-1");
+    const escalation = rule("dur-1").escalateWhen.find((e) => e.id === "over-five-years")?.text;
+    // The standard counts from each disclosure. A fallback that counted only from the end of the
+    // agreement could not be set against a term counted from each disclosure, so it accepts both.
+    expect(standard).toMatch(/after each disclosure/);
+    expect(fallback).toMatch(/after each disclosure/);
+    expect(fallback).toMatch(/after the agreement ends/);
+    // The escalation names its own number and holds whichever event the clause counts from, so
+    // whether it applies does not depend on the anchor of the fallback.
+    expect(escalation).toMatch(/\blonger than five years\b/);
+    expect(escalation).toMatch(/\bwhichever event\b/);
+    expect(escalation).not.toMatch(/\bthe fallback\b/);
+    // The number in the escalation is the number in the fallback.
+    expect(fallback?.match(/\b\w+ years\b/g)).toEqual(["five years", "five years"]);
+  });
+
+  it("settles which rule governs copies kept after return or destruction, in both rules", () => {
+    // A clause that keeps retained copies protected for as long as they are held satisfies the
+    // ret-1 standard and, with no end, breaches dur-1. Each rule is judged on its own text, so
+    // each says that the duration of that protection is dur-1's question.
+    expect(rule("ret-1").guidance).toMatch(/retained copies[^.]*\bdur-1\b[^.]*not here/);
+    expect(rule("dur-1").guidance).toMatch(/return or destruction clause/);
+    expect(rule("dur-1").guidance).toMatch(/no end[^.]*unacceptable case/);
+    expect(rule("dur-1").guidance).toMatch(/remain subject to the agreement/);
+  });
+
+  it("takes the party terms in the wording from def-1's definition and invents no other", () => {
+    // The wording is adapted to the document's own terms. "Receiving Party", "Disclosing Party"
+    // and "Confidential Information" are the vocabulary def-1's wording sets up, "Agreement" is
+    // the document itself and a place name is a place. A term such as "Purpose" is defined
+    // nowhere in the playbook, so wording that used it would depend on a definition it lacks.
+    const established = new Set(
+      (rule("def-1").fallbackLanguage ?? "").match(/\b[A-Z][a-z]+\b/g) ?? [],
+    );
+    expect([...established].sort()).toEqual([
+      "Confidential",
+      "Disclosing",
+      "Information",
+      "Party",
+      "Receiving",
+    ]);
+    const places = new Set(["Agreement", "Delaware", "State"]);
+    const openers = new Set(["The", "This", "Within"]);
+    for (const { key, wording } of withWording) {
+      const words = wording.replace(/\[[^\]]*\]/g, "").match(/\b[A-Z][a-z]+\b/g) ?? [];
+      const strangers = words.filter(
+        (word) => !established.has(word) && !places.has(word) && !openers.has(word),
+      );
+      expect(strangers, key).toEqual([]);
+    }
   });
 
   it("describes itself as invented policy and not as law, and states no law", () => {

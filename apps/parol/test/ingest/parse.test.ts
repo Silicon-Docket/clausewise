@@ -1,10 +1,22 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { MAX_DOCX_BYTES, MIN_REVIEWABLE_CHARS, parseDocument } from "../../src/ingest/parse.js";
+import {
+  MAX_DOCX_BYTES,
+  MAX_DOCX_XML_BYTES,
+  MAX_TEXT_CHARS,
+  MIN_REVIEWABLE_CHARS,
+  parseDocument,
+} from "../../src/ingest/parse.js";
 import { MAX_PARAGRAPHS } from "../../src/ingest/txt.js";
 import { UploadError } from "../../src/module-contracts.js";
-import { brokenDocxBytes, docxBytes, encode, strictDocxBytes } from "./support.js";
+import {
+  brokenDocxBytes,
+  docxBytes,
+  docxWithTextBytes,
+  encode,
+  strictDocxBytes,
+} from "./support.js";
 
 const fixture = (name: string): Uint8Array =>
   new Uint8Array(
@@ -109,6 +121,56 @@ describe("parseDocument for Word files", () => {
     );
     expect((await refusal(docx(many))).message).toMatch(/paragraphs/);
   }, 60_000);
+});
+
+describe("the size of the text a Word file expands to", () => {
+  it("refuses a body whose XML is larger than the limit, however small the file is", async () => {
+    const bytes = await docxWithTextBytes("a".repeat(MAX_DOCX_XML_BYTES + 1024));
+    // A repeated letter deflates to a few kilobytes, so the byte limit on the file cannot catch it.
+    expect(bytes.length).toBeLessThan(MAX_DOCX_BYTES / 10);
+    const error = await refusal(docx(bytes));
+    expect(error.message).toMatch(/too large or too complex/);
+  });
+
+  it("accepts a body just under the XML limit when its text is under the text limit", async () => {
+    expect(MAX_TEXT_CHARS).toBeLessThan(MAX_DOCX_XML_BYTES);
+    await expect(docx(await docxWithTextBytes("a".repeat(MAX_TEXT_CHARS)))).resolves.toBeDefined();
+  }, 60_000);
+
+  it("refuses more text than a text file may hold, in one paragraph or many", async () => {
+    const one = await refusal(docx(await docxWithTextBytes("a".repeat(MAX_TEXT_CHARS + 1))));
+    expect(one.message).toMatch(/characters of text/);
+    const many = await docxBytes(Array.from({ length: 30 }, () => "b".repeat(MAX_TEXT_CHARS / 20)));
+    expect((await refusal(docx(many))).message).toMatch(/characters of text/);
+  }, 60_000);
+
+  it("states the limit without quoting the file", async () => {
+    const error = await refusal(docx(await docxWithTextBytes("SECRET".repeat(MAX_TEXT_CHARS))));
+    expect(error.message).not.toContain("SECRET");
+  }, 60_000);
+});
+
+describe("text that shows as nothing", () => {
+  // Zero-width, formatting and blank characters beyond the few the quote anchor deletes.
+  it.each([
+    ["left-to-right mark", "\u200e"],
+    ["right-to-left mark", "\u200f"],
+    ["braille blank", "\u2800"],
+    ["combining grapheme joiner", "\u034f"],
+    ["hangul filler", "\u3164"],
+    ["invisible plus", "\u2064"],
+    ["function application", "\u2061"],
+    ["right-to-left override", "\u202e"],
+    ["object replacement character", "\ufffc"],
+    ["variation selector", "\ufe0f"],
+    ["mongolian vowel separator", "\u180e"],
+    ["a control character", "\u0007"],
+    ["a tag character", "\u{e0041}"],
+  ])("does not count %s as text", async (_name, character) => {
+    await refusal(txt(character.repeat(30)));
+    await refusal(docx(await docxBytes([character.repeat(30)])));
+    await refusal(txt(`${"a".repeat(10)}${character.repeat(30)}`));
+  });
 });
 
 describe("the minimum amount of text", () => {

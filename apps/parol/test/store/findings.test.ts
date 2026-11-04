@@ -20,6 +20,7 @@ import {
   fakePath,
   findingFor,
   makeWorld,
+  messageOf,
   rehash,
   reviewable,
   saveAll,
@@ -33,7 +34,10 @@ beforeEach(() => {
   w = makeWorld();
 });
 
-const span = (m: ReturnType<typeof addMatter>, i: number) => ({ id: m.nda.spanIds[i] as string, text: m.nda.texts[i] as string });
+const span = (m: ReturnType<typeof addMatter>, i: number) => ({
+  id: m.nda.spanIds[i] as string,
+  text: m.nda.texts[i] as string,
+});
 const reasons = (matterId: string, runId: string): ExportBlockerReason[] =>
   w.repo.getExportReadiness(matterId, runId).blockers.map((b) => b.reason);
 
@@ -60,9 +64,17 @@ describe("saveFindings", () => {
       currentReview: null,
     });
     expect(dur?.evidence).toHaveLength(1);
-    expect(dur?.evidence[0]).toMatchObject({ spanId: m.nda.spanIds[2], role: "governing", quoteCheck: "verified", supportCheck: "supported", offsets: { start: 0, end: 24 } });
+    expect(dur?.evidence[0]).toMatchObject({
+      spanId: m.nda.spanIds[2],
+      role: "governing",
+      quoteCheck: "verified",
+      supportCheck: "supported",
+      offsets: { start: 0, end: 22 },
+    });
     expect(dur?.evidence[0]?.id).toMatch(/^evd_/);
-    expect(dur?.checks).toEqual([{ id: "quote_exists", kind: "deterministic", outcome: "pass", detail: "1 of 1 found" }]);
+    expect(dur?.checks).toEqual([
+      { id: "quote_exists", kind: "deterministic", outcome: "pass", detail: "1 of 1 found" },
+    ]);
     expect(dur?.rule).toMatchObject({ key: "dur-1", title: "Duration of obligations", ordinal: 1 });
     // The stored content hashes back to the stored hash: nothing was lost or reordered on the way through.
     for (const f of saved) expect(findingContentSha256(f)).toBe(f.contentSha256);
@@ -80,13 +92,37 @@ describe("saveFindings", () => {
       conflict: "Section 6.1 says two years; the amendment deletes it.",
       abstainReason: "The documents do not settle precedence.",
       evidence: [
-        { spanId: amendment.spanIds[1] as string, quote: "Section 6.1", role: "conflicting", quoteCheck: "verified", offsets: { start: 3, end: 14 }, supportCheck: "insufficient" },
-        { spanId: m.nda.spanIds[2] as string, quote: "two (2) years", role: "superseded", quoteCheck: "ambiguous", offsets: null, supportCheck: "not_run" },
-        { spanId: m.nda.spanIds[3] as string, quote: "not in the text", role: "supporting", quoteCheck: "not_found", offsets: null, supportCheck: "not_run" },
+        {
+          spanId: amendment.spanIds[1] as string,
+          quote: "Section 6.1",
+          role: "conflicting",
+          quoteCheck: "verified",
+          offsets: { start: 3, end: 14 },
+          supportCheck: "insufficient",
+        },
+        {
+          spanId: m.nda.spanIds[2] as string,
+          // Occurs twice in the span ("each Receiving Party", "each disclosure"), so it is ambiguous.
+          quote: "each",
+          role: "superseded",
+          quoteCheck: "ambiguous",
+          offsets: null,
+          supportCheck: "not_run",
+        },
+        {
+          spanId: m.nda.spanIds[3] as string,
+          quote: "not in the text",
+          role: "supporting",
+          quoteCheck: "not_found",
+          offsets: null,
+          supportCheck: "not_run",
+        },
       ],
+      // A quote that was not found always raises quote_not_verified.
       escalations: [
         { code: "model_abstained", detail: "no status" },
         { code: "conflicting_sources", detail: "6.1 vs amendment" },
+        { code: "quote_not_verified", detail: "evidence 3: quote_not_found" },
       ],
       verificationState: "escalated_by_system",
     });
@@ -96,7 +132,11 @@ describe("saveFindings", () => {
       [m.nda.spanIds[2], "ambiguous"],
       [m.nda.spanIds[3], "not_found"],
     ]);
-    expect(saved?.escalations.map((e) => e.code)).toEqual(["model_abstained", "conflicting_sources"]);
+    expect(saved?.escalations.map((e) => e.code)).toEqual([
+      "model_abstained",
+      "conflicting_sources",
+      "quote_not_verified",
+    ]);
     expect(saved).toMatchObject({ conflict: f.conflict, abstainReason: f.abstainReason });
     expect(saved?.contentSha256).toBe(f.contentSha256);
     expect(findingContentSha256(saved as VerifiedFinding)).toBe(f.contentSha256);
@@ -106,7 +146,11 @@ describe("saveFindings", () => {
     const m = addMatter(w);
     const run = startRun(w, m);
     w.repo.saveFindings(m.id, run.id, [...allFindings(m)].reverse());
-    expect(w.repo.listFindings(m.id, run.id).map((f) => f.ruleKey)).toEqual(["pty-1", "dur-1", "gov-1"]);
+    expect(w.repo.listFindings(m.id, run.id).map((f) => f.ruleKey)).toEqual([
+      "pty-1",
+      "dur-1",
+      "gov-1",
+    ]);
   });
 
   it("audits the save with rule keys and counts only", () => {
@@ -125,14 +169,19 @@ describe("saveFindings", () => {
     expect(again.map((f) => f.id)).toEqual(first.map((f) => f.id));
     expect(w.repo.listFindings(m.id, run.id)).toHaveLength(3);
     expect(w.repo.listAuditEvents({ matterId: m.id, action: "finding.save" })).toHaveLength(1);
-    const different = rehash({ ...findingFor("dur-1", span(m, 2)), explanation: "Changed my mind." });
+    const different = rehash({
+      ...findingFor("dur-1", span(m, 2)),
+      explanation: "Changed my mind.",
+    });
     expect(() => w.repo.saveFindings(m.id, run.id, [different])).toThrow(/different finding/);
   });
 
   it("refuses a run whose inputs changed, and one that was superseded", () => {
     const m = addMatter(w);
     const run = startRun(w, m);
-    w.repo.updateClientName(m.id, "Marlowe Analytics Holdings, Inc.", { actorId: ACTORS.associate });
+    w.repo.updateClientName(m.id, "Marlowe Analytics Holdings, Inc.", {
+      actorId: ACTORS.associate,
+    });
     expect(() => saveAll(w, m, run)).toThrow(StaleRunError);
     expect(w.repo.listFindings(m.id, run.id)).toEqual([]);
   });
@@ -141,7 +190,11 @@ describe("saveFindings", () => {
     const m = addMatter(w);
     const run = startRun(w, m);
     // A change made around the repository, so that no invalidation ran.
-    w.db.prepare("UPDATE matters SET client_legal_name = 'Changed Behind The Back, Inc.' WHERE id = ?").run(m.id);
+    w.db
+      .prepare(
+        "UPDATE matters SET client_legal_name = 'Changed Behind The Back, Inc.' WHERE id = ?",
+      )
+      .run(m.id);
     expect(w.repo.getRun(m.id, run.id)?.status).toBe("analyzing");
     expect(() => saveAll(w, m, run)).toThrow(StaleRunError);
   });
@@ -150,7 +203,14 @@ describe("saveFindings", () => {
     const m = addMatter(w);
     const queued = startRun(w, m, "queued");
     expect(() => saveAll(w, m, queued)).toThrow(/is queued/);
-    for (const status of ["ingesting", "extracting", "retrieving", "analyzing", "verifying", "succeeded"] as const) {
+    for (const status of [
+      "ingesting",
+      "extracting",
+      "retrieving",
+      "analyzing",
+      "verifying",
+      "succeeded",
+    ] as const) {
       if (status !== "succeeded") w.repo.updateRunStatus(m.id, queued.id, status);
       if (status === "analyzing" || status === "verifying") continue;
       if (status === "succeeded") w.repo.updateRunStatus(m.id, queued.id, "succeeded");
@@ -165,42 +225,106 @@ describe("saveFindings", () => {
   });
 
   describe("checks the stages' work again", () => {
-    const refuse = (mutate: (f: VerifiedFinding) => VerifiedFinding, pattern: RegExp, rehashAfter = true) => {
+    const refuse = (
+      mutate: (f: VerifiedFinding) => VerifiedFinding,
+      pattern: RegExp,
+      rehashAfter = true,
+      mustNotEcho?: string,
+    ) => {
       const m = addMatter(w, { amendment: true });
       const run = startRun(w, m);
       const bad = mutate(findingFor("dur-1", span(m, 2)));
-      expect(() => w.repo.saveFindings(m.id, run.id, [rehashAfter ? rehash(bad) : bad])).toThrow(pattern);
+      const attempt = () => w.repo.saveFindings(m.id, run.id, [rehashAfter ? rehash(bad) : bad]);
+      expect(attempt).toThrow(pattern);
+      if (mustNotEcho !== undefined) expect(messageOf(attempt)).not.toContain(mustNotEcho);
       expect(w.repo.listFindings(m.id, run.id)).toEqual([]);
     };
 
     it("a content hash that is not the hash of the content", () => {
-      refuse((f) => ({ ...f, explanation: "Edited after hashing." }), /not the hash of its content/, false);
+      refuse(
+        (f) => ({ ...f, explanation: "Edited after hashing." }),
+        /not the hash of its content/,
+        false,
+      );
     });
     it("a rule that is not in the run's playbook version", () => {
-      refuse((f) => ({ ...f, ruleKey: "zzz-9" }), /zzz-9/);
+      // The rule key came from the caller, so the message names the finding's position and not the key.
+      refuse(
+        (f) => ({ ...f, ruleKey: "zzz-9" }),
+        /finding 1 names a rule that is not in/,
+        true,
+        "zzz-9",
+      );
     });
     it("a category or severity that disagrees with the rule", () => {
       refuse((f) => ({ ...f, severity: "low" }), /disagrees with its rule/);
       refuse((f) => ({ ...f, category: "parties" }), /disagrees with its rule/);
     });
     it("evidence that cites a span outside the run's documents", () => {
-      refuse((f) => ({ ...f, evidence: [{ ...(f.evidence[0] as object), spanId: "ver_unknown:p0" }] as never }), /not in the run's documents/);
+      refuse(
+        (f) => ({
+          ...f,
+          evidence: [{ ...(f.evidence[0] as object), spanId: "ver_unknown:p0" }] as never,
+        }),
+        /not in the run's documents/,
+      );
     });
     it("evidence that cites a span of another matter", () => {
       const other = addMatter(w, { name: "other" });
-      refuse((f) => ({ ...f, evidence: [{ ...(f.evidence[0] as object), spanId: other.nda.spanIds[2] as string }] as never }), /not in the run's documents/);
+      refuse(
+        (f) => ({
+          ...f,
+          evidence: [
+            { ...(f.evidence[0] as object), spanId: other.nda.spanIds[2] as string },
+          ] as never,
+        }),
+        /not in the run's documents/,
+      );
     });
     it("verified evidence without offsets, or with offsets past the span", () => {
-      refuse((f) => ({ ...f, evidence: [{ ...(f.evidence[0] as object), offsets: null }] as never }), /needs offsets/);
-      refuse((f) => ({ ...f, evidence: [{ ...(f.evidence[0] as object), offsets: { start: 0, end: 9999 } }] as never }), /needs offsets/);
-      refuse((f) => ({ ...f, evidence: [{ ...(f.evidence[0] as object), offsets: { start: 5, end: 5 } }] as never }), /needs offsets/);
+      refuse(
+        (f) => ({ ...f, evidence: [{ ...(f.evidence[0] as object), offsets: null }] as never }),
+        /needs offsets/,
+      );
+      refuse(
+        (f) => ({
+          ...f,
+          evidence: [{ ...(f.evidence[0] as object), offsets: { start: 0, end: 9999 } }] as never,
+        }),
+        /needs offsets/,
+      );
+      refuse(
+        (f) => ({
+          ...f,
+          evidence: [{ ...(f.evidence[0] as object), offsets: { start: 5, end: 5 } }] as never,
+        }),
+        /needs offsets/,
+      );
     });
     it("offsets on a quote that was not verified", () => {
-      refuse((f) => ({ ...f, evidence: [{ ...(f.evidence[0] as object), quoteCheck: "not_found" }] as never }), /not verified/);
+      refuse(
+        (f) => ({
+          ...f,
+          evidence: [{ ...(f.evidence[0] as object), quoteCheck: "not_found" }] as never,
+        }),
+        /not verified/,
+      );
     });
     it("an escalation that forces undetermined on a finding with another status", () => {
-      for (const code of ["conflicting_sources", "model_abstained", "output_invalid", "context_over_budget"] as const)
-        refuse((f) => ({ ...f, escalations: [{ code, detail: "x" }], verificationState: "escalated_by_system" }), /forces undetermined/);
+      for (const code of [
+        "conflicting_sources",
+        "model_abstained",
+        "output_invalid",
+        "context_over_budget",
+      ] as const)
+        refuse(
+          (f) => ({
+            ...f,
+            escalations: [{ code, detail: "x" }],
+            verificationState: "escalated_by_system",
+          }),
+          /forces undetermined/,
+        );
     });
     it("an undetermined finding with no escalation", () => {
       refuse((f) => ({ ...f, status: "undetermined" }), /carries no escalation/);
@@ -211,7 +335,10 @@ describe("saveFindings", () => {
     it("values outside the vocabulary", () => {
       refuse((f) => ({ ...f, status: "great" as never }), ValidationErrorPattern);
       refuse((f) => ({ ...f, fallbackBasis: "invented" as never }), ValidationErrorPattern);
-      refuse((f) => ({ ...f, escalations: [{ code: "mystery" as never, detail: "" }] }), ValidationErrorPattern);
+      refuse(
+        (f) => ({ ...f, escalations: [{ code: "mystery" as never, detail: "" }] }),
+        ValidationErrorPattern,
+      );
     });
     it("two findings for one rule", () => {
       const m = addMatter(w);
@@ -231,7 +358,10 @@ describe("saveFindings", () => {
       escalations: [{ code: "output_invalid", detail: "no valid answer" }],
       verificationState: "escalated_by_system",
     });
-    expect(w.repo.saveFindings(m.id, run.id, [f])[0]).toMatchObject({ status: "undetermined", evidence: [] });
+    expect(w.repo.saveFindings(m.id, run.id, [f])[0]).toMatchObject({
+      status: "undetermined",
+      evidence: [],
+    });
   });
 
   it("is all or nothing: a failure part way leaves no finding, evidence or check behind", () => {
@@ -243,7 +373,10 @@ describe("saveFindings", () => {
       BEGIN SELECT RAISE(ABORT, 'injected failure'); END`);
     expect(() => saveAll(w, m, run)).toThrow("injected failure");
     for (const table of ["findings", "finding_evidence", "verification_results"])
-      expect((w.db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n, table).toBe(0);
+      expect(
+        (w.db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n,
+        table,
+      ).toBe(0);
     expect(w.repo.listAuditEvents({ matterId: m.id, action: "finding.save" })).toEqual([]);
     w.db.exec("DROP TRIGGER fail_on_gov");
     expect(saveAll(w, m, run)).toHaveLength(3);
@@ -255,7 +388,12 @@ const ValidationErrorPattern = /invalid|finding/;
 describe("recordReview", () => {
   const setup = () => reviewable(w);
   const decide = (matterId: string, f: { id: string; contentSha256: string }, over: object = {}) =>
-    w.repo.recordReview(matterId, f.id, { reviewerId: ACTORS.reviewer, decision: "accept", findingContentSha256: f.contentSha256, ...over });
+    w.repo.recordReview(matterId, f.id, {
+      reviewerId: ACTORS.reviewer,
+      decision: "accept",
+      findingContentSha256: f.contentSha256,
+      ...over,
+    });
 
   it("records an acceptance bound to the content hash, and audits it without the reason", () => {
     const { m, findings } = setup();
@@ -275,7 +413,12 @@ describe("recordReview", () => {
     });
     const event = w.repo.listAuditEvents({ matterId: m.id, action: "review.decide" })[0];
     expect(event).toMatchObject({ actorId: ACTORS.reviewer, targetId: f.id });
-    expect(event?.detail).toMatchObject({ reviewId: review.id, ruleKey: "pty-1", decision: "accept", findingContentSha256: f.contentSha256 });
+    expect(event?.detail).toMatchObject({
+      reviewId: review.id,
+      ruleKey: "pty-1",
+      decision: "accept",
+      findingContentSha256: f.contentSha256,
+    });
     expect(w.repo.getFinding(m.id, f.id)?.currentReview?.id).toBe(review.id);
   });
 
@@ -287,9 +430,14 @@ describe("recordReview", () => {
       expect(() => decide(m.id, f, { decision, reason: "   " })).toThrow(/needs a reason/);
       expect(() => decide(m.id, f, { decision, reason: null })).toThrow(/needs a reason/);
     }
-    expect(() => decide(m.id, f, { decision: "edit", edits: { discrepancy: "x" } })).toThrow(/needs a reason/);
+    expect(() => decide(m.id, f, { decision: "edit", edits: { discrepancy: "x" } })).toThrow(
+      /needs a reason/,
+    );
     expect(w.repo.listReviews(m.id, f.id)).toEqual([]);
-    expect(decide(m.id, f, { decision: "reject", reason: "The clause is not what the finding says." }).reason).toBe("The clause is not what the finding says.");
+    expect(
+      decide(m.id, f, { decision: "reject", reason: "The clause is not what the finding says." })
+        .reason,
+    ).toBe("The clause is not what the finding says.");
     expect(decide(m.id, f, { decision: "accept", reason: "Agreed." }).reason).toBe("Agreed.");
   });
 
@@ -297,15 +445,25 @@ describe("recordReview", () => {
     const { m, findings } = setup();
     const f = findings[1] as NonNullable<(typeof findings)[0]>;
     expect(() => decide(m.id, f, { decision: "edit", reason: "r" })).toThrow(/needs the edits/);
-    expect(() => decide(m.id, f, { decision: "edit", reason: "r", edits: null })).toThrow(/needs the edits/);
-    expect(() => decide(m.id, f, { decision: "accept", edits: { status: "deviation" } })).toThrow(/only an edit/);
+    expect(() => decide(m.id, f, { decision: "edit", reason: "r", edits: null })).toThrow(
+      /needs the edits/,
+    );
+    expect(() => decide(m.id, f, { decision: "accept", edits: { status: "deviation" } })).toThrow(
+      /only an edit/,
+    );
     expect(() => decide(m.id, f, { decision: "bogus" })).toThrow(ValidationError);
   });
 
   it("stores changed fields only, and refuses an edit that changes nothing", () => {
     const { m, findings } = setup();
     const f = findings[1] as NonNullable<(typeof findings)[0]>;
-    expect(() => decide(m.id, f, { decision: "edit", reason: "r", edits: { status: "compliant", discrepancy: "" } })).toThrow(/change something/);
+    expect(() =>
+      decide(m.id, f, {
+        decision: "edit",
+        reason: "r",
+        edits: { status: "compliant", discrepancy: "" },
+      }),
+    ).toThrow(/change something/);
     const evidence = f.evidence[0] as NonNullable<(typeof f.evidence)[0]>;
     const review = decide(m.id, f, {
       decision: "edit",
@@ -318,17 +476,36 @@ describe("recordReview", () => {
       },
     });
     expect(review.edits).toEqual({ status: "deviation", discrepancy: "No end is stated." });
-    const roleEdit = decide(m.id, f, { decision: "edit", reason: "r", edits: { evidenceRoles: [{ evidenceId: evidence.id, role: "supporting" }] } });
-    expect(roleEdit.edits).toEqual({ evidenceRoles: [{ evidenceId: evidence.id, role: "supporting" }] });
+    const roleEdit = decide(m.id, f, {
+      decision: "edit",
+      reason: "r",
+      edits: { evidenceRoles: [{ evidenceId: evidence.id, role: "supporting" }] },
+    });
+    expect(roleEdit.edits).toEqual({
+      evidenceRoles: [{ evidenceId: evidence.id, role: "supporting" }],
+    });
   });
 
   it("refuses edits that name evidence of another finding, or unknown fields", () => {
     const { m, findings } = setup();
-    const [a, b] = findings as [NonNullable<(typeof findings)[0]>, NonNullable<(typeof findings)[0]>];
+    const [a, b] = findings as [
+      NonNullable<(typeof findings)[0]>,
+      NonNullable<(typeof findings)[0]>,
+    ];
     const foreign = b.evidence[0] as NonNullable<(typeof b.evidence)[0]>;
-    expect(() => decide(m.id, a, { decision: "edit", reason: "r", edits: { evidenceRoles: [{ evidenceId: foreign.id, role: "supporting" }] } })).toThrow(NotFoundError);
-    expect(() => decide(m.id, a, { decision: "edit", reason: "r", edits: { status: "bogus" } })).toThrow(ValidationError);
-    expect(() => decide(m.id, a, { decision: "edit", reason: "r", edits: { severity: "low" } })).toThrow(ValidationError);
+    expect(() =>
+      decide(m.id, a, {
+        decision: "edit",
+        reason: "r",
+        edits: { evidenceRoles: [{ evidenceId: foreign.id, role: "supporting" }] },
+      }),
+    ).toThrow(NotFoundError);
+    expect(() =>
+      decide(m.id, a, { decision: "edit", reason: "r", edits: { status: "bogus" } }),
+    ).toThrow(ValidationError);
+    expect(() =>
+      decide(m.id, a, { decision: "edit", reason: "r", edits: { severity: "low" } }),
+    ).toThrow(ValidationError);
     expect(w.repo.listReviews(m.id, a.id)).toEqual([]);
   });
 
@@ -340,15 +517,24 @@ describe("recordReview", () => {
     const second = decide(m.id, f, { decision: "reject", reason: "On reflection, no." });
     expect(second.supersedesReviewId).toBe(first.id);
     const all = w.repo.listReviews(m.id, f.id);
-    expect(all.map((r) => [r.id, r.validity])).toEqual([[first.id, "stale"], [second.id, "current"]]);
+    expect(all.map((r) => [r.id, r.validity])).toEqual([
+      [first.id, "stale"],
+      [second.id, "current"],
+    ]);
     expect(w.repo.getFinding(m.id, f.id)?.currentReview?.id).toBe(second.id);
-    expect(w.db.prepare("SELECT count(*) AS n FROM reviews WHERE finding_id = ? AND validity = 'current'").get(f.id)).toEqual({ n: 1 });
+    expect(
+      w.db
+        .prepare("SELECT count(*) AS n FROM reviews WHERE finding_id = ? AND validity = 'current'")
+        .get(f.id),
+    ).toEqual({ n: 1 });
   });
 
   it("refuses a decision made on content that is not the finding's, and changes nothing", () => {
     const { m, findings } = setup();
     const f = findings[0] as NonNullable<(typeof findings)[0]>;
-    expect(() => decide(m.id, f, { findingContentSha256: sha256Hex("older content") })).toThrow(ContentMismatchError);
+    expect(() => decide(m.id, f, { findingContentSha256: sha256Hex("older content") })).toThrow(
+      ContentMismatchError,
+    );
     expect(() => decide(m.id, f, { findingContentSha256: "short" })).toThrow(ValidationError);
     expect(w.repo.listReviews(m.id, f.id)).toEqual([]);
     expect(w.repo.getMatter(m.id)?.status).toBe("in_review");
@@ -357,16 +543,24 @@ describe("recordReview", () => {
   it("refuses a decision on a finding that went stale, naming it as stale and not as a mismatch", () => {
     const { m, findings } = setup();
     const f = findings[0] as NonNullable<(typeof findings)[0]>;
-    w.repo.updateClientName(m.id, "Marlowe Analytics Holdings, Inc.", { actorId: ACTORS.associate });
+    w.repo.updateClientName(m.id, "Marlowe Analytics Holdings, Inc.", {
+      actorId: ACTORS.associate,
+    });
     expect(() => decide(m.id, f)).toThrow(StaleFindingError);
-    expect(() => decide(m.id, f, { findingContentSha256: sha256Hex("older content") })).toThrow(StaleFindingError);
+    expect(() => decide(m.id, f, { findingContentSha256: sha256Hex("older content") })).toThrow(
+      StaleFindingError,
+    );
     expect(w.repo.listReviews(m.id, f.id)).toEqual([]);
   });
 
   it("refuses a finding whose run is no longer current even if its flag still says current", () => {
     const { m, run, findings } = setup();
     const f = findings[0] as NonNullable<(typeof findings)[0]>;
-    w.db.prepare("UPDATE matters SET client_legal_name = 'Changed Behind The Back, Inc.' WHERE id = ?").run(m.id);
+    w.db
+      .prepare(
+        "UPDATE matters SET client_legal_name = 'Changed Behind The Back, Inc.' WHERE id = ?",
+      )
+      .run(m.id);
     expect(w.repo.getFinding(m.id, f.id)?.validity).toBe("current");
     expect(w.repo.getRun(m.id, run.id)?.status).toBe("succeeded");
     expect(() => decide(m.id, f)).toThrow(StaleFindingError);
@@ -379,7 +573,9 @@ describe("recordReview", () => {
     expect(() => decide(m.id, findings[0] as never)).toThrow(/not open for review|running/);
     const done = exported(w);
     const f = done.findings[0] as NonNullable<(typeof done.findings)[0]>;
-    expect(() => decide(done.m.id, f, { decision: "reject", reason: "Too late." })).toThrow(/exported/);
+    expect(() => decide(done.m.id, f, { decision: "reject", reason: "Too late." })).toThrow(
+      /exported/,
+    );
   });
 
   it("moves the matter to review_complete when the last finding is decided, and back when it is reopened", () => {
@@ -398,7 +594,9 @@ describe("recordReview", () => {
     decide(m.id, findings[0] as never, { decision: "reject", reason: "Reopened." });
     expect(status()).toBe("review_complete");
     // A decision that is refused changes nothing.
-    expect(() => decide(m.id, findings[0] as never, { findingContentSha256: sha256Hex("x") })).toThrow();
+    expect(() =>
+      decide(m.id, findings[0] as never, { findingContentSha256: sha256Hex("x") }),
+    ).toThrow();
     expect(status()).toBe("review_complete");
   });
 
@@ -440,10 +638,16 @@ describe("export readiness", () => {
   it("reports finding_stale and run_not_current after an input change", () => {
     const { m, run, findings } = reviewable(w);
     decideAll(w, m.id, findings);
-    w.repo.updateClientName(m.id, "Marlowe Analytics Holdings, Inc.", { actorId: ACTORS.associate });
+    w.repo.updateClientName(m.id, "Marlowe Analytics Holdings, Inc.", {
+      actorId: ACTORS.associate,
+    });
     const { blockers } = w.repo.getExportReadiness(m.id, run.id);
     expect(blockers[0]).toEqual({ findingId: null, ruleKey: null, reason: "run_not_current" });
-    expect(blockers.slice(1).map((b) => b.reason)).toEqual(["finding_stale", "finding_stale", "finding_stale"]);
+    expect(blockers.slice(1).map((b) => b.reason)).toEqual([
+      "finding_stale",
+      "finding_stale",
+      "finding_stale",
+    ]);
     expect(blockers.slice(1).map((b) => b.ruleKey)).toEqual(["pty-1", "dur-1", "gov-1"]);
   });
 
@@ -472,7 +676,9 @@ describe("export readiness", () => {
   it("reports only stale decisions as stale_review", () => {
     const { m, run, findings } = reviewable(w);
     const reviews = decideAll(w, m.id, findings);
-    w.db.prepare("UPDATE reviews SET validity = 'stale' WHERE id = ?").run(reviews[1]?.id as string);
+    w.db
+      .prepare("UPDATE reviews SET validity = 'stale' WHERE id = ?")
+      .run(reviews[1]?.id as string);
     expect(w.repo.getExportReadiness(m.id, run.id).blockers).toEqual([
       { findingId: findings[1]?.id, ruleKey: "dur-1", reason: "stale_review" },
     ]);
@@ -483,7 +689,9 @@ describe("export readiness", () => {
     decideAll(w, m.id, findings);
     // Editing content around the repository (the update trigger would normally refuse this).
     w.db.exec("DROP TRIGGER findings_content_immutable");
-    w.db.prepare("UPDATE findings SET explanation = 'Quietly changed.' WHERE id = ?").run(findings[0]?.id as string);
+    w.db
+      .prepare("UPDATE findings SET explanation = 'Quietly changed.' WHERE id = ?")
+      .run(findings[0]?.id as string);
     expect(w.repo.getExportReadiness(m.id, run.id).blockers).toEqual([
       { findingId: findings[0]?.id, ruleKey: "pty-1", reason: "content_changed" },
     ]);
@@ -492,18 +700,27 @@ describe("export readiness", () => {
   it("is not ready when a rule has no finding, which an empty run would otherwise pass vacuously", () => {
     const m = addMatter(w);
     const run = startRun(w, m);
-    w.repo.saveFindings(m.id, run.id, [findingFor("pty-1", span(m, 1)), findingFor("gov-1", span(m, 3))]);
+    w.repo.saveFindings(m.id, run.id, [
+      findingFor("pty-1", span(m, 1)),
+      findingFor("gov-1", span(m, 3)),
+    ]);
     succeed(w, m, run);
     const first = w.repo.listFindings(m.id, run.id);
     decideAll(w, m.id, first);
-    expect(w.repo.getExportReadiness(m.id, run.id).blockers).toEqual([{ findingId: null, ruleKey: "dur-1", reason: "missing_finding" }]);
+    expect(w.repo.getExportReadiness(m.id, run.id).blockers).toEqual([
+      { findingId: null, ruleKey: "dur-1", reason: "missing_finding" },
+    ]);
 
     const empty = addMatter(w, { name: "empty" });
     const emptyRun = startRun(w, empty);
     succeed(w, empty, emptyRun);
     const result = w.repo.getExportReadiness(empty.id, emptyRun.id);
     expect(result.ready).toBe(false);
-    expect(result.blockers.map((b) => b.reason)).toEqual(["missing_finding", "missing_finding", "missing_finding"]);
+    expect(result.blockers.map((b) => b.reason)).toEqual([
+      "missing_finding",
+      "missing_finding",
+      "missing_finding",
+    ]);
   });
 
   it("returns not found for a run that is not this matter's", () => {
@@ -517,7 +734,11 @@ describe("export readiness", () => {
 describe("recordMemo", () => {
   it("records a memo for a fully decided run, supersedes the last one, and exports the matter", () => {
     const e = exported(w);
-    expect(e.memo).toMatchObject({ status: "current", runId: e.run.id, exportedBy: ACTORS.reviewer });
+    expect(e.memo).toMatchObject({
+      status: "current",
+      runId: e.run.id,
+      exportedBy: ACTORS.reviewer,
+    });
     expect(e.memo.reviewIds).toEqual(e.reviews.map((r) => r.id));
     expect(w.repo.getMatter(e.m.id)?.status).toBe("exported");
     expect(w.repo.getCurrentMemo(e.m.id)?.id).toBe(e.memo.id);
@@ -536,7 +757,11 @@ describe("recordMemo", () => {
     expect(w.repo.listMemos(e.m.id).map((x) => x.id)).toEqual([second.id, e.memo.id]);
     expect(w.repo.getMatter(e.m.id)?.status).toBe("exported");
     const event = w.repo.listAuditEvents({ matterId: e.m.id, action: "memo.export" })[0];
-    expect(event?.detail).toMatchObject({ runId: e.run.id, fileSha256: e.memo.fileSha256, reviews: 3 });
+    expect(event?.detail).toMatchObject({
+      runId: e.run.id,
+      fileSha256: e.memo.fileSha256,
+      reviews: 3,
+    });
   });
 
   it("is blocked, with the blockers, while anything is undecided", () => {
@@ -544,12 +769,20 @@ describe("recordMemo", () => {
     const reviews = decideAll(w, m.id, findings.slice(0, 2));
     let caught: unknown;
     try {
-      w.repo.recordMemo(m.id, { runId: run.id, reviewIds: reviews.map((r) => r.id), fileSha256: sha256Hex("m"), storagePath: fakePath(m.id), exportedBy: ACTORS.reviewer });
+      w.repo.recordMemo(m.id, {
+        runId: run.id,
+        reviewIds: reviews.map((r) => r.id),
+        fileSha256: sha256Hex("m"),
+        storagePath: fakePath(m.id),
+        exportedBy: ACTORS.reviewer,
+      });
     } catch (error) {
       caught = error;
     }
     expect(caught).toBeInstanceOf(ExportBlockedError);
-    expect((caught as ExportBlockedError).blockers).toEqual([{ findingId: findings[2]?.id, ruleKey: "gov-1", reason: "no_review" }]);
+    expect((caught as ExportBlockedError).blockers).toEqual([
+      { findingId: findings[2]?.id, ruleKey: "gov-1", reason: "no_review" },
+    ]);
     expect(w.repo.listMemos(m.id)).toEqual([]);
     expect(w.repo.getMatter(m.id)?.status).toBe("in_review");
   });
@@ -557,21 +790,46 @@ describe("recordMemo", () => {
   it("is blocked after an input change", () => {
     const { m, run, findings } = reviewable(w);
     const reviews = decideAll(w, m.id, findings);
-    w.repo.updateClientName(m.id, "Marlowe Analytics Holdings, Inc.", { actorId: ACTORS.associate });
-    expect(() => w.repo.recordMemo(m.id, { runId: run.id, reviewIds: reviews.map((r) => r.id), fileSha256: sha256Hex("m"), storagePath: fakePath(m.id), exportedBy: ACTORS.reviewer })).toThrow(ExportBlockedError);
+    w.repo.updateClientName(m.id, "Marlowe Analytics Holdings, Inc.", {
+      actorId: ACTORS.associate,
+    });
+    expect(() =>
+      w.repo.recordMemo(m.id, {
+        runId: run.id,
+        reviewIds: reviews.map((r) => r.id),
+        fileSha256: sha256Hex("m"),
+        storagePath: fakePath(m.id),
+        exportedBy: ACTORS.reviewer,
+      }),
+    ).toThrow(ExportBlockedError);
   });
 
   it("refuses a memo built from decisions that are not the current ones", () => {
     const { m, run, findings } = reviewable(w);
     const reviews = decideAll(w, m.id, findings);
     // The reviewer changes their mind while the document is being built.
-    w.repo.recordReview(m.id, findings[0]?.id as string, { reviewerId: ACTORS.reviewer, decision: "reject", reason: "Changed.", findingContentSha256: findings[0]?.contentSha256 as string });
+    w.repo.recordReview(m.id, findings[0]?.id as string, {
+      reviewerId: ACTORS.reviewer,
+      decision: "reject",
+      reason: "Changed.",
+      findingContentSha256: findings[0]?.contentSha256 as string,
+    });
     const attempt = (reviewIds: string[]) =>
-      w.repo.recordMemo(m.id, { runId: run.id, reviewIds, fileSha256: sha256Hex("m"), storagePath: fakePath(m.id), exportedBy: ACTORS.reviewer });
-    expect(() => attempt(reviews.map((r) => r.id))).toThrow(/changed while the memo was being built/);
+      w.repo.recordMemo(m.id, {
+        runId: run.id,
+        reviewIds,
+        fileSha256: sha256Hex("m"),
+        storagePath: fakePath(m.id),
+        exportedBy: ACTORS.reviewer,
+      });
+    expect(() => attempt(reviews.map((r) => r.id))).toThrow(
+      /changed while the memo was being built/,
+    );
     expect(() => attempt([])).toThrow(ConflictError);
     expect(w.repo.listMemos(m.id)).toEqual([]);
-    const current = w.repo.listFindings(m.id, run.id).map((f) => (f.currentReview as { id: string }).id);
+    const current = w.repo
+      .listFindings(m.id, run.id)
+      .map((f) => (f.currentReview as { id: string }).id);
     expect(attempt(current).status).toBe("current");
   });
 
@@ -579,7 +837,14 @@ describe("recordMemo", () => {
     const { m, run, findings } = reviewable(w);
     const reviews = decideAll(w, m.id, findings);
     const go = (over: object) =>
-      w.repo.recordMemo(m.id, { runId: run.id, reviewIds: reviews.map((r) => r.id), fileSha256: sha256Hex("m"), storagePath: fakePath(m.id), exportedBy: ACTORS.reviewer, ...over });
+      w.repo.recordMemo(m.id, {
+        runId: run.id,
+        reviewIds: reviews.map((r) => r.id),
+        fileSha256: sha256Hex("m"),
+        storagePath: fakePath(m.id),
+        exportedBy: ACTORS.reviewer,
+        ...over,
+      });
     expect(() => go({ fileSha256: "nope" })).toThrow(ValidationError);
     expect(() => go({ storagePath: fakePath("mat_ffffffffffffffff") })).toThrow(/own folder/);
     expect(() => go({ exportedBy: "usr_nobody" })).toThrow(NotFoundError);
@@ -593,21 +858,39 @@ describe("feedback", () => {
     const { m, run, findings } = reviewable(w);
     const f = findings[0] as NonNullable<(typeof findings)[0]>;
     const rating = w.repo.addFeedback(m.id, { userId: ACTORS.reviewer, kind: "rating", rating: 4 });
-    const reason = w.repo.addFeedback(m.id, { userId: ACTORS.reviewer, kind: "finding_reason", findingId: f.id, runId: run.id, reasonCode: "wrong_evidence" });
-    const missed = w.repo.addFeedback(m.id, { userId: ACTORS.associate, kind: "missed_issue", text: "FEEDBACK-SECRET about a clause" });
+    const reason = w.repo.addFeedback(m.id, {
+      userId: ACTORS.reviewer,
+      kind: "finding_reason",
+      findingId: f.id,
+      runId: run.id,
+      reasonCode: "wrong_evidence",
+    });
+    const missed = w.repo.addFeedback(m.id, {
+      userId: ACTORS.associate,
+      kind: "missed_issue",
+      text: "FEEDBACK-SECRET about a clause",
+    });
     w.repo.addFeedback(m.id, { userId: ACTORS.associate, kind: "comment", text: "Looks right." });
     expect(rating).toMatchObject({ kind: "rating", rating: 4, text: null });
     expect(reason).toMatchObject({ findingId: f.id, runId: run.id, reasonCode: "wrong_evidence" });
     expect(missed.text).toBe("FEEDBACK-SECRET about a clause");
     expect(w.repo.listFeedback(m.id)).toHaveLength(4);
-    const audit = JSON.stringify(w.repo.listAuditEvents({ matterId: m.id, action: "feedback.add" }));
+    const audit = JSON.stringify(
+      w.repo.listAuditEvents({ matterId: m.id, action: "feedback.add" }),
+    );
     expect(audit).not.toContain("FEEDBACK-SECRET");
     expect(w.repo.listAuditEvents({ matterId: m.id, action: "feedback.add" })).toHaveLength(4);
   });
 
   it("validates", () => {
     const { m, findings } = reviewable(w);
-    const go = (input: object) => w.repo.addFeedback(m.id, { userId: ACTORS.reviewer, kind: "comment", text: "t", ...input } as never);
+    const go = (input: object) =>
+      w.repo.addFeedback(m.id, {
+        userId: ACTORS.reviewer,
+        kind: "comment",
+        text: "t",
+        ...input,
+      } as never);
     expect(() => go({ kind: "rating" })).toThrow(/needs a rating/);
     expect(() => go({ kind: "rating", rating: 6 })).toThrow(ValidationError);
     expect(() => go({ kind: "rating", rating: 2.5 })).toThrow(ValidationError);

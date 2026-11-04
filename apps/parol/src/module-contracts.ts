@@ -208,6 +208,12 @@ export interface MemoFinding {
   finding: VerifiedFinding;
   /** Where each evidence quote is, in the order of `finding.evidence`. */
   locations: string[];
+  /**
+   * The stored id of each evidence item, in the order of `finding.evidence`. Needed when the
+   * decision changes evidence roles (`review.edits.evidenceRoles` names evidence by id) and
+   * otherwise optional. The store's `FindingRecord.evidence[i].id`.
+   */
+  evidenceIds?: string[];
   /** The reviewer's current decision, or null when there is none. A null decision blocks export. */
   review: {
     decision: "accept" | "edit" | "reject" | "escalate";
@@ -218,6 +224,8 @@ export interface MemoFinding {
       status?: string;
       discrepancy?: string;
       fallbackLanguage?: string;
+      /** The reviewer's change to how a cited passage is labelled. The store's `ReviewEdits`. */
+      evidenceRoles?: { evidenceId: string; role: string }[];
     } | null;
   } | null;
 }
@@ -248,6 +256,12 @@ export interface MemoInput {
   findings: MemoFinding[];
   /** Counts of rules by severity, to show on the summary. */
   ruleSeverities: Record<string, Severity>;
+  /**
+   * Rule titles by rule key, for the summary table and the section headings. Optional so that a
+   * caller written before the memo showed titles still compiles: a rule without a title is shown
+   * under the name of its category.
+   */
+  ruleTitles?: Record<string, string>;
   exportedBy: string;
   /** ISO 8601. The memo says this date, so it is an input and not read from the clock. */
   exportedAt: string;

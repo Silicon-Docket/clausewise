@@ -112,7 +112,14 @@ describe("matter ids", () => {
   });
 
   it("is refused on save and on delete", () => {
-    for (const bad of ["../escape", "mat_../../x", "mat_0123456789ABCDEF", "", "mat_0123456789abcdef/../..", "/etc"]) {
+    for (const bad of [
+      "../escape",
+      "mat_../../x",
+      "mat_0123456789ABCDEF",
+      "",
+      "mat_0123456789abcdef/../..",
+      "/etc",
+    ]) {
       expect(() => store.save(bad, bytes("x")), bad).toThrow(FileStoreError);
       expect(() => store.deleteMatter(bad), bad).toThrow(FileStoreError);
     }

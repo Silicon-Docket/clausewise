@@ -14,7 +14,7 @@ import {
 import { inputsDigestOf, type MattersApi } from "./repo-matters.js";
 import type { PlaybooksApi } from "./repo-playbooks.js";
 import { CallRecordSchema, RunManifestSchema } from "./schemas.js";
-import { canRunTransition, isTerminalRunStatus } from "./states.js";
+import { canRunTransition, isActiveRunStatus, isTerminalRunStatus } from "./states.js";
 import type { ModelCallRow, RunRow, RunStageRow } from "./types.js";
 
 interface RawRun {
@@ -133,14 +133,15 @@ export function createRunsApi(ctx: Ctx, matters: MattersApi, playbooks: Playbook
   };
   const requireRun = (matterId: string, runId: string): RunRow => {
     const found = getRun(matterId, runId);
-    if (!found) throw new NotFoundError("run", runId);
+    if (!found) throw new NotFoundError("run");
     return found;
   };
   /** Newest first. */
   const listRunsForMatter = (matterId: string): RunRow[] =>
-    all<RawRun>("SELECT * FROM runs WHERE matter_id = ? ORDER BY started_at DESC, rowid DESC", matterId).map(
-      toRun,
-    );
+    all<RawRun>(
+      "SELECT * FROM runs WHERE matter_id = ? ORDER BY started_at DESC, rowid DESC",
+      matterId,
+    ).map(toRun);
   const getActiveRun = (matterId: string): RunRow | undefined => {
     const row = get<RawRun>(
       `SELECT * FROM runs
@@ -177,11 +178,11 @@ export function createRunsApi(ctx: Ctx, matters: MattersApi, playbooks: Playbook
   ): RunManifest {
     const matter = requireMatter(matterId);
     if (matters.computeInputsDigest(matterId) === null || matter.playbookVersionId === null)
-      throw new InputsIncompleteError(matterId);
+      throw new InputsIncompleteError();
     const playbook = playbooks.getPlaybookVersion(matter.playbookVersionId);
-    if (!playbook) throw new NotFoundError("playbook version", matter.playbookVersionId);
+    if (!playbook) throw new NotFoundError("playbook version");
     const workflow = playbooks.getWorkflowVersion(opts.workflowVersionId);
-    if (!workflow) throw new NotFoundError("workflow version", opts.workflowVersionId);
+    if (!workflow) throw new NotFoundError("workflow version");
     return {
       matterId,
       clientLegalName: matter.clientLegalName,
@@ -226,7 +227,10 @@ export function createRunsApi(ctx: Ctx, matters: MattersApi, playbooks: Playbook
     const manifest = parseWith(RunManifestSchema, input.manifest, "run manifest");
     const manifestSha256 = hashOf(manifest);
     if (input.manifestSha256 !== undefined && input.manifestSha256 !== manifestSha256)
-      throw new ValidationError("manifest_hash_mismatch", "manifest sha256 is not the hash of the manifest");
+      throw new ValidationError(
+        "manifest_hash_mismatch",
+        "manifest sha256 is not the hash of the manifest",
+      );
     if (input.inputsSha256 !== undefined) assertSha256("inputsSha256", input.inputsSha256);
     const purpose = input.purpose ?? "matter";
     if (purpose !== "matter" && purpose !== "eval")
@@ -239,14 +243,13 @@ export function createRunsApi(ctx: Ctx, matters: MattersApi, playbooks: Playbook
         throw new ValidationError("manifest_matter", "manifest was built for a different matter");
 
       const digest = matters.computeInputsDigest(matterId);
-      if (digest === null || matter.playbookVersionId === null)
-        throw new InputsIncompleteError(matterId);
+      if (digest === null || matter.playbookVersionId === null) throw new InputsIncompleteError();
       const active = getActiveRun(matterId);
       if (active) throw new ActiveRunError(active.id);
       if (matter.status !== "ready" && matter.status !== "stale")
         throw new ConflictError(
           "matter_not_runnable",
-          `matter ${matterId} is ${matter.status}; a run starts from ready or stale`,
+          `the matter is ${matter.status}; a run starts from ready or stale`,
         );
 
       // The manifest must describe the inputs the matter has now. Its own digest is compared first
@@ -263,23 +266,32 @@ export function createRunsApi(ctx: Ctx, matters: MattersApi, playbooks: Playbook
             kind: d.kind,
           })),
       });
-      if (manifestDigest !== digest || (input.inputsSha256 !== undefined && input.inputsSha256 !== digest))
-        throw new StaleRunError(null, "inputs_changed");
+      if (
+        manifestDigest !== digest ||
+        (input.inputsSha256 !== undefined && input.inputsSha256 !== digest)
+      )
+        throw new StaleRunError("inputs_changed");
 
       const playbook = playbooks.getPlaybookVersion(matter.playbookVersionId);
       if (!playbook || playbook.status !== "approved")
-        throw new ConflictError("playbook_not_approved", "the matter's playbook version is not approved");
+        throw new ConflictError(
+          "playbook_not_approved",
+          "the matter's playbook version is not approved",
+        );
       const workflow = playbooks.getWorkflowVersion(manifest.workflow.versionId);
-      if (!workflow) throw new NotFoundError("workflow version", manifest.workflow.versionId);
+      if (!workflow) throw new NotFoundError("workflow version");
       if (workflow.status === "retired")
-        throw new ConflictError("workflow_retired", `workflow version ${workflow.id} is retired`);
+        throw new ConflictError("workflow_retired", "the workflow version is retired");
       const expected = buildRunManifest(matterId, {
         workflowVersionId: workflow.id,
         modelProvider: manifest.model.provider,
         model: manifest.model.model,
       });
       if (hashOf(expected) !== manifestSha256)
-        throw new ValidationError("manifest_mismatch", "manifest does not match the matter's inputs");
+        throw new ValidationError(
+          "manifest_mismatch",
+          "manifest does not match the matter's inputs",
+        );
 
       const id = newId("run");
       run(
@@ -334,13 +346,17 @@ export function createRunsApi(ctx: Ctx, matters: MattersApi, playbooks: Playbook
     matterId: string,
     runId: string,
     to: RunStatus,
-    opts: { errorKind?: string | null; modelReported?: string | null; actorId?: string | null } = {},
+    opts: {
+      errorKind?: string | null;
+      modelReported?: string | null;
+      actorId?: string | null;
+    } = {},
   ): RunRow {
     if (opts.errorKind !== undefined && opts.errorKind !== null)
       assertShortCode("errorKind", opts.errorKind);
     return tx(() => {
       const current = requireRun(matterId, runId);
-      if (current.status === "superseded") throw new StaleRunError(runId, "superseded");
+      if (current.status === "superseded") throw new StaleRunError("superseded");
       if (to === "superseded") throw new InvalidTransitionError("run", current.status, to);
       if (!canRunTransition(current.status, to))
         throw new InvalidTransitionError("run", current.status, to);
@@ -349,7 +365,7 @@ export function createRunsApi(ctx: Ctx, matters: MattersApi, playbooks: Playbook
         // Resuming: only on the inputs the run was started on, and only if nothing else is running.
         const digest = matters.computeInputsDigest(matterId);
         if (digest === null || digest !== current.inputsSha256)
-          throw new StaleRunError(runId, "inputs_changed");
+          throw new StaleRunError("inputs_changed");
         const active = getActiveRun(matterId);
         if (active) throw new ActiveRunError(active.id);
       }
@@ -388,7 +404,11 @@ export function createRunsApi(ctx: Ctx, matters: MattersApi, playbooks: Playbook
         action: "run.status",
         targetType: "run",
         targetId: runId,
-        detail: { from: current.status, to, errorKind: to === "failed" ? (opts.errorKind ?? null) : null },
+        detail: {
+          from: current.status,
+          to,
+          errorKind: to === "failed" ? (opts.errorKind ?? null) : null,
+        },
       });
       return requireRun(matterId, runId);
     });
@@ -436,10 +456,20 @@ export function createRunsApi(ctx: Ctx, matters: MattersApi, playbooks: Playbook
 
   // --- stages -------------------------------------------------------------------------------
 
-  /** A write for a run whose inputs have moved on must fail, so the stage stops spending money. */
+  /**
+   * A write for a run whose inputs have moved on must fail, so the stage stops spending money. A
+   * stage is also written only while its run is in flight: a stage row opened on a cancelled or
+   * failed run would never be closed (the boot sweep only looks at active runs), and a succeeded
+   * run's provenance is not added to after the fact.
+   */
   function requireWritableRun(matterId: string, runId: string): RunRow {
     const current = requireRun(matterId, runId);
-    if (current.status === "superseded") throw new StaleRunError(runId, "superseded");
+    if (current.status === "superseded") throw new StaleRunError("superseded");
+    if (!isActiveRunStatus(current.status))
+      throw new ConflictError(
+        "run_not_active",
+        `the run is ${current.status}; stages are written while it is in flight`,
+      );
     return current;
   }
 
@@ -522,7 +552,7 @@ export function createRunsApi(ctx: Ctx, matters: MattersApi, playbooks: Playbook
     return tx(() => {
       requireWritableRun(matterId, runId);
       const stage = getStage(matterId, runId, input.stage, unit, input.attempt);
-      if (!stage) throw new NotFoundError("run stage", `${runId}/${input.stage}/${unit}/${input.attempt}`);
+      if (!stage) throw new NotFoundError("run stage");
       if (stage.status !== "running")
         throw new ConflictError("stage_closed", "this stage attempt already has a result");
       run(
@@ -597,11 +627,24 @@ export function createRunsApi(ctx: Ctx, matters: MattersApi, playbooks: Playbook
   ): ModelCallRow[] {
     const parsed = calls.map((call) => parseWith(CallRecordSchema, call, "model call"));
     return tx(() => {
-      requireRun(matterId, runId);
+      const current = requireRun(matterId, runId);
+      // The rule key column names a rule of the run's own playbook version and holds nothing else,
+      // so a caller cannot park a sentence of a document in a table that must hold no text.
+      const ruleKeys = new Set(playbooks.listRules(current.playbookVersionId).map((r) => r.key));
       const ids: string[] = [];
       for (const call of parsed) {
-        if (!get<{ n: number }>("SELECT 1 AS n FROM prompt_versions WHERE id = ?", call.promptVersionId))
-          throw new NotFoundError("prompt version", call.promptVersionId);
+        if (call.ruleKey !== null && !ruleKeys.has(call.ruleKey))
+          throw new ValidationError(
+            "unknown_rule",
+            "a model call names a rule that is not in the run's playbook version",
+          );
+        if (
+          !get<{ n: number }>(
+            "SELECT 1 AS n FROM prompt_versions WHERE id = ?",
+            call.promptVersionId,
+          )
+        )
+          throw new NotFoundError("prompt version");
         const id = newId("mcl");
         ids.push(id);
         run(
@@ -627,11 +670,10 @@ export function createRunsApi(ctx: Ctx, matters: MattersApi, playbooks: Playbook
           call.priceTableSha256 ?? null,
         );
       }
-      return ids.map(
-        (id) =>
-          toModelCall(
-            get<RawModelCall>("SELECT * FROM model_calls WHERE id = ?", id) as RawModelCall,
-          ),
+      return ids.map((id) =>
+        toModelCall(
+          get<RawModelCall>("SELECT * FROM model_calls WHERE id = ?", id) as RawModelCall,
+        ),
       );
     });
   }

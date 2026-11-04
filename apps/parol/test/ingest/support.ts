@@ -130,6 +130,22 @@ export async function brokenDocxBytes(secret: string): Promise<Uint8Array> {
   return zip.generateAsync({ type: "uint8array" });
 }
 
+/**
+ * A Word file whose single paragraph holds `text`, written straight into the body so that a file
+ * with a very large paragraph can be made without the docx library building it in memory twice.
+ */
+export async function docxWithTextBytes(text: string): Promise<Uint8Array> {
+  const placeholder = "Placeholder paragraph for the file.";
+  const zip = await JSZip.loadAsync(await docxBytes([placeholder]));
+  const xml = await zip.file("word/document.xml")!.async("string");
+  if (!xml.includes(placeholder)) throw new Error("support: placeholder not found in the body");
+  zip.file(
+    "word/document.xml",
+    xml.replace(placeholder, () => text),
+  );
+  return zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
+}
+
 export const NO_INSPECTION: DocxInspection = {
   trackedInsertions: 0,
   trackedDeletions: 0,

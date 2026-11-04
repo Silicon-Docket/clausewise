@@ -27,11 +27,22 @@ const MAX_TERM_WORDS = 8;
 // nothing but quoted pairs costs a bounded amount per pair.
 const LOOKBEHIND = 120;
 const LOOKAHEAD = 100;
+// , . ; :
+const TRAILING_PUNCTUATION: ReadonlySet<number> = new Set([44, 46, 59, 58]);
 
-/** The term inside the quotes, tidied, or undefined when the text is not shaped like a term. */
+/**
+ * The term inside the quotes, tidied, or undefined when the text is not shaped like a term.
+ *
+ * The trailing punctuation is trimmed with a loop and not with a regular expression: a
+ * pattern such as /[,.;:]+$/ retries from every position of a long run of those characters that
+ * does not reach the end of the text, which is quadratic, and the text between two quotes is as
+ * long as the document allows.
+ */
 function termShape(inner: string): string | undefined {
   // American style puts the comma or full stop inside the quotes: (the "Company,")
-  const term = inner.replace(/[,.;:]+$/, "");
+  let end = inner.length;
+  while (end > 0 && TRAILING_PUNCTUATION.has(inner.charCodeAt(end - 1))) end--;
+  const term = end === inner.length ? inner : inner.slice(0, end);
   if (term.length < 2 || term.length > MAX_TERM_CHARS) return undefined;
   if (term !== term.trim() || !/^[\p{L}\p{N}]/u.test(term) || !/\p{L}/u.test(term)) {
     return undefined;

@@ -1,4 +1,12 @@
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -31,7 +39,10 @@ function copyMigrations(): string {
   const target = join(dir, "migrations");
   mkdirSync(target);
   for (const file of loadMigrationFiles(DEFAULT_MIGRATIONS_DIR))
-    copyFileSync(join(DEFAULT_MIGRATIONS_DIR, `${String(file.version).padStart(3, "0")}_${file.name}.sql`), join(target, `${String(file.version).padStart(3, "0")}_${file.name}.sql`));
+    copyFileSync(
+      join(DEFAULT_MIGRATIONS_DIR, `${String(file.version).padStart(3, "0")}_${file.name}.sql`),
+      join(target, `${String(file.version).padStart(3, "0")}_${file.name}.sql`),
+    );
   return target;
 }
 
@@ -89,15 +100,27 @@ describe("openDatabase", () => {
 describe("migrations", () => {
   it("applies every numbered file on an empty database and records version and checksum", () => {
     const db = openDatabase();
-    const rows = db.prepare("SELECT version, name, sha256 FROM schema_migrations ORDER BY version").all() as {
+    const rows = db
+      .prepare("SELECT version, name, sha256 FROM schema_migrations ORDER BY version")
+      .all() as {
       version: number;
       name: string;
       sha256: string;
     }[];
     const files = loadMigrationFiles();
     expect(files.length).toBeGreaterThanOrEqual(2);
-    expect(rows.map((r) => [r.version, r.name, r.sha256])).toEqual(files.map((f) => [f.version, f.name, f.sha256]));
-    for (const f of files) expect(f.sha256).toBe(sha256Hex(readFileSync(join(DEFAULT_MIGRATIONS_DIR, `${String(f.version).padStart(3, "0")}_${f.name}.sql`), "utf8").replace(/\r\n/g, "\n")));
+    expect(rows.map((r) => [r.version, r.name, r.sha256])).toEqual(
+      files.map((f) => [f.version, f.name, f.sha256]),
+    );
+    for (const f of files)
+      expect(f.sha256).toBe(
+        sha256Hex(
+          readFileSync(
+            join(DEFAULT_MIGRATIONS_DIR, `${String(f.version).padStart(3, "0")}_${f.name}.sql`),
+            "utf8",
+          ).replace(/\r\n/g, "\n"),
+        ),
+      );
     db.close();
   });
 
@@ -111,7 +134,9 @@ describe("migrations", () => {
     const file = join(dir, "a.db");
     openDatabase(file).close();
     const reopened = openDatabase(file);
-    const count = reopened.prepare("SELECT count(*) AS n FROM schema_migrations").get() as { n: number };
+    const count = reopened.prepare("SELECT count(*) AS n FROM schema_migrations").get() as {
+      n: number;
+    };
     expect(count.n).toBe(loadMigrationFiles().length);
     reopened.close();
   });
@@ -139,7 +164,10 @@ describe("migrations", () => {
     const file = join(dir, "c.db");
     openDatabase(file, { migrationsDir: migrations }).close();
     const second = join(migrations, "002_integrity.sql");
-    writeFileSync(second, readFileSync(second, "utf8").replace("one run in flight", "a run in flight"));
+    writeFileSync(
+      second,
+      readFileSync(second, "utf8").replace("one run in flight", "a run in flight"),
+    );
     expect(() => openDatabase(file, { migrationsDir: migrations })).toThrow(/migration 2/);
   });
 
@@ -148,7 +176,9 @@ describe("migrations", () => {
     writeFileSync(join(migrations, "003_extra.sql"), "CREATE TABLE extra_table (x TEXT);");
     const file = join(dir, "d.db");
     const db = openDatabase(file, { migrationsDir: migrations });
-    expect(db.prepare("SELECT version FROM schema_migrations WHERE version = 3").get()).toBeDefined();
+    expect(
+      db.prepare("SELECT version FROM schema_migrations WHERE version = 3").get(),
+    ).toBeDefined();
     expect(runMigrations(db, migrations).applied).toEqual([]);
     db.close();
     openDatabase(file, { migrationsDir: migrations }).close();
@@ -158,12 +188,17 @@ describe("migrations", () => {
     const migrations = copyMigrations();
     const file = join(dir, "e.db");
     openDatabase(file, { migrationsDir: migrations }).close();
-    writeFileSync(join(migrations, "003_bad.sql"), "CREATE TABLE half_done (x TEXT);\nINSERT INTO no_such_table VALUES (1);");
+    writeFileSync(
+      join(migrations, "003_bad.sql"),
+      "CREATE TABLE half_done (x TEXT);\nINSERT INTO no_such_table VALUES (1);",
+    );
     expect(() => openDatabase(file, { migrationsDir: migrations })).toThrow();
 
     writeFileSync(join(migrations, "003_bad.sql"), "CREATE TABLE fixed (x TEXT);");
     const db = openDatabase(file, { migrationsDir: migrations });
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[];
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+      name: string;
+    }[];
     expect(tables.map((t) => t.name)).not.toContain("half_done");
     expect(tables.map((t) => t.name)).toContain("fixed");
     db.close();
@@ -175,7 +210,9 @@ describe("migrations", () => {
     writeFileSync(join(migrations, "003_extra.sql"), "CREATE TABLE extra_table (x TEXT);");
     openDatabase(file, { migrationsDir: migrations }).close();
     rmSync(join(migrations, "003_extra.sql"));
-    expect(() => openDatabase(file, { migrationsDir: migrations })).toThrowError(/migration 3.*newer build/);
+    expect(() => openDatabase(file, { migrationsDir: migrations })).toThrowError(
+      /migration 3.*newer build/,
+    );
   });
 
   it("rejects gaps and misnamed files", () => {
@@ -208,7 +245,9 @@ describe("migrations", () => {
       (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
     expect(columns("runs")).toContain("inputs_sha256");
     expect(columns("matters")).toContain("current_inputs_sha256");
-    const indexes = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as { name: string }[]).map((i) => i.name);
+    const indexes = (
+      db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as { name: string }[]
+    ).map((i) => i.name);
     expect(indexes).toContain("runs_one_active_per_matter");
     expect(indexes).toContain("document_versions_one_operative");
     db.close();
@@ -261,7 +300,9 @@ describe("transaction", () => {
       }
       db.exec("INSERT INTO t VALUES (3)");
     });
-    expect((db.prepare("SELECT x FROM t ORDER BY x").all() as { x: number }[]).map((r) => r.x)).toEqual([1, 3]);
+    expect(
+      (db.prepare("SELECT x FROM t ORDER BY x").all() as { x: number }[]).map((r) => r.x),
+    ).toEqual([1, 3]);
     expect(count()).toBe(2);
   });
 
@@ -285,8 +326,18 @@ describe("transaction", () => {
 
   it("stays usable after a failure (the nesting depth is restored)", () => {
     const { db, count } = setup();
-    expect(() => transaction(db, () => { throw new Error("x"); })).toThrow();
-    expect(() => transaction(db, () => transaction(db, () => { throw new Error("y"); }))).toThrow();
+    expect(() =>
+      transaction(db, () => {
+        throw new Error("x");
+      }),
+    ).toThrow();
+    expect(() =>
+      transaction(db, () =>
+        transaction(db, () => {
+          throw new Error("y");
+        }),
+      ),
+    ).toThrow();
     transaction(db, () => db.exec("INSERT INTO t VALUES (9)"));
     expect(count()).toBe(1);
     expect(db.isTransaction).toBe(false);

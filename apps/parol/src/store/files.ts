@@ -121,7 +121,10 @@ export class FileStore {
    */
   deleteMatter(matterId: string): number {
     if (typeof matterId !== "string" || !MATTER_ID_PATTERN.test(matterId))
-      throw new FileStoreError("bad_matter_id", "matter id is not in the form mat_ and 16 hex digits");
+      throw new FileStoreError(
+        "bad_matter_id",
+        "matter id is not in the form mat_ and 16 hex digits",
+      );
     const dir = join(this.root, matterId);
     this.assertInsideRoot(dir);
     let stat;
@@ -142,13 +145,46 @@ export class FileStore {
     return count;
   }
 
+  /**
+   * The ids of the matter folders under the root, sorted. Only names in the form of a matter id
+   * are listed; anything else in the root is not this store's and is left alone.
+   */
+  listMatterIds(): string[] {
+    return readdirSync(this.root)
+      .filter((name) => MATTER_ID_PATTERN.test(name))
+      .sort();
+  }
+
+  /**
+   * Removes the folder of every matter that is not in `knownMatterIds`, and returns the ids it
+   * removed. This is the boot sweep for the one crash that deleting a matter can leave behind: the
+   * rows are deleted in one transaction and the files afterwards, so a stop between the two leaves a
+   * folder that no row names and `listExpiredMatters` will never return. Pass every id that has a
+   * row (`Repository.listMatterIds()`); a folder is removed only when its id is absent from it, so
+   * the list must come from the database this store belongs to, or live matters lose their files.
+   */
+  sweepOrphans(knownMatterIds: Iterable<string>): string[] {
+    const known = new Set<string>();
+    for (const id of knownMatterIds) if (typeof id === "string") known.add(id);
+    const removed: string[] = [];
+    for (const matterId of this.listMatterIds()) {
+      if (known.has(matterId)) continue;
+      this.deleteMatter(matterId);
+      removed.push(matterId);
+    }
+    return removed;
+  }
+
   // -------------------------------------------------------------------------------------------
 
   private matterDir(matterId: string, opts: { create: true }): string;
   private matterDir(matterId: string, opts: { create: false }): string | null;
   private matterDir(matterId: string, opts: { create: boolean }): string | null {
     if (typeof matterId !== "string" || !MATTER_ID_PATTERN.test(matterId))
-      throw new FileStoreError("bad_matter_id", "matter id is not in the form mat_ and 16 hex digits");
+      throw new FileStoreError(
+        "bad_matter_id",
+        "matter id is not in the form mat_ and 16 hex digits",
+      );
     const dir = join(this.root, matterId);
     this.assertInsideRoot(dir);
 
@@ -163,7 +199,7 @@ export class FileStore {
     }
     // A link (or anything that is not a folder) at the matter's name is never followed.
     if (!stat.isDirectory())
-      throw new FileStoreError("not_a_folder", `the matter folder ${matterId} is not a plain folder`);
+      throw new FileStoreError("not_a_folder", "the matter folder is not a plain folder");
     return dir;
   }
 
@@ -223,5 +259,7 @@ function safeUnlink(path: string): void {
 }
 
 function isMissing(error: unknown): boolean {
-  return typeof error === "object" && error !== null && (error as { code?: string }).code === "ENOENT";
+  return (
+    typeof error === "object" && error !== null && (error as { code?: string }).code === "ENOENT"
+  );
 }

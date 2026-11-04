@@ -22,7 +22,9 @@ describe.each(SHIPPED)("the shipped Clausewise playbook %s", (file) => {
   });
 
   it("is rejected by loadPlaybook for lacking a version", () => {
-    const err = playbookErrorOf(() => loadPlaybook({ yaml: text(file), slug: "shipped", source: file }));
+    const err = playbookErrorOf(() =>
+      loadPlaybook({ yaml: text(file), slug: "shipped", source: file }),
+    );
     expect(err.problems.filter((p) => p.startsWith("version:"))).toHaveLength(1);
     expect(err.message).toContain(`${file} is not a valid Parol playbook`);
   });
@@ -33,7 +35,9 @@ describe.each(SHIPPED)("the shipped Clausewise playbook %s", (file) => {
     const categoryProblems = err.problems.filter((p) => /^rules\[\d+\]\.category:/.test(p));
     expect(categoryProblems).toHaveLength(base.rules.length);
     base.rules.forEach((rule, i) => {
-      expect(categoryProblems[i], rule.id).toContain(`rules[${i}].category: rule "${rule.id}" has no category`);
+      expect(categoryProblems[i], rule.id).toContain(
+        `rules[${i}].category: rule "${rule.id}" has no category`,
+      );
     });
     // With no category anywhere, none of the seven is covered.
     for (const category of CATEGORY_IDS) {
@@ -59,7 +63,9 @@ describe("the two shipped playbooks together", () => {
 
   it("raise the same error type that callers catch for any other bad playbook", () => {
     for (const file of SHIPPED) {
-      expect(() => loadPlaybook({ yaml: text(file), slug: "shipped" }), file).toThrow(PlaybookError);
+      expect(() => loadPlaybook({ yaml: text(file), slug: "shipped" }), file).toThrow(
+        PlaybookError,
+      );
     }
   });
 });

@@ -46,6 +46,8 @@ export const AUDIT_ACTIONS = [
   "memo.export",
   "playbook.import",
   "playbook.approve",
+  "prompt.register",
+  "workflow.register",
   "workflow.promote",
   "feedback.add",
   "eval.record",
@@ -239,11 +241,7 @@ export function appendAudit(db: Database, input: AuditInput): AuditEvent {
 }
 
 export type AuditBreak =
-  | "sequence_gap"
-  | "prev_hash_mismatch"
-  | "hash_mismatch"
-  | "bad_detail"
-  | "truncated";
+  "sequence_gap" | "prev_hash_mismatch" | "hash_mismatch" | "bad_detail" | "truncated";
 
 export type AuditChainResult =
   | { ok: true; events: number }
@@ -321,4 +319,57 @@ export function listAuditEvents(db: Database, filter: AuditFilter = {}): AuditEv
     )
     .all(filter.matterId ?? null, filter.action ?? null, filter.afterSeq ?? 0, limit);
   return (rows as unknown as RawAuditRow[]).map(toEvent);
+}
+
+export interface MatterAuditFilter {
+  action?: string;
+  afterSeq?: number;
+  limit?: number;
+}
+
+export interface AuditPage {
+  events: AuditEvent[];
+  /**
+   * The sequence number to pass as `afterSeq` for the next page, or null when this page reached
+   * the end. A caller that ignores it can no longer mistake a cut-off listing for a complete one.
+   */
+  nextAfterSeq: number | null;
+}
+
+/**
+ * One matter's events, oldest first. The matter id is required and checked, because the same
+ * query with a null id would be the listing of every matter, and a route that forgot to pass the id
+ * must get an error and not somebody else's events.
+ */
+export function listMatterAuditEvents(
+  db: Database,
+  matterId: string,
+  filter: MatterAuditFilter = {},
+): AuditPage {
+  if (typeof matterId !== "string" || matterId.length === 0)
+    throw new ValidationError("matter_required", "listing a matter's audit events needs a matter");
+  const limit = Math.min(Math.max(Math.trunc(filter.limit ?? 1000), 1), 10_000);
+  // One more than asked for, to learn whether the page reached the end.
+  const rows = db
+    .prepare(
+      `SELECT seq, at, actor_id, matter_id, action, target_type, target_id, detail_json, prev_hash, hash
+       FROM audit_events
+       WHERE matter_id = ?1
+         AND (?2 IS NULL OR action = ?2)
+         AND seq > ?3
+       ORDER BY seq
+       LIMIT ?4`,
+    )
+    .all(
+      matterId,
+      filter.action ?? null,
+      filter.afterSeq ?? 0,
+      limit + 1,
+    ) as unknown as RawAuditRow[];
+  const events = rows.slice(0, limit).map(toEvent);
+  const last = events[events.length - 1];
+  return {
+    events,
+    nextAfterSeq: rows.length > limit && last !== undefined ? last.seq : null,
+  };
 }

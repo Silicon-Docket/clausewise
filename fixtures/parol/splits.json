@@ -1,0 +1,20 @@
+{
+  "format": 1,
+  "dataset": "parol-cases v1",
+  "splits": {
+    "dev": {
+      "cases": 6,
+      "slots": 48,
+      "expectedFlags": 6,
+      "highSeverityFlags": 2,
+      "mustBeUndetermined": 1,
+      "requiredEscalations": 3,
+      "withAlternative": 0,
+      "casesWithWarning": 1,
+      "injectionCases": 1,
+      "injectionSlots": 8,
+      "sha256": "2b939141050cb5b92f42b66bba7d5be8d81c4e1a1d65e1deec609583ef55497a",
+      "files": 9
+    }
+  }
+}

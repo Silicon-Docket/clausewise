@@ -1,5 +1,6 @@
 import { hashOf, sha256Hex } from "../../src/canonical.js";
 import { findingContentSha256 } from "../../src/canonical.js";
+import { verifyQuote } from "../../src/quotes.js";
 import type {
   PlaybookRuleRecord,
   SourceSpan,
@@ -78,6 +79,19 @@ export const RULES: PlaybookRuleRecord[] = [
   },
 ];
 
+/**
+ * The message of the error `fn` throws, or an empty string when it does not throw. For tests that
+ * check what an error says, and what it must not repeat.
+ */
+export function messageOf(fn: () => unknown): string {
+  try {
+    fn();
+  } catch (error) {
+    return (error as Error).message;
+  }
+  return "";
+}
+
 export const PLAYBOOK_YAML = "name: Test playbook\nversion: 1.0.0\nrules: [pty-1, dur-1, gov-1]\n";
 
 export function makeClock(startIso = "2026-11-01T09:00:00.000Z") {
@@ -128,7 +142,13 @@ export function makeWorld(options: { file?: string } = {}) {
   repo.seedDemoUsers();
   const playbook = repo.approvePlaybookVersion(
     repo.importPlaybookDraft(
-      { slug: "test-playbook", version: "1.0.0", yaml: PLAYBOOK_YAML, sha256: sha256Hex(PLAYBOOK_YAML), rules: RULES },
+      {
+        slug: "test-playbook",
+        version: "1.0.0",
+        yaml: PLAYBOOK_YAML,
+        sha256: sha256Hex(PLAYBOOK_YAML),
+        rules: RULES,
+      },
       { actorId: ACTORS.legalEngineer },
     ).id,
     { actorId: ACTORS.admin },
@@ -177,7 +197,13 @@ export interface MatterFixture {
 
 export function addMatter(
   w: World,
-  opts: { amendment?: boolean; synthetic?: boolean; spans?: boolean; pinPlaybook?: boolean; name?: string } = {},
+  opts: {
+    amendment?: boolean;
+    synthetic?: boolean;
+    spans?: boolean;
+    pinPlaybook?: boolean;
+    name?: string;
+  } = {},
 ): MatterFixture {
   const { repo } = w;
   const matter = repo.createMatter({
@@ -188,7 +214,12 @@ export function addMatter(
   });
   const withSpans = opts.spans ?? true;
 
-  const add = (kind: "nda" | "amendment", title: string, paragraphs: string[], statedDate: string) => {
+  const add = (
+    kind: "nda" | "amendment",
+    title: string,
+    paragraphs: string[],
+    statedDate: string,
+  ) => {
     const text = paragraphs.join("\n");
     const { document, version } = repo.addDocument(
       matter.id,
@@ -210,20 +241,45 @@ export function addMatter(
     const spans = buildSpans(version.id, document.label, paragraphs);
     const annotations: SpanAnnotation[] =
       kind === "amendment"
-        ? [{ kind: "cross_reference", spanId: spans[1]?.id as string, target: "6.1", verb: "deletes" }]
-        : [{ kind: "defines_term", spanId: spans[1]?.id as string, term: "Confidential Information" }];
+        ? [
+            {
+              kind: "cross_reference",
+              spanId: spans[1]?.id as string,
+              target: "6.1",
+              verb: "deletes",
+            },
+          ]
+        : [
+            {
+              kind: "defines_term",
+              spanId: spans[1]?.id as string,
+              term: "Confidential Information",
+            },
+          ];
     if (withSpans) repo.insertSpans(matter.id, spans, annotations);
-    return { documentId: document.id, versionId: version.id, spanIds: spans.map((s) => s.id), texts: paragraphs };
+    return {
+      documentId: document.id,
+      versionId: version.id,
+      spanIds: spans.map((s) => s.id),
+      texts: paragraphs,
+    };
   };
 
   const nda = add("nda", "Mutual NDA", NDA_PARAGRAPHS, "2026-01-15");
-  const amendment = opts.amendment ? add("amendment", "Amendment No. 1", AMENDMENT_PARAGRAPHS, "2026-02-20") : undefined;
-  if (opts.pinPlaybook ?? true) repo.setPlaybookVersion(matter.id, w.playbook.id, { actorId: ACTORS.associate });
+  const amendment = opts.amendment
+    ? add("amendment", "Amendment No. 1", AMENDMENT_PARAGRAPHS, "2026-02-20")
+    : undefined;
+  if (opts.pinPlaybook ?? true)
+    repo.setPlaybookVersion(matter.id, w.playbook.id, { actorId: ACTORS.associate });
   return { id: matter.id, nda, ...(amendment ? { amendment } : {}) };
 }
 
 /** Starts a run and moves it to `analyzing`, where findings may be saved. */
-export function startRun(w: World, m: MatterFixture, stage: "queued" | "analyzing" | "verifying" = "analyzing"): RunRow {
+export function startRun(
+  w: World,
+  m: MatterFixture,
+  stage: "queued" | "analyzing" | "verifying" = "analyzing",
+): RunRow {
   const { repo } = w;
   const manifest = repo.buildRunManifest(m.id, {
     workflowVersionId: w.workflow.id,
@@ -240,13 +296,27 @@ export function startRun(w: World, m: MatterFixture, stage: "queued" | "analyzin
   return repo.getRun(m.id, created.id) as RunRow;
 }
 
+/**
+ * The start of a paragraph, cut at a word boundary within `max` characters. A quote that ends in
+ * the middle of a word is not a quote the verifier finds (the whole-word rule), so the fixtures
+ * cite words and not an arbitrary slice of characters.
+ */
+export function quoteOf(text: string, max = 24): string {
+  const cut = text.slice(0, max);
+  if (text.length <= max || /\s/.test(text.charAt(max))) return cut;
+  const at = cut.lastIndexOf(" ");
+  return at > 0 ? cut.slice(0, at) : cut;
+}
+
 export function findingFor(
   ruleKey: string,
   span: { id: string; text: string },
   overrides: Partial<VerifiedFinding> = {},
 ): VerifiedFinding {
   const rule = RULES.find((r) => r.key === ruleKey) as PlaybookRuleRecord;
-  const quote = span.text.slice(0, 24);
+  const quote = quoteOf(span.text);
+  // The evidence says what the verifier says about this quote in this span, as a real stage would.
+  const found = verifyQuote(span.text, quote);
   const base: Omit<VerifiedFinding, "contentSha256"> = {
     ruleKey,
     category: rule.category,
@@ -257,8 +327,8 @@ export function findingFor(
         spanId: span.id,
         quote,
         role: "governing",
-        quoteCheck: "verified",
-        offsets: { start: 0, end: quote.length },
+        quoteCheck: found.check,
+        offsets: found.offsets,
         supportCheck: "supported",
       },
     ],
@@ -268,7 +338,9 @@ export function findingFor(
     fallbackBasis: "none",
     conflict: null,
     abstainReason: null,
-    checks: [{ id: "quote_exists", kind: "deterministic", outcome: "pass", detail: "1 of 1 found" }],
+    checks: [
+      { id: "quote_exists", kind: "deterministic", outcome: "pass", detail: "1 of 1 found" },
+    ],
     escalations: [],
     verificationState: "verified",
     ...overrides,
@@ -283,7 +355,10 @@ export function rehash(f: VerifiedFinding): VerifiedFinding {
 
 /** One finding per rule, each citing a paragraph of the NDA. */
 export function allFindings(m: MatterFixture): VerifiedFinding[] {
-  const spanFor = (i: number) => ({ id: m.nda.spanIds[i] as string, text: m.nda.texts[i] as string });
+  const spanFor = (i: number) => ({
+    id: m.nda.spanIds[i] as string,
+    text: m.nda.texts[i] as string,
+  });
   return [
     findingFor("pty-1", spanFor(1)),
     findingFor("dur-1", spanFor(2)),
@@ -301,10 +376,18 @@ export function succeed(w: World, m: MatterFixture, run: RunRow): RunRow {
   return w.repo.updateRunStatus(m.id, run.id, "succeeded");
 }
 
-/** A matter with a succeeded run and its eight (here three) findings, undecided. */
-export function reviewable(w: World, opts: Parameters<typeof addMatter>[1] = {}) {
+/**
+ * A matter with a succeeded run and its eight (here three) findings, undecided. `during` runs while
+ * the run is in flight, which is the only time stages and model calls can be written to it.
+ */
+export function reviewable(
+  w: World,
+  opts: Parameters<typeof addMatter>[1] = {},
+  during?: (run: RunRow, m: MatterFixture) => void,
+) {
   const m = addMatter(w, opts);
   const run = startRun(w, m);
+  during?.(run, m);
   const findings = saveAll(w, m, run);
   const done = succeed(w, m, run);
   return { m, run: done, findings };
@@ -321,8 +404,12 @@ export function decideAll(w: World, matterId: string, findings: FindingRecord[])
 }
 
 /** A matter taken all the way to an exported memo. */
-export function exported(w: World, opts: Parameters<typeof addMatter>[1] = {}) {
-  const r = reviewable(w, opts);
+export function exported(
+  w: World,
+  opts: Parameters<typeof addMatter>[1] = {},
+  during?: (run: RunRow, m: MatterFixture) => void,
+) {
+  const r = reviewable(w, opts, during);
   const reviews = decideAll(w, r.m.id, r.findings);
   const memo = w.repo.recordMemo(r.m.id, {
     runId: r.run.id,

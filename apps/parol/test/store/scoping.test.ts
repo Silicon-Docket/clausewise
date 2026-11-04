@@ -44,16 +44,44 @@ interface Ent {
 }
 
 function entity(world: World): Ent {
-  const e = exported(world, { amendment: true });
   const { repo } = world;
+  // Stages and model calls are written while the run is in flight, before it is finished.
+  const e = exported(world, { amendment: true }, (run, fixture) => {
+    repo.recordStageStart(fixture.id, run.id, {
+      stage: "extract",
+      inputSha256: sha256Hex("extract-in"),
+    });
+    repo.recordStageResult(fixture.id, run.id, {
+      stage: "extract",
+      attempt: 1,
+      status: "succeeded",
+      output: { located: ["x"] },
+    });
+    repo.insertModelCalls(fixture.id, run.id, [
+      {
+        stage: "extract",
+        ruleKey: null,
+        promptVersionId: "extract.p1",
+        requestSha256: sha256Hex("req"),
+        attempt: 1,
+        outcome: "ok",
+        latencyMs: 5,
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+      },
+    ]);
+  });
   const m = e.m;
   const amendment = m.amendment as NonNullable<typeof m.amendment>;
-  repo.recordStageStart(m.id, e.run.id, { stage: "extract", inputSha256: sha256Hex("extract-in") });
-  repo.recordStageResult(m.id, e.run.id, { stage: "extract", attempt: 1, status: "succeeded", output: { located: ["x"] } });
-  repo.insertModelCalls(m.id, e.run.id, [
-    { stage: "extract", ruleKey: null, promptVersionId: "extract.p1", requestSha256: sha256Hex("req"), attempt: 1, outcome: "ok", latencyMs: 5, inputTokens: 1, outputTokens: 1, cacheReadTokens: null, cacheWriteTokens: null },
-  ]);
-  const feedback = repo.addFeedback(m.id, { userId: ACTORS.reviewer, kind: "finding_reason", runId: e.run.id, findingId: e.findings[0]?.id as string, reasonCode: "unclear" });
+  const feedback = repo.addFeedback(m.id, {
+    userId: ACTORS.reviewer,
+    kind: "finding_reason",
+    runId: e.run.id,
+    findingId: e.findings[0]?.id as string,
+    reasonCode: "unclear",
+  });
   const version = repo.getVersion(m.id, m.nda.versionId);
   // The two matters hold the same synthetic NDA text, so each also gets a non-operative version whose
   // text hash is its own, written around addVersion so as not to disturb the operative flag.
@@ -64,7 +92,15 @@ function entity(world: World): Ent {
          (id, document_id, matter_id, version_no, media_type, file_sha256, text_sha256, byte_size, stated_date, operative, storage_path, uploaded_by, uploaded_at)
        VALUES (?, ?, ?, 2, 'txt', ?, ?, 1, NULL, 0, ?, ?, 't')`,
     )
-    .run(`ver_only_${m.id.slice(4)}`, m.nda.documentId, m.id, sha256Hex(`only-file-${m.id}`), onlyTextSha, fakePath(m.id), ACTORS.associate);
+    .run(
+      `ver_only_${m.id.slice(4)}`,
+      m.nda.documentId,
+      m.id,
+      sha256Hex(`only-file-${m.id}`),
+      onlyTextSha,
+      fakePath(m.id),
+      ACTORS.associate,
+    );
   return {
     id: m.id,
     ndaDoc: m.nda.documentId,
@@ -73,7 +109,12 @@ function entity(world: World): Ent {
     amendVersion: amendment.versionId,
     spans: [...m.nda.spanIds, ...amendment.spanIds],
     runId: e.run.id,
-    findings: e.findings.map((f) => ({ id: f.id, ruleKey: f.ruleKey, hash: f.contentSha256, evidenceId: f.evidence[0]?.id as string })),
+    findings: e.findings.map((f) => ({
+      id: f.id,
+      ruleKey: f.ruleKey,
+      hash: f.contentSha256,
+      evidenceId: f.evidence[0]?.id as string,
+    })),
     reviews: e.reviews.map((r) => r.id),
     memoId: e.memo.id,
     feedbackId: feedback.id,
@@ -137,13 +178,23 @@ function snapshot(matterId: string): string {
     rows("SELECT * FROM documents WHERE matter_id = ? ORDER BY id"),
     rows("SELECT * FROM document_versions WHERE matter_id = ? ORDER BY id"),
     rows("SELECT * FROM source_spans WHERE matter_id = ? ORDER BY id"),
-    rows("SELECT a.* FROM span_annotations a JOIN source_spans s ON s.id = a.span_id WHERE s.matter_id = ? ORDER BY a.rowid"),
+    rows(
+      "SELECT a.* FROM span_annotations a JOIN source_spans s ON s.id = a.span_id WHERE s.matter_id = ? ORDER BY a.rowid",
+    ),
     rows("SELECT * FROM runs WHERE matter_id = ? ORDER BY id"),
-    rows("SELECT s.* FROM run_stages s JOIN runs r ON r.id = s.run_id WHERE r.matter_id = ? ORDER BY s.rowid"),
-    rows("SELECT c.* FROM model_calls c JOIN runs r ON r.id = c.run_id WHERE r.matter_id = ? ORDER BY c.id"),
+    rows(
+      "SELECT s.* FROM run_stages s JOIN runs r ON r.id = s.run_id WHERE r.matter_id = ? ORDER BY s.rowid",
+    ),
+    rows(
+      "SELECT c.* FROM model_calls c JOIN runs r ON r.id = c.run_id WHERE r.matter_id = ? ORDER BY c.id",
+    ),
     rows("SELECT * FROM findings WHERE matter_id = ? ORDER BY id"),
-    rows("SELECT e.* FROM finding_evidence e JOIN findings f ON f.id = e.finding_id WHERE f.matter_id = ? ORDER BY e.id"),
-    rows("SELECT v.* FROM verification_results v JOIN findings f ON f.id = v.finding_id WHERE f.matter_id = ? ORDER BY v.finding_id, v.check_id"),
+    rows(
+      "SELECT e.* FROM finding_evidence e JOIN findings f ON f.id = e.finding_id WHERE f.matter_id = ? ORDER BY e.id",
+    ),
+    rows(
+      "SELECT v.* FROM verification_results v JOIN findings f ON f.id = v.finding_id WHERE f.matter_id = ? ORDER BY v.finding_id, v.check_id",
+    ),
     rows("SELECT * FROM reviews WHERE matter_id = ? ORDER BY id"),
     rows("SELECT * FROM memos WHERE matter_id = ? ORDER BY id"),
     rows("SELECT * FROM feedback WHERE matter_id = ? ORDER BY id"),
@@ -152,12 +203,43 @@ function snapshot(matterId: string): string {
 
 /** Methods that touch no matter data, or that are keyed by something other than a matter. */
 const NOT_MATTER_DATA = [
-  "seedDemoUsers", "getUser", "listUsers", "createMatter", "listMattersForUser", "listExpiredMatters", "markInterruptedOnBoot",
-  "importPlaybookDraft", "approvePlaybookVersion", "getPlaybookVersion", "findPlaybookVersion", "listPlaybookVersions", "listRules", "getRuleByKey",
-  "upsertPromptVersion", "getPromptVersion", "listPromptVersions",
-  "upsertWorkflowVersion", "getWorkflowVersion", "getWorkflowVersionByLabel", "listWorkflowVersions", "promoteWorkflowVersion",
-  "createEvalDataset", "getEvalDataset", "listEvalDatasets", "createEvalRun", "finishEvalRun", "getEvalRun", "listEvalRuns", "listEvalSlotResults",
-  "appendAudit", "listAuditEvents", "verifyAuditChain", "transaction", "compact", "db",
+  "seedDemoUsers",
+  "getUser",
+  "listUsers",
+  "createMatter",
+  "listMattersForUser",
+  "listExpiredMatters",
+  "listMatterIds",
+  "markInterruptedOnBoot",
+  "importPlaybookDraft",
+  "approvePlaybookVersion",
+  "getPlaybookVersion",
+  "findPlaybookVersion",
+  "listPlaybookVersions",
+  "listRules",
+  "getRuleByKey",
+  "upsertPromptVersion",
+  "getPromptVersion",
+  "listPromptVersions",
+  "upsertWorkflowVersion",
+  "getWorkflowVersion",
+  "getWorkflowVersionByLabel",
+  "listWorkflowVersions",
+  "promoteWorkflowVersion",
+  "createEvalDataset",
+  "getEvalDataset",
+  "listEvalDatasets",
+  "createEvalRun",
+  "finishEvalRun",
+  "getEvalRun",
+  "listEvalRuns",
+  "listEvalSlotResults",
+  "appendAudit",
+  "listAuditEvents",
+  "verifyAuditChain",
+  "transaction",
+  "compact",
+  "db",
 ];
 
 const probes: Record<string, () => void> = {
@@ -167,7 +249,12 @@ const probes: Record<string, () => void> = {
     expect(w.repo.getDocument(b.id, b.ndaDoc)?.id).toBe(b.ndaDoc);
   },
   listDocuments: () => {
-    expect(w.repo.listDocuments(a.id).map((d) => d.id).sort()).toEqual([a.ndaDoc, a.amendDoc].sort());
+    expect(
+      w.repo
+        .listDocuments(a.id)
+        .map((d) => d.id)
+        .sort(),
+    ).toEqual([a.ndaDoc, a.amendDoc].sort());
   },
   getVersion: () => {
     expect(w.repo.getVersion(a.id, b.ndaVersion)).toBeUndefined();
@@ -179,7 +266,10 @@ const probes: Record<string, () => void> = {
     expect(w.repo.listVersions(a.id).every((v) => v.matterId === a.id)).toBe(true);
   },
   listOperativeDocuments: () => {
-    expect(w.repo.listOperativeDocuments(a.id).map((o) => o.version.id)).toEqual([a.ndaVersion, a.amendVersion]);
+    expect(w.repo.listOperativeDocuments(a.id).map((o) => o.version.id)).toEqual([
+      a.ndaVersion,
+      a.amendVersion,
+    ]);
   },
   findVersionByFileSha256: () => {
     expect(w.repo.findVersionByFileSha256(a.id, b.fileSha)).toBeUndefined();
@@ -195,24 +285,46 @@ const probes: Record<string, () => void> = {
   addDocument: () => {
     // No parameter names another matter's row; it writes only into the matter it is given.
     const before = snapshot(b.id);
-    expect(() => w.repo.addDocument(a.id, { kind: "nda", title: "x", version: newVersion(b.id) }, { actorId: ACTORS.associate })).toThrow(ValidationError);
+    expect(() =>
+      w.repo.addDocument(
+        a.id,
+        { kind: "nda", title: "x", version: newVersion(b.id) },
+        { actorId: ACTORS.associate },
+      ),
+    ).toThrow(ValidationError);
     expect(snapshot(b.id)).toBe(before);
   },
   addVersion: () => {
     const before = snapshot(b.id);
-    behavesAsMissing((id) => w.repo.addVersion(a.id, id, newVersion(a.id), { actorId: ACTORS.associate }), b.ndaDoc, missing.document);
+    behavesAsMissing(
+      (id) => w.repo.addVersion(a.id, id, newVersion(a.id), { actorId: ACTORS.associate }),
+      b.ndaDoc,
+      missing.document,
+    );
     expect(snapshot(b.id)).toBe(before);
     expect(w.repo.listVersions(b.id, b.ndaDoc)).toHaveLength(2);
   },
   removeDocument: () => {
-    behavesAsMissing((id) => w.repo.removeDocument(a.id, id, { actorId: ACTORS.associate }), b.ndaDoc, missing.document);
+    behavesAsMissing(
+      (id) => w.repo.removeDocument(a.id, id, { actorId: ACTORS.associate }),
+      b.ndaDoc,
+      missing.document,
+    );
     expect(w.repo.getDocument(b.id, b.ndaDoc)).toBeDefined();
   },
   setOperativeVersion: () => {
-    behavesAsMissing((id) => w.repo.setOperativeVersion(a.id, id, { actorId: ACTORS.associate }), b.ndaVersion, missing.version);
+    behavesAsMissing(
+      (id) => w.repo.setOperativeVersion(a.id, id, { actorId: ACTORS.associate }),
+      b.ndaVersion,
+      missing.version,
+    );
   },
   setStatedDate: () => {
-    behavesAsMissing((id) => w.repo.setStatedDate(a.id, id, "2030-01-01", { actorId: ACTORS.associate }), b.ndaVersion, missing.version);
+    behavesAsMissing(
+      (id) => w.repo.setStatedDate(a.id, id, "2030-01-01", { actorId: ACTORS.associate }),
+      b.ndaVersion,
+      missing.version,
+    );
     expect(w.repo.getVersion(b.id, b.ndaVersion)?.statedDate).toBe("2026-01-15");
   },
   // --- spans ---
@@ -222,7 +334,9 @@ const probes: Record<string, () => void> = {
   },
   listSpans: () => {
     expect(w.repo.listSpans(a.id, [b.ndaVersion, b.amendVersion])).toEqual([]);
-    expect(w.repo.listSpans(a.id, [a.ndaVersion, b.ndaVersion]).every((s) => s.matterId === a.id)).toBe(true);
+    expect(
+      w.repo.listSpans(a.id, [a.ndaVersion, b.ndaVersion]).every((s) => s.matterId === a.id),
+    ).toBe(true);
     expect(w.repo.listSpans(b.id, [b.ndaVersion])).toHaveLength(4);
   },
   listAnnotations: () => {
@@ -234,7 +348,11 @@ const probes: Record<string, () => void> = {
     expect(w.repo.hasSpans(b.id, b.ndaVersion)).toBe(true);
   },
   insertSpans: () => {
-    behavesAsMissing((id) => w.repo.insertSpans(a.id, buildSpans(id, "D1", b.texts)), b.ndaVersion, missing.version);
+    behavesAsMissing(
+      (id) => w.repo.insertSpans(a.id, buildSpans(id, "D1", b.texts)),
+      b.ndaVersion,
+      missing.version,
+    );
   },
   // --- matters, members, inputs ---
   getMatter: () => {
@@ -259,12 +377,35 @@ const probes: Record<string, () => void> = {
     expect(snapshot(b.id)).toBe(before);
   },
   setPlaybookVersion: () => {
-    expect(() => w.repo.setPlaybookVersion(a.id, "pbv_ffffffffffffffff", { actorId: ACTORS.associate })).toThrow(NotFoundError);
+    expect(() =>
+      w.repo.setPlaybookVersion(a.id, "pbv_ffffffffffffffff", { actorId: ACTORS.associate }),
+    ).toThrow(NotFoundError);
   },
   setMatterStatus: () => {
     const before = snapshot(b.id);
-    w.repo.setMatterStatus(a.id, "stale", { actorId: ACTORS.associate });
+    // Only A's id is ever a parameter. The states that belong to applyInputChange are refused whatever
+    // the matter, and a state change that is allowed reaches nothing but A.
+    expect(() => w.repo.setMatterStatus(a.id, "stale", { actorId: ACTORS.associate })).toThrow(
+      ValidationError,
+    );
+    expect(w.repo.getMatter(a.id)?.status).toBe("exported");
+    expect(() =>
+      w.repo.setMatterStatus("mat_ffffffffffffffff", "in_review", { actorId: ACTORS.associate }),
+    ).toThrow(NotFoundError);
     expect(snapshot(b.id)).toBe(before);
+  },
+  listMatterAuditEvents: () => {
+    const events = w.repo.listMatterAuditEvents(a.id).events;
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every((e) => e.matterId === a.id)).toBe(true);
+    // B's id behaves as a matter with events of its own and never mixes into A's page.
+    const theirs = w.repo.listMatterAuditEvents(b.id).events;
+    expect(theirs.every((e) => e.matterId === b.id)).toBe(true);
+    expect(events.some((e) => theirs.some((t) => t.seq === e.seq))).toBe(false);
+    expect(w.repo.listMatterAuditEvents("mat_ffffffffffffffff")).toEqual({
+      events: [],
+      nextAfterSeq: null,
+    });
   },
   computeInputsDigest: () => {
     expect(w.repo.computeInputsDigest(a.id)).not.toBe(w.repo.computeInputsDigest(b.id));
@@ -296,7 +437,11 @@ const probes: Record<string, () => void> = {
     expect(w.repo.getCurrentRun(a.id)?.id).toBe(a.runId);
   },
   buildRunManifest: () => {
-    const manifest = w.repo.buildRunManifest(a.id, { workflowVersionId: w.workflow.id, modelProvider: "p", model: "m" });
+    const manifest = w.repo.buildRunManifest(a.id, {
+      workflowVersionId: w.workflow.id,
+      modelProvider: "p",
+      model: "m",
+    });
     expect(JSON.stringify(manifest)).not.toContain(b.id);
     expect(JSON.stringify(manifest)).not.toContain(b.ndaVersion);
   },
@@ -318,15 +463,26 @@ const probes: Record<string, () => void> = {
     expect(w.repo.getRun(b.id, b.runId)?.status).toBe("succeeded");
   },
   recordStageStart: () => {
-    behavesAsMissing((id) => w.repo.recordStageStart(a.id, id, { stage: "extract", inputSha256: sha256Hex("x") }), b.runId, missing.run);
+    behavesAsMissing(
+      (id) => w.repo.recordStageStart(a.id, id, { stage: "extract", inputSha256: sha256Hex("x") }),
+      b.runId,
+      missing.run,
+    );
   },
   recordStageResult: () => {
-    behavesAsMissing((id) => w.repo.recordStageResult(a.id, id, { stage: "extract", attempt: 1, status: "failed" }), b.runId, missing.run);
+    behavesAsMissing(
+      (id) =>
+        w.repo.recordStageResult(a.id, id, { stage: "extract", attempt: 1, status: "failed" }),
+      b.runId,
+      missing.run,
+    );
   },
   findReusableStage: () => {
     const input = sha256Hex("extract-in");
     expect(w.repo.findReusableStage(a.id, b.runId, "extract", "*", input)).toBeUndefined();
-    expect(w.repo.findReusableStage(b.id, b.runId, "extract", "*", input)?.output).toEqual({ located: ["x"] });
+    expect(w.repo.findReusableStage(b.id, b.runId, "extract", "*", input)?.output).toEqual({
+      located: ["x"],
+    });
   },
   listStages: () => {
     expect(w.repo.listStages(a.id, b.runId)).toEqual([]);
@@ -334,7 +490,22 @@ const probes: Record<string, () => void> = {
   },
   insertModelCalls: () => {
     behavesAsMissing(
-      (id) => w.repo.insertModelCalls(a.id, id, [{ stage: "extract", ruleKey: null, promptVersionId: "extract.p1", requestSha256: sha256Hex("r"), attempt: 1, outcome: "ok", latencyMs: 1, inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null }]),
+      (id) =>
+        w.repo.insertModelCalls(a.id, id, [
+          {
+            stage: "extract",
+            ruleKey: null,
+            promptVersionId: "extract.p1",
+            requestSha256: sha256Hex("r"),
+            attempt: 1,
+            outcome: "ok",
+            latencyMs: 1,
+            inputTokens: null,
+            outputTokens: null,
+            cacheReadTokens: null,
+            cacheWriteTokens: null,
+          },
+        ]),
       b.runId,
       missing.run,
     );
@@ -355,12 +526,25 @@ const probes: Record<string, () => void> = {
     expect(w.repo.listFindings(a.id, a.runId).every((f) => f.matterId === a.id)).toBe(true);
   },
   saveFindings: () => {
-    const input = allFindings({ id: b.id, nda: { documentId: b.ndaDoc, versionId: b.ndaVersion, spanIds: b.spans.slice(0, 4), texts: b.texts } });
+    const input = allFindings({
+      id: b.id,
+      nda: {
+        documentId: b.ndaDoc,
+        versionId: b.ndaVersion,
+        spanIds: b.spans.slice(0, 4),
+        texts: b.texts,
+      },
+    });
     behavesAsMissing((id) => w.repo.saveFindings(a.id, id, input), b.runId, missing.run);
   },
   recordReview: () => {
     behavesAsMissing(
-      (id) => w.repo.recordReview(a.id, id, { reviewerId: ACTORS.reviewer, decision: "accept", findingContentSha256: b.findings[0]?.hash as string }),
+      (id) =>
+        w.repo.recordReview(a.id, id, {
+          reviewerId: ACTORS.reviewer,
+          decision: "accept",
+          findingContentSha256: b.findings[0]?.hash as string,
+        }),
       b.findings[0]?.id as string,
       missing.finding,
     );
@@ -395,26 +579,80 @@ const probes: Record<string, () => void> = {
   },
   recordMemo: () => {
     behavesAsMissing(
-      (id) => w.repo.recordMemo(a.id, { runId: id, reviewIds: b.reviews, fileSha256: sha256Hex("m"), storagePath: fakePath(a.id), exportedBy: ACTORS.reviewer }),
+      (id) =>
+        w.repo.recordMemo(a.id, {
+          runId: id,
+          reviewIds: b.reviews,
+          fileSha256: sha256Hex("m"),
+          storagePath: fakePath(a.id),
+          exportedBy: ACTORS.reviewer,
+        }),
       b.runId,
       missing.run,
     );
   },
   addFeedback: () => {
-    behavesAsMissing((id) => w.repo.addFeedback(a.id, { userId: ACTORS.reviewer, kind: "comment", text: "t", runId: id }), b.runId, missing.run);
-    behavesAsMissing((id) => w.repo.addFeedback(a.id, { userId: ACTORS.reviewer, kind: "comment", text: "t", findingId: id }), b.findings[0]?.id as string, missing.finding);
+    behavesAsMissing(
+      (id) =>
+        w.repo.addFeedback(a.id, {
+          userId: ACTORS.reviewer,
+          kind: "comment",
+          text: "t",
+          runId: id,
+        }),
+      b.runId,
+      missing.run,
+    );
+    behavesAsMissing(
+      (id) =>
+        w.repo.addFeedback(a.id, {
+          userId: ACTORS.reviewer,
+          kind: "comment",
+          text: "t",
+          findingId: id,
+        }),
+      b.findings[0]?.id as string,
+      missing.finding,
+    );
   },
   listFeedback: () => {
     expect(w.repo.listFeedback(a.id).map((f) => f.matterId)).toEqual([a.id]);
   },
   recordEvalSlotResult: () => {
-    const dataset = w.repo.createEvalDataset({ label: "set", devSha256: "a".repeat(64), heldoutSha256: "b".repeat(64) });
+    const dataset = w.repo.createEvalDataset({
+      label: "set",
+      devSha256: "a".repeat(64),
+      heldoutSha256: "b".repeat(64),
+    });
     const evalRun = w.repo.createEvalRun(
-      { datasetId: dataset.id, split: "dev", workflowVersionId: w.workflow.id, playbookVersionId: w.playbook.id, model: "m", repeats: 1, priceTableSha256: "c".repeat(64), resultsPath: "r.json" },
+      {
+        datasetId: dataset.id,
+        split: "dev",
+        workflowVersionId: w.workflow.id,
+        playbookVersionId: w.playbook.id,
+        model: "m",
+        repeats: 1,
+        priceTableSha256: "c".repeat(64),
+        resultsPath: "r.json",
+      },
       { actorId: null },
     );
     behavesAsMissing(
-      (id) => w.repo.recordEvalSlotResult(a.id, { evalRunId: evalRun.id, caseKey: "C1", ruleKey: "dur-1", repeat: 0, runId: id, expectedStatus: "compliant", gotStatus: "compliant", scores: {} }, { actorId: null }),
+      (id) =>
+        w.repo.recordEvalSlotResult(
+          a.id,
+          {
+            evalRunId: evalRun.id,
+            caseKey: "C1",
+            ruleKey: "dur-1",
+            repeat: 0,
+            runId: id,
+            expectedStatus: "compliant",
+            gotStatus: "compliant",
+            scores: {},
+          },
+          { actorId: null },
+        ),
       b.runId,
       missing.run,
     );
@@ -460,13 +698,39 @@ describe("the matter-less methods cannot reach into a matter", () => {
   it("evaluation results refuse a run of a non-synthetic matter", () => {
     const real = addMatter(w, { synthetic: false, name: "real" });
     const realRun = startRun(w, real);
-    const dataset = w.repo.createEvalDataset({ label: "set", devSha256: "a".repeat(64), heldoutSha256: "b".repeat(64) });
+    const dataset = w.repo.createEvalDataset({
+      label: "set",
+      devSha256: "a".repeat(64),
+      heldoutSha256: "b".repeat(64),
+    });
     const evalRun = w.repo.createEvalRun(
-      { datasetId: dataset.id, split: "dev", workflowVersionId: w.workflow.id, playbookVersionId: w.playbook.id, model: "m", repeats: 1, priceTableSha256: "c".repeat(64), resultsPath: "r.json" },
+      {
+        datasetId: dataset.id,
+        split: "dev",
+        workflowVersionId: w.workflow.id,
+        playbookVersionId: w.playbook.id,
+        model: "m",
+        repeats: 1,
+        priceTableSha256: "c".repeat(64),
+        resultsPath: "r.json",
+      },
       { actorId: null },
     );
     const slot = (matterId: string, runId: string) =>
-      w.repo.recordEvalSlotResult(matterId, { evalRunId: evalRun.id, caseKey: "C1", ruleKey: "dur-1", repeat: 0, runId, expectedStatus: "compliant", gotStatus: "compliant", scores: {} }, { actorId: null });
+      w.repo.recordEvalSlotResult(
+        matterId,
+        {
+          evalRunId: evalRun.id,
+          caseKey: "C1",
+          ruleKey: "dur-1",
+          repeat: 0,
+          runId,
+          expectedStatus: "compliant",
+          gotStatus: "compliant",
+          scores: {},
+        },
+        { actorId: null },
+      );
     expect(() => slot(real.id, realRun.id)).toThrow(/synthetic/);
     expect(() => slot(real.id, a.runId)).toThrow(/synthetic/);
     expect(slot(a.id, a.runId).runId).toBe(a.runId);

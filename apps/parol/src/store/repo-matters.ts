@@ -14,6 +14,7 @@ import {
   assertSha256,
   assertShortCode,
   assertStoragePath,
+  assertStoragePathFree,
   bool,
   cleanLabel,
   cleanStatedDate,
@@ -21,12 +22,7 @@ import {
   parseWith,
   type Ctx,
 } from "./context.js";
-import {
-  ConflictError,
-  InvalidTransitionError,
-  NotFoundError,
-  ValidationError,
-} from "./errors.js";
+import { ConflictError, InvalidTransitionError, NotFoundError, ValidationError } from "./errors.js";
 import { AnnotationSchema, SpanSchema } from "./schemas.js";
 import { canTransition } from "./states.js";
 import type {
@@ -54,7 +50,12 @@ export const DEMO_USER_IDS = {
 } as const;
 
 const DEMO_USERS: readonly UserRow[] = [
-  { id: DEMO_USER_IDS.associate, displayName: "Alex Ruiz (associate)", globalRole: "member", demo: true },
+  {
+    id: DEMO_USER_IDS.associate,
+    displayName: "Alex Ruiz (associate)",
+    globalRole: "member",
+    demo: true,
+  },
   {
     id: DEMO_USER_IDS.reviewer,
     displayName: "Dana Whitfield (reviewing attorney)",
@@ -274,12 +275,15 @@ export function createMattersApi(ctx: Ctx) {
   // --- users --------------------------------------------------------------------------------
 
   const getUser = (userId: string): UserRow | undefined => {
-    const row = get<RawUser>("SELECT id, display_name, global_role FROM users WHERE id = ?", userId);
+    const row = get<RawUser>(
+      "SELECT id, display_name, global_role FROM users WHERE id = ?",
+      userId,
+    );
     return row ? toUser(row) : undefined;
   };
   const requireUser = (userId: string): UserRow => {
     const user = getUser(userId);
-    if (!user) throw new NotFoundError("user", userId);
+    if (!user) throw new NotFoundError("user");
     return user;
   };
 
@@ -311,7 +315,7 @@ export function createMattersApi(ctx: Ctx) {
   };
   const requireMatter = (matterId: string): MatterRow => {
     const matter = getMatter(matterId);
-    if (!matter) throw new NotFoundError("matter", matterId);
+    if (!matter) throw new NotFoundError("matter");
     return matter;
   };
 
@@ -372,6 +376,13 @@ export function createMattersApi(ctx: Ctx) {
     });
   }
 
+  /**
+   * Every matter id that has a row. Not scoped to a matter or a user, so it is for the boot sweep
+   * (`FileStore.sweepOrphans`) and for operations, never for a request.
+   */
+  const listMatterIds = (): string[] =>
+    all<{ id: string }>("SELECT id FROM matters ORDER BY id").map((r) => r.id);
+
   const listMattersForUser = (userId: string): MatterWithRole[] =>
     all<RawMatter & { role: MatterRole }>(
       `SELECT m.*, mm.role AS role
@@ -410,7 +421,7 @@ export function createMattersApi(ctx: Ctx) {
       if (!["associate", "reviewer", "viewer"].includes(role))
         throw new ValidationError("bad_role", "role must be associate, reviewer or viewer");
       if (getMember(matterId, userId))
-        throw new ConflictError("member_exists", `user ${userId} is already a member of matter ${matterId}`);
+        throw new ConflictError("member_exists", "the user is already a member of the matter");
       run(
         `INSERT INTO matter_members (matter_id, user_id, role, granted_by, granted_at)
          VALUES (?, ?, ?, ?, ?)`,
@@ -436,13 +447,15 @@ export function createMattersApi(ctx: Ctx) {
 
   /**
    * Moves a matter along the state machine. The edges are checked with `canTransition`; callers
-   * that need a precondition beyond the edge (a digest for `ready`, readiness for `exported`) check
-   * it themselves or go through `Repository.setMatterStatus`, which does.
+   * that need a precondition beyond the edge (readiness for `exported`) check it themselves or go
+   * through `Repository.setMatterStatus`, which does, and which leaves `stale`, `draft` and `ready`
+   * to `applyInputChange`.
    */
   function transitionMatter(matterId: string, to: MatterStatus): MatterRow {
     const matter = requireMatter(matterId);
     if (matter.status === to) return matter;
-    if (!canTransition(matter.status, to)) throw new InvalidTransitionError("matter", matter.status, to);
+    if (!canTransition(matter.status, to))
+      throw new InvalidTransitionError("matter", matter.status, to);
     run("UPDATE matters SET status = ? WHERE id = ?", to, matterId);
     return requireMatter(matterId);
   }
@@ -519,10 +532,19 @@ export function createMattersApi(ctx: Ctx) {
         "UPDATE reviews SET validity = 'stale' WHERE matter_id = ? AND validity = 'current'",
         matterId,
       );
-      const memosSuperseded = run(
-        "UPDATE memos SET status = 'superseded' WHERE matter_id = ? AND status = 'current'",
-        matterId,
-      );
+      // A re-run on unchanged inputs leaves the exported memo as it is (docs/parol/03, "Re-run with
+      // unchanged inputs"): the file is a record of what was exported, and the new run's own memo
+      // supersedes it when that one is exported. Anything that moved the inputs supersedes it now.
+      const unchangedRerun =
+        opts.reason === INPUT_CHANGE_REASONS.rerunRequested &&
+        digest !== null &&
+        digest === before.currentInputsSha256;
+      const memosSuperseded = unchangedRerun
+        ? 0
+        : run(
+            "UPDATE memos SET status = 'superseded' WHERE matter_id = ? AND status = 'current'",
+            matterId,
+          );
       // A stage still writing for a run that is being superseded is told so by its next write
       // failing with StaleRunError; its half-finished stage rows are closed here.
       run(
@@ -612,7 +634,13 @@ export function createMattersApi(ctx: Ctx) {
         targetId: matterId,
         detail: { field: "client_legal_name" },
       });
-      invalidateIfChanged(matterId, before, INPUT_CHANGE_REASONS.clientNameChanged, opts.actorId, true);
+      invalidateIfChanged(
+        matterId,
+        before,
+        INPUT_CHANGE_REASONS.clientNameChanged,
+        opts.actorId,
+        true,
+      );
       return requireMatter(matterId);
     });
   }
@@ -628,9 +656,12 @@ export function createMattersApi(ctx: Ctx) {
         "SELECT status FROM playbook_versions WHERE id = ?",
         playbookVersionId,
       );
-      if (!playbook) throw new NotFoundError("playbook version", playbookVersionId);
+      if (!playbook) throw new NotFoundError("playbook version");
       if (playbook.status !== "approved")
-        throw new ValidationError("playbook_not_approved", "only an approved playbook version can be selected");
+        throw new ValidationError(
+          "playbook_not_approved",
+          "only an approved playbook version can be selected",
+        );
       if (matter.playbookVersionId === playbookVersionId) return matter;
       const before = computeInputsDigest(matterId);
       run("UPDATE matters SET playbook_version_id = ? WHERE id = ?", playbookVersionId, matterId);
@@ -643,7 +674,13 @@ export function createMattersApi(ctx: Ctx) {
         detail: { field: "playbook_version_id", playbookVersionId },
       });
       // Forced: a different version pins different rules even if two versions share their YAML.
-      invalidateIfChanged(matterId, before, INPUT_CHANGE_REASONS.playbookChanged, opts.actorId, true);
+      invalidateIfChanged(
+        matterId,
+        before,
+        INPUT_CHANGE_REASONS.playbookChanged,
+        opts.actorId,
+        true,
+      );
       return requireMatter(matterId);
     });
   }
@@ -680,7 +717,10 @@ export function createMattersApi(ctx: Ctx) {
       documentId ?? null,
     ).map(toVersion);
 
-  const findVersionByFileSha256 = (matterId: string, fileSha256: string): DocumentVersionRow | undefined => {
+  const findVersionByFileSha256 = (
+    matterId: string,
+    fileSha256: string,
+  ): DocumentVersionRow | undefined => {
     const row = get<RawVersion>(
       "SELECT * FROM document_versions WHERE matter_id = ? AND file_sha256 = ? ORDER BY uploaded_at, version_no LIMIT 1",
       matterId,
@@ -689,7 +729,10 @@ export function createMattersApi(ctx: Ctx) {
     return row ? toVersion(row) : undefined;
   };
   /** Finds a re-saved file: different bytes, same extracted text (`near_duplicate_version`). */
-  const findVersionByTextSha256 = (matterId: string, textSha256: string): DocumentVersionRow | undefined => {
+  const findVersionByTextSha256 = (
+    matterId: string,
+    textSha256: string,
+  ): DocumentVersionRow | undefined => {
     const row = get<RawVersion>(
       "SELECT * FROM document_versions WHERE matter_id = ? AND text_sha256 = ? ORDER BY uploaded_at, version_no LIMIT 1",
       matterId,
@@ -715,6 +758,20 @@ export function createMattersApi(ctx: Ctx) {
     assertCount("byteSize", input.byteSize, 0);
     cleanStatedDate(input.statedDate);
     assertStoragePath(matterId, input.storagePath);
+  }
+
+  /**
+   * An upload is new only if the matter does not already hold the same bytes and the stored file is
+   * not already some other row's (docs/parol/03: an identical file is "not stored again" and
+   * changes nothing). Refusing here, before anything is written, is what keeps it a no-change.
+   */
+  function assertNewUpload(matterId: string, input: NewVersionInput): void {
+    if (findVersionByFileSha256(matterId, input.fileSha256) !== undefined)
+      throw new ConflictError(
+        "duplicate_file",
+        "the matter already holds a version with this file",
+      );
+    assertStoragePathFree({ get }, input.storagePath);
   }
 
   function insertVersion(
@@ -748,8 +805,16 @@ export function createMattersApi(ctx: Ctx) {
 
   function makeOperative(documentId: string, versionId: string): void {
     // Clear first: the unique index (and a trigger in front of it) allows one operative version.
-    run("UPDATE document_versions SET operative = 0 WHERE document_id = ? AND operative = 1 AND id <> ?", documentId, versionId);
-    run("UPDATE document_versions SET operative = 1 WHERE id = ? AND document_id = ?", versionId, documentId);
+    run(
+      "UPDATE document_versions SET operative = 0 WHERE document_id = ? AND operative = 1 AND id <> ?",
+      documentId,
+      versionId,
+    );
+    run(
+      "UPDATE document_versions SET operative = 1 WHERE id = ? AND document_id = ?",
+      versionId,
+      documentId,
+    );
   }
 
   function addDocument(
@@ -766,13 +831,14 @@ export function createMattersApi(ctx: Ctx) {
       requireUser(opts.actorId);
       const existing = listDocuments(matterId);
       if (input.kind === "nda" && existing.some((d) => d.kind === "nda"))
-        throw new ConflictError("nda_exists", `matter ${matterId} already has an NDA`);
+        throw new ConflictError("nda_exists", "the matter already has an NDA");
       if (input.kind === "amendment" && existing.filter((d) => d.kind === "amendment").length >= 2)
-        throw new ConflictError("amendment_limit", `matter ${matterId} already has two amendments`);
+        throw new ConflictError("amendment_limit", "the matter already has two amendments");
       const used = new Set(existing.map((d) => d.ordinal));
       const ordinal = [1, 2, 3].find((n) => !used.has(n));
       if (ordinal === undefined)
-        throw new ConflictError("document_limit", `matter ${matterId} already has three documents`);
+        throw new ConflictError("document_limit", "the matter already has three documents");
+      assertNewUpload(matterId, input.version);
 
       const before = computeInputsDigest(matterId);
       const documentId = newId("doc");
@@ -823,14 +889,24 @@ export function createMattersApi(ctx: Ctx) {
     return tx(() => {
       requireMatter(matterId);
       requireUser(opts.actorId);
-      if (!getDocument(matterId, documentId)) throw new NotFoundError("document", documentId);
+      if (!getDocument(matterId, documentId)) throw new NotFoundError("document");
+      assertNewUpload(matterId, input);
       const before = computeInputsDigest(matterId);
       const last = get<{ n: number | null }>(
         "SELECT MAX(version_no) AS n FROM document_versions WHERE document_id = ?",
         documentId,
       );
-      const versionId = insertVersion(matterId, documentId, (last?.n ?? 0) + 1, input, opts.actorId);
-      run("UPDATE document_versions SET operative = 0 WHERE document_id = ? AND operative = 1", documentId);
+      const versionId = insertVersion(
+        matterId,
+        documentId,
+        (last?.n ?? 0) + 1,
+        input,
+        opts.actorId,
+      );
+      run(
+        "UPDATE document_versions SET operative = 0 WHERE document_id = ? AND operative = 1",
+        documentId,
+      );
       if (input.operative) makeOperative(documentId, versionId);
       const version = getVersion(matterId, versionId) as DocumentVersionRow;
       ctx.audit({
@@ -860,7 +936,7 @@ export function createMattersApi(ctx: Ctx) {
   ): DocumentVersionRow {
     return tx(() => {
       const version = getVersion(matterId, documentVersionId);
-      if (!version) throw new NotFoundError("document version", documentVersionId);
+      if (!version) throw new NotFoundError("document version");
       if (version.operative) return version;
       const before = computeInputsDigest(matterId);
       const previous = get<{ id: string }>(
@@ -890,7 +966,7 @@ export function createMattersApi(ctx: Ctx) {
     const date = cleanStatedDate(statedDate);
     return tx(() => {
       const version = getVersion(matterId, documentVersionId);
-      if (!version) throw new NotFoundError("document version", documentVersionId);
+      if (!version) throw new NotFoundError("document version");
       if (version.statedDate === date) return version;
       const before = computeInputsDigest(matterId);
       run("UPDATE document_versions SET stated_date = ? WHERE id = ?", date, version.id);
@@ -912,10 +988,14 @@ export function createMattersApi(ctx: Ctx) {
    * Removes a document and everything derived from it. Returns the storage paths of its versions so
    * the caller can delete the files with `FileStore.remove`.
    */
-  function removeDocument(matterId: string, documentId: string, opts: { actorId: string }): string[] {
+  function removeDocument(
+    matterId: string,
+    documentId: string,
+    opts: { actorId: string },
+  ): string[] {
     return tx(() => {
       requireMatter(matterId);
-      if (!getDocument(matterId, documentId)) throw new NotFoundError("document", documentId);
+      if (!getDocument(matterId, documentId)) throw new NotFoundError("document");
       const before = computeInputsDigest(matterId);
       const versions = listVersions(matterId, documentId);
       run("DELETE FROM documents WHERE id = ? AND matter_id = ?", documentId, matterId);
@@ -984,7 +1064,10 @@ export function createMattersApi(ctx: Ctx) {
     const notes = annotations.map((a) => parseWith(AnnotationSchema, a, "annotation"));
     for (const span of parsed) {
       if (span.id !== `${span.documentVersionId}:p${span.paragraphIndex}`)
-        throw new ValidationError("bad_span_id", "span id must be <documentVersionId>:p<paragraphIndex>");
+        throw new ValidationError(
+          "bad_span_id",
+          "span id must be <documentVersionId>:p<paragraphIndex>",
+        );
       if (span.textSha256 !== sha256Hex(span.text))
         throw new ValidationError("bad_span_hash", "span text hash does not match its text");
     }
@@ -992,7 +1075,7 @@ export function createMattersApi(ctx: Ctx) {
       requireMatter(matterId);
       const versionIds = [...new Set(parsed.map((s) => s.documentVersionId))];
       for (const versionId of versionIds)
-        if (!getVersion(matterId, versionId)) throw new NotFoundError("document version", versionId);
+        if (!getVersion(matterId, versionId)) throw new NotFoundError("document version");
 
       let inserted = 0;
       let skipped = 0;
@@ -1001,7 +1084,13 @@ export function createMattersApi(ctx: Ctx) {
         const mine = parsed.filter((s) => s.documentVersionId === versionId);
         if (hasSpans(matterId, versionId)) {
           const stored = new Map(
-            all<{ id: string; text_sha256: string; clause_id: string; clause_number: string | null; heading: string | null }>(
+            all<{
+              id: string;
+              text_sha256: string;
+              clause_id: string;
+              clause_number: string | null;
+              heading: string | null;
+            }>(
               "SELECT id, text_sha256, clause_id, clause_number, heading FROM source_spans WHERE matter_id = ? AND document_version_id = ?",
               matterId,
               versionId,
@@ -1020,7 +1109,10 @@ export function createMattersApi(ctx: Ctx) {
               );
             });
           if (!same)
-            throw new ConflictError("spans_differ", `document version ${versionId} already has different spans`);
+            throw new ConflictError(
+              "spans_differ",
+              "the document version already has different spans",
+            );
           skipped += mine.length;
           for (const s of mine) known.add(s.id);
           continue;
@@ -1053,14 +1145,15 @@ export function createMattersApi(ctx: Ctx) {
           );
         }
       }
-      for (const note of notes)
-        if (!known.has(note.spanId))
-          throw new NotFoundError("span", note.spanId);
+      for (const note of notes) if (!known.has(note.spanId)) throw new NotFoundError("span");
       return { inserted, skipped };
     });
   }
 
-  function listAnnotations(matterId: string, documentVersionIds: readonly string[]): SpanAnnotation[] {
+  function listAnnotations(
+    matterId: string,
+    documentVersionIds: readonly string[],
+  ): SpanAnnotation[] {
     return all<{ span_id: string; kind: SpanAnnotation["kind"]; value: string }>(
       `SELECT a.span_id, a.kind, a.value
        FROM span_annotations a JOIN source_spans s ON s.id = a.span_id
@@ -1069,7 +1162,12 @@ export function createMattersApi(ctx: Ctx) {
       matterId,
       JSON.stringify(documentVersionIds),
     ).map(
-      (row) => ({ kind: row.kind, spanId: row.span_id, ...(JSON.parse(row.value) as object) }) as SpanAnnotation,
+      (row) =>
+        ({
+          kind: row.kind,
+          spanId: row.span_id,
+          ...(JSON.parse(row.value) as object),
+        }) as SpanAnnotation,
     );
   }
 
@@ -1086,7 +1184,9 @@ export function createMattersApi(ctx: Ctx) {
   /**
    * Removes every row that belongs to the matter, the matters row included, in one transaction,
    * and leaves only the audit events (which hold ids, hashes and counts). Returns the storage paths
-   * of its documents and memos; the caller deletes the files, then compacts the database.
+   * of its documents and memos; the caller deletes the files, then compacts the database. A stop
+   * between the transaction and the file deletion leaves a folder that no row names: the boot sweep
+   * `FileStore.sweepOrphans(repo.listMatterIds())` finds and removes it.
    *
    * It refuses while a run is in flight: the run is still writing, so it is cancelled first.
    */
@@ -1094,7 +1194,10 @@ export function createMattersApi(ctx: Ctx) {
     return tx(() => {
       const matter = requireMatter(matterId);
       if (matter.status === "running" || hasActiveRun(matterId))
-        throw new ConflictError("matter_running", `matter ${matterId} has a run in flight; cancel it first`);
+        throw new ConflictError(
+          "matter_running",
+          "the matter has a run in flight; cancel it first",
+        );
 
       const paths = [
         ...all<{ storage_path: string }>(
@@ -1177,6 +1280,7 @@ export function createMattersApi(ctx: Ctx) {
     // matters
     createMatter,
     getMatter,
+    listMatterIds,
     listMattersForUser,
     updateClientName,
     setPlaybookVersion,

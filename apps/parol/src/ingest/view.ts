@@ -15,33 +15,71 @@ export const matchView = (text: string): string => normalizeForAnchor(text);
 
 const WORD_CHAR = /^[\p{L}\p{N}_]$/u;
 
-/** The code point that ends at `end`, which may be a surrogate pair. */
-function codePointEndingAt(text: string, end: number): string {
-  if (end <= 0) return "";
+/** Whether the code point is a letter, a digit or an underscore. ASCII is answered without a call. */
+function isWordPoint(point: number): boolean {
+  if (point < 128) {
+    return (
+      (point >= 48 && point <= 57) ||
+      (point >= 65 && point <= 90) ||
+      (point >= 97 && point <= 122) ||
+      point === 95
+    );
+  }
+  return WORD_CHAR.test(String.fromCodePoint(point));
+}
+
+/** The code point that ends at `end`, which may be a surrogate pair, or -1 at the start. */
+function pointBefore(text: string, end: number): number {
+  if (end <= 0) return -1;
   const low = text.charCodeAt(end - 1);
   if (low >= 0xdc00 && low <= 0xdfff && end >= 2) {
     const high = text.charCodeAt(end - 2);
-    if (high >= 0xd800 && high <= 0xdbff) return text.slice(end - 2, end);
+    if (high >= 0xd800 && high <= 0xdbff) return (high - 0xd800) * 0x400 + (low - 0xdc00) + 0x10000;
   }
-  return text.charAt(end - 1);
+  return low;
 }
 
-function codePointAt(text: string, start: number): string {
-  const point = text.codePointAt(start);
-  return point === undefined ? "" : String.fromCodePoint(point);
+/** The code point that starts at `start`, or -1 at the end. */
+function pointAt(text: string, start: number): number {
+  return start >= text.length ? -1 : (text.codePointAt(start) ?? -1);
 }
 
-/** Whether `term` occurs in `text` bounded by non-word characters on both sides. Case-sensitive. */
+/** The first index at or after `from` whose preceding character is not a word character. */
+function nextWordBoundary(text: string, from: number): number {
+  let at = from;
+  while (at < text.length) {
+    const unit = text.charCodeAt(at - 1);
+    // A half of a surrogate pair is not tested whole, so it counts as a boundary. That is the
+    // safe side: it can only make the caller look at one more position, never skip a match.
+    if (unit < 128 ? !isWordPoint(unit) : !WORD_CHAR.test(text.charAt(at - 1))) return at;
+    at++;
+  }
+  return text.length;
+}
+
+/**
+ * Whether `term` occurs in `text` bounded by non-word characters on both sides. Case-sensitive.
+ *
+ * A term starts with a word character (see termShape), so a match can only begin where the
+ * character before is not one, and after a failed match the search jumps to the next such
+ * place. Without that, a term such as "aa" in a paragraph of "aaaa..." fails at every one of a
+ * million positions, once per term; with it, the cost is one pass over the text per term.
+ */
 export function containsWholeWord(text: string, term: string): boolean {
   if (term === "") return false;
+  const startsWithWord = isWordPoint(term.codePointAt(0)!);
   let from = 0;
   for (;;) {
     const at = text.indexOf(term, from);
     if (at < 0) return false;
-    const before = codePointEndingAt(text, at);
-    const after = codePointAt(text, at + term.length);
-    if (!WORD_CHAR.test(before) && !WORD_CHAR.test(after)) return true;
-    from = at + 1;
+    const before = pointBefore(text, at);
+    if (before >= 0 && isWordPoint(before)) {
+      from = startsWithWord ? nextWordBoundary(text, at + 1) : at + 1;
+      continue;
+    }
+    const after = pointAt(text, at + term.length);
+    if (after < 0 || !isWordPoint(after)) return true;
+    from = startsWithWord ? nextWordBoundary(text, at + 1) : at + 1;
   }
 }
 
@@ -81,7 +119,10 @@ export function pairQuotes(view: string, accept: (inner: string) => boolean): Qu
 }
 
 // Words that end in a full stop without ending the sentence. "e.g." and "i.e." are caught by the
-// single-letter rule below.
+// single-letter rule below. Months are here because a date written "Sept. 1, 2025" has a digit
+// after the full stop, which looks like the start of a sentence; the cost is that a sentence that
+// really ends with an abbreviated month and starts a new one is not cut. Company forms from other
+// jurisdictions (Pty, Pte, Bhd, Sdn, Ltda) are here for the same reason as Inc and Ltd.
 const ABBREVIATIONS = new Set([
   "no",
   "nos",
@@ -89,6 +130,29 @@ const ABBREVIATIONS = new Set([
   "ltd",
   "co",
   "corp",
+  "pty",
+  "pte",
+  "bhd",
+  "sdn",
+  "ltda",
+  "cie",
+  "mfg",
+  "assn",
+  "bros",
+  "esq",
+  "prof",
+  "hon",
+  "rev",
+  "gen",
+  "gov",
+  "sen",
+  "rep",
+  "lt",
+  "col",
+  "capt",
+  "sgt",
+  "messrs",
+  "mme",
   "sec",
   "secs",
   "art",
@@ -96,11 +160,29 @@ const ABBREVIATIONS = new Set([
   "para",
   "paras",
   "cl",
+  "subsec",
+  "sched",
+  "exh",
+  "ref",
+  "vol",
+  "pt",
+  "ch",
+  "pp",
+  "ss",
+  "al",
+  "viz",
+  "amt",
   "mr",
   "mrs",
   "ms",
   "dr",
   "st",
+  "ste",
+  "ave",
+  "blvd",
+  "rd",
+  "bldg",
+  "apt",
   "vs",
   "approx",
   "dept",
@@ -108,6 +190,18 @@ const ABBREVIATIONS = new Set([
   "cf",
   "jr",
   "sr",
+  "jan",
+  "feb",
+  "mar",
+  "apr",
+  "jun",
+  "jul",
+  "aug",
+  "sep",
+  "sept",
+  "oct",
+  "nov",
+  "dec",
 ]);
 const LETTER = /\p{L}/u;
 const LOWERCASE = /\p{Ll}/u;
@@ -161,14 +255,4 @@ export function lowerBound(values: readonly number[], target: number): number {
     else hi = mid;
   }
   return lo;
-}
-
-/** The half-open range of the sentence that holds `position`. */
-export function sentenceAround(
-  cuts: readonly number[],
-  position: number,
-  length: number,
-): { start: number; end: number } {
-  const at = lowerBound(cuts, position);
-  return { start: at === 0 ? 0 : cuts[at - 1]! + 1, end: at < cuts.length ? cuts[at]! : length };
 }

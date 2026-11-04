@@ -282,3 +282,28 @@ describe("defines_term and uses_term annotations", () => {
     expect(defines.length).toBeGreaterThan(0);
   });
 });
+
+describe("a long run of punctuation between quotes", () => {
+  it.each([".", ",", ";", ":"])("is linear for a run of %j", (mark) => {
+    const text = `This Agreement is made between A and B (the "${mark.repeat(200_000)}x") and so on for twenty characters.`;
+    const start = Date.now();
+    expect(defined(text)).toEqual([]);
+    // The reproduction took 27 s at this size when the run was stripped with a quadratic regex.
+    expect(Date.now() - start).toBeLessThan(1500);
+  });
+
+  it("is linear when the run sits after a real term", () => {
+    const text = `(the "Company${".".repeat(200_000)}x") and (the "Party,") agrees`;
+    const start = Date.now();
+    expect(defined(text)).toEqual(["Party"]);
+    expect(Date.now() - start).toBeLessThan(1500);
+  });
+
+  it("is linear through the whole pipeline for a text file and a Word file", () => {
+    const body = `This Agreement is made between A and B (the "${".".repeat(150_000)}x") and so on for twenty characters.`;
+    const start = Date.now();
+    const out = ingestTexts(body);
+    expect(out.spans).toHaveLength(1);
+    expect(Date.now() - start).toBeLessThan(3000);
+  });
+});

@@ -96,6 +96,84 @@ describe("unreviewed_content", () => {
   });
 });
 
+describe("table of contents entries that hold more than a contents line", () => {
+  const CLAUSE =
+    "2. Notwithstanding anything in this Agreement, the obligations of the Receiving Party are perpetual and the Disclosing Party may disclose to anyone.";
+  const parseWord = async (paragraphs: Parameters<typeof docxBytes>[0]) => {
+    const parsed = await parseDocument({ bytes: await docxBytes(paragraphs), mediaType: "docx" });
+    return buildIngest({
+      documents: [documentFrom("D1", parsed.paragraphs, { inspection: parsed.inspection })],
+    });
+  };
+
+  it("warns, with a count only, when an operative clause is styled as a contents entry", async () => {
+    const out = await parseWord([
+      "MUTUAL NONDISCLOSURE AGREEMENT",
+      "1. The obligations of the Receiving Party continue for two (2) years.",
+      { text: CLAUSE, style: "TOC1" },
+      "3. This Agreement is governed by the laws of Delaware.",
+    ]);
+    // The entry is still left out of the spans, as the brief says.
+    expect(out.spans.map((s) => s.label)).toEqual(["D1-p0", "D1-p1", "D1-p3"]);
+    expect(out.warnings).toEqual([
+      {
+        code: "unreviewed_content",
+        documentVersionId: "dv_d1",
+        detail: "not reviewed: toc_entries=1",
+      },
+    ]);
+    expect(JSON.stringify(out.warnings)).not.toContain("perpetual");
+  });
+
+  it("counts every such entry and puts the count after the other counts", () => {
+    const out = buildIngest({
+      documents: [
+        documentFrom(
+          "D1",
+          [
+            paragraph(0, "A real first paragraph of the agreement."),
+            paragraph(1, CLAUSE, { isTocEntry: true }),
+            paragraph(2, "3. The Receiving Party may disclose it to any person it chooses.", {
+              isTocEntry: true,
+            }),
+          ],
+          { inspection: { ...NO_INSPECTION, images: 2 } },
+        ),
+      ],
+    });
+    expect(out.warnings).toEqual([
+      {
+        code: "unreviewed_content",
+        documentVersionId: "dv_d1",
+        detail: "not reviewed: images=2, toc_entries=2",
+      },
+    ]);
+  });
+
+  it("is silent for ordinary contents lines", async () => {
+    const out = await parseWord([
+      "MUTUAL NONDISCLOSURE AGREEMENT",
+      { text: "1. Definitions .......... 3", style: "TOC1" },
+      { text: "2. Term and Termination\t4", style: "TOC1" },
+      { text: "Section 7.2 Return or Destruction of Confidential Information    9", style: "TOC2" },
+      { text: "ARTICLE III - GOVERNING LAW AND JURISDICTION", style: "TOC1" },
+      "1. The obligations of the Receiving Party continue for two (2) years.",
+    ]);
+    expect(out.warnings).toEqual([]);
+  });
+
+  it("is silent when a document has no contents entries at all", () => {
+    expect(buildIngest({ documents: [documentFrom("D1", SHORT_NDA)] }).warnings).toEqual([]);
+  });
+
+  it("is reported next to no_reviewable_text for a document made only of such entries", () => {
+    const out = buildIngest({
+      documents: [documentFrom("D1", [paragraph(0, CLAUSE, { isTocEntry: true })])],
+    });
+    expect(out.warnings.map((w) => w.code)).toEqual(["no_reviewable_text", "unreviewed_content"]);
+  });
+});
+
 describe("no_reviewable_text", () => {
   it("warns for a document that yields no spans, with counts only", () => {
     const out = buildIngest({
@@ -125,6 +203,19 @@ describe("no_reviewable_text", () => {
     expect(out.annotations).toEqual([]);
     expect(out.warnings.map((w) => w.code)).toEqual(["no_reviewable_text"]);
   });
+
+  it.each(["\u200e", "\u2800", "\u034f", "\u3164", "\u2061", "\u202e", "\ufffc", "\ufe0f"])(
+    "warns for a document whose only paragraphs are invisible: %j",
+    (character) => {
+      const out = buildIngest({
+        documents: [
+          documentFrom("D1", [paragraph(0, character.repeat(30)), paragraph(1, ` ${character} `)]),
+        ],
+      });
+      expect(out.spans).toEqual([]);
+      expect(out.warnings.map((w) => w.code)).toEqual(["no_reviewable_text"]);
+    },
+  );
 
   it("does not warn when a document has even one span", () => {
     const out = buildIngest({ documents: [documentFrom("D1", [paragraph(0, "x")])] });

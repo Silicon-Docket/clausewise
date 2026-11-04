@@ -1,31 +1,50 @@
 import { DocxError, inspectDocx, parseDocx, type DocxParagraph } from "@clausewise/docx";
 import { UploadError, type ParseDocument, type ParsedDocument } from "../module-contracts.js";
+import { withoutInvisible } from "./invisible.js";
 import { MAX_PARAGRAPHS, parseTxt } from "./txt.js";
 
 /** A signed contract in Word is well under a megabyte. 10 MB leaves room for embedded images. */
 export const MAX_DOCX_BYTES = 10 * 1024 * 1024;
 /** Fewer characters than this is a cover page or a stray file, not something to review. */
 export const MIN_REVIEWABLE_CHARS = 20;
-
-// What Word shows as nothing. Matches the set used for TXT and for the span test in buildIngest.
-const INVISIBLE = /[\u200b-\u200d\u2060\ufeff\u00ad]/g;
+/**
+ * The engine's own limits are far above any contract (50 MiB of body XML), and a small zip can
+ * expand to them: forty megabytes of one repeated letter deflate to about a hundred kilobytes, so
+ * the byte limit on the file alone does not bound what is read. The body of a real 500 page
+ * agreement is a few megabytes of XML, so these leave room and no more.
+ */
+export const MAX_DOCX_XML_BYTES = 16 * 1024 * 1024;
+export const MAX_DOCX_PART_BYTES = 4 * 1024 * 1024;
+/**
+ * The most text a file may hold, in UTF-16 code units, whatever its type. This is the size limit
+ * of a text file (2 MB, and no character is narrower than a byte), applied to a Word file after
+ * its markup is gone. It also bounds the largest paragraph. Work and output downstream grow with
+ * the amount of text, and this is what keeps them bounded.
+ */
+export const MAX_TEXT_CHARS = 2 * 1024 * 1024;
 
 /**
- * Counts the characters a reviewer could read, leaving out table of contents lines, white space at
- * the ends of a paragraph and invisible characters, and stopping as soon as the minimum is met so
- * a large file costs nothing here.
+ * Counts the characters a reader could see, leaving out table of contents lines, white space at
+ * the ends of a paragraph and invisible characters (see invisible.ts), and stopping as soon as
+ * the minimum is met so a large file costs nothing here.
  */
 function hasReviewableText(paragraphs: DocxParagraph[]): boolean {
   let count = 0;
   for (const paragraph of paragraphs) {
     if (paragraph.isTocEntry === true) continue;
-    const text = paragraph.text.replace(INVISIBLE, "").trim();
+    const text = withoutInvisible(paragraph.text).trim();
     // Iterating a string walks code points, so a character outside the basic plane counts once.
     for (const character of text) {
       if (character !== "" && ++count >= MIN_REVIEWABLE_CHARS) return true;
     }
   }
   return false;
+}
+
+function totalCharacters(paragraphs: DocxParagraph[]): number {
+  let total = 0;
+  for (const paragraph of paragraphs) total += paragraph.text.length;
+  return total;
 }
 
 /**
@@ -63,7 +82,11 @@ async function parseWord(bytes: Uint8Array): Promise<ParsedDocument> {
   }
   if (bytes.length === 0) throw new UploadError("This file is empty.");
   try {
-    const limits = { maxInputBytes: MAX_DOCX_BYTES };
+    const limits = {
+      maxInputBytes: MAX_DOCX_BYTES,
+      maxDocumentXmlBytes: MAX_DOCX_XML_BYTES,
+      maxPartBytes: MAX_DOCX_PART_BYTES,
+    };
     const { paragraphs } = await parseDocx(bytes, limits);
     const inspection = await inspectDocx(bytes, limits);
     return { paragraphs, inspection };
@@ -91,6 +114,12 @@ export const parseDocument: ParseDocument = async ({ bytes, mediaType }) => {
   if (parsed.paragraphs.length > MAX_PARAGRAPHS) {
     throw new UploadError(
       `This file has more than ${MAX_PARAGRAPHS} paragraphs, which is more than a contract has.`,
+    );
+  }
+  if (totalCharacters(parsed.paragraphs) > MAX_TEXT_CHARS) {
+    throw new UploadError(
+      `This file has more than ${MAX_TEXT_CHARS} characters of text, which is more than a contract has. ` +
+        "Check that it is the right file.",
     );
   }
   if (!hasReviewableText(parsed.paragraphs)) {

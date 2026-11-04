@@ -45,6 +45,11 @@ CREATE UNIQUE INDEX reviews_one_current_per_finding ON reviews (finding_id) WHER
 CREATE UNIQUE INDEX memos_one_current_per_matter ON memos (matter_id) WHERE status = 'current';
 -- A run has one finding per rule.
 CREATE UNIQUE INDEX findings_one_per_rule ON findings (run_id, rule_key);
+-- A stored file belongs to one row. Two rows naming one file would hand whoever deletes the first
+-- row's file a path the second row still needs. The two tables are also kept apart by a trigger
+-- below, because a unique index cannot span them.
+CREATE UNIQUE INDEX document_versions_one_per_file ON document_versions (storage_path);
+CREATE UNIQUE INDEX memos_one_per_file ON memos (storage_path);
 
 -- SQLite does not index the child side of a foreign key. Without these, deleting a matter scans
 -- every child table once per cascaded row.
@@ -96,6 +101,13 @@ WHEN NEW.id IS NOT OLD.id OR NEW.created_by IS NOT OLD.created_by
   OR NEW.created_at IS NOT OLD.created_at OR NEW.synthetic IS NOT OLD.synthetic
 BEGIN SELECT RAISE(ABORT, 'parol: matter identity is immutable'); END;
 
+-- INSERT OR REPLACE on an existing matter deletes it, and the foreign keys cascade that delete to
+-- every finding, decision and memo it had. The guard is on the insert, so it does not rely on
+-- recursive_triggers, which a connection other than the store's will not have set.
+CREATE TRIGGER matters_no_replace BEFORE INSERT ON matters
+WHEN NEW.id IS NULL OR EXISTS (SELECT 1 FROM matters WHERE id = NEW.id)
+BEGIN SELECT RAISE(ABORT, 'parol: matters are never replaced'); END;
+
 CREATE TRIGGER matters_pin_approved_playbook_insert BEFORE INSERT ON matters
 WHEN NEW.playbook_version_id IS NOT NULL AND NOT EXISTS (
   SELECT 1 FROM playbook_versions WHERE id = NEW.playbook_version_id AND status = 'approved')
@@ -141,6 +153,10 @@ BEGIN SELECT RAISE(ABORT, 'parol: document version must belong to the matter of 
 CREATE TRIGGER document_versions_own_storage BEFORE INSERT ON document_versions
 WHEN substr(NEW.storage_path, 1, length(NEW.matter_id) + 1) IS NOT NEW.matter_id || '/'
 BEGIN SELECT RAISE(ABORT, 'parol: stored file must sit in its own matter folder'); END;
+
+CREATE TRIGGER document_versions_file_not_a_memo BEFORE INSERT ON document_versions
+WHEN EXISTS (SELECT 1 FROM memos WHERE storage_path = NEW.storage_path)
+BEGIN SELECT RAISE(ABORT, 'parol: a stored file belongs to one row'); END;
 
 CREATE TRIGGER document_versions_operative_flag_insert BEFORE INSERT ON document_versions
 WHEN NEW.operative NOT IN (0, 1)
@@ -192,10 +208,11 @@ CREATE TRIGGER playbook_versions_insert_as_draft BEFORE INSERT ON playbook_versi
 WHEN NEW.id IS NULL OR NEW.status IS NOT 'draft' OR NEW.approved_by IS NOT NULL OR NEW.approved_at IS NOT NULL
 BEGIN SELECT RAISE(ABORT, 'parol: a playbook version is created as a draft'); END;
 
+-- Retired is as frozen as approved: a version that was retired can still have matters pinned to it.
 CREATE TRIGGER playbook_versions_no_replace BEFORE INSERT ON playbook_versions
 WHEN EXISTS (
   SELECT 1 FROM playbook_versions
-  WHERE status = 'approved'
+  WHERE status <> 'draft'
     AND (id = NEW.id OR (playbook_slug = NEW.playbook_slug AND version = NEW.version)))
 BEGIN SELECT RAISE(ABORT, 'parol: an approved playbook version is immutable'); END;
 
@@ -413,6 +430,10 @@ BEGIN SELECT RAISE(ABORT, 'parol: a stale review stays stale'); END;
 CREATE TRIGGER memos_no_replace BEFORE INSERT ON memos
 WHEN NEW.id IS NULL OR EXISTS (SELECT 1 FROM memos WHERE id = NEW.id)
 BEGIN SELECT RAISE(ABORT, 'parol: memos are never replaced'); END;
+
+CREATE TRIGGER memos_file_not_a_version BEFORE INSERT ON memos
+WHEN EXISTS (SELECT 1 FROM document_versions WHERE storage_path = NEW.storage_path)
+BEGIN SELECT RAISE(ABORT, 'parol: a stored file belongs to one row'); END;
 
 CREATE TRIGGER memos_same_matter BEFORE INSERT ON memos
 WHEN NOT EXISTS (SELECT 1 FROM runs WHERE id = NEW.run_id AND matter_id = NEW.matter_id)

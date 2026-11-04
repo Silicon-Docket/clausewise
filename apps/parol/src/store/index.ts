@@ -25,6 +25,7 @@ export {
   MAX_DETAIL_STRING_LENGTH,
   appendAudit,
   listAuditEvents,
+  listMatterAuditEvents,
   validateAuditDetail,
   verifyAuditChain,
   type AuditBreak,
@@ -34,9 +35,12 @@ export {
   type AuditEvent,
   type AuditFilter,
   type AuditInput,
+  type AuditPage,
+  type MatterAuditFilter,
 } from "./audit.js";
 
 export { FileStore, MATTER_ID_PATTERN } from "./files.js";
+export { toSourceSpans } from "./model-labels.js";
 
 export { createRepository, type Repository } from "./repo.js";
 export type { RepositoryOptions } from "./context.js";
@@ -49,7 +53,13 @@ export {
 } from "./repo-matters.js";
 export type { PlaybookImport } from "./repo-playbooks.js";
 
-export { canRunTransition, canTransition, isActiveRunStatus, ACTIVE_RUN_STATUSES } from "./states.js";
+export {
+  ACTIVE_RUN_STATUSES,
+  canRunTransition,
+  canTransition,
+  isActiveRunStatus,
+  isTerminalRunStatus,
+} from "./states.js";
 
 export {
   ActiveRunError,
@@ -67,6 +77,7 @@ export {
   StaleRunError,
   StoreError,
   ValidationError,
+  type EntityKind,
   type ExportBlocker,
   type ExportBlockerReason,
 } from "./errors.js";

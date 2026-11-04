@@ -28,9 +28,26 @@ export interface AnnotationResult {
 }
 
 // A run defines a few dozen terms. These caps only matter for a file built to make the matching
-// quadratic: terms beyond them are ignored, which costs hints and never correctness.
+// or the output grow without bound: terms beyond them are ignored, which costs hints and never
+// correctness. The bounds, with the reason for each:
+//  - terms a span defines, terms in the run, and definitions in the run: a paragraph of nothing
+//    but definitions, and twenty thousand paragraphs that each repeat them,
+//  - terms one span is annotated as using, and uses in the run: every span of a long file
+//    holding every term would otherwise be thousands of annotations each,
+//  - cross references in the run: a range such as "Sections 1 through 99" names up to a hundred
+//    clauses, and a file may hold twenty thousand paragraphs of them,
+//  - the work of looking for terms: terms times characters, so that a file of two megabytes with
+//    hundreds of terms stops searching instead of running for minutes. It is counted in
+//    characters and not in time, so the same input always stops at the same place.
+// When a bound is reached the spans before it keep everything, and the spans after it lose that
+// kind of annotation. A normal agreement is nowhere near any of them.
 const MAX_TERMS_PER_SPAN = 50;
 const MAX_TERMS_PER_RUN = 500;
+const MAX_DEFINITIONS_PER_RUN = 50_000;
+const MAX_USES_PER_SPAN = 100;
+const MAX_USES_PER_RUN = 200_000;
+const MAX_REFERENCES_PER_RUN = 50_000;
+const MAX_TERM_SEARCH_WORK = 400_000_000;
 
 // Plain code-unit order. localeCompare depends on the machine's locale, and the output of this
 // module must be identical wherever it runs.
@@ -77,14 +94,36 @@ export function annotateSpans(spans: AnnotatableSpan[]): AnnotationResult {
 
   const annotations: SpanAnnotation[] = [];
   const instruction = new Map<SpanId, string[]>();
+  let definitionsLeft = MAX_DEFINITIONS_PER_RUN;
+  let usesLeft = MAX_USES_PER_RUN;
+  let referencesLeft = MAX_REFERENCES_PER_RUN;
+  let searchWorkLeft = MAX_TERM_SEARCH_WORK;
 
   spans.forEach((span, index) => {
     const view = views[index]!;
     const own: SpanAnnotation[] = [];
 
+    // Searching a span for every term costs terms times its length. When the budget cannot pay
+    // for a span, this span and every later one are not searched.
+    const searchCost = terms.length * view.length;
+    const search = searchCost <= searchWorkLeft;
+    if (search) searchWorkLeft -= searchCost;
+    else searchWorkLeft = 0;
+    let usesHere = 0;
     for (const term of terms) {
-      if (definers.get(term)!.has(index)) own.push({ kind: "defines_term", spanId: span.id, term });
-      else if (containsWholeWord(view, term)) {
+      if (definers.get(term)!.has(index)) {
+        if (definitionsLeft > 0) {
+          definitionsLeft--;
+          own.push({ kind: "defines_term", spanId: span.id, term });
+        }
+      } else if (
+        search &&
+        usesHere < MAX_USES_PER_SPAN &&
+        usesLeft > 0 &&
+        containsWholeWord(view, term)
+      ) {
+        usesHere++;
+        usesLeft--;
         own.push({ kind: "uses_term", spanId: span.id, term });
       }
     }
@@ -92,6 +131,8 @@ export function annotateSpans(spans: AnnotatableSpan[]): AnnotationResult {
     for (const reference of findCrossReferences(view, {
       amendment: span.documentKind === "amendment",
     })) {
+      if (referencesLeft <= 0) break;
+      referencesLeft--;
       own.push({
         kind: "cross_reference",
         spanId: span.id,

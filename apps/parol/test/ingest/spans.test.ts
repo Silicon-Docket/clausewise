@@ -347,3 +347,39 @@ describe("paragraphs parsed from text", () => {
     expect(out.spans.map((s) => s.id)).toEqual(["dv_d1:p0", "dv_d1:p1"]);
   });
 });
+
+describe("the clause number of an amendment paragraph that begins with a reference", () => {
+  const D2 =
+    "The parties agree as follows:\n\nSection 6.1 of the Agreement is deleted in its entirety.\n\nSection 6.2 of the Agreement is amended by replacing the words.\n\nSection 1. Capitalized terms have the meanings given in the Agreement.\n\n2. Section 7.2 of the Agreement is deleted.";
+
+  it("does not give the amendment's paragraph the number of the clause it amends", () => {
+    const out = ingestTexts(SHORT_NDA, D2);
+    expect(spanByLabel(out, "D2-p1").clauseNumber).toBeNull();
+    expect(spanByLabel(out, "D2-p2").clauseNumber).toBeNull();
+    // The NDA's own clause keeps its number.
+    expect(spanByLabel(out, "D1-p7").clauseNumber).toBe("6.1");
+  });
+
+  it("keeps the amendment's own numbering, whether typed as a number or as a section label", () => {
+    const out = ingestTexts(SHORT_NDA, D2);
+    expect(spanByLabel(out, "D2-p3").clauseNumber).toBe("1");
+    expect(spanByLabel(out, "D2-p4").clauseNumber).toBe("2");
+  });
+
+  it("applies to a wrapped line that starts with a reference, in any document", () => {
+    const out = ingestTexts(
+      "1. The Receiving Party shall comply.\n\nSection 4 shall survive termination.",
+      "A free paragraph.\n\nClause 3 is hereby replaced.",
+    );
+    expect(spanByLabel(out, "D1-p1").clauseNumber).toBeNull();
+    expect(spanByLabel(out, "D2-p1").clauseNumber).toBeNull();
+    expect(spanByLabel(out, "D1-p0").clauseNumber).toBe("1");
+  });
+
+  it("does not change the clause id or heading of such a paragraph", () => {
+    const out = ingestTexts(SHORT_NDA, D2);
+    const reference = spanByLabel(out, "D2-p1");
+    expect(reference.clauseId).toMatch(/^c\d+$/);
+    expect(reference.text).toBe("Section 6.1 of the Agreement is deleted in its entirety.");
+  });
+});

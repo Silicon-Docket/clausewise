@@ -87,7 +87,8 @@ export function loadMigrationFiles(dir: string = DEFAULT_MIGRATIONS_DIR): Migrat
   const out: MigrationFile[] = [];
   for (const file of files) {
     const match = MIGRATION_NAME.exec(file);
-    if (!match) throw new MigrationError("bad_migration_name", `migration file ${file} is misnamed`);
+    if (!match)
+      throw new MigrationError("bad_migration_name", `migration file ${file} is misnamed`);
     const sql = readFileSync(join(dir, file), "utf8").replace(/\r\n/g, "\n");
     out.push({
       version: Number(match[1]),

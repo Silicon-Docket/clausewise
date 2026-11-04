@@ -36,6 +36,11 @@ describe("the paragraph rule", () => {
       ["One.", "Two.", "Three."],
     ],
     [
+      "a line that is only direction marks, a braille blank or an object replacement is blank",
+      "One.\n\u200e\u200f\n\u2800\nTwo.\n\ufffc\nThree.",
+      ["One.", "Two.", "Three."],
+    ],
+    [
       "a line that is only zero-width characters is blank",
       "One.\n\u200b\u200b\nTwo.",
       ["One.", "Two."],
@@ -89,6 +94,135 @@ describe("the paragraph rule", () => {
     expect(startsWithClauseNumber("12. text")).toBe(true);
     expect(startsWithClauseNumber("text 6.1")).toBe(false);
     expect(startsWithClauseNumber("")).toBe(false);
+  });
+});
+
+describe("a wrapped line that begins like a clause number", () => {
+  it.each<[string, string, string[]]>([
+    [
+      "a number written out and then in figures",
+      "1. The obligations of the Receiving Party shall continue for five\n(5) years from the date of disclosure.",
+      [
+        "1. The obligations of the Receiving Party shall continue for five (5) years from the date of disclosure.",
+      ],
+    ],
+    [
+      "a two-digit number",
+      '3. Section 7.2 of the Agreement is amended by replacing "ten\n(10) business days" with "thirty (30) days".',
+      [
+        '3. Section 7.2 of the Agreement is amended by replacing "ten (10) business days" with "thirty (30) days".',
+      ],
+    ],
+    [
+      "a compound number",
+      "4. The notice period is twenty-four\n(24) hours.",
+      ["4. The notice period is twenty-four (24) hours."],
+    ],
+    [
+      "a reference after a preposition",
+      "5. The Receiving Party shall comply with the duties set out in\nSection 4.2 of this Agreement.",
+      [
+        "5. The Receiving Party shall comply with the duties set out in Section 4.2 of this Agreement.",
+      ],
+    ],
+    [
+      "a reference after an article",
+      "6. The Receiving Party is bound by the\nArticle 3 restrictions on use.",
+      ["6. The Receiving Party is bound by the Article 3 restrictions on use."],
+    ],
+    [
+      "a decimal with a unit after a preposition",
+      "7. Interest accrues at a rate of\n1.5 percent per month on late sums.",
+      ["7. Interest accrues at a rate of 1.5 percent per month on late sums."],
+    ],
+  ])("joins it to the line above: %s", (_name, input, expected) => {
+    expect(texts(input)).toEqual(expected);
+  });
+
+  it.each<[string, string, string[]]>([
+    [
+      "figures that do not repeat the number before",
+      "1. Payment is due within ten\n(5) other sums are not.",
+      ["1. Payment is due within ten", "(5) other sums are not."],
+    ],
+    [
+      "a list item that follows an item ending in a number word",
+      "(1) the first item is one\n(2) the second item is two",
+      ["(1) the first item is one", "(2) the second item is two"],
+    ],
+    [
+      "a bracketed letter after a lead-in with no colon",
+      "8. The parties agree that\n(a) notice is required.",
+      ["8. The parties agree that", "(a) notice is required."],
+    ],
+    [
+      "a list item after and",
+      "(a) keep it secret; and\n(b) return it on request.",
+      ["(a) keep it secret; and", "(b) return it on request."],
+    ],
+    [
+      "a numbered heading",
+      "2. Term of Agreement\n2.1 The obligations continue for two years.",
+      ["2. Term of Agreement", "2.1 The obligations continue for two years."],
+    ],
+    [
+      "a clause after a sentence",
+      "1. The first clause ends here.\n2. The second clause begins here.",
+      ["1. The first clause ends here.", "2. The second clause begins here."],
+    ],
+    [
+      "a labelled number after a sentence",
+      "Section 4. The first clause ends here.\nSection 5. The second begins here.",
+      ["Section 4. The first clause ends here.", "Section 5. The second begins here."],
+    ],
+  ])("still opens a paragraph: %s", (_name, input, expected) => {
+    expect(texts(input)).toEqual(expected);
+  });
+});
+
+describe("a heading line followed directly by body text", () => {
+  it.each<[string, string, string[]]>([
+    [
+      "a numbered heading in capitals",
+      '1. DEFINITIONS\n"Confidential Information" means non-public information.',
+      ["1. DEFINITIONS", '"Confidential Information" means non-public information.'],
+    ],
+    [
+      "a title in capitals",
+      "MUTUAL NONDISCLOSURE AGREEMENT\nThis Agreement is made between Acme and Beta.",
+      ["MUTUAL NONDISCLOSURE AGREEMENT", "This Agreement is made between Acme and Beta."],
+    ],
+    [
+      "a heading and then a numbered clause",
+      "3. TERM\n3.1 The term is two years.",
+      ["3. TERM", "3.1 The term is two years."],
+    ],
+  ])("is its own paragraph: %s", (_name, input, expected) => {
+    expect(texts(input)).toEqual(expected);
+  });
+
+  it.each<[string, string, string[]]>([
+    [
+      "a wrapped paragraph in capitals",
+      "THE RECEIVING PARTY SHALL NOT BE LIABLE FOR ANY INDIRECT\nDAMAGES ARISING FROM THIS AGREEMENT.",
+      [
+        "THE RECEIVING PARTY SHALL NOT BE LIABLE FOR ANY INDIRECT DAMAGES ARISING FROM THIS AGREEMENT.",
+      ],
+    ],
+    [
+      "a long first line in capitals that goes on in lower case",
+      "THE OBLIGATIONS IN THIS SECTION SURVIVE THE END OF THE AGREEMENT AND THEN SOME MORE WORDS\ncontinue in lower case here.",
+      [
+        "THE OBLIGATIONS IN THIS SECTION SURVIVE THE END OF THE AGREEMENT AND THEN SOME MORE WORDS continue in lower case here.",
+      ],
+    ],
+    [
+      "a capitalised line that ends in a comma",
+      "ACME CORPORATION,\na Delaware corporation, agrees as follows.",
+      ["ACME CORPORATION, a Delaware corporation, agrees as follows."],
+    ],
+  ])("does not split %s", (_name, input, expected) => {
+    expect(texts(input)).toEqual(expected);
   });
 });
 

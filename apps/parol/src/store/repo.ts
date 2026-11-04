@@ -2,18 +2,16 @@ import type { MatterStatus } from "../contracts.js";
 import {
   appendAudit,
   listAuditEvents,
+  listMatterAuditEvents,
   verifyAuditChain,
   type AuditFilter,
   type AuditInput,
+  type AuditPage,
+  type MatterAuditFilter,
 } from "./audit.js";
 import { createContext, type RepositoryOptions } from "./context.js";
 import type { Database } from "./db.js";
-import {
-  ConflictError,
-  InputsIncompleteError,
-  InvalidTransitionError,
-  ValidationError,
-} from "./errors.js";
+import { ConflictError, InvalidTransitionError, ValidationError } from "./errors.js";
 import { createEvalApi } from "./repo-eval.js";
 import { createFindingsApi } from "./repo-findings.js";
 import { createMattersApi } from "./repo-matters.js";
@@ -41,9 +39,15 @@ export function createRepository(db: Database, options: RepositoryOptions = {}) 
 
   /**
    * A guarded status change for callers outside the repository. The edge must be one of
-   * `canTransition`'s, and the state it moves to must be true: `ready` needs complete inputs,
-   * `running` an active run, `review_complete` a run whose findings are all decided, `exported` a
-   * current memo. Deletion has its own method.
+   * `canTransition`'s, and the state it moves to must be true: `running` needs an active run,
+   * `review_complete` a run whose findings are all decided, `exported` a memo of that run.
+   *
+   * Three states are not reachable from here. `stale`, `draft` and `ready` each say something about
+   * the inputs (they changed, they are incomplete, they are complete and nothing has run), and the
+   * only code that may say so is the one that changes them: `applyInputChange` moves the matter
+   * there together with the findings, decisions, memo and runs that the change invalidates. Setting
+   * one by hand would leave results current under a matter that calls them stale, or open the
+   * matter to a second run while one is in flight. Deletion has its own method.
    */
   function setMatterStatus(
     matterId: string,
@@ -54,22 +58,33 @@ export function createRepository(db: Database, options: RepositoryOptions = {}) 
       const matter = requireMatter(matterId);
       if (to === "deleted")
         throw new ValidationError("use_delete_matter", "use deleteMatter to delete a matter");
+      if (to === "stale" || to === "draft" || to === "ready")
+        throw new ValidationError(
+          "use_apply_input_change",
+          "a matter reaches stale, draft or ready through applyInputChange, which also invalidates its results",
+        );
       if (matter.status === to) return matter;
-      if (!canTransition(matter.status, to)) throw new InvalidTransitionError("matter", matter.status, to);
+      if (!canTransition(matter.status, to))
+        throw new InvalidTransitionError("matter", matter.status, to);
 
-      if (to === "ready" && matters.computeInputsDigest(matterId) === null)
-        throw new InputsIncompleteError(matterId);
       if (to === "running" && !runs.getActiveRun(matterId))
-        throw new ConflictError("no_active_run", `matter ${matterId} has no run in flight`);
+        throw new ConflictError("no_active_run", "the matter has no run in flight");
       if (to === "review_complete" || to === "exported") {
         const current = runs.getCurrentRun(matterId);
         if (!current || !findings.getExportReadiness(matterId, current.id).ready)
-          throw new ConflictError("not_fully_decided", `matter ${matterId} has undecided or stale findings`);
-        if (to === "exported" && !findings.getCurrentMemo(matterId))
-          throw new ConflictError("no_memo", `matter ${matterId} has no current memo`);
+          throw new ConflictError(
+            "not_fully_decided",
+            "the matter has undecided or stale findings",
+          );
+        // A memo left current by a re-run on unchanged inputs belongs to the older run.
+        if (to === "exported" && findings.getCurrentMemo(matterId)?.runId !== current.id)
+          throw new ConflictError("no_memo", "the matter has no current memo");
       }
       if (to === "in_review" && matter.status === "running" && !runs.getCurrentRun(matterId))
-        throw new ConflictError("no_current_run", `matter ${matterId} has no succeeded run on its current inputs`);
+        throw new ConflictError(
+          "no_current_run",
+          "the matter has no succeeded run on its current inputs",
+        );
 
       transitionMatter(matterId, to);
       ctx.audit({
@@ -90,7 +105,8 @@ export function createRepository(db: Database, options: RepositoryOptions = {}) 
    * any transaction.
    */
   function compact(): void {
-    if (db.isTransaction) throw new ConflictError("in_transaction", "compact cannot run inside a transaction");
+    if (db.isTransaction)
+      throw new ConflictError("in_transaction", "compact cannot run inside a transaction");
     db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     db.exec("VACUUM");
   }
@@ -109,7 +125,16 @@ export function createRepository(db: Database, options: RepositoryOptions = {}) 
     ...evals,
     // audit
     appendAudit: (input: Omit<AuditInput, "at">) => ctx.audit(input),
+    /**
+     * Every matter's events, and the ones that belong to no matter, when no `matterId` is given.
+     * That is an operator's view (the chain check, the playbook and workflow events); a request
+     * about a matter uses `listMatterAuditEvents`, which cannot be asked for everything.
+     */
     listAuditEvents: (filter?: AuditFilter) => listAuditEvents(db, filter),
+    /** One matter's events, oldest first, a page at a time. `matterId` is required. */
+    listMatterAuditEvents: (matterId: string, filter?: MatterAuditFilter): AuditPage =>
+      listMatterAuditEvents(db, matterId, filter),
+    /** The whole chain is one chain, so this is global by nature; it reports counts and a sequence number only. */
     verifyAuditChain: () => verifyAuditChain(db),
     // plumbing
     transaction: <T>(fn: () => T): T => ctx.tx(fn),

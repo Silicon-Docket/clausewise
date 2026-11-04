@@ -5,7 +5,7 @@ description: Fictional practice-group playbook for the Parol demonstration. It i
 contractTypes: [nda]
 perspective: We act for the party that expects to receive most of the information under a mutual
   or one-way NDA. The client's exact legal name is given at intake. We want narrow, time-limited,
-  workable obligations that bind both parties equally.
+  workable obligations and, where the NDA is mutual, obligations that bind both parties equally.
 rules:
   - id: pty-1
     category: parties
@@ -33,8 +33,8 @@ rules:
     standard: Confidential Information is information marked or identified as confidential, or
       that a reasonable person would understand to be confidential from its nature or the
       circumstances of disclosure.
-    fallback: Only information disclosed in writing and marked confidential, or disclosed orally
-      and identified as confidential in writing within 30 days.
+    fallback: Non-public information disclosed for the purpose of the agreement, whether or not it
+      is marked or identified as confidential.
     unacceptable: All information of any kind, in any form, whether or not marked or identified as
       confidential.
     fallbackLanguage: '"Confidential Information" means non-public information disclosed by the
@@ -98,7 +98,8 @@ rules:
     required: true
     standard: Obligations end three years or less after each disclosure. Continued protection of
       trade secrets for as long as they remain trade secrets is acceptable.
-    fallback: Obligations end five years or less after the agreement ends.
+    fallback: Obligations end five years or less after each disclosure, or five years or less
+      after the agreement ends.
     unacceptable: Obligations that are perpetual or have no stated end, for information that is
       not a trade secret.
     fallbackLanguage: The obligations of each Receiving Party under this Agreement shall continue
@@ -107,8 +108,11 @@ rules:
       secret under applicable law.
     escalateWhen:
       - id: over-five-years
-        text: The stated period is longer than the fallback but finite, which is a business
-          decision.
+        text: The stated period is longer than five years, counted from whichever event the clause
+          uses, but finite, which is a business decision.
+    guidance: Copies kept under the return or destruction clause are covered. Protection of them
+      for as long as they are held, with no end, is the unacceptable case, while copies that
+      remain subject to the agreement stay subject to its own period.
 
   - id: ret-1
     category: return-destruction
@@ -123,7 +127,8 @@ rules:
       Receiving Party shall return or destroy the Disclosing Party's Confidential Information,
       except that it may retain copies required by law or held in routine backup systems, which
       remain subject to this Agreement.
-    guidance: An officer's certificate of destruction is not a deviation on its own.
+    guidance: An officer's certificate of destruction is not a deviation on its own. How long
+      retained copies stay protected is tested under dur-1, not here.
 
   - id: gov-1
     category: governing-law
