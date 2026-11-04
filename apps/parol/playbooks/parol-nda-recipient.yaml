@@ -72,8 +72,8 @@ rules:
       prior written consent.
     fallbackLanguage: The Receiving Party may disclose Confidential Information to its and its
       affiliates' employees, officers, contractors and professional advisers who need to know it
-      for the Purpose and who are bound by obligations of confidentiality no less protective than
-      those in this Agreement.
+      for the purposes permitted by this Agreement and who are bound by obligations of
+      confidentiality no less protective than those in this Agreement.
 
   - id: pds-2
     category: permitted-disclosures

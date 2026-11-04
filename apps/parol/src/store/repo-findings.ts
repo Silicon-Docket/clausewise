@@ -1,0 +1,887 @@
+import {
+  FORCES_UNDETERMINED,
+  REVIEW_DECISIONS,
+  type CheckResult,
+  type Escalation,
+  type EvidenceRole,
+  type FallbackBasis,
+  type ReviewDecision,
+  type Status,
+  type VerifiedFinding,
+} from "../contracts.js";
+import { canonicalJson, findingContentSha256, hashOf } from "../canonical.js";
+import { newId } from "../ids.js";
+import {
+  assertSha256,
+  assertShortCode,
+  assertStoragePath,
+  cleanProse,
+  parseWith,
+  type Ctx,
+} from "./context.js";
+import {
+  ConflictError,
+  ContentMismatchError,
+  ExportBlockedError,
+  NotFoundError,
+  StaleFindingError,
+  StaleRunError,
+  ValidationError,
+  safeId,
+  type ExportBlocker,
+} from "./errors.js";
+import type { MattersApi } from "./repo-matters.js";
+import { toStoredRule } from "./repo-playbooks.js";
+import type { PlaybooksApi } from "./repo-playbooks.js";
+import type { RunsApi } from "./repo-runs.js";
+import { ReviewEditsSchema, VerifiedFindingSchema } from "./schemas.js";
+import type {
+  ExportReadiness,
+  FeedbackRow,
+  FindingRecord,
+  MemoRow,
+  ReviewEdits,
+  ReviewRecord,
+  StoredEvidence,
+  StoredRule,
+} from "./types.js";
+
+interface RawFinding {
+  id: string;
+  run_id: string;
+  matter_id: string;
+  playbook_rule_id: string;
+  rule_key: string;
+  category: VerifiedFinding["category"];
+  severity: VerifiedFinding["severity"];
+  status: Status;
+  discrepancy: string;
+  explanation: string;
+  fallback_language: string | null;
+  fallback_basis: FallbackBasis;
+  escalations_json: string;
+  verification_state: VerifiedFinding["verificationState"];
+  content_sha256: string;
+  validity: "current" | "stale";
+  stale_reason: string | null;
+  conflict: string | null;
+  abstain_reason: string | null;
+}
+interface RawEvidence {
+  id: string;
+  finding_id: string;
+  span_id: string;
+  role: EvidenceRole;
+  quote: string;
+  start_offset: number | null;
+  end_offset: number | null;
+  quote_check: StoredEvidence["quoteCheck"];
+  support_check: StoredEvidence["supportCheck"];
+}
+interface RawCheck {
+  finding_id: string;
+  check_id: string;
+  kind: CheckResult["kind"];
+  outcome: CheckResult["outcome"];
+  detail: string;
+}
+interface RawReview {
+  id: string;
+  finding_id: string;
+  matter_id: string;
+  reviewer_id: string;
+  reviewer_name: string;
+  decision: ReviewDecision;
+  edited_json: string | null;
+  reason: string | null;
+  finding_content_sha256: string;
+  supersedes_review_id: string | null;
+  validity: "current" | "stale";
+  created_at: string;
+}
+interface RawMemo {
+  id: string;
+  matter_id: string;
+  run_id: string;
+  review_ids_json: string;
+  file_sha256: string;
+  storage_path: string;
+  status: "current" | "superseded";
+  exported_by: string;
+  exported_at: string;
+}
+interface RawFeedback {
+  id: string;
+  matter_id: string;
+  run_id: string | null;
+  finding_id: string | null;
+  user_id: string;
+  kind: FeedbackRow["kind"];
+  reason_code: string | null;
+  rating: number | null;
+  text: string | null;
+  created_at: string;
+}
+
+const toReview = (r: RawReview): ReviewRecord => ({
+  id: r.id,
+  findingId: r.finding_id,
+  matterId: r.matter_id,
+  reviewerId: r.reviewer_id,
+  reviewerName: r.reviewer_name,
+  decision: r.decision,
+  edits: r.edited_json === null ? null : (JSON.parse(r.edited_json) as ReviewEdits),
+  reason: r.reason,
+  findingContentSha256: r.finding_content_sha256,
+  supersedesReviewId: r.supersedes_review_id,
+  validity: r.validity,
+  createdAt: r.created_at,
+});
+const toMemo = (r: RawMemo): MemoRow => ({
+  id: r.id,
+  matterId: r.matter_id,
+  runId: r.run_id,
+  reviewIds: JSON.parse(r.review_ids_json) as string[],
+  fileSha256: r.file_sha256,
+  storagePath: r.storage_path,
+  status: r.status,
+  exportedBy: r.exported_by,
+  exportedAt: r.exported_at,
+});
+const toFeedback = (r: RawFeedback): FeedbackRow => ({
+  id: r.id,
+  matterId: r.matter_id,
+  runId: r.run_id,
+  findingId: r.finding_id,
+  userId: r.user_id,
+  kind: r.kind,
+  reasonCode: r.reason_code,
+  rating: r.rating,
+  text: r.text,
+  createdAt: r.created_at,
+});
+
+const MAX_REASON = 4000;
+const MAX_EDIT_TEXT = 8000;
+const MAX_FEEDBACK_TEXT = 4000;
+
+export function createFindingsApi(
+  ctx: Ctx,
+  matters: MattersApi,
+  playbooks: PlaybooksApi,
+  runs: RunsApi,
+) {
+  const { get, all, run, tx } = ctx;
+  const { requireMatter, requireUser, transitionMatter } = matters.internal;
+  const { requireRun } = runs.internal;
+
+  // --- reading ------------------------------------------------------------------------------
+
+  /**
+   * Assembles findings with their evidence, checks, escalations, rule and decisions. One call per
+   * kind of row for the whole set, so listing a run is five queries however many findings it has.
+   * Every query is anchored on the matter.
+   */
+  function assemble(matterId: string, runId: string | null, findingId: string | null): FindingRecord[] {
+    const findings = all<RawFinding>(
+      "SELECT * FROM findings WHERE matter_id = ?1 AND (?2 IS NULL OR run_id = ?2) AND (?3 IS NULL OR id = ?3)",
+      matterId,
+      runId,
+      findingId,
+    );
+    if (findings.length === 0) return [];
+
+    const ruleIds = JSON.stringify([...new Set(findings.map((f) => f.playbook_rule_id))]);
+    const rules = new Map<string, StoredRule>(
+      all<Parameters<typeof toStoredRule>[0]>(
+        "SELECT * FROM playbook_rules WHERE id IN (SELECT value FROM json_each(?))",
+        ruleIds,
+      ).map((r) => [r.id, toStoredRule(r)]),
+    );
+
+    const evidenceBy = new Map<string, StoredEvidence[]>();
+    for (const e of all<RawEvidence>(
+      `SELECT e.* FROM finding_evidence e JOIN findings f ON f.id = e.finding_id
+       WHERE f.matter_id = ?1 AND (?2 IS NULL OR f.run_id = ?2) AND (?3 IS NULL OR f.id = ?3)
+       ORDER BY e.finding_id, e.ordinal`,
+      matterId,
+      runId,
+      findingId,
+    )) {
+      const list = evidenceBy.get(e.finding_id) ?? [];
+      list.push({
+        id: e.id,
+        spanId: e.span_id,
+        quote: e.quote,
+        role: e.role,
+        quoteCheck: e.quote_check,
+        offsets:
+          e.start_offset === null || e.end_offset === null
+            ? null
+            : { start: e.start_offset, end: e.end_offset },
+        supportCheck: e.support_check,
+      });
+      evidenceBy.set(e.finding_id, list);
+    }
+
+    const checksBy = new Map<string, CheckResult[]>();
+    for (const c of all<RawCheck>(
+      `SELECT v.* FROM verification_results v JOIN findings f ON f.id = v.finding_id
+       WHERE f.matter_id = ?1 AND (?2 IS NULL OR f.run_id = ?2) AND (?3 IS NULL OR f.id = ?3)
+       ORDER BY v.finding_id, v.ordinal`,
+      matterId,
+      runId,
+      findingId,
+    )) {
+      const list = checksBy.get(c.finding_id) ?? [];
+      list.push({ id: c.check_id, kind: c.kind, outcome: c.outcome, detail: c.detail });
+      checksBy.set(c.finding_id, list);
+    }
+
+    const reviewsBy = new Map<string, ReviewRecord[]>();
+    for (const r of all<RawReview>(
+      `SELECT rv.*, u.display_name AS reviewer_name
+       FROM reviews rv
+       JOIN users u ON u.id = rv.reviewer_id
+       JOIN findings f ON f.id = rv.finding_id
+       WHERE rv.matter_id = ?1 AND f.matter_id = ?1
+         AND (?2 IS NULL OR f.run_id = ?2) AND (?3 IS NULL OR f.id = ?3)
+       ORDER BY rv.created_at, rv.rowid`,
+      matterId,
+      runId,
+      findingId,
+    )) {
+      const list = reviewsBy.get(r.finding_id) ?? [];
+      list.push(toReview(r));
+      reviewsBy.set(r.finding_id, list);
+    }
+
+    const records = findings.map((f): FindingRecord => {
+      const reviews = reviewsBy.get(f.id) ?? [];
+      return {
+        id: f.id,
+        runId: f.run_id,
+        matterId: f.matter_id,
+        playbookRuleId: f.playbook_rule_id,
+        ruleKey: f.rule_key,
+        category: f.category,
+        severity: f.severity,
+        status: f.status,
+        evidence: evidenceBy.get(f.id) ?? [],
+        discrepancy: f.discrepancy,
+        explanation: f.explanation,
+        fallbackLanguage: f.fallback_language,
+        fallbackBasis: f.fallback_basis,
+        conflict: f.conflict,
+        abstainReason: f.abstain_reason,
+        checks: checksBy.get(f.id) ?? [],
+        escalations: JSON.parse(f.escalations_json) as Escalation[],
+        verificationState: f.verification_state,
+        contentSha256: f.content_sha256,
+        validity: f.validity,
+        staleReason: f.stale_reason,
+        rule: rules.get(f.playbook_rule_id) as StoredRule,
+        reviews,
+        currentReview: reviews.find((r) => r.validity === "current") ?? null,
+      };
+    });
+    return records.sort(
+      (a, b) => a.rule.ordinal - b.rule.ordinal || (a.ruleKey < b.ruleKey ? -1 : 1),
+    );
+  }
+
+  const getFinding = (matterId: string, findingId: string): FindingRecord | undefined =>
+    assemble(matterId, null, findingId)[0];
+  /** In playbook order. Empty for a run that is not this matter's. */
+  const listFindings = (matterId: string, runId: string): FindingRecord[] =>
+    assemble(matterId, runId, null);
+
+  // --- writing findings ---------------------------------------------------------------------
+
+  /**
+   * Writes a run's findings, their evidence and their check results in one transaction.
+   *
+   * Refused with `StaleRunError` when the run is superseded or its inputs digest is no longer the
+   * matter's, so a run that was overtaken by an edit cannot leave results behind. Everything the
+   * stages computed is checked again here, because this is the last place before a reviewer sees
+   * it: the content hash must be the hash of the content, evidence must cite spans of this
+   * matter's documents named in the run manifest, offsets must fit their span, and the statuses
+   * that must carry an escalation must carry one. Saving a rule that already has a finding with the
+   * same content is a no-op, so a resumed run can save again.
+   */
+  function saveFindings(
+    matterId: string,
+    runId: string,
+    findings: readonly VerifiedFinding[],
+    opts: { actorId?: string | null } = {},
+  ): FindingRecord[] {
+    const parsed = findings.map((f) => parseWith(VerifiedFindingSchema, f, "finding"));
+    if (new Set(parsed.map((f) => f.ruleKey)).size !== parsed.length)
+      throw new ValidationError("duplicate_rule", "a run has one finding per rule");
+
+    return tx(() => {
+      const current = requireRun(matterId, runId);
+      if (current.status === "superseded") throw new StaleRunError(runId, "superseded");
+      const digest = matters.computeInputsDigest(matterId);
+      if (digest === null || current.inputsSha256 !== digest)
+        throw new StaleRunError(runId, "inputs_changed");
+      if (current.status !== "analyzing" && current.status !== "verifying")
+        throw new ConflictError(
+          "run_not_writing",
+          `run ${runId} is ${current.status}; findings are saved while it is analyzing or verifying`,
+        );
+
+      const rules = new Map(playbooks.listRules(current.playbookVersionId).map((r) => [r.key, r]));
+      const inManifest = new Set(current.manifest.documents.map((d) => d.documentVersionId));
+      const existing = new Map(
+        all<{ rule_key: string; content_sha256: string }>(
+          "SELECT rule_key, content_sha256 FROM findings WHERE run_id = ? AND matter_id = ?",
+          runId,
+          matterId,
+        ).map((r) => [r.rule_key, r.content_sha256]),
+      );
+
+      const saved: string[] = [];
+      let skipped = 0;
+      for (const f of parsed) {
+        const rule = rules.get(f.ruleKey);
+        if (!rule) throw new ValidationError("unknown_rule", `rule ${safeId(f.ruleKey)} is not in the run's playbook version`);
+        if (rule.category !== f.category || rule.severity !== f.severity)
+          throw new ValidationError("rule_mismatch", `finding for ${safeId(f.ruleKey)} disagrees with its rule`);
+
+        const forced = f.escalations.some((e) => FORCES_UNDETERMINED.has(e.code));
+        if (forced && f.status !== "undetermined")
+          throw new ValidationError(
+            "status_must_be_undetermined",
+            `finding for ${safeId(f.ruleKey)} carries an escalation that forces undetermined`,
+          );
+        if (f.status === "undetermined" && f.escalations.length === 0)
+          throw new ValidationError(
+            "undetermined_needs_escalation",
+            `undetermined finding for ${safeId(f.ruleKey)} carries no escalation`,
+          );
+        if (new Set(f.checks.map((c) => c.id)).size !== f.checks.length)
+          throw new ValidationError("duplicate_check", `finding for ${safeId(f.ruleKey)} repeats a check id`);
+
+        // Offsets are checked against the span text as stored, which is what the inspector highlights.
+        for (const e of f.evidence) {
+          const span = matters.getSpan(matterId, e.spanId);
+          if (!span || !inManifest.has(span.documentVersionId))
+            throw new ValidationError(
+              "evidence_outside_manifest",
+              `finding for ${safeId(f.ruleKey)} cites a span that is not in the run's documents`,
+            );
+          if (e.quoteCheck === "verified") {
+            if (
+              e.offsets === null ||
+              e.offsets.start >= e.offsets.end ||
+              e.offsets.end > span.text.length
+            )
+              throw new ValidationError(
+                "bad_offsets",
+                `verified evidence for ${safeId(f.ruleKey)} needs offsets inside its span`,
+              );
+          } else if (e.offsets !== null) {
+            throw new ValidationError(
+              "bad_offsets",
+              `evidence for ${safeId(f.ruleKey)} has offsets but its quote was not verified`,
+            );
+          }
+        }
+
+        const recomputed = findingContentSha256({
+          ruleKey: f.ruleKey,
+          status: f.status,
+          discrepancy: f.discrepancy,
+          explanation: f.explanation,
+          fallbackLanguage: f.fallbackLanguage,
+          fallbackBasis: f.fallbackBasis,
+          conflict: f.conflict,
+          evidence: f.evidence,
+          escalations: f.escalations,
+        });
+        if (recomputed !== f.contentSha256)
+          throw new ValidationError(
+            "content_hash_mismatch",
+            `content hash of the finding for ${safeId(f.ruleKey)} is not the hash of its content`,
+          );
+
+        const already = existing.get(f.ruleKey);
+        if (already !== undefined) {
+          if (already !== f.contentSha256)
+            throw new ConflictError("finding_exists", `run ${runId} already has a different finding for ${safeId(f.ruleKey)}`);
+          skipped += 1;
+          continue;
+        }
+
+        const findingId = newId("fnd");
+        run(
+          `INSERT INTO findings
+             (id, run_id, matter_id, playbook_rule_id, rule_key, category, severity, status, discrepancy,
+              explanation, fallback_language, fallback_basis, escalations_json, verification_state,
+              content_sha256, validity, stale_reason, conflict, abstain_reason)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'current', NULL, ?, ?)`,
+          findingId,
+          runId,
+          matterId,
+          rule.id,
+          f.ruleKey,
+          f.category,
+          f.severity,
+          f.status,
+          f.discrepancy,
+          f.explanation,
+          f.fallbackLanguage,
+          f.fallbackBasis,
+          canonicalJson(f.escalations),
+          f.verificationState,
+          f.contentSha256,
+          f.conflict,
+          f.abstainReason,
+        );
+        f.evidence.forEach((e, ordinal) =>
+          run(
+            `INSERT INTO finding_evidence
+               (id, finding_id, span_id, role, quote, start_offset, end_offset, quote_check, support_check, ordinal)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            newId("evd"),
+            findingId,
+            e.spanId,
+            e.role,
+            e.quote,
+            e.offsets?.start ?? null,
+            e.offsets?.end ?? null,
+            e.quoteCheck,
+            e.supportCheck,
+            ordinal,
+          ),
+        );
+        f.checks.forEach((c, ordinal) =>
+          run(
+            `INSERT INTO verification_results (finding_id, check_id, kind, outcome, detail, ordinal)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            findingId,
+            c.id,
+            c.kind,
+            c.outcome,
+            c.detail,
+            ordinal,
+          ),
+        );
+        saved.push(f.ruleKey);
+      }
+
+      if (saved.length > 0)
+        ctx.audit({
+          actorId: opts.actorId ?? null,
+          matterId,
+          action: "finding.save",
+          targetType: "run",
+          targetId: runId,
+          detail: { saved: saved.length, skipped, ruleKeys: saved },
+        });
+      return listFindings(matterId, runId).filter((f) => parsed.some((p) => p.ruleKey === f.ruleKey));
+    });
+  }
+
+  // --- reviews ------------------------------------------------------------------------------
+
+  const getReview = (matterId: string, reviewId: string): ReviewRecord | undefined => {
+    const row = get<RawReview>(
+      `SELECT rv.*, u.display_name AS reviewer_name
+       FROM reviews rv JOIN users u ON u.id = rv.reviewer_id
+       WHERE rv.id = ? AND rv.matter_id = ?`,
+      reviewId,
+      matterId,
+    );
+    return row ? toReview(row) : undefined;
+  };
+
+  /** Every decision on a finding, oldest first. */
+  const listReviews = (matterId: string, findingId: string): ReviewRecord[] =>
+    all<RawReview>(
+      `SELECT rv.*, u.display_name AS reviewer_name
+       FROM reviews rv JOIN users u ON u.id = rv.reviewer_id
+       WHERE rv.matter_id = ? AND rv.finding_id = ? ORDER BY rv.created_at, rv.rowid`,
+      matterId,
+      findingId,
+    ).map(toReview);
+
+  /**
+   * Decisions made on earlier findings for the same rule, newest first, for "prior decision shown
+   * for reference" after a re-run. Their `findingContentSha256` is what a one-click re-confirm
+   * compares with the new finding's hash.
+   */
+  const listReviewsForRule = (matterId: string, ruleKey: string): (ReviewRecord & { runId: string })[] =>
+    all<RawReview & { run_id: string }>(
+      `SELECT rv.*, u.display_name AS reviewer_name, f.run_id AS run_id
+       FROM reviews rv
+       JOIN users u ON u.id = rv.reviewer_id
+       JOIN findings f ON f.id = rv.finding_id
+       WHERE rv.matter_id = ?1 AND f.matter_id = ?1 AND f.rule_key = ?2
+       ORDER BY rv.created_at DESC, rv.rowid DESC`,
+      matterId,
+      ruleKey,
+    ).map((row) => ({ ...toReview(row), runId: row.run_id }));
+
+  function normaliseEdits(edits: unknown, finding: FindingRecord): ReviewEdits {
+    const given = parseWith(ReviewEditsSchema, edits, "edits");
+    const out: ReviewEdits = {};
+    if (given.status !== undefined && given.status !== finding.status) out.status = given.status;
+    if (given.discrepancy !== undefined && given.discrepancy !== finding.discrepancy) {
+      cleanProse("edited discrepancy", given.discrepancy, MAX_EDIT_TEXT);
+      out.discrepancy = given.discrepancy;
+    }
+    if (given.fallbackLanguage !== undefined && given.fallbackLanguage !== (finding.fallbackLanguage ?? "")) {
+      cleanProse("edited fallback language", given.fallbackLanguage, MAX_EDIT_TEXT);
+      out.fallbackLanguage = given.fallbackLanguage;
+    }
+    if (given.evidenceRoles !== undefined) {
+      const roles: { evidenceId: string; role: EvidenceRole }[] = [];
+      for (const change of given.evidenceRoles) {
+        const evidence = finding.evidence.find((e) => e.id === change.evidenceId);
+        // An evidence id from another finding is refused as if it did not exist.
+        if (!evidence) throw new NotFoundError("evidence", change.evidenceId);
+        if (evidence.role !== change.role) roles.push(change);
+      }
+      if (roles.length > 0) out.evidenceRoles = roles;
+    }
+    if (Object.keys(out).length === 0)
+      throw new ValidationError("edit_changes_nothing", "an edit decision must change something");
+    return out;
+  }
+
+  /**
+   * Records a reviewer's decision, bound to the exact content they saw.
+   *
+   * It checks, in this order, that the finding exists in this matter, that it is current and its
+   * run is the matter's current one (`StaleFindingError`), that the matter is open for review, that
+   * `findingContentSha256` is the finding's hash (`ContentMismatchError`), and that a reason is
+   * given where one is required. The finding's previous current decision becomes stale and the new
+   * one records `supersedesReviewId`. The matter's `in_review` / `review_complete` status follows.
+   */
+  function recordReview(
+    matterId: string,
+    findingId: string,
+    input: {
+      reviewerId: string;
+      decision: ReviewDecision;
+      findingContentSha256: string;
+      edits?: ReviewEdits | null;
+      reason?: string | null;
+    },
+  ): ReviewRecord {
+    if (!(REVIEW_DECISIONS as readonly string[]).includes(input.decision))
+      throw new ValidationError("bad_decision", "decision must be accept, edit, reject or escalate");
+    assertSha256("findingContentSha256", input.findingContentSha256);
+    const reason = input.reason === undefined || input.reason === null ? null : input.reason;
+    if (reason !== null) cleanProse("reason", reason, MAX_REASON);
+    const needsReason = input.decision !== "accept";
+    if (needsReason && (reason === null || reason.trim().length === 0))
+      throw new ValidationError("reason_required", `a ${input.decision} decision needs a reason`);
+    const hasEdits = input.edits !== undefined && input.edits !== null;
+    if (input.decision === "edit" && !hasEdits)
+      throw new ValidationError("edits_required", "an edit decision needs the edits");
+    if (input.decision !== "edit" && hasEdits)
+      throw new ValidationError("edits_not_allowed", "only an edit decision carries edits");
+
+    return tx(() => {
+      const finding = getFinding(matterId, findingId);
+      if (!finding) throw new NotFoundError("finding", findingId);
+      const matter = requireMatter(matterId);
+      const current = requireRun(matterId, finding.runId);
+
+      // Currency is recomputed from the digest as well as read from the flag, because the flag is a
+      // cache and the digest is the definition.
+      const digest = matters.computeInputsDigest(matterId);
+      if (
+        finding.validity !== "current" ||
+        current.status === "superseded" ||
+        digest === null ||
+        current.inputsSha256 !== digest
+      )
+        throw new StaleFindingError(findingId);
+      if (matter.status === "exported")
+        throw new ConflictError("matter_exported", "the memo is exported; decisions can change only after a re-run");
+      if (matter.status !== "in_review" && matter.status !== "review_complete")
+        throw new ConflictError("matter_not_in_review", `matter ${matterId} is ${matter.status}, not open for review`);
+      if (current.status !== "succeeded")
+        throw new ConflictError("run_not_succeeded", `run ${current.id} has not succeeded`);
+      if (input.findingContentSha256 !== finding.contentSha256) throw new ContentMismatchError(findingId);
+
+      requireUser(input.reviewerId);
+      const edits = hasEdits ? normaliseEdits(input.edits, finding) : null;
+
+      const previous = finding.currentReview;
+      if (previous) run("UPDATE reviews SET validity = 'stale' WHERE id = ?", previous.id);
+      const id = newId("rev");
+      run(
+        `INSERT INTO reviews
+           (id, finding_id, matter_id, reviewer_id, decision, edited_json, reason, finding_content_sha256,
+            supersedes_review_id, validity, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'current', ?)`,
+        id,
+        findingId,
+        matterId,
+        input.reviewerId,
+        input.decision,
+        edits === null ? null : canonicalJson(edits),
+        reason,
+        finding.contentSha256,
+        previous?.id ?? null,
+        ctx.now(),
+      );
+
+      // Every current finding decided moves the matter to review_complete; reopening one moves it back.
+      const after = getExportReadiness(matterId, finding.runId);
+      const target = after.ready ? "review_complete" : "in_review";
+      if (matter.status !== target) transitionMatter(matterId, target);
+
+      ctx.audit({
+        actorId: input.reviewerId,
+        matterId,
+        action: "review.decide",
+        targetType: "finding",
+        targetId: findingId,
+        detail: {
+          reviewId: id,
+          ruleKey: finding.ruleKey,
+          decision: input.decision,
+          findingContentSha256: finding.contentSha256,
+          supersedesReviewId: previous?.id ?? null,
+          matterStatus: target,
+        },
+      });
+      return getReview(matterId, id) as ReviewRecord;
+    });
+  }
+
+  // --- export readiness ---------------------------------------------------------------------
+
+  /**
+   * Whether the run's findings can be exported now, and if not, what stands in the way. Nothing
+   * stored is taken on trust: the inputs digest is recomputed, each finding's content hash is
+   * recomputed from its content, and each decision's hash is compared with it.
+   *
+   * Ready means: the run succeeded on the matter's current inputs, the run has a finding for every
+   * rule of its playbook version, and every one of them is current with a current decision made on
+   * exactly its content.
+   */
+  function getExportReadiness(matterId: string, runId: string): ExportReadiness {
+    const target = requireRun(matterId, runId);
+    const matter = requireMatter(matterId);
+    const blockers: ExportBlocker[] = [];
+
+    const digest = matters.computeInputsDigest(matterId);
+    const runCurrent =
+      target.status === "succeeded" &&
+      digest !== null &&
+      target.inputsSha256 === digest &&
+      matter.currentInputsSha256 === digest;
+    if (!runCurrent) blockers.push({ findingId: null, ruleKey: null, reason: "run_not_current" });
+
+    const found = listFindings(matterId, runId);
+    const byRule = new Map(found.map((f) => [f.ruleKey, f]));
+    for (const rule of playbooks.listRules(target.playbookVersionId))
+      if (!byRule.has(rule.key))
+        blockers.push({ findingId: null, ruleKey: rule.key, reason: "missing_finding" });
+
+    for (const f of found) {
+      const at = { findingId: f.id, ruleKey: f.ruleKey };
+      if (f.validity !== "current") {
+        blockers.push({ ...at, reason: "finding_stale" });
+        continue;
+      }
+      if (findingContentSha256(f) !== f.contentSha256) {
+        blockers.push({ ...at, reason: "content_changed" });
+        continue;
+      }
+      const decision = f.currentReview;
+      if (!decision) {
+        blockers.push({
+          ...at,
+          reason: f.reviews.some((r) => r.validity === "stale") ? "stale_review" : "no_review",
+        });
+        continue;
+      }
+      if (decision.findingContentSha256 !== f.contentSha256)
+        blockers.push({ ...at, reason: "content_changed" });
+    }
+    return { ready: blockers.length === 0, blockers };
+  }
+
+  // --- memos --------------------------------------------------------------------------------
+
+  const getMemo = (matterId: string, memoId: string): MemoRow | undefined => {
+    const row = get<RawMemo>("SELECT * FROM memos WHERE id = ? AND matter_id = ?", memoId, matterId);
+    return row ? toMemo(row) : undefined;
+  };
+  const getCurrentMemo = (matterId: string): MemoRow | undefined => {
+    const row = get<RawMemo>(
+      "SELECT * FROM memos WHERE matter_id = ? AND status = 'current'",
+      matterId,
+    );
+    return row ? toMemo(row) : undefined;
+  };
+  /** Newest first. */
+  const listMemos = (matterId: string): MemoRow[] =>
+    all<RawMemo>("SELECT * FROM memos WHERE matter_id = ? ORDER BY exported_at DESC, rowid DESC", matterId).map(
+      toMemo,
+    );
+
+  /**
+   * Records an exported memo. The caller builds and saves the file first and inserts the row only
+   * when that worked (docs/parol/03, "Memo write failure"), so a row always has a file.
+   *
+   * Readiness is recomputed inside this transaction, and `reviewIds` must be exactly the current
+   * decisions of the run's findings: a decision changed while the document was being built makes
+   * the insert fail instead of recording a memo that does not match the record. The matter's
+   * previous current memo is superseded and the matter becomes `exported`.
+   */
+  function recordMemo(
+    matterId: string,
+    input: {
+      runId: string;
+      reviewIds: readonly string[];
+      fileSha256: string;
+      storagePath: string;
+      exportedBy: string;
+    },
+  ): MemoRow {
+    assertSha256("fileSha256", input.fileSha256);
+    assertStoragePath(matterId, input.storagePath);
+    return tx(() => {
+      const target = requireRun(matterId, input.runId);
+      const matter = requireMatter(matterId);
+      requireUser(input.exportedBy);
+      const readiness = getExportReadiness(matterId, target.id);
+      if (!readiness.ready) throw new ExportBlockedError(readiness.blockers);
+
+      const ordered = listFindings(matterId, target.id).map((f) => (f.currentReview as ReviewRecord).id);
+      const given = [...input.reviewIds].sort();
+      const expected = [...ordered].sort();
+      if (given.length !== expected.length || given.some((id, i) => id !== expected[i]))
+        throw new ConflictError("reviews_changed", "the decisions changed while the memo was being built");
+
+      run("UPDATE memos SET status = 'superseded' WHERE matter_id = ? AND status = 'current'", matterId);
+      const id = newId("memo");
+      run(
+        `INSERT INTO memos (id, matter_id, run_id, review_ids_json, file_sha256, storage_path, status, exported_by, exported_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'current', ?, ?)`,
+        id,
+        matterId,
+        target.id,
+        canonicalJson(ordered),
+        input.fileSha256,
+        input.storagePath,
+        input.exportedBy,
+        ctx.now(),
+      );
+      if (matter.status === "in_review") transitionMatter(matterId, "review_complete");
+      if (matter.status !== "exported") transitionMatter(matterId, "exported");
+      ctx.audit({
+        actorId: input.exportedBy,
+        matterId,
+        action: "memo.export",
+        targetType: "memo",
+        targetId: id,
+        detail: {
+          runId: target.id,
+          fileSha256: input.fileSha256,
+          reviews: ordered.length,
+          reviewsSha256: hashOf(ordered),
+        },
+      });
+      return getMemo(matterId, id) as MemoRow;
+    });
+  }
+
+  // --- feedback -----------------------------------------------------------------------------
+
+  function addFeedback(
+    matterId: string,
+    input: {
+      userId: string;
+      kind: FeedbackRow["kind"];
+      runId?: string | null;
+      findingId?: string | null;
+      reasonCode?: string | null;
+      rating?: number | null;
+      text?: string | null;
+    },
+  ): FeedbackRow {
+    if (!["finding_reason", "missed_issue", "rating", "comment"].includes(input.kind))
+      throw new ValidationError("bad_kind", "feedback kind is not recognised");
+    const reasonCode = input.reasonCode ?? null;
+    if (reasonCode !== null) assertShortCode("reasonCode", reasonCode);
+    const rating = input.rating ?? null;
+    if (rating !== null && (!Number.isInteger(rating) || rating < 1 || rating > 5))
+      throw new ValidationError("bad_rating", "rating must be a whole number from 1 to 5");
+    if (input.kind === "rating" && rating === null)
+      throw new ValidationError("rating_required", "a rating needs a rating");
+    const text = input.text ?? null;
+    if (text !== null) cleanProse("feedback text", text, MAX_FEEDBACK_TEXT);
+    if ((input.kind === "missed_issue" || input.kind === "comment") && (text === null || text.trim() === ""))
+      throw new ValidationError("text_required", `${input.kind} feedback needs text`);
+    if (input.kind === "finding_reason" && !input.findingId)
+      throw new ValidationError("finding_required", "finding_reason feedback names a finding");
+
+    return tx(() => {
+      requireMatter(matterId);
+      requireUser(input.userId);
+      const runId = input.runId ?? null;
+      const findingId = input.findingId ?? null;
+      if (runId !== null) requireRun(matterId, runId);
+      if (findingId !== null && !getFinding(matterId, findingId)) throw new NotFoundError("finding", findingId);
+      const id = newId("fbk");
+      run(
+        `INSERT INTO feedback (id, matter_id, run_id, finding_id, user_id, kind, reason_code, rating, text, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id,
+        matterId,
+        runId,
+        findingId,
+        input.userId,
+        input.kind,
+        reasonCode,
+        rating,
+        text,
+        ctx.now(),
+      );
+      // The text itself is not audited: the audit log holds ids and codes only.
+      ctx.audit({
+        actorId: input.userId,
+        matterId,
+        action: "feedback.add",
+        targetType: "feedback",
+        targetId: id,
+        detail: { kind: input.kind, reasonCode, rating, hasText: text !== null, findingId, runId },
+      });
+      return toFeedback(get<RawFeedback>("SELECT * FROM feedback WHERE id = ?", id) as RawFeedback);
+    });
+  }
+
+  const listFeedback = (matterId: string): FeedbackRow[] =>
+    all<RawFeedback>("SELECT * FROM feedback WHERE matter_id = ? ORDER BY created_at, rowid", matterId).map(
+      toFeedback,
+    );
+
+  return {
+    saveFindings,
+    getFinding,
+    listFindings,
+    recordReview,
+    getReview,
+    listReviews,
+    listReviewsForRule,
+    getExportReadiness,
+    recordMemo,
+    getMemo,
+    getCurrentMemo,
+    listMemos,
+    addFeedback,
+    listFeedback,
+  };
+}
+
+export type FindingsApi = ReturnType<typeof createFindingsApi>;
