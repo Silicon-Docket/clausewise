@@ -1,5 +1,6 @@
 import type { Severity } from "@clausewise/playbook";
 import type { Status } from "../../contracts.js";
+import { STAND_IN_HEADING, STAND_IN_TEXT, isStandInProvider } from "../../stand-in.js";
 import type {
   FindingView,
   IssueRow,
@@ -284,6 +285,12 @@ export function RunPage(props: RunPageProps) {
             Workflow <RevealedText value={run.workflowLabel} />
           </span>
           <span>
+            Read by{" "}
+            <RevealedText
+              value={`${run.model.provider}, ${run.model.reported ?? run.model.requested}`}
+            />
+          </span>
+          <span>
             Playbook <RevealedText value={`${run.playbook.slug} ${run.playbook.version}`} />
           </span>
           <span>
@@ -291,6 +298,13 @@ export function RunPage(props: RunPageProps) {
           </span>
         </p>
       </header>
+
+      {isStandInProvider(run.model.provider) ? (
+        <section class="banner banner-standin" aria-labelledby="run-standin-heading">
+          <h2 id="run-standin-heading">{STAND_IN_HEADING}</h2>
+          <p>{STAND_IN_TEXT}</p>
+        </section>
+      ) : null}
 
       {outOfDate ? (
         <section class="banner banner-stale" aria-labelledby="run-stale-heading">
@@ -385,13 +399,19 @@ export function RunPage(props: RunPageProps) {
                     : "No finding matches this filter."}
                 </p>
               ) : (
-                <IssueTable
-                  matterId={matter.id}
-                  runId={run.id}
-                  rows={rows}
-                  filter={filter}
-                  selectedId={props.selected?.issue.findingId}
-                />
+                <>
+                  <p class="scroll-hint muted">
+                    The table scrolls sideways on a narrow screen. The review state and the flags
+                    are on the right.
+                  </p>
+                  <IssueTable
+                    matterId={matter.id}
+                    runId={run.id}
+                    rows={rows}
+                    filter={filter}
+                    selectedId={props.selected?.issue.findingId}
+                  />
+                </>
               )}
               {props.warnings === undefined || props.warnings.length === 0 ? null : (
                 <div class="run-warnings">

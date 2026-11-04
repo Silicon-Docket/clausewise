@@ -591,11 +591,13 @@ describe("finding 10: j, k and ? act only while focus is in the issue table", ()
     const h = runScript(runPage({ selected: null }));
     const links = h.doc.querySelectorAll("[data-row-link]");
     links[0]!.focus();
-    expect(key(h, "j", links[0]!).defaultPrevented).toBe(true);
+    // From the row that has focus, j goes to the next one. (This once expected the first j to stay
+    // on row 0, which is what a real browser showed was wrong: Tab to a row, press j, nothing moved.)
     // Compared by identity: a failed comparison of two page elements would print the whole page.
-    expect(h.doc.activeElement === links[0]).toBe(true);
     expect(key(h, "j", links[0]!).defaultPrevented).toBe(true);
     expect(h.doc.activeElement === links[1]).toBe(true);
+    expect(key(h, "j", links[1]!).defaultPrevented).toBe(true);
+    expect(h.doc.activeElement === links[2]).toBe(true);
   });
 
   it("starts from the table's own box, which is where the back link lands", () => {

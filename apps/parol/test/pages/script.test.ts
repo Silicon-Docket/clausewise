@@ -94,6 +94,25 @@ describe("keyboard", () => {
     expect(rows()).toHaveLength(8);
   });
 
+  it("moves from the row that has focus when Tab put it there, not from the last row it moved to", () => {
+    // Found in a real browser: Tab to the first row, then j did nothing visible (it went to row 0),
+    // and Tab to the fourth row, then j jumped back to the first. Positions are compared as numbers
+    // because a failed comparison of two fake elements prints a circular structure and hangs.
+    const h = runScript(runPage({ selected: null }));
+    const links = h.doc.querySelectorAll("[data-row-link]");
+    const at = (): number => links.findIndex((link) => link === h.doc.activeElement);
+    links[0]!.focus();
+    key(h, "j");
+    expect(at()).toBe(1);
+    links[3]!.focus();
+    key(h, "j");
+    expect(at()).toBe(4);
+    links[5]!.focus();
+    key(h, "k");
+    expect(at()).toBe(4);
+    expect(h.doc.querySelectorAll("tr.is-current")).toHaveLength(1);
+  });
+
   it("starts from the selected row", () => {
     const h = runScript(runPage());
     const links = h.doc.querySelectorAll("[data-row-link]");

@@ -466,6 +466,17 @@ bdi {
   color: var(--accent-ink);
 }
 
+/* A reader that is a program and not a language model: said in the colour of a note, not of a warning. */
+.banner-standin {
+  border-color: var(--info-edge);
+  background: var(--info-bg);
+  color: var(--info-ink);
+}
+
+.banner-standin a {
+  color: var(--info-ink);
+}
+
 .banner-failed {
   border-color: var(--bad-edge);
   background: var(--bad-bg);
@@ -526,6 +537,27 @@ bdi {
   max-width: 100%;
   overflow-x: auto;
   border-bottom: 1px solid var(--rule);
+  /* An edge shadow that shows only on a side with more to scroll to, so a table cut off at the
+     edge of a phone does not look as if it ends there. The two paper-coloured strips travel with
+     the content and cover the shadows once the end is reached. */
+  background:
+    linear-gradient(to right, var(--paper), var(--paper)) left center / 1.5rem 100% no-repeat local,
+    linear-gradient(to left, var(--paper), var(--paper)) right center / 1.5rem 100% no-repeat local,
+    linear-gradient(to right, var(--edge), transparent) left center / 0.6rem 100% no-repeat scroll,
+    linear-gradient(to left, var(--edge), transparent) right center / 0.6rem 100% no-repeat scroll;
+}
+
+/* A sentence about sideways scrolling, for the table that matters most, and only where it applies. */
+.scroll-hint {
+  display: none;
+}
+
+@media (max-width: 40rem) {
+  .scroll-hint {
+    display: block;
+    margin: 0 0 0.5rem;
+    font-size: 0.875rem;
+  }
 }
 
 .data-table {

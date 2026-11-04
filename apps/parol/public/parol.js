@@ -46,6 +46,9 @@
 
     function move(step) {
       if (links.length === 0) return;
+      // Tab can put focus on any row, so start from the row that has it and not from the last one moved to.
+      var focused = links.indexOf(doc.activeElement);
+      if (focused !== -1) index = focused;
       if (index === -1) index = step > 0 ? 0 : links.length - 1;
       else index = Math.min(links.length - 1, Math.max(0, index + step));
       mark(index);

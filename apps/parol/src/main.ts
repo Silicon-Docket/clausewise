@@ -14,6 +14,7 @@ import {
 import { createScriptedGenerator } from "@clausewise/llm/testing";
 import type { Hono } from "hono";
 import { CATEGORY_IDS } from "./contracts.js";
+import { createSimulatedModel } from "./demo/simulated-model.js";
 import { createApp } from "./server/app.js";
 import { renderErrorPage } from "./server/pages/error.js";
 import type { AppConfig, AppDeps } from "./server/deps.js";
@@ -42,7 +43,7 @@ export interface ParolSettings {
   cookieSecret: string;
   /** True when the secret was made for this start because none was given. */
   cookieSecretGenerated: boolean;
-  /** Use the built-in stand-in model, which calls nothing. */
+  /** Use the simulated reader (src/demo), a scripted stand-in that calls nothing. */
   scripted: boolean;
   /** The deployment is https, so cookies are marked Secure. */
   secureCookies: boolean;
@@ -156,9 +157,10 @@ export function parseEnv(env: Env, newSecret: () => string = randomSecret): Paro
 // ---------------------------------------------------------------------------------------------
 
 /**
- * A model that calls nothing and reviews nothing. It lets the whole application run, with every
- * rule coming out `undetermined` and escalated, when there is no key. It is a way to see the
- * screens, not a review, and its disclosure says so.
+ * A model that calls nothing and reviews nothing, with every rule coming out `undetermined` and
+ * escalated. PAROL_SCRIPTED no longer uses it: that setting runs the simulated reader of
+ * src/demo, which can read the worked example. This one stays for a caller that wants a model
+ * that never states a status.
  */
 export function scriptedStandIn(): ObjectGenerator {
   const answer = (request: GenerateObjectRequest<unknown>): unknown => {
@@ -270,7 +272,7 @@ export async function start(
   // The model is chosen first, so a missing key stops the start before anything is opened.
   const generator =
     options.generator ??
-    (settings.scripted ? scriptedStandIn() : createObjectGenerator(loadLlmConfig(env)));
+    (settings.scripted ? createSimulatedModel() : createObjectGenerator(loadLlmConfig(env)));
   notice(`Document text is sent to: ${generator.disclosure}`);
 
   const { createServices } = await requireModule(

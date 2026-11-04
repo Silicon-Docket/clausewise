@@ -32,6 +32,15 @@ export interface PlaybookOption {
   ruleCount: number;
 }
 
+/** A workflow version a review can be started with. */
+export interface WorkflowOption {
+  /** The label a run is started with, such as `v2`. */
+  label: string;
+  status: "candidate" | "pilot" | "retired";
+  /** True for the one a review uses when none is chosen. */
+  isDefault: boolean;
+}
+
 export interface MemberView {
   userId: string;
   displayName: string;
@@ -137,6 +146,12 @@ export interface MatterView {
   memos: MemoSummary[];
   /** True when one person may both prepare and review, so the memo says so. */
   segregationRelaxed: boolean;
+  /**
+   * The workflow versions a review can be started with, the default first. Optional so that a view
+   * built before it existed still fits; the start form offers a choice only when there are two or
+   * more.
+   */
+  workflows?: WorkflowOption[];
 }
 
 export interface ReviewSummary {

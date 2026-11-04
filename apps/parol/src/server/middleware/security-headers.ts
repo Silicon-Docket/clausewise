@@ -17,18 +17,20 @@ export const CONTENT_SECURITY_POLICY = [
   "base-uri 'none'",
 ].join("; ");
 
-/** Every browser feature the policy language names, switched off. Parol uses none of them. */
+/**
+ * Every browser feature that current browsers recognise, switched off. Parol uses none of them.
+ * Names a browser does not know are left out on purpose: Chromium prints a console warning for
+ * each one on every page (ambient-light-sensor, battery, bluetooth, document-domain and
+ * web-share were seen), which buries a real warning, and it gains nothing to deny a feature the
+ * browser has no way to grant. Add a name only after checking that the browser console stays quiet.
+ */
 const DENIED_FEATURES = [
   "accelerometer",
-  "ambient-light-sensor",
   "autoplay",
-  "battery",
-  "bluetooth",
   "camera",
   "clipboard-read",
   "clipboard-write",
   "display-capture",
-  "document-domain",
   "encrypted-media",
   "fullscreen",
   "gamepad",
@@ -48,7 +50,6 @@ const DENIED_FEATURES = [
   "serial",
   "sync-xhr",
   "usb",
-  "web-share",
   "xr-spatial-tracking",
 ];
 export const PERMISSIONS_POLICY = DENIED_FEATURES.map((feature) => `${feature}=()`).join(", ");

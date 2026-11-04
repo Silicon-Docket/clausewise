@@ -24,6 +24,8 @@ export const urls = {
   runs: (matterId: string) => `/matters/${e(matterId)}/runs`,
   run: (matterId: string, runId: string, findingId?: string) =>
     `/matters/${e(matterId)}/runs/${e(runId)}${findingId === undefined ? "" : `?finding=${e(findingId)}`}`,
+  /** What the progress script polls (pages/matter.tsx puts it in `data-status-url`). Answers JSON. */
+  runStatus: (matterId: string, runId: string) => `/matters/${e(matterId)}/runs/${e(runId)}/status`,
   runResume: (matterId: string, runId: string) => `/matters/${e(matterId)}/runs/${e(runId)}/resume`,
   runCancel: (matterId: string, runId: string) => `/matters/${e(matterId)}/runs/${e(runId)}/cancel`,
   finding: (matterId: string, findingId: string) =>

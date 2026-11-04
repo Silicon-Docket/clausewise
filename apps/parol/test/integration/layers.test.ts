@@ -601,7 +601,7 @@ describe("a matter whose documents changed after the review", () => {
       ),
     ).toBe(true);
     expect(readable(byId(matterRoot, "export-reason")!)).toBe(
-      "There is no current review to export.",
+      "The results are out of date. Run the review again first.",
     );
 
     // And the service agrees with the page: a decision on the stale finding is refused.

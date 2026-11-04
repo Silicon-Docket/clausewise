@@ -483,6 +483,26 @@ describe("MatterPage reviews and memos", () => {
     expect(readable(section(root, "runs"))).toContain("Out of date, start a new review");
   });
 
+  it("counts the findings of a review that was superseded, and says none yet only when there are none", () => {
+    // Found in a real browser walk-through: after a new amendment version the stale review showed
+    // "None yet" in the Findings column although it held eight findings.
+    const superseded = buildRunSummary({ status: "superseded", current: false, findingCount: 8 });
+    const running = buildRunSummary({
+      id: "run_running",
+      status: "analyzing",
+      current: false,
+      findingCount: 0,
+    });
+    const root = page(buildMatterView({ runs: [running, superseded], currentRun: null }));
+    const cells = all(
+      first(section(root, "runs"), (el) => el.name === "tbody"),
+      (el) => el.name === "tr",
+    ).map((row) => readable(row));
+    expect(cells[0]).toContain("None yet");
+    expect(cells[1]).toContain("8 findings");
+    expect(cells[1]).not.toContain("None yet");
+  });
+
   it("says so when no review has run", () => {
     const root = page(buildMatterView({ runs: [], currentRun: null }));
     expect(readable(section(root, "runs"))).toContain("No review has been run yet");
@@ -540,7 +560,10 @@ describe("MatterPage reviews and memos", () => {
     const form = formsTo(root, urls.memos(M))[0]!;
     const button = first(form, (el) => el.name === "button");
     expect(hasAttr(button, "disabled")).toBe(true);
-    expect(readable(byId(root, attr(button, "aria-describedby")!)!)).toContain("no current review");
+    // A matter made stale by a new document says so, and not that no review exists.
+    expect(readable(byId(root, attr(button, "aria-describedby")!)!)).toContain(
+      "The results are out of date",
+    );
     const draft = buildMatterViewFor("reviewer", {
       matter: buildMatterSummary({ status: "ready", role: "reviewer" }),
     });

@@ -7,6 +7,7 @@ import type {
   RunSummary,
   UploadWarningView,
   UserOption,
+  WorkflowOption,
 } from "../../services/views.js";
 import { urls } from "../urls.js";
 import { dateInputValue, formatBytes, formatDate, plural, shortHash } from "../views/format.js";
@@ -59,9 +60,15 @@ export interface MatterPageProps {
 export const RUN_ALREADY_ACTIVE = "A review is already running";
 const NOT_READY = "The matter is not ready for a review";
 
-/** The URL the script polls for a run's progress. The route is added by the server shell. */
+/** The URL the script polls for a run's progress. The route is in server/routes. */
 export const runStatusUrl = (matterId: string, runId: string): string =>
-  `${urls.run(matterId, runId)}/status`;
+  urls.runStatus(matterId, runId);
+
+/**
+ * The name of the select that chooses a workflow version on the start form. It is read by the
+ * start route. It lives here and not in forms.ts because only this form uses it.
+ */
+export const WORKFLOW_FIELD = "workflow";
 
 // ---------------------------------------------------------------------------------------------
 // Warnings
@@ -522,7 +529,9 @@ function RunsTable(props: {
                 ) : null}
               </td>
               <td>
-                {run.status === "succeeded" ? plural(run.findingCount, "finding") : "None yet"}
+                {run.status === "succeeded" || run.findingCount > 0
+                  ? plural(run.findingCount, "finding")
+                  : "None yet"}
               </td>
               <td>
                 <RevealedText value={run.workflowLabel} />
@@ -558,6 +567,12 @@ function RunsTable(props: {
   );
 }
 
+/** `v2 (candidate)`, `v1 (pilot, default)`: the label, then what a person needs to choose by. */
+function workflowOptionText(workflow: WorkflowOption): string {
+  const notes = [workflow.status, ...(workflow.isDefault ? ["default"] : [])];
+  return revealToString(`${workflow.label} (${notes.join(", ")})`);
+}
+
 function StartSection(props: { chrome: Chrome; view: MatterView; canStart: boolean }) {
   const { view } = props;
   const matterId = view.matter.id;
@@ -590,6 +605,25 @@ function StartSection(props: { chrome: Chrome; view: MatterView; canStart: boole
               each playbook rule.
             </p>
           )}
+          {view.workflows !== undefined && view.workflows.length > 1 ? (
+            <Field
+              id="start-workflow"
+              label="Workflow version"
+              hint="The review records which workflow version made it, so two reviews can be compared."
+            >
+              <select
+                id="start-workflow"
+                name={WORKFLOW_FIELD}
+                aria-describedby="start-workflow-hint"
+              >
+                {view.workflows.map((workflow) => (
+                  <option value={workflow.label} selected={workflow.isDefault}>
+                    {workflowOptionText(workflow)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          ) : null}
           <div class="actions">
             <button
               type="submit"
@@ -771,9 +805,11 @@ export function MatterPage(props: MatterPageProps) {
 
   // Why the memo cannot be exported right now, in the order a person would fix it.
   let exportBlocked: string | null = null;
-  if (view.currentRun === null) exportBlocked = "There is no current review to export.";
-  else if (matter.status === "stale")
+  // Out of date comes first: a review that a new document made stale is not the current one, and
+  // "no current review" would read as if nothing had ever been run.
+  if (matter.status === "stale")
     exportBlocked = "The results are out of date. Run the review again first.";
+  else if (view.currentRun === null) exportBlocked = "There is no current review to export.";
   else if (matter.status === "in_review")
     exportBlocked = "Every finding needs a current decision before the memo can be exported.";
   else if (matter.status !== "review_complete" && matter.status !== "exported")

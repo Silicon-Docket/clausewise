@@ -76,6 +76,22 @@ describe("security headers", () => {
       expect(entries).toContain(`${feature}=()`);
   });
 
+  it("name no feature that Chromium does not recognise, since it warns on every page for each", async () => {
+    // Seen in the console of Chromium 1xx on every page of a browser walk-through. The warnings
+    // are harmless but they bury a real one, and denying a feature nobody can grant gains nothing.
+    const shell = makeShell();
+    const policy = (await shell.anonymous().get("/healthz")).headers.get("permissions-policy")!;
+    const names = policy.split(", ").map((entry) => entry.split("=")[0]);
+    for (const unknown of [
+      "ambient-light-sensor",
+      "battery",
+      "bluetooth",
+      "document-domain",
+      "web-share",
+    ])
+      expect(names).not.toContain(unknown);
+  });
+
   it("keep their values when a handler tries to set its own", async () => {
     const shell = makeShell();
     defineRoute(shell.app, {

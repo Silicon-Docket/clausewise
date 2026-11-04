@@ -97,6 +97,7 @@ describe("the page and view sources", () => {
       /^@clausewise\/playbook$/,
       /^\.\.\/\.\.\/contracts\.js$/,
       /^\.\.\/\.\.\/auth\/actions\.js$/,
+      /^\.\.\/\.\.\/stand-in\.js$/,
       /^\.\.\/\.\.\/services\/views\.js$/,
       /^\.\.\/\.\.\/ingest\/invisible\.js$/,
       /^\.\.\/urls\.js$/,

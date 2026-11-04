@@ -867,6 +867,23 @@ describe("provenance appendix", () => {
     );
   });
 
+  it("says that a scripted stand-in read the documents, and says it only for a stand-in", async () => {
+    // The memorandum is the file that leaves the system, so the statement must be in it.
+    for (const provider of ["simulated", "scripted"]) {
+      const input = workedExample();
+      input.run.modelProvider = provider;
+      const out = await lines(input);
+      expect(out, provider).toContain(
+        "Stand-in reader: The findings in this memorandum were produced by a scripted stand-in program, not a language model. They are not an analysis of these documents by any model.",
+      );
+      // It sits with the model line, before the hashes.
+      const at = out.findIndex((line) => line.startsWith("Stand-in reader:"));
+      expect(out[at - 1]?.startsWith("Model:")).toBe(true);
+    }
+    const real = await lines(workedExample());
+    expect(real.some((line) => line.startsWith("Stand-in reader:"))).toBe(false);
+  });
+
   it("prints the manifest hash and each document's hash in full", async () => {
     const input = workedExample();
     const out = (await lines(input)).join("\n");

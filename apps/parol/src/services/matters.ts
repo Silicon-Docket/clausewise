@@ -7,7 +7,7 @@ import type { Presenter } from "./present.js";
 import { startReadiness } from "./readiness.js";
 import type { Uploads } from "./uploads.js";
 import type { MatterService } from "./types.js";
-import type { MatterView } from "./views.js";
+import type { MatterView, WorkflowOption } from "./views.js";
 
 /**
  * Matters, their members and their documents. Every function that takes an `AuthorizedMatter`
@@ -48,7 +48,28 @@ export function createMatterService(
       destination: deps.generator.disclosure,
       memos: repo.listMemos(matter.id).map(present.memoSummary),
       segregationRelaxed: config.relaxedSegregation,
+      workflows: workflowOptions(),
     };
+  }
+
+  /**
+   * The workflow versions a review can start with, the default first. The default is the one
+   * `RunService.start` picks when no label is given (the latest promoted pilot, else v1), so the
+   * start form's preselected entry is the one a run would use anyway.
+   */
+  function workflowOptions(): WorkflowOption[] {
+    const live = repo.listWorkflowVersions().filter((w) => w.status !== "retired");
+    const promoted = live
+      .filter((w) => w.status === "pilot")
+      .sort((a, b) => (a.promotedAt ?? "").localeCompare(b.promotedAt ?? ""))
+      .at(-1);
+    const chosen = promoted ?? live.find((w) => w.label === "v1");
+    const options = live.map((w) => ({
+      label: w.label,
+      status: w.status,
+      isDefault: w === chosen,
+    }));
+    return [...options.filter((o) => o.isDefault), ...options.filter((o) => !o.isDefault)];
   }
 
   return {

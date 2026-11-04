@@ -1,0 +1,532 @@
+/**
+ * The Markdown report of one Parol evaluation run. It is written from a results file alone, so a
+ * report can be reprinted from a file later and says the same.
+ *
+ * It contains only values that were measured or counted. A cell with no data is "n/a". No rate is
+ * printed for a denominator of zero. A selftest or a simulated run says so in capitals at the top
+ * and again over every table of scores, and never presents what a scripted stand-in did as the
+ * score of a model.
+ */
+import { GATES, GATE_IDS } from "./gates.js";
+import { NA, dollars, md, rateCell, ratio, seconds, shortSha, table, whole } from "./format.js";
+import {
+  CALL_OUTCOME_MEANINGS,
+  HELDOUT_SEAL_WARNING,
+  NOT_CLEAN,
+  bannerOf,
+  isScripted,
+  runHealth,
+  type ResultsFile,
+  type RunHealth,
+  type SplitSection,
+} from "./results.js";
+import {
+  RATE_METRICS,
+  summarizeRun,
+  type RateMetricName,
+  type RepeatMetrics,
+  type RunMetrics,
+} from "./score.js";
+
+const MAX_LISTED = 40;
+
+const RATE_ROWS: [label: string, metric: RateMetricName][] = [
+  ["Status accuracy", "statusAccuracy"],
+  ["Issue recall (strict)", "issueRecallStrict"],
+  ["Issue precision (strict)", "issuePrecisionStrict"],
+  ["Issue recall (lenient)", "issueRecallLenient"],
+  ["Issue precision (lenient)", "issuePrecisionLenient"],
+  ["Required escalation recall", "requiredEscalationRecall"],
+  ["Unnecessary escalation rate", "unnecessaryEscalationRate"],
+  ["Extraction span recall", "extractionRecall"],
+  ["Extraction span precision", "extractionPrecision"],
+  ["Not-found accuracy", "notFoundAccuracy"],
+  ["Model citation validity", "modelCitationValidity"],
+  ["Displayed citation validity", "displayedCitationValidity"],
+  ["Substantive support (key)", "substantiveSupport"],
+  ["Injection effect (slots that differ from the twin)", "injectionEffect"],
+];
+
+/** What the numbers of this run are the numbers of. */
+function subjectOf(file: ResultsFile): string {
+  if (file.mode === "selftest") return "the scripted oracle (a selftest, not a model)";
+  if (file.mode === "simulated") return "the scripted simulated reader (not a model)";
+  // Where the requests went is part of what the scores are of: the same model name answers
+  // differently from a gateway or a stub than from the provider's own API.
+  const endpoint = file.pins.model.endpoint ?? null;
+  return `${md(file.pins.model.requested)} (${md(file.pins.model.provider)}${endpoint === null ? "" : `, at ${md(endpoint)}`})`;
+}
+
+function banner(file: ResultsFile): string[] {
+  const text = bannerOf(file.mode);
+  return text === null ? [] : [`**${text}**`, ""];
+}
+
+function cleanWarning(health: RunHealth): string[] {
+  if (health.clean) return [];
+  return [
+    `**${NOT_CLEAN}.** ${health.problems.map((p) => md(p, 500)).join(" ")} The scores below are those of the run as it happened and are not a measure of the model alone. Fix the cause and run again before reading them as the model's.`,
+    "",
+  ];
+}
+
+/** The calls the stages made, by outcome, and the stages that fell back or skipped a rule. */
+function healthLines(health: RunHealth): string[] {
+  const outcomes = Object.entries(health.calls);
+  const lines: string[] = [
+    "## Calls and degraded stages",
+    "",
+    `Calls recorded by the stages over ${health.runs} ${health.runs === 1 ? "run" : "runs"}${health.failedRuns > 0 ? ` (${health.failedRuns} did not finish, and their calls are not recorded)` : ""}, by outcome. A call that failed is counted here and is scored in the slot it was for: nothing is retried or left out.`,
+    "",
+  ];
+  if (outcomes.length === 0) {
+    lines.push("No call was recorded.", "");
+  } else {
+    lines.push(
+      table(
+        ["Outcome", "Calls", "Meaning"],
+        outcomes.map(([outcome, n]) => [
+          md(outcome),
+          String(n),
+          md(
+            CALL_OUTCOME_MEANINGS[outcome] ??
+              "an outcome this version of the report does not describe",
+          ),
+        ]),
+      ),
+      "",
+    );
+  }
+  lines.push(
+    `Extraction degraded in ${health.extractDegradedRuns} of ${health.runs} runs. Rules not sent because the context was over the workflow's budget: ${health.rulesOverBudget} (summed over runs).`,
+    "",
+  );
+  if (health.clean) {
+    lines.push(
+      "No call failed on the wire, no extraction fell back to the whole document and no rule was left unsent.",
+      "",
+    );
+  }
+  return lines;
+}
+
+function metricsTable(repeats: RunMetrics): string {
+  const summary = summarizeRun(repeats);
+  const rows = RATE_ROWS.map(([label, metric]) => {
+    const cell = rateCell(summary.rates[metric]);
+    return [md(label), md(cell.result), md(cell.counts), md(cell.interval)];
+  });
+  return table(["Metric", "Result", "Counts per repeat", "95% Wilson interval per repeat"], rows);
+}
+
+function countRows(run: RunMetrics): string {
+  const per = (pick: (m: RepeatMetrics) => string): string => run.repeats.map(pick).join("; ");
+  const swf = summarizeRun(run).swf;
+  const swfText =
+    swf.mean === null
+      ? NA
+      : run.repeats.length === 1
+        ? ratio(swf.mean)
+        : `mean ${ratio(swf.mean)} (range ${ratio(swf.min)} to ${ratio(swf.max)})`;
+  const rows: string[][] = [
+    [
+      "Silent misses",
+      per((m) => String(m.silentMisses.total)),
+      per(
+        (m) =>
+          `high ${m.silentMisses.bySeverity.high}, medium ${m.silentMisses.bySeverity.medium}, low ${m.silentMisses.bySeverity.low}`,
+      ),
+    ],
+    [
+      "Verified but unsupported findings",
+      per((m) => String(m.support.verifiedButUnsupported.count)),
+      "",
+    ],
+    [
+      "Severity-weighted failure (SWF)",
+      swfText,
+      per((m) =>
+        m.swf.value === null
+          ? `${NA} (nothing to weigh)`
+          : `${m.swf.weightedFailure} of ${m.swf.maximum}`,
+      ),
+    ],
+    [
+      "Stability (mean modal agreement)",
+      run.stability === null
+        ? NA
+        : run.stability.repeats < 2
+          ? `${NA} (needs 2 or more repeats)`
+          : ratio(run.stability.meanAgreement),
+      run.stability === null ? "" : `${run.stability.slots} slots, ${run.repeats.length} repeats`,
+    ],
+  ];
+  return table(
+    ["Count", "Result per repeat", "Detail"],
+    rows.map((r) => r.map((c) => md(c))),
+  );
+}
+
+function gatesTable(section: SplitSection, file: ResultsFile): string[] {
+  const lines: string[] = [];
+  if (section.gates === null) {
+    lines.push(
+      section.metrics === null
+        ? "Gates were not evaluated: no repeat finished."
+        : "Gates were not evaluated: the run is incomplete, and a gate asks about every repeat.",
+    );
+    return lines;
+  }
+  const outcome = { pass: "pass", fail: "FAIL", not_evaluated: "not evaluated" } as const;
+  const rows = GATE_IDS.map((id) => {
+    const result = section.gates!.results.find((r) => r.id === id)!;
+    const definition = GATES.find((g) => g.id === id)!;
+    return [
+      id,
+      md(definition.title),
+      md(definition.threshold),
+      outcome[result.outcome],
+      md(result.detail, 400),
+    ];
+  });
+  if (isScripted(file.mode)) {
+    lines.push(
+      `Gate results of ${subjectOf(file)}. They test the plumbing and say nothing about any model.`,
+      "",
+    );
+  }
+  lines.push(table(["Gate", "Title", "Threshold", "Outcome", "Measured"], rows));
+  const failed = section.gates.failed;
+  const open = section.gates.notEvaluated;
+  lines.push(
+    "",
+    `Gates failed: ${failed.length === 0 ? "none" : failed.join(", ")}. Gates not evaluated: ${open.length === 0 ? "none" : open.join(", ")}.`,
+  );
+  if (open.includes("G1")) {
+    lines.push(
+      "G1 needs the authorization probes and the canary scan, which this runner does not perform yet, so it is not evaluated and not assumed to be 0.",
+    );
+  }
+  if (open.some((id) => id === "G3" || id === "G4" || id === "G5")) {
+    lines.push(
+      "G3, G4 and G5 are counts that must be zero, out of the slots they could happen to (injection pairs, expected high-severity flags, determined findings). With none of those in the run they are not evaluated, and not assumed to pass.",
+    );
+  }
+  if (open.includes("G11")) {
+    lines.push("G11 needs the support checker's calibration set, which has not been run.");
+  }
+  if (open.includes("G12") || open.includes("G13")) {
+    lines.push(
+      "G12 and G13 compare with a baseline or a budget. Run with --compare to evaluate them against an earlier run.",
+    );
+  }
+  return lines;
+}
+
+function failureList(section: SplitSection): string[] {
+  const repeats = section.metrics?.repeats ?? [];
+  const bySlot = new Map<
+    string,
+    {
+      caseKey: string;
+      ruleKey: string;
+      severity: string;
+      expected: string;
+      observed: string[];
+      failures: string[];
+      weighted: number;
+    }
+  >();
+  for (const m of repeats) {
+    for (const s of m.slotScores) {
+      if (s.failure === null && s.statusCorrect) continue;
+      const id = `${s.caseKey}\u0000${s.ruleKey}`;
+      const entry = bySlot.get(id) ?? {
+        caseKey: s.caseKey,
+        ruleKey: s.ruleKey,
+        severity: s.severity,
+        expected: s.expected,
+        observed: [],
+        failures: [],
+        weighted: 0,
+      };
+      entry.observed.push(s.observed);
+      entry.failures.push(s.failure ?? "none");
+      entry.weighted += s.weight * s.factor;
+      bySlot.set(id, entry);
+    }
+  }
+  const all = [...bySlot.values()].sort(
+    (a, b) =>
+      b.weighted - a.weighted ||
+      a.caseKey.localeCompare(b.caseKey) ||
+      a.ruleKey.localeCompare(b.ruleKey),
+  );
+  if (all.length === 0) {
+    return [
+      repeats.length === 0
+        ? "No repeat finished, so no slot was scored."
+        : "Every slot was correct, with no failure of any kind, in every repeat.",
+    ];
+  }
+  const rows = all
+    .slice(0, MAX_LISTED)
+    .map((e) => [
+      md(e.caseKey),
+      md(e.ruleKey),
+      md(e.severity),
+      md(e.expected),
+      md(e.observed.join(", ")),
+      md(e.failures.join(", ")),
+      String(e.weighted),
+    ]);
+  return [
+    `Slots with a failure or a wrong status, largest weighted failure first (weight times factor, summed over repeats). ${all.length} in all${all.length > MAX_LISTED ? `, the first ${MAX_LISTED} shown` : ""}.`,
+    "",
+    table(
+      [
+        "Case",
+        "Rule",
+        "Severity",
+        "Expected",
+        "Observed per repeat",
+        "Failure per repeat",
+        "Weighted",
+      ],
+      rows,
+    ),
+  ];
+}
+
+function unstableList(section: SplitSection): string[] {
+  const stability = section.metrics?.stability;
+  if (stability === null || stability === undefined || stability.repeats < 2) return [];
+  if (stability.belowUnanimous.length === 0) {
+    return [`Every slot gave the same status in every one of the ${stability.repeats} repeats.`];
+  }
+  return [
+    `Slots whose repeats did not all agree, least stable first (${stability.belowUnanimous.length} of ${stability.slots}).`,
+    "",
+    table(
+      ["Case", "Rule", "Agreement", "Statuses"],
+      stability.belowUnanimous
+        .slice(0, MAX_LISTED)
+        .map((s) => [md(s.caseKey), md(s.ruleKey), ratio(s.agreement), md(s.statuses.join(", "))]),
+    ),
+  ];
+}
+
+function renderSection(file: ResultsFile, section: SplitSection): string[] {
+  const lines: string[] = [];
+  const scripted = isScripted(file.mode);
+  lines.push(
+    `## Split ${section.split}${scripted ? ` (${file.mode.toUpperCase()})` : ""}`,
+    "",
+    ...banner(file),
+    `Cases run: ${section.caseKeys.length} of ${section.casesInSplit}${section.fullSplit ? "" : " (a subset: the gates are defined for the whole split, so they are indicative only)"}, with ${section.twinKeys.length} injection ${section.twinKeys.length === 1 ? "twin" : "twins"}. Repeats scored: ${section.completedRepeats} of ${file.pins.repeats}. Split hash ${shortSha(section.splitSha256)}.`,
+    "",
+  );
+  if (section.metrics === null) {
+    lines.push("No repeat finished, so there is nothing to score.", "");
+    return lines;
+  }
+  const run: RunMetrics = {
+    repeats: section.metrics.repeats,
+    stability: section.metrics.stability,
+  };
+  if (section.split !== "heldout" || file.pins.repeats < 3 || !section.fullSplit) {
+    lines.push(
+      "The gates of document 5 are written for the whole held-out split with 3 repeats. " +
+        "This section is not that, so its gate results are indicative and are not a promotion result.",
+      "",
+    );
+  }
+  lines.push(
+    ...(runHealth(file, section.split).clean
+      ? []
+      : [`**${NOT_CLEAN}** for this split: see "Calls and degraded stages" below.`, ""]),
+    `### Result of ${subjectOf(file)}`,
+    "",
+    metricsTable(run),
+    "",
+    countRows(run),
+    "",
+    "### Gates",
+    "",
+    ...gatesTable(section, file),
+    "",
+    "### Slots",
+    "",
+    ...failureList(section),
+    "",
+    ...unstableList(section),
+    ...(unstableList(section).length > 0 ? [""] : []),
+    "### Latency and cost",
+    "",
+    ...timingLines(file, section),
+    "",
+  );
+  return lines;
+}
+
+function timingLines(file: ResultsFile, section: SplitSection): string[] {
+  if (isScripted(file.mode)) {
+    return [
+      "Not reported for a scripted run. Latency and cost of a scripted stand-in are not figures for any model.",
+    ];
+  }
+  const lines: string[] = [];
+  const latency = section.latency;
+  if (latency === null) {
+    lines.push(
+      file.complete
+        ? "Latency was not summarised: no run was timed."
+        : "Latency was not summarised: the run is incomplete.",
+    );
+  } else {
+    const stageRows = Object.entries(latency.stages).map(([stage, s]) => [
+      md(stage),
+      seconds(s.p50),
+      seconds(s.p95),
+      seconds(s.max),
+    ]);
+    lines.push(
+      `Run latency over ${latency.completed} completed runs: p50 ${seconds(latency.total.p50)} s, p95 ${seconds(latency.total.p95)} s, max ${seconds(latency.total.max)} s. ${latency.failed.length} failed.`,
+      "",
+      table(["Stage", "p50 (s)", "p95 (s)", "max (s)"], stageRows),
+    );
+  }
+  lines.push("");
+  const cost = section.cost;
+  if (!file.usage.available) {
+    lines.push(
+      `Cost: not available. ${md(file.usage.note ?? "The provider does not report token usage.", 400)}`,
+    );
+  } else if (cost === null) {
+    lines.push(
+      file.complete
+        ? "Cost was not summarised: no run has a cost, or no price was applied."
+        : "Cost was not summarised: the run is incomplete.",
+    );
+  } else {
+    lines.push(
+      `Cost over ${cost.runs} runs started: total ${dollars(cost.totalUsd)}, mean ${dollars(cost.meanUsd)}, max ${dollars(cost.maxUsd)}. Prompt tokens read from the cache: ${cost.cacheReadShare === null ? NA : `${(cost.cacheReadShare * 100).toFixed(1)} percent`} of ${whole(cost.promptTokens)}. The prices are those of the table recorded under Pins, which has not been checked against a live price list.`,
+    );
+  }
+  return lines;
+}
+
+function pinsTable(file: ResultsFile): string {
+  const p = file.pins;
+  const rows: [string, string][] = [
+    ["Mode", file.mode],
+    [
+      "Dataset",
+      `${p.dataset.label}; keys ${shortSha(p.dataset.answerKeysSha256)}; splits file ${shortSha(p.dataset.splitsFileSha256)}`,
+    ],
+    [
+      "Split hashes",
+      Object.entries(p.dataset.splits)
+        .map(([split, sha]) => `${split} ${shortSha(sha)}`)
+        .join("; "),
+    ],
+    ["Split run", p.split],
+    ["Cases", `${p.cases.length}: ${p.cases.join(", ")}`],
+    ["Playbook", `${p.playbook.slug} ${p.playbook.version}, sha256 ${shortSha(p.playbook.sha256)}`],
+    [
+      "Workflow",
+      `${p.workflow.label}, sha256 ${shortSha(p.workflow.sha256)}; retrieval ${p.workflow.retrieval}; checks ${p.workflow.checks.join(", ") || "none"}; context budget ${p.workflow.budgetTokens}; repair attempts ${p.workflow.repairAttempts}`,
+    ],
+    [
+      "Prompts",
+      `extract ${p.workflow.prompts.extract.id} ${shortSha(p.workflow.prompts.extract.sha256)}; analyze ${p.workflow.prompts.analyze.id} ${shortSha(p.workflow.prompts.analyze.sha256)}; support ${p.workflow.prompts.support === null ? "none" : `${p.workflow.prompts.support.id} ${shortSha(p.workflow.prompts.support.sha256)}`}`,
+    ],
+    [
+      "Model",
+      `${p.model.provider}, requested ${p.model.requested}; endpoint ${p.model.endpoint ?? "none (a scripted run reaches no endpoint)"}; reported by the provider: ${p.model.reported === null ? "not reported" : p.model.reported.join(", ")}. ${p.model.reportedNote}`,
+    ],
+    [
+      "Generation settings",
+      p.generation === null
+        ? "none (a scripted run sends no request)"
+        : `max output tokens ${p.generation.maxOutputTokens}; effort ${p.generation.effort ?? "model default"}; client retries ${p.generation.maxRetries}; rules at once ${p.generation.ruleConcurrency}; temperature ${p.generation.temperature === null ? "none sent" : p.generation.temperature}; fallback ${p.generation.fallback ?? "off"}`,
+    ],
+    [
+      "Price table",
+      p.prices === null
+        ? "none used"
+        : `sha256 ${shortSha(p.prices.sha256)}; ${p.prices.model.input} input, ${p.prices.model.output} output, ${p.prices.model.cacheRead} cache read, ${p.prices.model.cacheWrite} cache write, USD per million tokens`,
+    ],
+    ["Evaluation version", `${p.evaluation.label}, sha256 ${shortSha(p.evaluation.sha256)}`],
+    [
+      "Code",
+      p.code.commit === null
+        ? "not a git repository"
+        : `commit ${p.code.commit.slice(0, 12)}${p.code.dirty === true ? ", with uncommitted changes, so the commit does not pin the code" : ""}`,
+    ],
+    ["Repeats (k)", String(p.repeats)],
+    ["Started", file.startedAt],
+    ["Finished", file.finishedAt],
+  ];
+  return table(
+    ["Pin", "Value"],
+    rows.map(([name, value]) => [md(name), md(value, 600)]),
+  );
+}
+
+export function renderReport(file: ResultsFile): string {
+  const scripted = isScripted(file.mode);
+  const lines: string[] = [
+    scripted
+      ? `# Parol evaluation, ${file.mode === "selftest" ? "SELFTEST" : "SIMULATED"}`
+      : "# Parol evaluation",
+    "",
+    ...banner(file),
+  ];
+  if (!file.complete) {
+    lines.push(
+      `**INCOMPLETE: the run stopped early.** ${md(file.stoppedBecause ?? "No reason was recorded.", 500)} Only repeats in which every case finished are scored, and gates are not evaluated.`,
+      "",
+    );
+  }
+  lines.push(...cleanWarning(runHealth(file)));
+  lines.push(
+    `Scores of: ${subjectOf(file)}. Dataset ${md(file.pins.dataset.label)}; workflow ${md(file.pins.workflow.label)}; ${file.pins.repeats} ${file.pins.repeats === 1 ? "repeat" : "repeats"}. The synthetic answer keys show consistency with the fictional demo playbook and not professional legal quality (document 5).`,
+    "",
+  );
+  if (file.sections.some((s) => s.split === "heldout")) {
+    lines.push(`**Held-out set.** ${HELDOUT_SEAL_WARNING}`, "");
+  }
+  if (file.contamination !== null) {
+    lines.push(`**Contamination note.** ${md(file.contamination.note, 800)}`, "");
+  }
+  for (const note of file.notes) lines.push(`Note: ${md(note, 600)}`, "");
+  for (const section of file.sections) lines.push(...renderSection(file, section));
+
+  lines.push(...healthLines(runHealth(file)));
+  lines.push("## Usage", "");
+  if (scripted) {
+    lines.push(
+      `Model calls made to the scripted ${file.mode === "selftest" ? "oracle" : "reader"}: ${whole(file.usage.calls)}. No tokens, no cost: nothing was sent anywhere.`,
+    );
+  } else if (!file.usage.available) {
+    lines.push(
+      `Model calls made: ${whole(file.usage.calls)}. ${md(file.usage.note ?? "Token usage is unavailable.", 400)}`,
+    );
+  } else if (file.usage.total !== null) {
+    const u = file.usage.total;
+    lines.push(
+      `Model calls made: ${whole(file.usage.calls)}. Tokens reported by the provider: ${whole(u.inputTokens)} input, ${whole(u.outputTokens)} output, ${whole(u.cacheReadTokens)} cache read, ${whole(u.cacheWriteTokens)} cache write. Cost from the price table: ${dollars(file.usage.costUsd)}.`,
+    );
+  }
+  lines.push(
+    "",
+    "## Integrity and pins",
+    "",
+    `Dataset integrity: the answer keys and files of ${file.integrity.splits.length === 1 ? "the split" : "each split"} matched the hashes recorded in fixtures/parol/splits.json before the run.`,
+    "",
+    pinsTable(file),
+    "",
+  );
+  return `${lines.join("\n")}\n`;
+}

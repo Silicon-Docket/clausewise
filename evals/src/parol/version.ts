@@ -8,8 +8,14 @@ import { canonicalJson, sha256Hex } from "../../../apps/parol/src/canonical.js";
 import { GATES, THRESHOLDS } from "./gates.js";
 import { FAILURE_FACTORS, MAX_FACTOR, RATE_METRICS, SEVERITY_WEIGHTS } from "./score.js";
 
-/** Bump when a definition in score.ts or a gate in gates.ts changes meaning. */
-export const EVALUATION_LABEL = "parol-eval v1";
+/**
+ * Bump when a definition in score.ts or a gate in gates.ts changes meaning.
+ *
+ *  - v2: G4 and G5 are not evaluated for a repeat with nothing at risk (no expected high-severity
+ *    flag to miss, no determined finding to be unsupported), as G3 already was. They passed on a
+ *    count of zero out of nothing before.
+ */
+export const EVALUATION_LABEL = "parol-eval v2";
 
 export interface EvaluationVersion {
   label: string;

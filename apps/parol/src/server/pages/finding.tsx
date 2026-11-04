@@ -1,5 +1,5 @@
 import { EVIDENCE_ROLES, REVIEW_DECISIONS, STATUSES } from "../../contracts.js";
-import type { CheckResult, ReviewDecision } from "../../contracts.js";
+import type { CheckResult, EvidenceRole, ReviewDecision, Status } from "../../contracts.js";
 import type { EvidenceView, FindingView, ReviewHistoryItem } from "../../services/views.js";
 import { urls } from "../urls.js";
 import { shortHash } from "../views/format.js";
@@ -43,10 +43,28 @@ import {
 import { FIELDS, evidenceRoleField } from "./forms.js";
 import { Layout, csrfField, type Chrome } from "./layout.js";
 
+/**
+ * What the reviewer had typed into the decision form when it was refused, so the page can show it
+ * again and nothing typed is lost. Every field is optional: a field that is missing shows the
+ * finding's own value. The route builds it from the posted form (routes/decision.ts) and keeps
+ * only choices that exist and text of a bounded length.
+ */
+export interface DecisionDraft {
+  decision?: ReviewDecision;
+  reason?: string;
+  status?: Status;
+  discrepancy?: string;
+  fallbackLanguage?: string;
+  /** Labels by evidence id. */
+  roles?: Readonly<Record<string, EvidenceRole>>;
+}
+
 export interface FindingPaneProps {
   chrome: Chrome;
   matterId: string;
   finding: FindingView;
+  /** Shown in the decision form in place of the finding's own values, after a refused decision. */
+  draft?: DecisionDraft | undefined;
   /**
    * The level of the pane's title. Beside the issue table it is a section of the page (2); on a
    * page of its own it is the page title (1). Everything inside follows from it.
@@ -417,7 +435,7 @@ function SuggestionSection({ finding, level }: { finding: FindingView; level: Lv
 // Decision
 // ---------------------------------------------------------------------------------------------
 
-function DecisionForm({ chrome, matterId, finding }: FindingPaneProps) {
+function DecisionForm({ chrome, matterId, finding, draft }: FindingPaneProps) {
   const { issue } = finding;
   const current = finding.reviews.find((r) => r.validity === "current");
   return (
@@ -446,6 +464,7 @@ function DecisionForm({ chrome, matterId, finding }: FindingPaneProps) {
               id={`decision-${decision}`}
               name={FIELDS.decision}
               value={decision}
+              checked={draft?.decision === decision}
               required
               aria-describedby={`decision-${decision}-hint`}
             />
@@ -468,7 +487,7 @@ function DecisionForm({ chrome, matterId, finding }: FindingPaneProps) {
           rows={3}
           aria-describedby="decision-reason-hint"
         >
-          {textareaValue("")}
+          {textareaValue(draft?.reason ?? "")}
         </textarea>
       </Field>
 
@@ -477,7 +496,7 @@ function DecisionForm({ chrome, matterId, finding }: FindingPaneProps) {
         <Field id="edit-status" label="Status">
           <select id="edit-status" name={FIELDS.status}>
             {STATUSES.map((status) => (
-              <option value={status} selected={status === issue.status}>
+              <option value={status} selected={status === (draft?.status ?? issue.status)}>
                 {STATUS_LABEL[status]}
               </option>
             ))}
@@ -490,12 +509,12 @@ function DecisionForm({ chrome, matterId, finding }: FindingPaneProps) {
             it compares it with the finding. */}
         <Field id="edit-discrepancy" label="Discrepancy">
           <textarea id="edit-discrepancy" name={FIELDS.discrepancy} rows={5}>
-            {textareaValue(finding.discrepancy)}
+            {textareaValue(draft?.discrepancy ?? finding.discrepancy)}
           </textarea>
         </Field>
         <Field id="edit-fallback" label="Fallback language">
           <textarea id="edit-fallback" name={FIELDS.fallbackLanguage} rows={6}>
-            {textareaValue(finding.fallbackLanguage ?? "")}
+            {textareaValue(draft?.fallbackLanguage ?? finding.fallbackLanguage ?? "")}
           </textarea>
         </Field>
         {finding.evidence.length === 0 ? null : (
@@ -510,7 +529,10 @@ function DecisionForm({ chrome, matterId, finding }: FindingPaneProps) {
                   </label>
                   <select id={id} name={evidenceRoleField(evidence.evidenceId)}>
                     {EVIDENCE_ROLES.map((role) => (
-                      <option value={role} selected={role === evidence.role}>
+                      <option
+                        value={role}
+                        selected={role === (draft?.roles?.[evidence.evidenceId] ?? evidence.role)}
+                      >
                         {ROLE_LABEL[role]}
                       </option>
                     ))}
@@ -733,6 +755,7 @@ export function FindingPage(props: FindingPaneProps & { matterName: string }) {
         chrome={props.chrome}
         matterId={props.matterId}
         finding={props.finding}
+        draft={props.draft}
         level={1}
       />
     </Layout>

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { urls } from "../../src/server/urls.js";
 import { ISSUE_FILTERS, orderIssues, runHref } from "../../src/server/pages/index.js";
@@ -259,6 +261,84 @@ describe("RunPage inspector", () => {
   it("keeps a selected finding visible even when the filter would hide its row", () => {
     const root = page({ filter: "stale", selected: buildFindingView() });
     expect(keysOf(root)).toEqual(["dur-1"]);
+  });
+});
+
+describe("RunPage reader", () => {
+  const banner = (root: El): El | undefined => withClass(root, "banner-standin")[0];
+
+  it("names the reader in the header and says that a scripted stand-in is not a language model", () => {
+    // Found in a real browser walk-through: a verified Compliant from the scripted reader looked
+    // like a model's analysis, because nothing on the review page said what had read the documents.
+    for (const provider of ["scripted", "simulated"]) {
+      const root = page({
+        run: buildRunSummary({ model: { provider, requested: "parol-reader", reported: null } }),
+      });
+      const found = banner(root);
+      expect(found, provider).toBeDefined();
+      expect(readable(found!), provider).toContain(
+        "Read by a scripted stand-in, not a language model",
+      );
+      expect(readable(found!), provider).toContain(
+        "not an analysis of these documents by any model",
+      );
+      expect(readable(first(root, (el) => hasClass(el, "run-meta")))).toContain(
+        `Read by ${provider}, parol-reader`,
+      );
+    }
+  });
+
+  it("says nothing of the kind for a real provider, and still names the model", () => {
+    const root = page({
+      run: buildRunSummary({
+        model: { provider: "anthropic", requested: "claude-test", reported: "claude-test-2026" },
+      }),
+    });
+    expect(banner(root)).toBeUndefined();
+    expect(readable(first(root, (el) => hasClass(el, "run-meta")))).toContain(
+      "Read by anthropic, claude-test-2026",
+    );
+  });
+
+  it("shows the banner above the table, with the inspector open, so it is read first", () => {
+    const html = runPage({
+      run: buildRunSummary({ model: { provider: "simulated", requested: "r", reported: null } }),
+    });
+    expect(html.indexOf("banner-standin")).toBeGreaterThan(-1);
+    expect(html.indexOf("banner-standin")).toBeLessThan(html.indexOf("data-issue-table"));
+  });
+});
+
+describe("RunPage on a narrow screen", () => {
+  it("says that the table scrolls sideways, and the stylesheet shows that only on a narrow screen", () => {
+    // Found in a real browser walk-through at 390px: the review state and flags were off the right
+    // edge, and nothing showed that the table went on.
+    const root = page();
+    const hint = first(root, (el) => hasClass(el, "scroll-hint"));
+    expect(readable(hint)).toContain("scrolls sideways");
+    const html = runPage();
+    expect(html.indexOf("scroll-hint")).toBeLessThan(html.indexOf("data-issue-table"));
+    const css = readFileSync(join(import.meta.dirname, "../../public/parol.css"), "utf8");
+    expect(css).toMatch(/\.scroll-hint\s*\{\s*display:\s*none;/);
+    expect(css).toMatch(
+      /@media \(max-width: 40rem\)\s*\{\s*\.scroll-hint\s*\{\s*display:\s*block;/,
+    );
+  });
+
+  it("draws an edge shadow on a scroll box, with covers that hide it at the ends", () => {
+    const css = readFileSync(join(import.meta.dirname, "../../public/parol.css"), "utf8");
+    const rule = /\.table-scroll\s*\{([^}]*)\}/.exec(css)![1]!;
+    expect(rule).toContain("overflow-x: auto");
+    // Two covers that travel with the content (local), two shadows that stay put (scroll).
+    expect(rule.match(/no-repeat local/g)).toHaveLength(2);
+    expect(rule.match(/no-repeat scroll/g)).toHaveLength(2);
+    // The stylesheet may not load an image, so a gradient it is, and never url().
+    expect(rule).not.toContain("url(");
+  });
+
+  it("gives no hint when there is no table to scroll", () => {
+    const root = page({ issues: [], selected: null });
+    expect(withClass(root, "scroll-hint")).toHaveLength(0);
   });
 });
 

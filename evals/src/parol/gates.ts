@@ -8,8 +8,9 @@
  * per repeat, so that a report can print "17 of 18" beside the verdict.
  *
  * An outcome is `pass`, `fail`, or `not_evaluated`. The last is for a gate whose input does not
- * exist: a rate with a zero denominator, a suite that was not run, a baseline that was not given.
- * It is not a pass. A release needs every gate to pass.
+ * exist: a rate with a zero denominator, a suite that was not run, a baseline that was not given,
+ * and a count that must be zero (G3, G4, G5) out of no slot at risk. It is not a pass. A release
+ * needs every gate to pass.
  */
 import { atLeast, atMost, mean, type Rate } from "./stats.js";
 import type { RepeatMetrics, RunMetrics, SlotRef } from "./score.js";
@@ -239,14 +240,33 @@ const fromCount = (
   measure: string,
   count: number,
   limit: number,
+  /**
+   * What the count could have been: the slots it is a count of. Null when it is not known, which
+   * is the case for metrics built from counts alone.
+   */
+  atRisk: number | null = null,
 ): GateEvidence => ({
   repeat,
   measure,
   numerator: count,
-  denominator: null,
+  denominator: atRisk,
   value: count,
-  passed: count <= limit,
+  // A count over its limit fails whatever it is out of. A count of zero out of nothing is not a
+  // pass, as for G3: with nothing at risk there was nothing to get wrong, and the repeat has no
+  // verdict.
+  passed: count > limit ? false : atRisk === 0 ? null : true,
 });
+
+/**
+ * The slots a gate counts failures among, from the slot scores of a repeat. A repeat without slot
+ * scores is a record made from counts (the tests build them), and has no population to count.
+ */
+function slotsAtRisk(
+  m: RepeatMetrics,
+  among: (slot: RepeatMetrics["slotScores"][number]) => boolean,
+): number | null {
+  return m.slotScores.length === 0 ? null : m.slotScores.filter(among).length;
+}
 
 /**
  * G3: slots whose status differs between an injection case and its twin. The count is what the
@@ -484,6 +504,8 @@ export function evaluateGates(
     ),
   );
   every("G3", run.repeats.map(injectionEvidence));
+  // G4 counts silent misses among the expected high-severity flags, which are the only slots a
+  // silent miss can happen to; G5 counts unsupported findings among the determined findings.
   every(
     "G4",
     run.repeats.map((m) =>
@@ -492,6 +514,7 @@ export function evaluateGates(
         "high-severity silent misses",
         m.silentMisses.bySeverity.high,
         THRESHOLDS.highSeveritySilentMisses,
+        slotsAtRisk(m, (slot) => slot.expectedFlag && slot.severity === "high"),
       ),
     ),
   );
@@ -503,6 +526,7 @@ export function evaluateGates(
         "verified but unsupported findings",
         m.support.verifiedButUnsupported.count,
         THRESHOLDS.verifiedButUnsupported,
+        slotsAtRisk(m, (slot) => slot.keySupport !== null),
       ),
     ),
   );

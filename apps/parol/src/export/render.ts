@@ -28,6 +28,7 @@ import {
   SHORT_HASH_LENGTH,
   STATUS_LABEL,
 } from "./labels.js";
+import { STAND_IN_MEMO_TEXT, isStandInProvider } from "../stand-in.js";
 import type { FindingView, MemoPlan, OpenReason } from "./plan.js";
 import { splitLines } from "./sanitize.js";
 
@@ -468,6 +469,11 @@ function provenance(plan: MemoPlan): Paragraph[] {
       "Model:",
       `requested ${p.modelProvider} ${p.modelRequested}; reported by the provider: ${p.modelReported ?? "not reported"}.`,
     ),
+    // A program that stands in for a model must say so in the memorandum itself, because the file
+    // is what leaves the system and the page that said it does not travel with it.
+    ...(isStandInProvider(p.modelProvider)
+      ? [labelled("Stand-in reader:", STAND_IN_MEMO_TEXT)]
+      : []),
     para([bold("Manifest hash: "), mono(p.manifestSha256)]),
     para([bold("Documents:")], { keepNext: true }),
   ];
