@@ -43,6 +43,7 @@ export type EntityKind =
   | "run stage"
   | "finding"
   | "evidence"
+  | "memo"
   | "eval dataset"
   | "eval run";
 

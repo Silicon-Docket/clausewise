@@ -20,7 +20,7 @@ describe("the demo playbook loads", () => {
   it("has the identity the design documents give it", () => {
     expect(demo.slug).toBe("parol-nda-recipient");
     expect(demo.name).toBe("Parol NDA (Recipient)");
-    expect(demo.version).toBe("1.0.0");
+    expect(demo.version).toBe("1.0.1");
     expect(demo.perspective).toMatch(/^We act for the party that expects to receive most/);
     expect(demo.yaml).toBe(yaml);
   });
@@ -48,10 +48,12 @@ describe("the demo playbook loads", () => {
   });
 
   it("has the hash of the file, which must not move without a new version", () => {
-    // Version 1.0.0 is approved once and then immutable in the store, and every run records this
-    // hash. If this test fails after an edit to the YAML, the edit needs a new version number and
-    // a new pinned value here, not a quiet update of this line.
-    expect(demo.sha256).toBe("9ac87da098c85e3d8bda539b82bb90e411c68cfdce42e821e7e2bf47e8b24251");
+    // A version is approved once and then immutable in the store, and every run records this hash.
+    // If this test fails after an edit to the YAML, the edit needs a new version number and a new
+    // pinned value here, not a quiet update of this line. Version 1.0.0 had no hintTopics; adding
+    // them to pds-1 and pds-2 made this version 1.0.1, because a database seeded with the 1.0.0
+    // text refuses to start (playbook_version_exists) when the file under that number changes.
+    expect(demo.sha256).toBe("19ad95165bb5e930444f0375bbc192f817f8a023a7b3361d6cb0a3a3bd77a739");
   });
 
   it("changes hash when one character of the file changes", () => {
@@ -119,6 +121,7 @@ describe("every field of the demo rules maps", () => {
           text: "The stated period is longer than five years, counted from whichever event the clause uses, but finite, which is a business decision.",
         },
       ],
+      hintTopics: [],
     });
   });
 

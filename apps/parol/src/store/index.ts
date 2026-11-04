@@ -52,6 +52,7 @@ export {
   type InputsParts,
 } from "./repo-matters.js";
 export type { PlaybookImport } from "./repo-playbooks.js";
+export type { NewIngestWarning, StoredIngestWarning } from "./repo-warnings.js";
 
 export {
   ACTIVE_RUN_STATUSES,

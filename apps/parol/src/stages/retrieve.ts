@@ -9,6 +9,7 @@ import {
   type SourceSpan,
   type SpanId,
 } from "../contracts.js";
+import { hintCountsFor } from "../ingest/signals.js";
 import type { BuildBundles } from "../module-contracts.js";
 import { renderRule, renderSpans } from "../prompts/render.js";
 import { headingNumber, referenceNumbers, targetsClause } from "./clause-refs.js";
@@ -26,7 +27,9 @@ export { headingNumber };
  *   2. the definition spans of every defined term those spans use,
  *   3. the keyword-hint spans for the category that extract did not locate, and the spans it
  *      pointed at with a quote that is not in them (a pointer that was not confirmed is a hint,
- *      not a location).
+ *      not a location). A rule that lists `hintTopics` takes only the hints of those topics, and
+ *      those with no topic: a category several rules share holds hints for each rule's subject,
+ *      and the hints of another rule's subject are not candidates for this one.
  * When extract found nothing it can vouch for, or could not run, the whole of every document is
  * used (`fullDocument`), so that "missing" is a judgment about the documents and not about what
  * retrieval happened to find. A passage whose quote is not in its span is not something extract
@@ -73,7 +76,7 @@ export const buildBundles: BuildBundles = ({ ingest, extract, rules, policy, bud
   // Annotations are indexed once. An annotation on a span that is not in this run is dropped here.
   const definers = new Map<string, Set<SpanId>>();
   const usedTerms = new Map<SpanId, Set<string>>();
-  const hinted = new Map<CategoryId, Set<SpanId>>();
+  const hinted = new Map<CategoryId, { spanId: SpanId; topic: string | undefined }[]>();
   const changes = new Map<SpanId, { target: string }[]>();
   indexAnnotations(ingest, byId, { definers, usedTerms, hinted, changes });
 
@@ -114,8 +117,9 @@ export const buildBundles: BuildBundles = ({ ingest, extract, rules, policy, bud
     }
 
     const hints = new Set<SpanId>();
-    for (const id of [...(hinted.get(rule.category) ?? []), ...pointed])
-      if (!located.has(id)) hints.add(id);
+    for (const { spanId, topic } of hinted.get(rule.category) ?? [])
+      if (hintCountsFor(rule.hintTopics, topic) && !located.has(spanId)) hints.add(spanId);
+    for (const id of pointed) if (!located.has(id)) hints.add(id);
 
     const base = new Set<SpanId>(
       fullDocument ? byId.keys() : [...located, ...definitions, ...hints],
@@ -190,7 +194,7 @@ function indexAnnotations(
   into: {
     definers: Map<string, Set<SpanId>>;
     usedTerms: Map<SpanId, Set<string>>;
-    hinted: Map<CategoryId, Set<SpanId>>;
+    hinted: Map<CategoryId, { spanId: SpanId; topic: string | undefined }[]>;
     changes: Map<SpanId, { target: string }[]>;
   },
 ): void {
@@ -211,9 +215,12 @@ function indexAnnotations(
       case "uses_term":
         add(into.usedTerms, annotation.spanId, annotation.term);
         break;
-      case "keyword_hint":
-        add(into.hinted, annotation.category, annotation.spanId);
+      case "keyword_hint": {
+        const list = into.hinted.get(annotation.category) ?? [];
+        list.push({ spanId: annotation.spanId, topic: annotation.topic });
+        into.hinted.set(annotation.category, list);
         break;
+      }
       case "cross_reference":
         if (CHANGING_VERBS.has(annotation.verb)) {
           const list = into.changes.get(annotation.spanId) ?? [];
@@ -229,5 +236,9 @@ function indexAnnotations(
 
 /** The bundle owns its rule, so a later change to the playbook object cannot alter a stored bundle. */
 function cloneRule(rule: PlaybookRuleRecord): PlaybookRuleRecord {
-  return { ...rule, escalateWhen: rule.escalateWhen.map(({ id, text }) => ({ id, text })) };
+  return {
+    ...rule,
+    escalateWhen: rule.escalateWhen.map(({ id, text }) => ({ id, text })),
+    ...(rule.hintTopics === undefined ? {} : { hintTopics: [...rule.hintTopics] }),
+  };
 }

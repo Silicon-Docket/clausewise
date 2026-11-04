@@ -18,6 +18,7 @@ const RECORD_KEYS: (keyof PlaybookRuleRecord)[] = [
   "guidance",
   "fallbackLanguage",
   "escalateWhen",
+  "hintTopics",
 ];
 
 describe("loadPlaybook: mapping a valid playbook", () => {
@@ -67,6 +68,7 @@ describe("loadPlaybook: mapping a valid playbook", () => {
         { id: "first-case", text: "Invented first condition." },
         { id: "second-case", text: "Invented second condition." },
       ],
+      hintTopics: [],
     });
   });
 
@@ -105,6 +107,7 @@ describe("loadPlaybook: mapping a valid playbook", () => {
       guidance: null,
       fallbackLanguage: null,
       escalateWhen: [],
+      hintTopics: [],
     });
   });
 

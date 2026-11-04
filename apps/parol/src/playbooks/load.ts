@@ -1,6 +1,7 @@
 import { PlaybookError, parsePlaybook, type Playbook } from "@clausewise/playbook";
 import { sha256Hex } from "../canonical.js";
 import { CATEGORY_IDS, type CategoryId, type PlaybookRuleRecord } from "../contracts.js";
+import { HINT_TOPICS } from "../ingest/signals.js";
 import type { LoadPlaybook, LoadedPlaybook } from "../module-contracts.js";
 
 const CATEGORY_SET: ReadonlySet<string> = new Set(CATEGORY_IDS);
@@ -128,7 +129,40 @@ function toRecord(rule: Playbook["rules"][number], category: CategoryId): Playbo
     guidance: rule.guidance ?? null,
     fallbackLanguage: rule.fallbackLanguage ?? null,
     escalateWhen: (rule.escalateWhen ?? []).map(({ id, text }) => ({ id, text })),
+    // An empty list means every topic of the category, so a rule without the field is unchanged.
+    hintTopics: [...(rule.hintTopics ?? [])],
   };
+}
+
+/**
+ * The topics of a category are fixed by the keyword lists in ingest, so a rule can only choose
+ * among them. A topic nothing raises would never match a hint, and a rule that lists only such
+ * topics would count no hint at all: the check that "missing" is not contradicted by a hint would
+ * pass whatever the document says. The message names the position and the category, never the
+ * topic the file wrote.
+ */
+function hintTopicProblems(
+  rule: Playbook["rules"][number],
+  category: CategoryId,
+  i: number,
+): string[] {
+  const known = HINT_TOPICS[category];
+  const listed = rule.hintTopics ?? [];
+  if (listed.length === 0) return [];
+  if (known.length === 0) {
+    return [
+      `rules[${i}].hintTopics: rule "${rule.id}" lists hint topics, and the category "${category}" has none`,
+    ];
+  }
+  const problems: string[] = [];
+  listed.forEach((topic, j) => {
+    if (!known.includes(topic)) {
+      problems.push(
+        `rules[${i}].hintTopics[${j}]: rule "${rule.id}" lists a topic the category "${category}" does not have; use ${known.join(", ")}`,
+      );
+    }
+  });
+  return problems;
 }
 
 type ParolCheck =
@@ -181,6 +215,7 @@ function checkParolFields(playbook: Playbook): ParolCheck {
       );
     } else {
       covered.add(category);
+      problems.push(...hintTopicProblems(rule, category, i));
       rules.push(toRecord(rule, category));
     }
   });

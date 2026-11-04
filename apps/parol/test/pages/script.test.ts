@@ -1,0 +1,493 @@
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
+import { describe, expect, it } from "vitest";
+import { FakeElement, SCRIPT_PATH, event, runScript } from "./fake-dom.js";
+import { matterPage, mattersPage, runPage } from "./render.js";
+import {
+  buildIssueRows,
+  buildMatterView,
+  buildRunSummary,
+  buildRunningMatterView,
+} from "./support.js";
+
+const source = readFileSync(SCRIPT_PATH, "utf8");
+/** A key press goes to the element that has focus, as it does in a browser, unless a test names one. */
+const key = (h: ReturnType<typeof runScript>, k: string, extra = {}, target?: FakeElement) => {
+  const at = target ?? h.doc.activeElement ?? h.doc.body;
+  at.dispatch(event("keydown", at, { key: k, ...extra }));
+};
+/** Puts focus on the issue table's own box, which is where a keyboard user arrives by tabbing. */
+const focusTable = (h: ReturnType<typeof runScript>): FakeElement => {
+  const box = h.doc.querySelector('[data-zone="issues"]')!;
+  box.focus();
+  return box;
+};
+
+describe("parol.js as a file", () => {
+  it("is one file under 250 lines, with no dependency", () => {
+    expect(source.split("\n").length).toBeLessThan(250);
+    expect(source).not.toMatch(/\b(import|require)\b\s*[("'{]/);
+    expect(source).not.toMatch(/https?:\/\//);
+  });
+
+  it("is syntactically valid and runs in strict mode inside one function", () => {
+    expect(() => new vm.Script(source)).not.toThrow();
+    expect(source).toContain('"use strict"');
+    expect(source).toMatch(/\(function \(\) \{[\s\S]*\}\)\(\);\s*$/);
+  });
+
+  it("never writes server data as markup, evaluates strings or touches cookies", () => {
+    for (const banned of [
+      "innerHTML",
+      "outerHTML",
+      "insertAdjacentHTML",
+      "document.write",
+      "createContextualFragment",
+      "eval(",
+      "new Function",
+      "Function(",
+      "document.cookie",
+      "localStorage",
+      "XMLHttpRequest",
+      "importScripts",
+      "WebSocket",
+      "postMessage",
+      "srcdoc",
+    ]) {
+      expect(source.includes(banned), banned).toBe(false);
+    }
+    // Timers get functions, never strings.
+    for (const call of source.matchAll(/setTimeout\(\s*([^,)]*)/g)) {
+      expect(call[1]).not.toMatch(/^["'`]/);
+    }
+    expect(source).toContain("textContent");
+  });
+
+  it("has no em or en dash", () => {
+    expect(source).not.toMatch(/[\u2013\u2014]/);
+  });
+
+  it("makes one kind of request, to the address the page names, after checking it is local", () => {
+    const fetches = [...source.matchAll(/\.fetch\(/g)];
+    expect(fetches).toHaveLength(1);
+    expect(source).toContain("sameOriginPath(url)");
+  });
+});
+
+describe("keyboard", () => {
+  const rows = () => buildIssueRows();
+
+  it("moves down and up the rows with j and k, focusing each row's link", () => {
+    const h = runScript(runPage({ selected: null }));
+    const links = h.doc.querySelectorAll("[data-row-link]");
+    expect(links).toHaveLength(8);
+    focusTable(h);
+    key(h, "j");
+    expect(links[0]!.calls.focus).toBe(1);
+    expect(h.doc.activeElement).toBe(links[0]);
+    key(h, "j");
+    expect(h.doc.activeElement).toBe(links[1]);
+    key(h, "k");
+    expect(h.doc.activeElement).toBe(links[0]);
+    key(h, "k");
+    expect(h.doc.activeElement).toBe(links[0]);
+    expect(rows()).toHaveLength(8);
+  });
+
+  it("starts from the selected row", () => {
+    const h = runScript(runPage());
+    const links = h.doc.querySelectorAll("[data-row-link]");
+    expect(links[0]!.getAttribute("aria-current")).toBe("true");
+    focusTable(h);
+    key(h, "j");
+    expect(h.doc.activeElement).toBe(links[1]);
+  });
+
+  it("starts at the last row with k when nothing is chosen, and stops at the ends", () => {
+    const h = runScript(runPage({ selected: null }));
+    const links = h.doc.querySelectorAll("[data-row-link]");
+    focusTable(h);
+    key(h, "k");
+    expect(h.doc.activeElement).toBe(links[7]);
+    key(h, "j");
+    expect(h.doc.activeElement).toBe(links[7]);
+  });
+
+  it("marks the row it is on", () => {
+    const h = runScript(runPage({ selected: null }));
+    focusTable(h);
+    key(h, "j");
+    key(h, "j");
+    const current = h.doc.querySelectorAll("tr.is-current");
+    expect(current).toHaveLength(1);
+    expect(current[0]).toBe(h.doc.querySelectorAll("[data-row-link]")[1]!.closest("tr"));
+  });
+
+  it("opens the row with Enter when focus is on the table's box, and leaves a focused link alone", () => {
+    const h = runScript(runPage({ selected: null }));
+    const links = h.doc.querySelectorAll("[data-row-link]");
+    const box = focusTable(h);
+    key(h, "Enter");
+    expect(links[0]!.calls.click).toBe(0);
+    key(h, "j");
+    // Focus is on the first link now. Go back to the box, as the back link does.
+    box.focus();
+    key(h, "Enter");
+    expect(links[0]!.calls.click).toBe(1);
+    // With the link itself focused the browser follows it, so the script must not click twice.
+    const e = event("keydown", links[0], { key: "Enter" });
+    links[0]!.dispatch(e);
+    expect(links[0]!.calls.click).toBe(1);
+    expect(e.defaultPrevented).toBe(false);
+  });
+
+  it("ignores keys typed into a form field, and keys with a modifier", () => {
+    const h = runScript(matterPage(buildMatterView()));
+    expect(h.doc.querySelectorAll("[data-row-link]")).toHaveLength(0);
+    const h2 = runScript(runPage({ selected: null }));
+    // A field inside the table's box, so only the check for typing can stop the key.
+    const field = new FakeElement(h2.doc, null, "textarea");
+    field.parent = h2.doc.querySelector('[data-zone="issues"]');
+    key(h2, "j", {}, field);
+    expect(h2.doc.querySelectorAll("tr.is-current")).toHaveLength(0);
+    const box = focusTable(h2);
+    for (const mod of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }]) {
+      key(h2, "j", mod);
+    }
+    expect(h2.doc.querySelectorAll("tr.is-current")).toHaveLength(0);
+    const handled = event("keydown", box, { key: "j", defaultPrevented: true });
+    box.dispatch(handled);
+    expect(h2.doc.querySelectorAll("tr.is-current")).toHaveLength(0);
+  });
+
+  it("shows the key list with ? in the table and hides it with Escape", () => {
+    const h = runScript(runPage());
+    const help = h.doc.querySelector("[data-keys-help]")!;
+    expect(help.open).toBe(false);
+    const box = focusTable(h);
+    key(h, "?");
+    expect(help.open).toBe(true);
+    expect(h.doc.activeElement).toBe(help.querySelector("summary"));
+    key(h, "Escape");
+    expect(help.open).toBe(false);
+    key(h, "?", {}, box);
+    expect(help.open).toBe(true);
+    key(h, "Escape", {}, box);
+    expect(help.open).toBe(false);
+  });
+
+  it("does nothing on a page without a table or a key list", () => {
+    const h = runScript(mattersPage());
+    expect(() => {
+      key(h, "j");
+      key(h, "?");
+      key(h, "Enter");
+    }).not.toThrow();
+  });
+});
+
+describe("scrolling the quote into view", () => {
+  it("centres the highlighted quote, smoothly unless motion is reduced", () => {
+    const h = runScript(runPage());
+    const mark = h.doc.querySelector("mark[data-quote]")!;
+    expect(mark.calls.scroll).toEqual([{ block: "center", behavior: "smooth" }]);
+    const reduced = runScript(runPage(), { reducedMotion: true });
+    expect(reduced.doc.querySelector("mark[data-quote]")!.calls.scroll).toEqual([
+      { block: "center", behavior: "auto" },
+    ]);
+  });
+
+  it("brings the chosen row into view", () => {
+    const h = runScript(runPage());
+    expect(h.doc.querySelector("tr.is-selected")!.calls.scroll).toEqual([{ block: "nearest" }]);
+  });
+
+  it("does nothing when nothing is chosen", () => {
+    const h = runScript(runPage({ selected: null }));
+    expect(h.doc.querySelectorAll("mark")).toHaveLength(0);
+  });
+});
+
+describe("buttons after a submit", () => {
+  const submit = (_h: ReturnType<typeof runScript>, form: FakeElement) =>
+    form.dispatch(event("submit", form));
+
+  it("disables a form's submit buttons once it has been sent, not before", async () => {
+    const h = runScript(matterPage(buildMatterView()));
+    const form = h.doc
+      .querySelectorAll("form")
+      .find((f) => f.getAttribute("action")?.endsWith("/runs"))!;
+    const buttons = form.elements.filter((el) => el.type === "submit");
+    expect(buttons.length).toBeGreaterThan(0);
+    submit(h, form);
+    expect(buttons.every((b) => !b.disabled)).toBe(true);
+    await h.advance(0);
+    expect(buttons.every((b) => b.disabled && b.hasAttribute("data-busy"))).toBe(true);
+  });
+
+  it("leaves other forms' buttons alone", async () => {
+    const h = runScript(matterPage(buildMatterView()));
+    const forms = h.doc.querySelectorAll("form");
+    const run = forms.find((f) => f.getAttribute("action")?.endsWith("/runs"))!;
+    const other = forms.find((f) => f.getAttribute("action")?.endsWith("/settings"))!;
+    submit(h, run);
+    await h.advance(0);
+    expect(other.elements.filter((el) => el.type === "submit").every((b) => !b.disabled)).toBe(
+      true,
+    );
+  });
+
+  it("includes a button tied to the form by the form attribute", async () => {
+    const h = runScript(matterPage(buildMatterView()));
+    const dateForm = h.doc
+      .querySelectorAll("form")
+      .find((f) => f.getAttribute("action")?.includes("/stated-date"))!;
+    const tied = dateForm.elements.filter((el) => el.tagName === "BUTTON");
+    expect(tied).toHaveLength(1);
+    submit(h, dateForm);
+    await h.advance(0);
+    expect(tied[0]!.disabled).toBe(true);
+  });
+
+  it("gives the buttons back if the page stays (a download), or comes back from the cache", async () => {
+    const h = runScript(matterPage(buildMatterView()));
+    const form = h.doc
+      .querySelectorAll("form")
+      .find((f) => f.getAttribute("action")?.endsWith("/runs"))!;
+    const buttons = form.elements.filter((el) => el.type === "submit");
+    submit(h, form);
+    await h.advance(1000);
+    expect(buttons.every((b) => b.disabled)).toBe(true);
+    await h.advance(15000);
+    expect(buttons.every((b) => !b.disabled && !b.hasAttribute("data-busy"))).toBe(true);
+    submit(h, form);
+    await h.advance(0);
+    expect(buttons.every((b) => b.disabled)).toBe(true);
+    h.pageshow(false);
+    expect(buttons.every((b) => b.disabled)).toBe(true);
+    h.pageshow(true);
+    expect(buttons.every((b) => !b.disabled && !b.hasAttribute("data-busy"))).toBe(true);
+  });
+
+  it("ignores a submit that is not from a form", async () => {
+    const h = runScript(matterPage(buildMatterView()));
+    const stray = new FakeElement(h.doc, null, "div");
+    stray.parent = h.doc.body;
+    expect(() => stray.dispatch(event("submit", stray))).not.toThrow();
+  });
+});
+
+describe("progress polling", () => {
+  const running = () => runScript(matterPage(buildRunningMatterView()));
+  const answer = (h: ReturnType<typeof runScript>, body: unknown, ok = true) =>
+    h.respondWith(() => Promise.resolve({ ok, json: () => Promise.resolve(body) }));
+  const text = (h: ReturnType<typeof runScript>, role: string) =>
+    h.doc.querySelector(`[data-role="${role}"]`)!.textContent;
+
+  it("asks for the page's status URL every two seconds, as JSON, with the session", async () => {
+    const h = running();
+    answer(h, {
+      status: "analyzing",
+      label: "Analyzing rules",
+      progress: { stage: "analyze", done: 4, total: 8 },
+    });
+    await h.advance(1999);
+    expect(h.fetchCalls).toHaveLength(0);
+    await h.advance(1);
+    expect(h.fetchCalls).toHaveLength(1);
+    expect(h.fetchCalls[0]!.url).toBe("/matters/m_lanternfish01/runs/r_0142/status");
+    expect(h.fetchCalls[0]!.init).toMatchObject({
+      headers: { Accept: "application/json" },
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    await h.advance(2000);
+    expect(h.fetchCalls).toHaveLength(2);
+  });
+
+  it("updates the numbers and the bar from the answer", async () => {
+    const h = running();
+    answer(h, {
+      status: "analyzing",
+      label: "Analyzing rules",
+      progress: { stage: "analyze", done: 6, total: 8 },
+    });
+    await h.advance(2000);
+    expect(text(h, "done")).toBe("6");
+    expect(text(h, "total")).toBe("8");
+    const bar = h.doc.querySelector('[data-role="bar"]')!;
+    expect(bar.value).toBe(6);
+    expect(bar.max).toBe(8);
+    expect(text(h, "stage")).toBe("Analyzing rules");
+  });
+
+  it("never lets a number be zero-width or non-finite", async () => {
+    const h = running();
+    answer(h, { status: "analyzing", progress: { stage: "analyze", done: 0, total: 0 } });
+    await h.advance(2000);
+    expect(h.doc.querySelector('[data-role="bar"]')!.max).toBe(1);
+    answer(h, { status: "analyzing", progress: { stage: "analyze", done: "x", total: null } });
+    await h.advance(2000);
+    expect(text(h, "done")).toBe("0");
+  });
+
+  it("writes a label from the server as text, never as markup", async () => {
+    const h = running();
+    const hostile = '<img src=x onerror="window.pwned=1"><script>1</script>';
+    answer(h, { status: "analyzing", label: hostile, progress: null });
+    await h.advance(2000);
+    const stage = h.doc.querySelector('[data-role="stage"]')!;
+    expect(stage.textContent).toBe(hostile);
+    expect(stage.children).toHaveLength(0);
+    expect(h.doc.querySelectorAll("img")).toHaveLength(0);
+  });
+
+  it("reloads the page when the run has finished", async () => {
+    const h = running();
+    answer(h, { status: "succeeded", finished: true, progress: null });
+    await h.advance(2000);
+    expect(h.reloads).toBe(1);
+    await h.advance(10000);
+    expect(h.fetchCalls).toHaveLength(1);
+  });
+
+  it("treats a terminal status as finished even without the flag", async () => {
+    for (const status of ["succeeded", "failed", "cancelled", "superseded"]) {
+      const h = running();
+      answer(h, { status });
+      await h.advance(2000);
+      expect(h.reloads, status).toBe(1);
+    }
+  });
+
+  it("does not reload under someone who is typing, and says the run is done", async () => {
+    const h = running();
+    const field = new FakeElement(h.doc, null, "input");
+    field.parent = h.doc.body;
+    h.doc.activeElement = field;
+    answer(h, { status: "succeeded", finished: true });
+    await h.advance(2000);
+    expect(h.reloads).toBe(0);
+    expect(text(h, "stage")).toBe("Finished. Reload the page to see the results.");
+    await h.advance(10000);
+    expect(h.fetchCalls).toHaveLength(1);
+  });
+
+  it("reloads at most three times a minute, so a disagreeing server cannot loop", async () => {
+    const h = running();
+    h.storage.set("parol-reload", `3:${h.now - 1000}`);
+    answer(h, { status: "succeeded", finished: true });
+    await h.advance(2000);
+    expect(h.reloads).toBe(0);
+    expect(text(h, "stage")).toBe("Finished. Reload the page to see the results.");
+    const later = running();
+    later.storage.set("parol-reload", `3:${later.now - 61000}`);
+    answer(later, { status: "succeeded", finished: true });
+    await later.advance(2000);
+    expect(later.reloads).toBe(1);
+  });
+
+  it("still works when session storage is blocked", async () => {
+    const h = runScript(matterPage(buildRunningMatterView()), { storageBlocked: true });
+    answer(h, { status: "succeeded", finished: true });
+    await h.advance(2000);
+    expect(h.reloads).toBe(1);
+  });
+
+  it("ignores failures: a bad status, a network error, bad JSON and a wrong shape all keep it trying", async () => {
+    const h = running();
+    h.respondWith(() => Promise.resolve({ ok: false, json: () => Promise.resolve({}) }));
+    await h.advance(2000);
+    h.respondWith(() => Promise.reject(new Error("offline")));
+    await h.advance(2000);
+    h.respondWith(() =>
+      Promise.resolve({ ok: true, json: () => Promise.reject(new SyntaxError("bad")) }),
+    );
+    await h.advance(2000);
+    h.respondWith(() =>
+      Promise.resolve({ ok: true, json: () => Promise.resolve({ unexpected: true }) }),
+    );
+    await h.advance(2000);
+    expect(h.fetchCalls).toHaveLength(4);
+    answer(h, { status: "analyzing", progress: { stage: "analyze", done: 7, total: 8 } });
+    await h.advance(2000);
+    expect(text(h, "done")).toBe("7");
+    expect(h.reloads).toBe(0);
+  });
+
+  it("gives up after five failures in a row, and a good answer resets the count", async () => {
+    const h = running();
+    h.respondWith(() => Promise.reject(new Error("offline")));
+    await h.advance(2000 * 4);
+    expect(h.fetchCalls).toHaveLength(4);
+    answer(h, { status: "analyzing", progress: null });
+    await h.advance(2000);
+    h.respondWith(() => Promise.reject(new Error("offline")));
+    await h.advance(2000 * 4);
+    expect(h.fetchCalls).toHaveLength(9);
+    await h.advance(2000);
+    expect(h.fetchCalls).toHaveLength(10);
+    await h.advance(60000);
+    expect(h.fetchCalls).toHaveLength(10);
+  });
+
+  it("does not ask while the tab is hidden, and carries on when it is shown", async () => {
+    const h = running();
+    answer(h, { status: "analyzing", progress: null });
+    h.doc.hidden = true;
+    await h.advance(6000);
+    expect(h.fetchCalls).toHaveLength(0);
+    h.doc.hidden = false;
+    await h.advance(2000);
+    expect(h.fetchCalls).toHaveLength(1);
+  });
+
+  it("does not start on a page with no running review", async () => {
+    for (const html of [matterPage(buildMatterView()), mattersPage(), runPage()]) {
+      const h = runScript(html);
+      await h.advance(20000);
+      expect(h.fetchCalls).toHaveLength(0);
+    }
+  });
+
+  it("also runs on the issue table page while a review runs", async () => {
+    const run = buildRunSummary({
+      status: "analyzing",
+      progress: { stage: "analyze", done: 1, total: 8 },
+      finishedAt: null,
+    });
+    const h = runScript(runPage({ run, issues: [], selected: null }));
+    answer(h, { status: "analyzing", progress: { stage: "analyze", done: 2, total: 8 } });
+    await h.advance(2000);
+    expect(h.fetchCalls[0]!.url).toBe("/matters/m_lanternfish01/runs/r_0142/status");
+    expect(text(h, "done")).toBe("2");
+  });
+
+  it("will not send a request anywhere but a path on this site", async () => {
+    const base = matterPage(buildRunningMatterView());
+    for (const bad of [
+      "//evil.example/status",
+      "https://evil.example/status",
+      "http://evil.example/",
+      "javascript:alert(1)",
+      "\\\\evil.example",
+      "/ok\\evil",
+      "status",
+      "",
+    ]) {
+      const html = base.replace(
+        /data-status-url="[^"]*"/,
+        `data-status-url="${bad.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}"`,
+      );
+      const h = runScript(html);
+      await h.advance(10000);
+      expect(h.fetchCalls, bad).toHaveLength(0);
+    }
+  });
+
+  it("does nothing when fetch is missing", async () => {
+    const h = runScript(matterPage(buildRunningMatterView()), { noFetch: true });
+    await h.advance(10000);
+    expect(h.fetchCalls).toHaveLength(0);
+  });
+});

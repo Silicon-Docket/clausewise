@@ -34,6 +34,9 @@ const pragma = (db: DatabaseSync, name: string): unknown => {
   return Object.values(row)[0];
 };
 
+/** The number a scratch migration takes, after the ones the build ships. */
+const NEXT = String(loadMigrationFiles(DEFAULT_MIGRATIONS_DIR).length + 1).padStart(3, "0");
+
 /** A scratch copy of the real migrations, to edit without touching the originals. */
 function copyMigrations(): string {
   const target = join(dir, "migrations");
@@ -173,11 +176,11 @@ describe("migrations", () => {
 
   it("applies a new migration once and only once", () => {
     const migrations = copyMigrations();
-    writeFileSync(join(migrations, "003_extra.sql"), "CREATE TABLE extra_table (x TEXT);");
+    writeFileSync(join(migrations, `${NEXT}_extra.sql`), "CREATE TABLE extra_table (x TEXT);");
     const file = join(dir, "d.db");
     const db = openDatabase(file, { migrationsDir: migrations });
     expect(
-      db.prepare("SELECT version FROM schema_migrations WHERE version = 3").get(),
+      db.prepare("SELECT version FROM schema_migrations WHERE version = ?").get(Number(NEXT)),
     ).toBeDefined();
     expect(runMigrations(db, migrations).applied).toEqual([]);
     db.close();
@@ -189,12 +192,12 @@ describe("migrations", () => {
     const file = join(dir, "e.db");
     openDatabase(file, { migrationsDir: migrations }).close();
     writeFileSync(
-      join(migrations, "003_bad.sql"),
+      join(migrations, `${NEXT}_bad.sql`),
       "CREATE TABLE half_done (x TEXT);\nINSERT INTO no_such_table VALUES (1);",
     );
     expect(() => openDatabase(file, { migrationsDir: migrations })).toThrow();
 
-    writeFileSync(join(migrations, "003_bad.sql"), "CREATE TABLE fixed (x TEXT);");
+    writeFileSync(join(migrations, `${NEXT}_bad.sql`), "CREATE TABLE fixed (x TEXT);");
     const db = openDatabase(file, { migrationsDir: migrations });
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
       name: string;
@@ -207,11 +210,11 @@ describe("migrations", () => {
   it("refuses a database written by a newer build", () => {
     const migrations = copyMigrations();
     const file = join(dir, "f.db");
-    writeFileSync(join(migrations, "003_extra.sql"), "CREATE TABLE extra_table (x TEXT);");
+    writeFileSync(join(migrations, `${NEXT}_extra.sql`), "CREATE TABLE extra_table (x TEXT);");
     openDatabase(file, { migrationsDir: migrations }).close();
-    rmSync(join(migrations, "003_extra.sql"));
+    rmSync(join(migrations, `${NEXT}_extra.sql`));
     expect(() => openDatabase(file, { migrationsDir: migrations })).toThrowError(
-      /migration 3.*newer build/,
+      new RegExp(`migration ${Number(NEXT)}.*newer build`),
     );
   });
 

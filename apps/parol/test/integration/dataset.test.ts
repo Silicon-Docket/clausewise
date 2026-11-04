@@ -128,12 +128,15 @@ describe("the dev split with a model that answers as the key does", () => {
     }
   });
 
-  it("escalates a correct finding without need only for `missing` on pds-2, a known limitation", () => {
-    // pds-2 (disclosure required by law) shares its category with pds-1. Retrieval reads the whole
-    // document for it, so `missing` can be stated and verified. The keyword hints for the category
-    // sit on the clause pds-1 covers and on the definition of "Affiliate", and the finding cannot
-    // cite them in any role that is true, so `missing_confirmation` asks a person to look. That is
-    // 2 of the 45 slots that need no escalation, against a gate of 0.15.
+  it("escalates no finding the key says needs no escalation, `missing` on pds-2 included", () => {
+    // pds-2 (disclosure required by law) shares its category with pds-1, so retrieval reads the
+    // whole document for it and `missing` can be stated and verified. The hints of the category
+    // used to be one list for both rules: the clause pds-1 covers, the definition of "Affiliate",
+    // the paragraph that mentions the supervising attorney and the retention clause's "copies
+    // required by law" all hinted it, and `missing_confirmation` reported every missing pds-2 as
+    // unexplained (2 of the 45 slots that need no escalation, 3 with the twin). Hints now carry a
+    // topic and a rule names its own, so only wording about being compelled to disclose counts for
+    // pds-2.
     const unnecessary: string[] = [];
     for (const { caseKey, world, run } of ran) {
       for (const [ruleKey, { finding }] of run.results) {
@@ -145,12 +148,48 @@ describe("the dev split with a model that answers as the key does", () => {
         }
       }
     }
-    expect(unnecessary.sort()).toEqual([
-      "PAROL-D03 pds-2: missing_not_confirmed",
-      "PAROL-D08 pds-2: missing_not_confirmed",
-      "PAROL-D08-twin pds-2: missing_not_confirmed",
-    ]);
-    expect(metrics.escalation.unnecessaryRate.value).toBeLessThan(0.15);
+    expect(unnecessary).toEqual([]);
+    expect(metrics.escalation.unnecessaryRate).toMatchObject({ numerator: 0, denominator: 45 });
+    expect(metrics.escalation.unnecessaryRate.value).toBe(0);
+  });
+
+  it("verifies `missing` on pds-2 for the two cases that have no compelled-disclosure clause", () => {
+    for (const caseKey of ["PAROL-D03", "PAROL-D08", "PAROL-D08-twin"]) {
+      const { finding } = ran.find((r) => r.caseKey === caseKey)!.run.results.get("pds-2")!;
+      expect(finding.status, caseKey).toBe("missing");
+      expect(finding.verificationState, caseKey).toBe("verified");
+      expect(finding.escalations, caseKey).toEqual([]);
+      expect(finding.checks.find((c) => c.id === "missing_confirmation")!.outcome, caseKey).toBe(
+        "pass",
+      );
+    }
+  });
+
+  it("hints for pds-2 only the wording of compulsion, whatever else the document says", () => {
+    // What the old per-category hints put in front of pds-2, and what the topics leave out.
+    let checked = 0;
+    for (const { caseKey, world } of ran) {
+      const topicOf = (spanId: string): string[] =>
+        world.ingest.annotations
+          .filter(
+            (a) =>
+              a.kind === "keyword_hint" &&
+              a.category === "permitted-disclosures" &&
+              a.spanId === spanId,
+          )
+          .map((a) => (a as { topic?: string }).topic ?? "(none)");
+      for (const span of world.ingest.spans) {
+        const topics = topicOf(span.id);
+        // Every permitted-disclosures hint of the demo documents has a topic.
+        expect(topics.includes("(none)"), `${caseKey} ${span.label}`).toBe(false);
+        if (/\bAffiliate" means|supervising attorney|copies required by law/.test(span.text)) {
+          expect(topics, `${caseKey} ${span.label}`).not.toContain("legal-compulsion");
+          checked++;
+        }
+      }
+    }
+    // The three kinds of span are in the documents, so this is not a loop over nothing.
+    expect(checked).toBeGreaterThan(10);
   });
 
   it("reads the whole document for pds-2, which shares its category, so `missing` can be judged", () => {

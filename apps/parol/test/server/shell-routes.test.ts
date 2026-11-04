@@ -1,0 +1,568 @@
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { Hono } from "hono";
+import { describe, expect, it } from "vitest";
+import {
+  defineMatterRoute,
+  defineRoute,
+  describeRoutes,
+  findMatterUrlsWithoutGuard,
+  findUnguardedMatterRoutes,
+  isMatterScopedPath,
+  type RouteMethod,
+} from "../../src/server/matter-route.js";
+import type { AppDeps } from "../../src/server/deps.js";
+import { MATTER_ACTIONS, type MatterAction } from "../../src/auth/actions.js";
+import { SRC_ROOT, createParolProgram } from "../auth/brand-types.js";
+import { findDirectRouteRegistrations } from "./shell-registration-scan.js";
+import { ALL_ACTIONS, makeShell } from "./support-app.js";
+
+/**
+ * The rule: every route that can reach a matter goes through `defineMatterRoute`. The check reads
+ * the application as it is (Hono's `app.routes`) and the record `defineMatterRoute` keeps, so it
+ * holds for routes added by later work without anyone updating a list. It is proved here with
+ * synthetic routes, including ones added the wrong way.
+ */
+
+const METHODS: RouteMethod[] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+const ok = (c: { text: (s: string) => Response }): Response => c.text("ok");
+
+describe("the live application", () => {
+  it("has no matter route that bypasses defineMatterRoute", () => {
+    const { app } = makeShell();
+    expect(findUnguardedMatterRoutes(app)).toEqual([]);
+  });
+
+  it("answers no matter URL by anything but a matter guard", () => {
+    const { app } = makeShell();
+    expect(findMatterUrlsWithoutGuard(app)).toEqual([]);
+  });
+
+  it("declares every route it owns: only middleware is registered any other way", () => {
+    const { app } = makeShell();
+    const undeclared = describeRoutes(app).filter(
+      (route) => route.kind === "unmanaged" && route.method !== "ALL",
+    );
+    expect(undeclared).toEqual([]);
+    const owned = describeRoutes(app)
+      .filter((route) => route.kind !== "unmanaged")
+      .map((route) => `${route.method} ${route.path} ${route.kind}`);
+    expect(owned).toEqual(
+      expect.arrayContaining([
+        "GET /healthz public",
+        "GET /assets/:name public",
+        "POST /session public",
+        "POST /session/end public",
+      ]),
+    );
+  });
+
+  // Whoever writes the page and API routes exports `registerRoutes(app, deps)` from
+  // src/server/routes/index.ts: main.ts loads it by that name. This test then covers them with no
+  // change. Until the file exists there is nothing to add, and the test is reported as skipped and
+  // not as passed, so the gap is visible. Once the file exists the test cannot pass by finding
+  // nothing: a missing export fails it, because main.ts would then serve the shell only.
+  const routesFile = join(import.meta.dirname, "..", "..", "src", "server", "routes", "index.ts");
+  it.skipIf(!existsSync(routesFile))(
+    "holds for the routes the next phase adds (src/server/routes/index.ts)",
+    async () => {
+      const module = (await import(/* @vite-ignore */ routesFile)) as {
+        registerRoutes?: (app: Hono, deps: AppDeps) => void;
+      };
+      expect(
+        typeof module.registerRoutes,
+        "src/server/routes/index.ts must export registerRoutes(app, deps), which main.ts loads",
+      ).toBe("function");
+      const shell = makeShell();
+      module.registerRoutes!(shell.app, shell.deps);
+      expect(findUnguardedMatterRoutes(shell.app)).toEqual([]);
+      expect(findMatterUrlsWithoutGuard(shell.app)).toEqual([]);
+      // And the routes it added really are there, so the check was not run on an empty app.
+      expect(describeRoutes(shell.app).some((route) => route.kind === "matter")).toBe(true);
+    },
+  );
+});
+
+describe("no route is registered on the side", () => {
+  /** Only the function that does the registering may call Hono's own methods. */
+  const ALLOWED = new Set(["server/matter-route.ts"]);
+  const sources = (dir: string): string[] =>
+    readdirSync(dir).flatMap((name) => {
+      const path = join(dir, name);
+      return statSync(path).isDirectory() ? sources(path) : /\.tsx?$/.test(name) ? [path] : [];
+    });
+
+  it("finds no app.get, app.post, app.on or the like anywhere in src but defineMatterRoute", () => {
+    const roots = sources(SRC_ROOT);
+    expect(roots.length).toBeGreaterThan(20);
+    const found = findDirectRouteRegistrations(createParolProgram(roots), ALLOWED).map(
+      (f) => `${f.file}:${f.line} app.${f.method}`,
+    );
+    expect(found).toEqual([]);
+  }, 120_000);
+
+  describe("the scan itself", () => {
+    const run = (body: string): string[] => {
+      const path = join(SRC_ROOT, "__snippets__", "route.ts");
+      const text = [
+        `import { Hono } from "hono";`,
+        `import type { Context } from "hono";`,
+        `export function f(app: Hono, c: Context, sub = new Hono()): void {`,
+        body,
+        `}`,
+      ].join("\n");
+      return findDirectRouteRegistrations(
+        createParolProgram([path], new Map([[path, text]])),
+        new Set(),
+      ).map((x) => x.method);
+    };
+
+    it("reports each registering method, on any Hono value", () => {
+      expect(run(`app.get("/a", (x) => x.text("a"));`)).toEqual(["get"]);
+      expect(
+        run(`sub.post("/a", (x) => x.text("a")); sub.delete("/a", (x) => x.text("a"));`),
+      ).toEqual(["post", "delete"]);
+      expect(run(`app.on(["GET"], "/a", (x) => x.text("a"));`)).toEqual(["on"]);
+      expect(run(`app.all("/a", (x) => x.text("a"));`)).toEqual(["all"]);
+      expect(run(`new Hono().put("/a", (x) => x.text("a"));`)).toEqual(["put"]);
+    });
+
+    it("leaves alone what is not a route", () => {
+      expect(
+        run(
+          `c.get("key"); c.req.header("x"); new Map<string, string>().get("k"); [1].includes(1);` +
+            `app.use("*", async (_c, next) => next()); app.onError((_e, x) => x.text("e"));` +
+            `app.route("/p", sub); app.notFound((x) => x.text("n"));`,
+        ),
+      ).toEqual([]);
+    });
+  });
+});
+
+describe("routes declared the right way", () => {
+  it("are all found as guarded, for every method and both prefixes", () => {
+    const { app } = makeShell();
+    for (const method of METHODS) {
+      defineMatterRoute(app, {
+        method,
+        path: "/matters/:matterId/things",
+        action: "matter.read",
+        handler: ok,
+      });
+      defineMatterRoute(app, {
+        method,
+        path: "/api/matters/:matterId/things/:thingId",
+        action: "matter.read",
+        handler: ok,
+      });
+    }
+    defineMatterRoute(app, {
+      method: "GET",
+      path: "/matters/:matterId",
+      action: "matter.read",
+      handler: ok,
+    });
+    defineMatterRoute(app, {
+      method: "DELETE",
+      path: "/api/matters/:matterId",
+      action: "matter.delete",
+      handler: ok,
+    });
+    expect(findUnguardedMatterRoutes(app)).toEqual([]);
+    expect(describeRoutes(app).filter((route) => route.kind === "matter").length).toBe(
+      METHODS.length * 2 + 2,
+    );
+  });
+
+  it("record the action each route checks", () => {
+    const { app } = makeShell();
+    for (const action of Object.keys(MATTER_ACTIONS) as (keyof typeof MATTER_ACTIONS)[]) {
+      defineMatterRoute(app, {
+        method: "POST",
+        path: `/api/matters/:matterId/${action}`,
+        action,
+        handler: ok,
+      });
+    }
+    const recorded = describeRoutes(app)
+      .filter((route) => route.kind === "matter")
+      .map((route) => route.action);
+    expect(new Set(recorded)).toEqual(new Set(Object.keys(MATTER_ACTIONS)));
+  });
+
+  it("are recorded as public or principal for the others", () => {
+    const { app } = makeShell();
+    defineRoute(app, { method: "GET", path: "/matters", access: "principal", handler: ok });
+    defineRoute(app, { method: "POST", path: "/matters", access: "principal", handler: ok });
+    defineRoute(app, { method: "GET", path: "/api/playbooks", access: "principal", handler: ok });
+    const kinds = new Map(describeRoutes(app).map((r) => [`${r.method} ${r.path}`, r.kind]));
+    expect(kinds.get("GET /matters")).toBe("principal");
+    expect(kinds.get("POST /matters")).toBe("principal");
+    expect(kinds.get("GET /api/playbooks")).toBe("principal");
+    expect(findUnguardedMatterRoutes(app)).toEqual([]);
+  });
+});
+
+describe("routes declared the wrong way", () => {
+  const bypasses: Record<string, (app: Hono) => void> = {
+    "app.get": (app) => app.get("/matters/:matterId/leak", (c) => c.text("x")),
+    "app.post under /api": (app) => app.post("/api/matters/:matterId/leak", (c) => c.text("x")),
+    "app.put, app.patch, app.delete": (app) => {
+      app.put("/matters/:matterId/a", (c) => c.text("x"));
+      app.patch("/matters/:matterId/b", (c) => c.text("x"));
+      app.delete("/matters/:matterId/c", (c) => c.text("x"));
+    },
+    "app.all": (app) => app.all("/api/matters/:matterId/leak", (c) => c.text("x")),
+    "app.on with several methods": (app) =>
+      app.on(["GET", "POST"], "/matters/:matterId/leak", (c) => c.text("x")),
+    "middleware on the matter prefix": (app) =>
+      app.use("/matters/:matterId/*", async (_c, next) => next()),
+    "a wildcard under matters": (app) => app.get("/matters/*", (c) => c.text("x")),
+    "a wildcard under the api": (app) => app.all("/api/matters/*", (c) => c.text("x")),
+    "another name for the parameter": (app) => app.get("/api/matters/:id/leak", (c) => c.text("x")),
+    "a parameter with a pattern": (app) =>
+      app.get("/matters/:matterId{[a-z0-9_]+}/leak", (c) => c.text("x")),
+    "a prefix in front": (app) => app.get("/v2/api/matters/:matterId/leak", (c) => c.text("x")),
+    "a matterId parameter elsewhere": (app) => app.get("/export/:matterId", (c) => c.text("x")),
+    "a plain handler on the bare matter route": (app) =>
+      app.get("/matters/:matterId", (c) => c.text("x")),
+  };
+
+  for (const [label, add] of Object.entries(bypasses)) {
+    it(`is found: ${label}`, () => {
+      const { app } = makeShell();
+      add(app);
+      const found = findUnguardedMatterRoutes(app);
+      expect(found.length, label).toBeGreaterThan(0);
+    });
+  }
+
+  it("names the one route that was added the wrong way among those added the right way", () => {
+    const { app } = makeShell();
+    defineMatterRoute(app, {
+      method: "GET",
+      path: "/matters/:matterId/documents",
+      action: "matter.read",
+      handler: ok,
+    });
+    app.get("/matters/:matterId/leak", (c) => c.text("x"));
+    defineMatterRoute(app, {
+      method: "POST",
+      path: "/api/matters/:matterId/runs",
+      action: "run.start",
+      handler: ok,
+    });
+    expect(findUnguardedMatterRoutes(app)).toEqual(["GET /matters/:matterId/leak"]);
+  });
+
+  it("is found when a guard is copied onto another path or method", () => {
+    const { app } = makeShell();
+    defineMatterRoute(app, {
+      method: "GET",
+      path: "/matters/:matterId/documents",
+      action: "matter.read",
+      handler: ok,
+    });
+    const guard = app.routes.find(
+      (route) => route.path === "/matters/:matterId/documents",
+    )!.handler;
+    app.get("/matters/:matterId/elsewhere", guard);
+    app.post("/matters/:matterId/documents", guard);
+    expect(findUnguardedMatterRoutes(app).sort()).toEqual([
+      "GET /matters/:matterId/elsewhere",
+      "POST /matters/:matterId/documents",
+    ]);
+  });
+
+  it("is refused at registration when a route that reaches a matter uses defineRoute", () => {
+    const { app } = makeShell();
+    for (const path of [
+      "/matters/:matterId/x",
+      "/api/matters/:matterId/x",
+      "/matters/:id/x",
+      "/matters/*",
+      "/export/:matterId",
+    ])
+      expect(() =>
+        defineRoute(app, { method: "GET", path, access: "public", handler: ok }),
+      ).toThrow(TypeError);
+  });
+
+  it("is refused at registration when defineMatterRoute is given a path it cannot authorize", () => {
+    const { app } = makeShell();
+    for (const path of [
+      "/matters",
+      "/matters/new",
+      "/matters/:id/x",
+      "/other/:matterId",
+      "/api/other/matters/:matterId",
+      "/matters/:matterIdentifier/x",
+      "/MATTERS/:matterId",
+    ])
+      expect(() =>
+        defineMatterRoute(app, { method: "GET", path, action: "matter.read", handler: ok }),
+      ).toThrow(TypeError);
+  });
+});
+
+describe("a state-changing action", () => {
+  // Written out by hand from the HTTP API table in docs/parol/03, not computed from the table the
+  // code uses: every GET in that table is one of the first four, every other row is not a GET.
+  const READS: MatterAction[] = ["matter.read", "run.read", "finding.read", "memo.read"];
+  const CHANGES: MatterAction[] = [
+    "matter.update",
+    "member.add",
+    "document.write",
+    "run.start",
+    "run.resume",
+    "review.decide",
+    "memo.export",
+    "feedback.add",
+    "matter.delete",
+  ];
+
+  it("is every action that is not a read, so a new action is checked too", () => {
+    expect([...READS, ...CHANGES].sort()).toEqual([...ALL_ACTIONS].sort());
+  });
+
+  it("cannot be bound to GET or HEAD, because those carry no CSRF token", () => {
+    const { app } = makeShell();
+    for (const action of CHANGES)
+      for (const method of ["GET", "HEAD", "get", "head"])
+        expect(
+          () =>
+            defineMatterRoute(app, {
+              method: method as RouteMethod,
+              path: "/matters/:matterId/runs/start",
+              action,
+              handler: ok,
+            }),
+          `${method} ${action}`,
+        ).toThrow(TypeError);
+    // Nothing was left registered by the refusals.
+    expect(describeRoutes(app).filter((route) => route.kind === "matter")).toEqual([]);
+  });
+
+  it("can be bound to every other method, where the token is required", () => {
+    const { app } = makeShell();
+    for (const action of CHANGES)
+      for (const method of ["POST", "PUT", "PATCH", "DELETE"] as const)
+        expect(() =>
+          defineMatterRoute(app, {
+            method,
+            path: `/api/matters/:matterId/${action}/${method}`,
+            action,
+            handler: ok,
+          }),
+        ).not.toThrow();
+  });
+
+  it("leaves a read free to use GET, and to use POST as well", () => {
+    const { app } = makeShell();
+    for (const action of READS)
+      for (const method of ["GET", "POST"] as const)
+        expect(() =>
+          defineMatterRoute(app, {
+            method,
+            path: `/api/matters/:matterId/${action}/${method}`,
+            action,
+            handler: ok,
+          }),
+        ).not.toThrow();
+  });
+});
+
+describe("generic routes that answer matter URLs", () => {
+  // None of these has `matters` or `:matterId` in its path, so the check of paths cannot see them,
+  // yet each answers /matters/<id> and /api/matters/<id> without any authorization.
+  const generic: Record<string, (app: Hono) => void> = {
+    "a two-parameter route": (app) => app.get("/:area/:id", (c) => c.text("UNGUARDED")),
+    "a three-parameter route": (app) => app.get("/:a/:b/:c", (c) => c.text("UNGUARDED")),
+    "a deeper parameter route under the API": (app) =>
+      app.post("/api/:area/:id/:what", (c) => c.text("UNGUARDED")),
+    "a catch-all": (app) => app.get("*", (c) => c.text("UNGUARDED")),
+    "a catch-all under the API": (app) => app.get("/api/*", (c) => c.text("UNGUARDED")),
+    "a catch-all for writes": (app) => app.post("*", (c) => c.text("UNGUARDED")),
+    "app.all with parameters": (app) => app.all("/:area/:id", (c) => c.text("UNGUARDED")),
+    "a route declared with defineRoute": (app) =>
+      defineRoute(app, { method: "GET", path: "/:area/:id", access: "public", handler: ok }),
+    "a route declared as needing a person": (app) =>
+      defineRoute(app, {
+        method: "DELETE",
+        path: "/api/:area/:id",
+        access: "principal",
+        handler: ok,
+      }),
+  };
+
+  for (const [label, add] of Object.entries(generic))
+    it(`is found: ${label}`, () => {
+      const { app } = makeShell();
+      add(app);
+      const found = findMatterUrlsWithoutGuard(app);
+      expect(found.length, label).toBeGreaterThan(0);
+      // It names a concrete URL and what answered it, and never a value taken from a request.
+      expect(found.every((line) => /^[A-Z]+ \/\S* answered by [A-Z]+ \S+$/.test(line))).toBe(true);
+    });
+
+  it("really does answer an anonymous request, which is what the check is for", async () => {
+    const { app } = makeShell();
+    app.get("/:area/:id", (c) => c.text(`UNGUARDED ${c.req.param("area")}`));
+    const response = await app.request("/matters/m_probe");
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("UNGUARDED matters");
+    expect(findUnguardedMatterRoutes(app)).toEqual([]);
+    expect(findMatterUrlsWithoutGuard(app).length).toBeGreaterThan(0);
+  });
+
+  it("is not triggered by global middleware, which every request passes through", () => {
+    const { app } = makeShell();
+    app.use("*", async (_c, next) => next());
+    app.use("/*", async (_c, next) => next());
+    app.use("/api/*", async (_c, next) => next());
+    app.all("/api/*", async (_c, next) => next());
+    defineMatterRoute(app, {
+      method: "GET",
+      path: "/matters/:matterId/documents",
+      action: "matter.read",
+      handler: ok,
+    });
+    expect(findMatterUrlsWithoutGuard(app)).toEqual([]);
+  });
+
+  it("is not triggered by routes that cannot answer a matter URL", () => {
+    const { app } = makeShell();
+    defineRoute(app, { method: "GET", path: "/api/playbooks", access: "principal", handler: ok });
+    defineRoute(app, {
+      method: "GET",
+      path: "/api/playbooks/:slug",
+      access: "principal",
+      handler: ok,
+    });
+    defineRoute(app, { method: "GET", path: "/matters", access: "principal", handler: ok });
+    defineRoute(app, { method: "POST", path: "/matters", access: "principal", handler: ok });
+    defineRoute(app, { method: "GET", path: "/matters/new", access: "principal", handler: ok });
+    expect(findMatterUrlsWithoutGuard(app)).toEqual([]);
+  });
+
+  it("depends on order: the first handler to match decides, as it does when a request arrives", () => {
+    // A guard registered first answers its own URL, so a generic route after it is not reached
+    // for that URL (it is still found for the URLs the guard does not cover).
+    const after = makeShell().app;
+    defineMatterRoute(after, {
+      method: "GET",
+      path: "/matters/:matterId/documents",
+      action: "matter.read",
+      handler: ok,
+    });
+    after.get("/:a/:b/:c", (c) => c.text("UNGUARDED"));
+    const found = findMatterUrlsWithoutGuard(after);
+    expect(found.some((line) => line.includes("/documents"))).toBe(false);
+    expect(found.some((line) => line.startsWith("GET /matters/"))).toBe(true);
+
+    // Registered before the guard, the generic route answers the guard's own URL.
+    const before = makeShell().app;
+    before.get("/:a/:b/:c", (c) => c.text("UNGUARDED"));
+    defineMatterRoute(before, {
+      method: "GET",
+      path: "/matters/:matterId/documents",
+      action: "matter.read",
+      handler: ok,
+    });
+    expect(
+      findMatterUrlsWithoutGuard(before).some((line) =>
+        line.startsWith("GET /matters/probe/documents answered by GET /:a/:b/:c"),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not freeze the application: routes can still be added after it has been asked", async () => {
+    const { app } = makeShell();
+    expect(findMatterUrlsWithoutGuard(app)).toEqual([]);
+    defineMatterRoute(app, {
+      method: "GET",
+      path: "/matters/:matterId/later",
+      action: "matter.read",
+      handler: ok,
+    });
+    expect(findMatterUrlsWithoutGuard(app)).toEqual([]);
+    expect((await app.request("/matters/m_x/later")).status).toBe(303);
+  });
+
+  it("covers a mounted sub-application", () => {
+    const { app } = makeShell();
+    const sub = new Hono();
+    sub.get("/:area/:id", (c) => c.text("UNGUARDED"));
+    app.route("/api", sub);
+    expect(findMatterUrlsWithoutGuard(app).length).toBeGreaterThan(0);
+  });
+});
+
+describe("mounted sub-applications", () => {
+  it("are covered: a guarded route is accepted under a prefix and a plain one is found", () => {
+    const { app } = makeShell();
+    const good = new Hono();
+    defineMatterRoute(good, {
+      method: "GET",
+      path: "/matters/:matterId/things",
+      action: "matter.read",
+      handler: ok,
+    });
+    app.route("/api", good);
+    expect(findUnguardedMatterRoutes(app)).toEqual([]);
+
+    const bad = new Hono();
+    bad.get("/matters/:matterId/things", (c) => c.text("x"));
+    app.route("/pages", bad);
+    expect(findUnguardedMatterRoutes(app)).toEqual(["GET /pages/matters/:matterId/things"]);
+  });
+
+  it("are covered when the sub-application has an error handler of its own", () => {
+    const { app } = makeShell();
+    const sub = new Hono();
+    sub.onError((_err, c) => c.text("sub error", 500));
+    defineMatterRoute(sub, {
+      method: "GET",
+      path: "/matters/:matterId/things",
+      action: "matter.read",
+      handler: ok,
+    });
+    sub.get("/matters/:matterId/leak", (c) => c.text("x"));
+    app.route("/", sub);
+    expect(findUnguardedMatterRoutes(app)).toEqual(["GET /matters/:matterId/leak"]);
+  });
+});
+
+describe("what counts as a matter path", () => {
+  const matterPaths = [
+    "/matters/:matterId",
+    "/matters/:matterId/documents",
+    "/api/matters/:matterId/spans/:spanId",
+    "/matters/:id",
+    "/matters/*",
+    "/api/matters/*",
+    "/matters/:matterId{[a-z]+}",
+    "/v2/matters/:id/x",
+    "/export/:matterId",
+  ];
+  const otherPaths = [
+    "/",
+    "/matters",
+    "/matters/",
+    "/matters/new",
+    "/api/matters",
+    "/api/playbooks",
+    "/api/playbooks/:slug/versions",
+    "/healthz",
+    "/assets/:name",
+    "/session",
+    "/session/end",
+    "*",
+    "/*",
+  ];
+  for (const path of matterPaths)
+    it(`treats ${path} as reaching a matter`, () => expect(isMatterScopedPath(path)).toBe(true));
+  for (const path of otherPaths)
+    it(`does not treat ${path} as reaching a matter`, () =>
+      expect(isMatterScopedPath(path)).toBe(false));
+});

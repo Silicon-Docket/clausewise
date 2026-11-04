@@ -149,6 +149,15 @@ export interface PlaybookRuleRecord {
   /** Approved wording to offer or adapt. Null when the playbook gives none. */
   fallbackLanguage: string | null;
   escalateWhen: { id: string; text: string }[];
+  /**
+   * The keyword-hint topics that matter to this rule (see `keyword_hint` below). Several rules can
+   * share a category, and a hint raised by one rule's wording (advisers) says nothing about
+   * another's (disclosure required by law), so a rule names the topics it cares about. A hint
+   * counts for the rule when its topic is listed or when it has none. An empty or absent list
+   * means every topic of the category counts, which is how a playbook written before topics
+   * behaves. Optional so that a record built by hand or read from an older store stays valid.
+   */
+  hintTopics?: string[];
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -195,7 +204,18 @@ export type SpanAnnotation =
       verb: "replaces" | "amends" | "deletes" | "refers";
     }
   | { kind: "instruction_like"; spanId: SpanId; pattern: string }
-  | { kind: "keyword_hint"; spanId: SpanId; category: CategoryId };
+  | {
+      kind: "keyword_hint";
+      spanId: SpanId;
+      category: CategoryId;
+      /**
+       * A kind of hint within the category, such as `legal-compulsion`. Set only for a category
+       * that holds rules about different things (permitted disclosures); absent otherwise, and
+       * absent on annotations stored before topics existed. A hint without a topic counts for
+       * every rule of its category.
+       */
+      topic?: string;
+    };
 
 export interface IngestWarning {
   code: WarningCode;

@@ -65,6 +65,12 @@ export const WorkflowManifestSchema = z
   })
   .strict();
 
+/** A keyword-hint topic is spelt as a rule id is, which is how a playbook writes it. */
+const hintTopic = z
+  .string()
+  .regex(/^[a-z0-9][a-z0-9-]*$/)
+  .max(64);
+
 /** What `playbook_rules.rule_json` holds: everything of a rule that has no column of its own. */
 export const RuleJsonSchema = z
   .object({
@@ -75,6 +81,8 @@ export const RuleJsonSchema = z
     guidance: z.string().nullable(),
     fallbackLanguage: z.string().nullable(),
     escalateWhen: z.array(z.object({ id: z.string().min(1), text: z.string() }).strict()),
+    // Absent on a rule imported before topics existed, which means every topic of its category.
+    hintTopics: z.array(hintTopic).optional(),
   })
   .strict();
 
@@ -91,6 +99,7 @@ export const PlaybookRuleRecordSchema = z.object({
   guidance: z.string().nullable(),
   fallbackLanguage: z.string().nullable(),
   escalateWhen: z.array(z.object({ id: z.string().min(1), text: z.string() })),
+  hintTopics: z.array(hintTopic).optional(),
 });
 
 export const AnnotationSchema = z.discriminatedUnion("kind", [
@@ -103,7 +112,13 @@ export const AnnotationSchema = z.discriminatedUnion("kind", [
     verb: z.enum(["replaces", "amends", "deletes", "refers"]),
   }),
   z.object({ kind: z.literal("instruction_like"), spanId: id, pattern: z.string().min(1) }),
-  z.object({ kind: z.literal("keyword_hint"), spanId: id, category: z.enum(CATEGORY_IDS) }),
+  z.object({
+    kind: z.literal("keyword_hint"),
+    spanId: id,
+    category: z.enum(CATEGORY_IDS),
+    // Absent for a category without topics and for an annotation stored before topics existed.
+    topic: hintTopic.optional(),
+  }),
 ]);
 
 export const SpanSchema = z.object({

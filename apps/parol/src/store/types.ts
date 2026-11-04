@@ -96,6 +96,15 @@ export interface NewVersionInput {
    * deliberate act.
    */
   operative?: boolean;
+  /**
+   * Store the version and leave the document's operative version as it is, on `addVersion` only.
+   * For a re-saved file whose text is a version the matter already holds: the text that governs
+   * does not change, so no finding, decision or memo goes stale (docs/parol/03, Invalidation), and
+   * using the new file is a deliberate `setOperativeVersion`. Without it a new version takes the
+   * operative flag away from the old one even when it is not operative itself. It cannot be
+   * combined with `operative`, which already says which version governs.
+   */
+  keepOperative?: boolean;
 }
 
 export interface OperativeDocument {

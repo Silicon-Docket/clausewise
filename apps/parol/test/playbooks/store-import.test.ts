@@ -46,7 +46,7 @@ describe("importing a loaded playbook into the store", () => {
     });
     expect(version).toMatchObject({
       slug: "parol-nda-recipient",
-      version: "1.0.0",
+      version: "1.0.1",
       sha256: demo.sha256,
     });
     const stored = repo.listRules(version.id);

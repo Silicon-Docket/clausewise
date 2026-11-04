@@ -2,8 +2,8 @@
   "format": 1,
   "playbook": {
     "slug": "parol-nda-recipient",
-    "version": "1.0.0",
-    "sha256": "9ac87da098c85e3d8bda539b82bb90e411c68cfdce42e821e7e2bf47e8b24251",
+    "version": "1.0.1",
+    "sha256": "19ad95165bb5e930444f0375bbc192f817f8a023a7b3361d6cb0a3a3bd77a739",
     "rules": {
       "pty-1": { "category": "parties", "severity": "medium", "required": true },
       "def-1": { "category": "ci-definition", "severity": "medium", "required": true },

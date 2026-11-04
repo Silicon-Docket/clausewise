@@ -24,6 +24,13 @@ export const EscalateWhenSchema = z.strictObject({
   text: visible,
 });
 
+// A hint topic is named like a rule id: lowercase words joined by hyphens. The set of topics a
+// category has belongs to the tool that raises the hints, so this format only fixes the spelling.
+const HINT_TOPIC = z
+  .string()
+  .regex(/^[a-z0-9][a-z0-9-]*$/, "use lowercase letters, digits and hyphens")
+  .max(64, "use at most 64 characters");
+
 export const RuleSchema = z.strictObject({
   id: z
     .string()
@@ -60,6 +67,13 @@ export const RuleSchema = z.strictObject({
   fallbackLanguage: visible.optional(),
   /** Situations that go to an attorney whatever the status, each with a stable id to cite. */
   escalateWhen: z.array(EscalateWhenSchema).optional(),
+  /**
+   * Which kinds of keyword hint matter to this rule, for a category that several rules share. A
+   * tool that hints passages by keyword tags each hint with a topic, and a rule that lists topics
+   * is checked against the hints of those topics only. Without the field, or with an empty list,
+   * every topic of the category counts.
+   */
+  hintTopics: z.array(HINT_TOPIC).optional(),
 });
 
 export const PlaybookSchema = z
@@ -98,6 +112,19 @@ export const PlaybookSchema = z
         });
       }
       seen.add(rule.id);
+      // The message names no topic: the base format puts nothing from the file into this one, so
+      // a caller that scrubs the file's own text out of errors has nothing to scrub.
+      const topics = new Set<string>();
+      rule.hintTopics?.forEach((topic, j) => {
+        if (topics.has(topic)) {
+          ctx.addIssue({
+            code: "custom",
+            message: "list each hint topic once",
+            path: ["rules", i, "hintTopics", j],
+          });
+        }
+        topics.add(topic);
+      });
       const escalationIds = new Set<string>();
       rule.escalateWhen?.forEach((item, j) => {
         if (escalationIds.has(item.id)) {

@@ -758,6 +758,11 @@ export function createMattersApi(ctx: Ctx) {
     assertCount("byteSize", input.byteSize, 0);
     cleanStatedDate(input.statedDate);
     assertStoragePath(matterId, input.storagePath);
+    if (input.operative === true && input.keepOperative === true)
+      throw new ValidationError(
+        "operative_conflict",
+        "a version cannot both become operative and leave the operative version in place",
+      );
   }
 
   /**
@@ -903,10 +908,13 @@ export function createMattersApi(ctx: Ctx) {
         input,
         opts.actorId,
       );
-      run(
-        "UPDATE document_versions SET operative = 0 WHERE document_id = ? AND operative = 1",
-        documentId,
-      );
+      // A new version takes the flag from the old one unless it was asked not to: a re-saved copy
+      // of text already held changes nothing that governs.
+      if (input.keepOperative !== true)
+        run(
+          "UPDATE document_versions SET operative = 0 WHERE document_id = ? AND operative = 1",
+          documentId,
+        );
       if (input.operative) makeOperative(documentId, versionId);
       const version = getVersion(matterId, versionId) as DocumentVersionRow;
       ctx.audit({

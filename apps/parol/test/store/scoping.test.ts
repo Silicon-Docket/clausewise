@@ -354,6 +354,40 @@ const probes: Record<string, () => void> = {
       missing.version,
     );
   },
+  replaceIngestWarnings: () => {
+    // A foreign version behaves as one that is nowhere, and a warning never lands in another matter.
+    behavesAsMissing(
+      (id) =>
+        w.repo.replaceIngestWarnings(a.id, id, [{ code: "unreviewed_content", detail: "counts" }]),
+      b.ndaVersion,
+      missing.version,
+    );
+    expect(w.repo.listIngestWarnings(b.id)).toEqual([]);
+  },
+  listIngestWarnings: () => {
+    w.repo.replaceIngestWarnings(b.id, b.ndaVersion, [
+      { code: "unreviewed_content", detail: "not reviewed: comments=1" },
+    ]);
+    expect(w.repo.listIngestWarnings(a.id)).toEqual([]);
+    expect(w.repo.listIngestWarnings(a.id, [b.ndaVersion])).toEqual([]);
+    expect(w.repo.listIngestWarnings(b.id).every((x) => x.matterId === b.id)).toBe(true);
+  },
+  replaceAnnotations: () => {
+    // Another matter's span cannot be named, and the other matter's annotations are not replaced.
+    const before = snapshot(b.id);
+    behavesAsMissing(
+      (id) =>
+        w.repo.replaceAnnotations(
+          a.id,
+          [a.ndaVersion, b.ndaVersion],
+          [{ kind: "keyword_hint", spanId: id, category: "duration" }],
+        ),
+      b.spans[0] as string,
+      missing.span,
+    );
+    w.repo.replaceAnnotations(a.id, [b.ndaVersion, b.amendVersion], []);
+    expect(snapshot(b.id)).toBe(before);
+  },
   // --- matters, members, inputs ---
   getMatter: () => {
     // Keyed by the matter itself; whether the caller may see it is the authorization layer's question.

@@ -1,5 +1,5 @@
 name: Parol NDA (Recipient)
-version: 1.0.0
+version: 1.0.1
 description: Fictional practice-group playbook for the Parol demonstration. It is invented
   client policy, not a statement of law, and must not be used for a real matter.
 contractTypes: [nda]
@@ -65,6 +65,7 @@ rules:
     title: Disclosure to representatives
     severity: medium
     required: true
+    hintTopics: [representatives]
     standard: The recipient may share Confidential Information with its and its affiliates'
       employees, officers, contractors and professional advisers who need to know it for the
       purpose and are bound by confidentiality duties no less protective than the agreement.
@@ -80,6 +81,7 @@ rules:
     title: Disclosure required by law
     severity: medium
     required: true
+    hintTopics: [legal-compulsion]
     standard: A dedicated clause lets the recipient disclose what law, regulation or court order
       requires, with prompt notice to the discloser where legally permitted and reasonably
       practicable.

@@ -360,9 +360,11 @@ describe("keyword hints", () => {
       annotationsOn(out, label, "keyword_hint").map((a) => (a as { category: string }).category);
     expect(of("D1-p7")).toContain("duration");
     expect(of("D1-p11")).toContain("duration");
-    expect(of("D1-p10")).toEqual(
-      expect.arrayContaining(["return-destruction", "permitted-disclosures"]),
-    );
+    // The clause keeps copies "required by law", which is a retention carve-out and not a clause
+    // about being compelled to disclose, so it hints return-destruction and no longer
+    // permitted-disclosures (hint-topics.test.ts covers the topics).
+    expect(of("D1-p10")).toContain("return-destruction");
+    expect(of("D1-p10")).not.toContain("permitted-disclosures");
     expect(of("D2-p3")).toEqual([]);
     expect(of("D2-p4")).toEqual([]);
     expect(of("D2-p5")).toEqual([]);

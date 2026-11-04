@@ -1,6 +1,6 @@
 import type { DocumentKind, SpanAnnotation, SpanId } from "../contracts.js";
 import { findCrossReferences } from "./references.js";
-import { instructionPatterns, keywordCategories } from "./signals.js";
+import { instructionPatterns, keywordHints } from "./signals.js";
 import { findDefinedTerms } from "./terms.js";
 import { containsWholeWord, matchView } from "./view.js";
 
@@ -63,7 +63,10 @@ function valueOf(annotation: SpanAnnotation): string {
     case "instruction_like":
       return annotation.pattern;
     case "keyword_hint":
-      return annotation.category;
+      // A hint without a topic sorts by its category alone, as it always has.
+      return annotation.topic === undefined
+        ? annotation.category
+        : `${annotation.category}\u0000${annotation.topic}`;
   }
 }
 
@@ -147,8 +150,12 @@ export function annotateSpans(spans: AnnotatableSpan[]): AnnotationResult {
       own.push({ kind: "instruction_like", spanId: span.id, pattern });
     }
 
-    for (const category of keywordCategories(view)) {
-      own.push({ kind: "keyword_hint", spanId: span.id, category });
+    for (const { category, topic } of keywordHints(view)) {
+      own.push(
+        topic === undefined
+          ? { kind: "keyword_hint", spanId: span.id, category }
+          : { kind: "keyword_hint", spanId: span.id, category, topic },
+      );
     }
 
     annotations.push(...own.sort(byKindThenValue));

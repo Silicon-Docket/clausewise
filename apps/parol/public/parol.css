@@ -1,0 +1,1497 @@
+/*
+ * Parol: a restrained legal-document look. Paper and ink, one accent, a serif for what the
+ * documents say and a sans for the interface. System fonts only, because the content security
+ * policy allows same-origin requests and nothing else. No image, no web font, no inline anything.
+ *
+ * Colour never carries meaning alone. Every status, severity, role, check and flag is a text label
+ * with a shape (circle, ring, triangle, square, diamond, bar, flag) drawn by the .shape rules, and
+ * severity also shows one to three bars.
+ *
+ * Contrast pairs checked (WCAG 2.x ratio; text needs 4.5, body text here 7, borders and focus 3).
+ * test/pages/styles.test.ts reads this file and recomputes every pair below in both themes.
+ *   ink on paper 7, surface and field 4.5     muted on paper, surface and select 4.5
+ *   accent on paper, surface, select and warn-bg 4.5     accent-ink on accent 4.5
+ *   banner-ink on banner-bg 7                 mark-ink on mark-bg 4.5
+ *   danger-ink on danger-bg 4.5               ok, bad, warn, info and neutral ink on their bg 4.5
+ *   ok-ink and bad-ink on paper 4.5           muted on neutral-bg 4.5
+ *   edge on paper and field 3 (form borders)  focus on paper and surface 3
+ *   ok, bad, warn and info edge on paper 3 (chip borders)
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --serif:
+    "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, "Times New Roman",
+    serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+  --paper: #fbf9f4;
+  --surface: #f2eee3;
+  --field: #ffffff;
+  --ink: #1d1c1a;
+  --muted: #5a564e;
+  --edge: #857f6f;
+  --rule: #d3ccbb;
+  --accent: #1f4a7a;
+  --accent-ink: #ffffff;
+  --focus: #1f4a7a;
+  --select: #e6eef7;
+  --mark-bg: #ffe27a;
+  --mark-ink: #1d1c1a;
+  --banner-bg: #2a2825;
+  --banner-ink: #fbf9f4;
+  --danger-bg: #8a1f14;
+  --danger-ink: #ffffff;
+  --ok-bg: #dfeede;
+  --ok-ink: #1d4a22;
+  --ok-edge: #5f8f5b;
+  --bad-bg: #f7dedb;
+  --bad-ink: #7a1c12;
+  --bad-edge: #b0463d;
+  --warn-bg: #f8ebc3;
+  --warn-ink: #5a4100;
+  --warn-edge: #a37e12;
+  --info-bg: #dce8f5;
+  --info-ink: #1b3f6b;
+  --info-edge: #4f7bb0;
+  --neutral-bg: #ebe7dc;
+  --neutral-ink: #3b3830;
+  --neutral-edge: #857f6f;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #17181a;
+    --surface: #202225;
+    --field: #101113;
+    --ink: #ece9e1;
+    --muted: #b4afa3;
+    --edge: #8a8576;
+    --rule: #3a3c40;
+    --accent: #8db8ea;
+    --accent-ink: #0f1c2b;
+    --focus: #8db8ea;
+    --select: #1e2a38;
+    --mark-bg: #6b5a12;
+    --mark-ink: #fff6d5;
+    --banner-bg: #0c0c0d;
+    --banner-ink: #f1eee6;
+    --danger-bg: #e5877c;
+    --danger-ink: #2b0c08;
+    --ok-bg: #1f3322;
+    --ok-ink: #b9e0b4;
+    --ok-edge: #5f9a5f;
+    --bad-bg: #3b1f1c;
+    --bad-ink: #f3b9b1;
+    --bad-edge: #b8605a;
+    --warn-bg: #3a2f10;
+    --warn-ink: #f0d58a;
+    --warn-edge: #b39a3c;
+    --info-bg: #1a2e45;
+    --info-ink: #b5d3f2;
+    --info-edge: #5a8bc4;
+    --neutral-bg: #2a2b2d;
+    --neutral-ink: #d4d0c5;
+    --neutral-edge: #8a8576;
+  }
+}
+
+/* ---------------------------------------------------------------------------------------- */
+/* Base                                                                                      */
+/* ---------------------------------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  scroll-padding-top: 4rem;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 1rem;
+  line-height: 1.55;
+  /* Names, titles and locations are typed by people and can be one very long word. Wrapping them
+     anywhere keeps them inside their box, so a long name cannot make the page scroll sideways. */
+  overflow-wrap: anywhere;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  line-height: 1.25;
+  margin: 0 0 0.5rem;
+  font-weight: 650;
+}
+
+h1 {
+  font-size: 1.75rem;
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  font-size: 1.2rem;
+}
+
+h3 {
+  font-size: 1.05rem;
+}
+
+h4 {
+  font-size: 0.95rem;
+}
+
+p {
+  margin: 0 0 0.75rem;
+}
+
+a {
+  color: var(--accent);
+  text-underline-offset: 0.15em;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+code,
+kbd {
+  font-family: var(--mono);
+  font-size: 0.875em;
+}
+
+dl,
+ul,
+ol {
+  margin: 0 0 0.75rem;
+}
+
+blockquote {
+  margin: 0 0 0.75rem;
+}
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/*
+ * Text from people and documents can hold direction controls. Every inline element is its own
+ * bidi isolate, so an override left open inside a name or a quote cannot reorder the words that
+ * come after it. Block boundaries already end a paragraph for the bidi algorithm. Document and
+ * model text also has its direction controls printed as visible markers by the server.
+ */
+a,
+strong,
+em,
+code,
+span,
+time,
+mark,
+del,
+bdi {
+  unicode-bidi: isolate;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.empty {
+  color: var(--muted);
+}
+
+.lead {
+  font-size: 1.1rem;
+  max-width: 42rem;
+}
+
+/* ---------------------------------------------------------------------------------------- */
+/* Frame                                                                                     */
+/* ---------------------------------------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  left: 0.5rem;
+  top: -4rem;
+  z-index: 40;
+  padding: 0.5rem 0.9rem;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.skip-link:focus {
+  top: 0.5rem;
+}
+
+.demo-banner {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--banner-bg);
+  color: var(--banner-ink);
+  padding: 0.45rem 1rem;
+  text-align: center;
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.site-header {
+  border-bottom: 2px solid var(--ink);
+  background: var(--paper);
+}
+
+.site-header-inner {
+  max-width: 100rem;
+  margin: 0 auto;
+  padding: 0.6rem 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.5rem;
+}
+
+.brand {
+  font-family: var(--serif);
+  font-size: 1.5rem;
+  font-variant: small-caps;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.nav-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: 1rem;
+}
+
+.whoami {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.9rem;
+}
+
+.inline-form {
+  display: inline;
+  margin: 0;
+}
+
+.page {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 4rem;
+}
+
+.page-wide {
+  max-width: 100rem;
+}
+
+.page:focus {
+  outline: none;
+}
+
+.site-footer {
+  border-top: 1px solid var(--rule);
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding: 1rem;
+  text-align: center;
+}
+
+.crumbs ol {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0;
+  margin: 0 0 0.75rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+.crumbs li + li::before {
+  content: "/";
+  margin-right: 0.25rem;
+}
+
+/* ---------------------------------------------------------------------------------------- */
+/* Sections                                                                                  */
+/* ---------------------------------------------------------------------------------------- */
+
+.section {
+  margin: 2rem 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rule);
+  scroll-margin-top: 4rem;
+}
+
+.section > h2 {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.section-note {
+  color: var(--muted);
+  max-width: 44rem;
+}
+
+.matter-head h1 {
+  margin-bottom: 0.25rem;
+}
+
+.matter-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.25rem;
+}
+
+.stack > * + * {
+  margin-top: 1rem;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: minmax(8rem, max-content) minmax(0, 1fr);
+  gap: 0.35rem 1.25rem;
+}
+
+.facts dt {
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding-top: 0.15rem;
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.destination {
+  padding: 0.6rem 0.9rem;
+  border-left: 4px solid var(--accent);
+  background: var(--surface);
+}
+
+.reasons {
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--warn-edge);
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+
+.reasons ul {
+  margin-bottom: 0;
+}
+
+/* ---------------------------------------------------------------------------------------- */
+/* Banners and notices                                                                       */
+/* ---------------------------------------------------------------------------------------- */
+
+.banner {
+  margin: 1rem 0;
+  padding: 0.9rem 1.1rem;
+  border: 1px solid var(--warn-edge);
+  border-left-width: 0.5rem;
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+
+.banner h2 {
+  margin-bottom: 0.25rem;
+}
+
+.banner p:last-child {
+  margin-bottom: 0;
+}
+
+.banner a {
+  color: var(--warn-ink);
+}
+
+.banner .hint {
+  color: var(--warn-ink);
+}
+
+.banner .button {
+  color: var(--ink);
+}
+
+.banner .button-primary {
+  color: var(--accent-ink);
+}
+
+.banner-failed {
+  border-color: var(--bad-edge);
+  background: var(--bad-bg);
+  color: var(--bad-ink);
+}
+
+.banner-failed a {
+  color: var(--bad-ink);
+}
+
+.notice {
+  margin: 0 0 1rem;
+  padding: 0.7rem 1rem;
+  border: 1px solid var(--info-edge);
+  background: var(--info-bg);
+  color: var(--info-ink);
+}
+
+.notice p {
+  margin: 0;
+}
+
+/* The label and shape that say what kind of notice it is, so colour is never the only sign. */
+.notice .chip {
+  margin-right: 0.35rem;
+  vertical-align: baseline;
+}
+
+.notice-success {
+  border-color: var(--ok-edge);
+  background: var(--ok-bg);
+  color: var(--ok-ink);
+}
+
+.notice-error {
+  border-color: var(--bad-edge);
+  background: var(--bad-bg);
+  color: var(--bad-ink);
+}
+
+.error-page {
+  max-width: 40rem;
+  margin: 3rem auto;
+}
+
+.error-code {
+  font-family: var(--mono);
+  color: var(--muted);
+  margin-bottom: 0.25rem;
+}
+
+/* ---------------------------------------------------------------------------------------- */
+/* Tables                                                                                    */
+/* ---------------------------------------------------------------------------------------- */
+
+/* A table scrolls inside this box on a narrow screen, and the box can be scrolled by keyboard. */
+.table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--rule);
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9375rem;
+  /* A table keeps its words whole and scrolls inside its box instead of squeezing a column. */
+  overflow-wrap: normal;
+}
+
+.data-table th,
+.data-table td {
+  padding: 0.6rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--rule);
+}
+
+.data-table thead th {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  border-bottom: 2px solid var(--ink);
+  white-space: nowrap;
+}
+
+.data-table tbody th {
+  font-weight: 600;
+}
+
+.data-table tbody tr:last-child th,
+.data-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.issue-table tr.is-selected {
+  background: var(--select);
+}
+
+.issue-table tr.is-selected > :first-child {
+  box-shadow: inset 4px 0 0 var(--accent);
+}
+
+.issue-table tr.is-current .row-link {
+  outline: 2px dotted var(--focus);
+  outline-offset: 2px;
+}
+
+.row-link {
+  display: inline-block;
+  font-weight: 650;
+}
+
+.row-sub {
+  display: block;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 400;
+}
+
+.chip-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+.filters ul {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.filter {
+  display: inline-block;
+  padding: 0.3rem 0.8rem;
+  border: 1px solid var(--edge);
+  background: var(--surface);
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+.filter.is-current {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+  font-weight: 650;
+}
+
+.count {
+  font-variant-numeric: tabular-nums;
+  margin-left: 0.2rem;
+}
+
+.run-head h1 {
+  margin-bottom: 0.25rem;
+}
+
+.run-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 1.25rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.run-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+/* The table needs about 39rem to show every column and its flags without scrolling, so the
+   inspector goes beside it only when both fit. Below that the inspector follows the table and a
+   link above the table leads to it. */
+@media (min-width: 70rem) {
+  .run-layout {
+    grid-template-columns: minmax(39rem, 6fr) minmax(0, 5fr);
+  }
+
+  .inspector {
+    position: sticky;
+    top: 3.5rem;
+    max-height: calc(100vh - 4.5rem);
+    overflow-y: auto;
+  }
+}
+
+.inspector {
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  padding: 1rem 1.25rem;
+  min-width: 0;
+}
+
+.inspector-empty {
+  color: var(--muted);
+}
+
+.run-table {
+  min-width: 0;
+}
+
+/* A plain link between the table and the inspector, for anyone who would otherwise tab through
+   every row to get from one to the other. */
+.jump {
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+}
+
+.conflict-group,
+.escalations {
+  margin-top: 1rem;
+}
+
+.run-warnings {
+  margin-top: 1.5rem;
+}
+
+.legend {
+  font-size: 0.85rem;
+  margin-top: 0.75rem;
+}
+
+/* ---------------------------------------------------------------------------------------- */
+/* Chips and shapes                                                                          */
+/* ---------------------------------------------------------------------------------------- */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  padding: 0.05rem 0.5rem;
+  border: 1px solid var(--neutral-edge);
+  border-radius: 2px;
+  background: var(--neutral-bg);
+  color: var(--neutral-ink);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+/* A flag can be a whole phrase, so in the table it wraps between words. Everything else stays on
+   one line, and the table scrolls inside its box when the screen is too narrow for it. */
+.data-table .chip,
+.data-table .chip-text {
+  white-space: normal;
+}
+
+.tone-ok {
+  background: var(--ok-bg);
+  color: var(--ok-ink);
+  border-color: var(--ok-edge);
+}
+
+.tone-bad {
+  background: var(--bad-bg);
+  color: var(--bad-ink);
+  border-color: var(--bad-edge);
+}
+
+.tone-warn {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+  border-color: var(--warn-edge);
+}
+
+.tone-info {
+  background: var(--info-bg);
+  color: var(--info-ink);
+  border-color: var(--info-edge);
+}
+
+.tone-neutral {
+  background: var(--neutral-bg);
+  color: var(--neutral-ink);
+  border-color: var(--neutral-edge);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.5rem;
+  align-items: center;
+}
+
+.shape {
+  display: inline-block;
+  flex: none;
+  width: 0.7em;
+  height: 0.7em;
+  background: currentColor;
+}
+
+.shape-circle {
+  border-radius: 50%;
+}
+
+.shape-ring {
+  border-radius: 50%;
+  background: transparent;
+  border: 0.15em solid currentColor;
+}
+
+.shape-triangle {
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+
+.shape-square {
+  border-radius: 0;
+}
+
+.shape-diamond {
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+
+.shape-bar {
+  height: 0.2em;
+  width: 0.8em;
+}
+
+.shape-flag {
+  clip-path: polygon(0 0, 100% 25%, 18% 50%, 18% 100%, 0 100%);
+  width: 0.75em;
+}
+
+/* Severity: the word, and one to three bars that are filled or hollow. */
+.chip-severity {
+  background: var(--paper);
+  color: var(--ink);
+  border-color: var(--ink);
+}
+
+.level {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 0.8em;
+}
+
+.level i {
+  display: block;
+  width: 0.28em;
+  border: 1px solid currentColor;
+}
+
+.level i:nth-child(1) {
+  height: 0.4em;
+}
+
+.level i:nth-child(2) {
+  height: 0.6em;
+}
+
+.level i:nth-child(3) {
+  height: 0.8em;
+}
+
+.level i.on {
+  background: currentColor;
+}
+
+.level i.off {
+  background: transparent;
+}
+
+/* ---------------------------------------------------------------------------------------- */
+/* Forms and buttons                                                                         */
+/* ---------------------------------------------------------------------------------------- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.field > label,
+legend {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.field-inline {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.field-inline > label {
+  font-weight: 400;
+  flex: 1 1 14rem;
+}
+
+.field-inline > select {
+  flex: 0 1 12rem;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0;
+  max-width: 44rem;
+}
+
+input[type="text"],
+input[type="date"],
+input[type="file"],
+select,
+textarea {
+  font: inherit;
+  width: 100%;
+  max-width: 44rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--edge);
+  border-radius: 3px;
+  background: var(--field);
+  color: var(--ink);
+}
+
+textarea {
+  resize: vertical;
+  font-family: var(--serif);
+  line-height: 1.5;
+}
+
+input[type="radio"],
+input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 1.1rem;
+  height: 1.1rem;
+  margin: 0.2rem 0.5rem 0 0;
+  flex: none;
+}
+
+.form-panel {
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  max-width: 50rem;
+}
+
+fieldset {
+  border: 1px solid var(--rule);
+  padding: 0.75rem 1rem 1rem;
+  margin: 0;
+  min-width: 0;
+}
+
+.choice {
+  display: grid;
+  grid-template-columns: 1.6rem minmax(0, 1fr);
+  column-gap: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.choice label {
+  font-weight: 600;
+}
+
+.choice .hint {
+  grid-column: 2;
+}
+
+.check {
+  display: flex;
+  align-items: flex-start;
+}
+
+.inline-edit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.inline-edit input[type="date"] {
+  width: auto;
+}
+
+.button {
+  display: inline-block;
+  font: inherit;
+  font-weight: 600;
+  padding: 0.45rem 1rem;
+  border: 1px solid var(--edge);
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--ink);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.button:hover {
+  border-color: var(--ink);
+}
+
+.button-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.button-primary:hover {
+  border-color: var(--ink);
+}
+
+.button-danger {
+  background: var(--danger-bg);
+  border-color: var(--danger-bg);
+  color: var(--danger-ink);
+}
+
+.button-quiet {
+  background: transparent;
+}
+
+.button-small {
+  padding: 0.2rem 0.6rem;
+  font-size: 0.85rem;
+}
+
+/* A disabled button is dashed as well as dimmer, so it never relies on colour alone. */
+.button[disabled] {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--edge);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.button[data-busy] {
+  cursor: progress;
+  border-style: dotted;
+}
+
+.identity-list ul {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+}
+
+.identity {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  font: inherit;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--edge);
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+
+.identity:hover {
+  border-color: var(--ink);
+}
+
+.identity-name {
+  font-weight: 650;
+}
+
+.identity-role {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.disclosure {
+  margin: 0.75rem 0;
+}
+
+.disclosure > summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0.25rem 0;
+}
+
+.disclosure[open] > summary {
+  margin-bottom: 0.5rem;
+}
+
+.disclosure-danger > summary {
+  color: var(--bad-ink);
+}
+
+/* ---------------------------------------------------------------------------------------- */
+/* Documents                                                                                 */
+/* ---------------------------------------------------------------------------------------- */
+
+.documents {
+  display: grid;
+  /* One column that may shrink below its content, so a wide table scrolls in its own box. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.5rem;
+}
+
+.document {
+  min-width: 0;
+  border: 1px solid var(--rule);
+  padding: 1rem 1.25rem;
+  background: var(--paper);
+}
+
+.document .actions {
+  margin-top: 0.75rem;
+}
+
+.documents + h3 {
+  margin-top: 2rem;
+}
+
+.document-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.document-head h3 {
+  margin: 0;
+}
+
+.doc-label {
+  font-family: var(--mono);
+  color: var(--muted);
+  margin-right: 0.35rem;
+}
+
+.warning-list {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+.warning {
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--warn-edge);
+  border-left-width: 0.4rem;
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+
+.warning p {
+  margin: 0.35rem 0 0;
+}
+
+.technical {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.warning .technical {
+  color: var(--warn-ink);
+}
+
+.hash {
+  font-family: var(--mono);
+  font-size: 0.85em;
+}
+
+.progress-box {
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--info-edge);
+  background: var(--info-bg);
+  color: var(--info-ink);
+}
+
+.progress-box progress {
+  display: block;
+  width: 100%;
+  height: 1rem;
+  accent-color: var(--accent);
+}
+
+/* ---------------------------------------------------------------------------------------- */
+/* The inspector: passages, checks, decision                                                 */
+/* ---------------------------------------------------------------------------------------- */
+
+.finding-pane > .pane-head {
+  margin-bottom: 1rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.25rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.pane-section {
+  margin: 1.5rem 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rule);
+  scroll-margin-top: 4rem;
+}
+
+.pane-section > h3 {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.passages {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.passages-conflict {
+  grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
+}
+
+.passage {
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--rule);
+  border-left-width: 0.35rem;
+  background: var(--surface);
+  min-width: 0;
+}
+
+.role-governing {
+  border-left-color: var(--accent);
+}
+
+.role-conflicting {
+  border-left-color: var(--bad-edge);
+}
+
+.passage-head {
+  margin-bottom: 0.5rem;
+}
+
+.location {
+  margin: 0 0 0.35rem;
+  font-size: 0.9rem;
+}
+
+.passage-note {
+  font-size: 0.875rem;
+}
+
+/* Words from a document, a model or a person are set in a serif, as a quotation would be. */
+.doc-text {
+  font-family: var(--serif);
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 0.5rem 0.9rem;
+  border-left: 3px solid var(--rule);
+  background: var(--paper);
+}
+
+.doc-text.long {
+  max-height: 24rem;
+  overflow: auto;
+}
+
+.doc-text.suggestion {
+  border-left-color: var(--accent);
+}
+
+.doc-text.reason {
+  font-size: 1rem;
+}
+
+mark.quote {
+  background: var(--mark-bg);
+  color: var(--mark-ink);
+  padding: 0.05em 0.15em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  border-bottom: 2px solid var(--mark-ink);
+}
+
+del {
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+}
+
+.is-superseded .doc-text {
+  color: var(--muted);
+}
+
+.unverified {
+  font-family: var(--serif);
+  font-size: 1.0625rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.unverified-quote {
+  color: var(--bad-ink);
+}
+
+.unverified-note {
+  font-size: 0.875rem;
+  color: var(--bad-ink);
+}
+
+.quoted-label {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.invisible {
+  font-family: var(--mono);
+  font-size: 0.7em;
+  padding: 0 0.25em;
+  border: 1px dashed var(--edge);
+  background: var(--neutral-bg);
+  color: var(--neutral-ink);
+  white-space: nowrap;
+}
+
+.conflict-lead {
+  padding: 0.5rem 0.75rem;
+  border-left: 4px solid var(--bad-edge);
+  background: var(--bad-bg);
+  color: var(--bad-ink);
+}
+
+.checks,
+.escalation-list,
+.history,
+.edit-list {
+  list-style: none;
+  padding: 0;
+}
+
+.check-item {
+  display: grid;
+  grid-template-columns: 9.5rem minmax(0, 1fr);
+  gap: 0.25rem 0.75rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.check-item .chip {
+  align-self: start;
+  justify-self: start;
+}
+
+.check-name {
+  margin: 0;
+  font-weight: 600;
+}
+
+.check-kind {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.check-body .technical {
+  margin: 0.15rem 0 0;
+}
+
+.escalation-list li {
+  margin-bottom: 0.75rem;
+}
+
+.flag-meaning {
+  margin: 0.25rem 0 0;
+  font-size: 0.9rem;
+}
+
+.prose {
+  font-family: var(--serif);
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.basis {
+  font-size: 0.9rem;
+}
+
+.decision-form legend {
+  padding: 0 0.35rem;
+}
+
+.binding {
+  padding: 0.6rem 0.9rem;
+  border-left: 4px solid var(--accent);
+  background: var(--surface);
+  font-size: 0.9rem;
+}
+
+.decision-blocked {
+  padding: 0.7rem 0.9rem;
+  border: 1px dashed var(--edge);
+  background: var(--surface);
+}
+
+.history li {
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.history li.is-stale .doc-text {
+  color: var(--muted);
+}
+
+.edit-list {
+  font-size: 0.9rem;
+}
+
+.keys {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.25rem 1rem;
+}
+
+.keys dd {
+  margin: 0;
+}
+
+kbd {
+  display: inline-block;
+  padding: 0 0.4em;
+  border: 1px solid var(--edge);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  background: var(--surface);
+}
+
+/* ---------------------------------------------------------------------------------------- */
+/* Narrow screens, motion, forced colours                                                    */
+/* ---------------------------------------------------------------------------------------- */
+
+@media (max-width: 40rem) {
+  h1 {
+    font-size: 1.5rem;
+  }
+
+  .facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .check-item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .whoami {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .inspector {
+    padding: 0.75rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .chip,
+  .passage,
+  .banner,
+  .notice {
+    border: 1px solid CanvasText;
+  }
+
+  mark.quote {
+    background: Highlight;
+    color: HighlightText;
+    forced-color-adjust: none;
+  }
+
+  .shape {
+    forced-color-adjust: none;
+    background: CanvasText;
+  }
+
+  .shape-ring {
+    background: transparent;
+    border-color: CanvasText;
+  }
+}
+
+@media print {
+  .demo-banner {
+    position: static;
+  }
+
+  .skip-link,
+  .whoami,
+  .actions {
+    display: none;
+  }
+
+  .inspector {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+}

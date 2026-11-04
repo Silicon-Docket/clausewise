@@ -8,6 +8,7 @@ import type {
   SpanId,
   Status,
 } from "../../contracts.js";
+import { hintCountsFor } from "../../ingest/signals.js";
 import { MAX_EVIDENCE_ITEMS, isUsable, refOf, type Cited, type EvidenceSet } from "./evidence.js";
 import { extractFacts, isPlaceFact, isSupportedFact, type Fact } from "./facts.js";
 import type { CheckOutput, RunIndex } from "./run-index.js";
@@ -380,6 +381,12 @@ export function parties({ rule, set, manifest, bundle, index }: CheckContext): C
  * span is in the bundle and the finding neither cites nor explains it, the claim that no clause
  * exists is not confirmed. This is why `missing` needs the whole document in the bundle: the
  * hints can only be tested against what the model was shown.
+ *
+ * Only the hints that belong to the rule count. A category several rules share holds hints for
+ * each rule's subject, and the clause that lets the recipient share with advisers is no candidate
+ * for a missing clause about disclosure that law requires. A rule names its topics (`hintTopics`);
+ * a hint of another topic is ignored, and a hint with no topic, or a rule with no topics, counts
+ * as before.
  */
 export function missingConfirmation({
   claim,
@@ -406,6 +413,7 @@ export function missingConfirmation({
   const seen = new Set<SpanId>();
   for (const annotation of ingest.annotations) {
     if (annotation.kind !== "keyword_hint" || annotation.category !== rule.category) continue;
+    if (!hintCountsFor(rule.hintTopics, annotation.topic)) continue;
     if (!bundleIds.has(annotation.spanId) || cited.has(annotation.spanId)) continue;
     if (seen.has(annotation.spanId)) continue;
     seen.add(annotation.spanId);

@@ -399,6 +399,43 @@ describe("documents", () => {
     expect(w.repo.getVersion(m.id, m.nda.versionId)?.operative).toBe(false);
   });
 
+  it("can store a version and leave the operative one in place, so that nothing it governs changes", () => {
+    const m = addMatter(w);
+    const before = w.repo.computeInputsDigest(m.id);
+    expect(before).not.toBeNull();
+    const copy = w.repo.addVersion(
+      m.id,
+      m.nda.documentId,
+      version(m.id, "a re-saved copy", { keepOperative: true }),
+      { actorId: ACTORS.associate },
+    );
+    expect(copy).toMatchObject({ versionNo: 2, operative: false });
+    expect(w.repo.getVersion(m.id, m.nda.versionId)?.operative).toBe(true);
+    expect(w.repo.listOperativeDocuments(m.id).map((o) => o.version.id)).toEqual([m.nda.versionId]);
+    // The digest is the one the matter had, so no run or finding is stale and the status holds.
+    expect(w.repo.computeInputsDigest(m.id)).toBe(before);
+    expect(w.repo.getMatter(m.id)?.status).toBe("ready");
+    // The copy is a version like any other: it can be chosen, and then the inputs do change.
+    w.repo.setOperativeVersion(m.id, copy.id, { actorId: ACTORS.associate });
+    expect(w.repo.listOperativeDocuments(m.id).map((o) => o.version.id)).toEqual([copy.id]);
+    expect(w.repo.computeInputsDigest(m.id)).not.toBe(before);
+  });
+
+  it("refuses a version that is to become operative and to leave the operative one in place", () => {
+    const m = addMatter(w);
+    expect(() =>
+      w.repo.addVersion(
+        m.id,
+        m.nda.documentId,
+        version(m.id, "both", { operative: true, keepOperative: true }),
+        { actorId: ACTORS.associate },
+      ),
+    ).toThrow(expect.objectContaining({ name: "ValidationError", code: "operative_conflict" }));
+    // Nothing was written.
+    expect(w.repo.listVersions(m.id, m.nda.documentId)).toHaveLength(1);
+    expect(w.repo.getVersion(m.id, m.nda.versionId)?.operative).toBe(true);
+  });
+
   it("keeps exactly one operative version per document when switching", () => {
     const m = addMatter(w);
     const v2 = w.repo.addVersion(m.id, m.nda.documentId, version(m.id, "v2"), {

@@ -82,6 +82,7 @@ export const toStoredRule = (r: RawRule): StoredRule => {
     guidance: json.guidance,
     fallbackLanguage: json.fallbackLanguage,
     escalateWhen: json.escalateWhen,
+    ...(json.hintTopics === undefined ? {} : { hintTopics: json.hintTopics }),
   };
 };
 

@@ -17,6 +17,7 @@ import { createFindingsApi } from "./repo-findings.js";
 import { createMattersApi } from "./repo-matters.js";
 import { createPlaybooksApi } from "./repo-playbooks.js";
 import { createRunsApi } from "./repo-runs.js";
+import { createWarningsApi } from "./repo-warnings.js";
 import { canTransition } from "./states.js";
 import type { MatterRow } from "./types.js";
 
@@ -123,6 +124,7 @@ export function createRepository(db: Database, options: RepositoryOptions = {}) 
     ...runsApi,
     ...findings,
     ...evals,
+    ...createWarningsApi(ctx),
     // audit
     appendAudit: (input: Omit<AuditInput, "at">) => ctx.audit(input),
     /**

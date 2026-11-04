@@ -240,7 +240,7 @@ export function instructionPatterns(view: string): string[] {
 // Keyword hints
 // ---------------------------------------------------------------------------------------------
 
-/**
+/*
  * A recall backstop. The model finds clauses by meaning and can miss one that is phrased
  * unusually; these hints name every span with a word a human would look for, so the analysis
  * can see it anyway. A hint is not a finding and says nothing about whether a clause complies.
@@ -255,8 +255,62 @@ export function instructionPatterns(view: string): string[] {
  * Fragments are regular expressions on the normalized view, case-insensitive. A leading \b is
  * written in; a trailing one is left off where the word may continue (surviv matches survive,
  * survives and surviving).
+ *
+ * Topics. A category that several rules share has one list of words for all of them, and then a
+ * word that belongs to one rule's subject raises a hint the other rules cannot explain. The demo
+ * playbook has two rules for permitted disclosures: disclosure to representatives (pds-1) and
+ * disclosure required by law (pds-2). A clause about advisers or affiliates, the definition of
+ * "Affiliate", or a paragraph that mentions "the supervising attorney" is no evidence of a
+ * compelled-disclosure clause, yet it hinted the category, and the check that a finding of
+ * "missing" is not contradicted by a hint (missing_confirmation) reported every missing pds-2 as
+ * unexplained. So such a category has one list per topic, every hint carries its topic, and a rule
+ * says which topics matter to it (`hintTopics`, see `hintCountsFor`). The topics of a category are
+ * fixed here, in code, because they are what the words below mean; a playbook can only choose
+ * among them, and its loader refuses a topic the category does not have. A category with no topic
+ * list is hinted as before and its annotations carry no topic.
  */
-const HINTS: Record<CategoryId, string[]> = {
+interface TopicFragments {
+  /** Words that hint the topic wherever they stand. */
+  always: string[];
+  /**
+   * Words too common in other clauses to hint the topic in a sentence about returning, destroying
+   * or keeping copies. "Except for copies required by law or held in routine backups" is the
+   * wording of the playbook's own return rule and says nothing of disclosing, but it holds
+   * "required by law", the phrase a compelled-disclosure clause also uses. Such a word still
+   * hints in every other sentence.
+   */
+  unlessRetention?: string[];
+  /**
+   * Words that show a sentence about copies is also about disclosing, and so lift the guard above
+   * for that sentence: "If the Receiving Party is required by law to disclose Confidential
+   * Information, it shall return or destroy the disclosed copies afterwards" is a
+   * compelled-disclosure clause that happens to speak of copies. The words are the verb of
+   * disclosing and not the noun or the participle, which a return clause uses all the time
+   * ("Confidential Information disclosed to it", "the Disclosing Party"). What this misses: a
+   * compelled-disclosure sentence that speaks of copies, has no such verb and uses none of the
+   * `always` words, such as "copies may be produced to a regulator". What it admits: a return
+   * sentence that also says "cease to use or disclose" and keeps copies "as required by law"
+   * hints the topic. That costs a reviewer a look at one missing pds-2, the cheaper of the two
+   * errors, and no retention clause of the demo dataset words it that way.
+   */
+  despiteRetention?: string[];
+}
+
+type CategoryHints = string[] | Record<string, TopicFragments>;
+
+const RETURN_DESTRUCTION_WORDS = [
+  "\\breturn(?:s|ed|ing)?\\b",
+  "\\bdestr(?:oy|oyed|oying|uction)\\b",
+  "\\bdelete\\b",
+  "\\bdeletion\\b",
+  "\\berase",
+  "\\bpurg(?:e|ed|ing)\\b",
+  "\\bshred",
+  "\\bcopies\\b",
+  "\\bback-?ups?\\b",
+];
+
+const HINTS: Record<CategoryId, CategoryHints> = {
   duration: [
     "\\byears?\\b",
     "\\bmonths?\\b",
@@ -283,17 +337,7 @@ const HINTS: Record<CategoryId, string[]> = {
     "\\barbitra",
     "\\btribunal",
   ],
-  "return-destruction": [
-    "\\breturn(?:s|ed|ing)?\\b",
-    "\\bdestr(?:oy|oyed|oying|uction)\\b",
-    "\\bdelete\\b",
-    "\\bdeletion\\b",
-    "\\berase",
-    "\\bpurg(?:e|ed|ing)\\b",
-    "\\bshred",
-    "\\bcopies\\b",
-    "\\bback-?ups?\\b",
-  ],
+  "return-destruction": RETURN_DESTRUCTION_WORDS,
   exclusions: [
     "\\bpublic\\s+domain\\b",
     "\\balready\\s+known\\b",
@@ -312,32 +356,81 @@ const HINTS: Record<CategoryId, string[]> = {
     "\\bexcludes?\\b",
     "\\b(?:does|shall)\\s+not\\s+include\\b",
   ],
-  "permitted-disclosures": [
-    "\\badvis[eo]rs?\\b",
-    "\\brepresentatives?\\b",
-    "\\baffiliates?\\b",
-    "\\brequired\\s+(?:by|under)\\b",
-    "\\blegally\\s+(?:required|compelled|obliged)\\b",
-    "\\bapplicable\\s+law\\b",
-    "\\blegal\\s+process\\b",
-    "\\bsubpoena",
-    "\\bcourt\\s+orders?\\b",
-    "\\bregulat",
-    "\\bgovernment",
-    "\\bauthorit(?:y|ies)\\b",
-    "\\bcompelled\\b",
-    "\\bneed\\s+to\\s+know\\b",
-    "\\bemployees?\\b",
-    "\\bofficers?\\b",
-    "\\bdirectors?\\b",
-    "\\battorneys?\\b",
-    "\\bcounsel\\b",
-    "\\baccountants?\\b",
-    "\\bauditors?\\b",
-    "\\bconsultants?\\b",
-    "\\bcontractors?\\b",
-    "\\bagents?\\b",
-  ],
+  "permitted-disclosures": {
+    // Who may receive the information. The people and the groups a clause names.
+    representatives: {
+      always: [
+        "\\badvis[eo]rs?\\b",
+        "\\brepresentatives?\\b",
+        "\\baffiliates?\\b",
+        "\\bneed\\s+to\\s+know\\b",
+        "\\bemployees?\\b",
+        "\\bofficers?\\b",
+        "\\bdirectors?\\b",
+        "\\battorneys?\\b",
+        "\\bcounsel\\b",
+        "\\baccountants?\\b",
+        "\\bauditors?\\b",
+        "\\bconsultants?\\b",
+        "\\bcontractors?\\b",
+        "\\bsubcontractors?\\b",
+        "\\bpersonnel\\b",
+        "\\bagents?\\b",
+      ],
+    },
+    // Disclosure the recipient is made to give. The nouns of compulsion hint wherever they stand.
+    // The rest name a source of obligations that other clauses use too, so they do not hint in a
+    // sentence about copies ("copies required by law") unless it also speaks of disclosing. Two are
+    // narrower still: "authority to" is a grant of power ("full power and authority to enter into
+    // this Agreement"), and "applicable law" hints only next to a word of requirement, permission
+    // or necessity, because "a trade secret under applicable law" belongs to a duration clause and
+    // "shall comply with applicable law" is a covenant, not a disclosure.
+    //
+    // The list is wide on purpose, as the other categories' are: the hint is what catches a model
+    // that calls a compelled-disclosure clause missing, and the topic split already keeps these
+    // words away from every rule but the one they belong to.
+    "legal-compulsion": {
+      always: [
+        "\\bsubpoena",
+        "\\bcourt\\s+orders?\\b",
+        // "an order of a court", "an order of a United States federal court".
+        "\\borders?\\s+of\\s+(?:[a-z-]+\\s+){0,5}?(?:court|tribunal)\\b",
+        "\\blegal\\s+process\\b",
+        "\\bjudicial\\s+(?:process|orders?|decrees?|demands?)\\b",
+        "\\bcompelled\\b",
+        "\\bcompulsory\\b",
+        "\\bcompulsion\\b",
+        // "a court compels the Receiving Party to disclose", but not "ask a court to compel
+        // specific performance".
+        "\\bcompel(?:s|ling)?\\b[^.;]{0,60}?\\b(?:disclos(?:e|ure)|produc(?:e|tion)|reveal|divulg|furnish)",
+        "\\b(?:disclose|produce|reveal|divulge|furnish)\\b[^.;]{0,60}?\\bcompel(?:s|ling)?\\b",
+        // "if a court so ordered"
+        "\\bso\\s+ordered\\b",
+      ],
+      unlessRetention: [
+        "\\brequired\\s+(?:by|under)\\b",
+        // "required to do so by law", "ordered to do so by a court", "demanded by a court of
+        // competent jurisdiction", "obliged to do so under the law of any country".
+        "\\b(?:require[sd]?|requiring|demand(?:s|ed|ing)?|order(?:s|ed|ing)?|direct(?:s|ed)?|mandat(?:e[sd]?|ing)|request(?:s|ed|ing)?|obliged|compel(?:s|led|ling)?)\\b[^.;]{0,40}?\\b(?:by|under|from)\\s+(?:(?:applicable|any|the|a|an|such|relevant|competent|its|their|each)\\s+)*(?:laws?|legislation|statutes?|regulat|rules?|ordinances?|courts?|tribunals?|judges?|judicial|government|legal|authorit|subpoena|stock\\s+exchange|securities\\s+exchange)",
+        "\\blegally\\s+(?:required|obliged|obligated)\\b",
+        "\\blegal\\s+(?:requirements?|obligations?|compulsions?)\\b",
+        "\\b(?:requir|compel|permit|oblig|mandat|demand)\\w*\\b[^.;]{0,30}?\\bapplicable\\s+laws?\\b",
+        "\\bapplicable\\s+laws?\\b[^.;]{0,30}?\\b(?:requir|compel|permit|oblig|mandat|demand)",
+        // "to the extent necessary to comply with applicable law", "in order to comply with the
+        // law". A bare "comply with applicable law" is a covenant and does not match.
+        "\\b(?:necessary|needed|required|order|extent)\\b[^.;]{0,20}?\\bcompl(?:y|ying|iance)\\b[^.;]{0,40}?\\b(?:applicable\\s+)?(?:laws?|legal|regulat)",
+        "\\bso\\s+(?:require[sd]?|direct(?:s|ed)?|compel(?:s|led)?|demand(?:s|ed)?|order(?:s|ed)?)\\b",
+        "\\bregulat",
+        "\\bgovernment",
+        // "any authority to which it is subject", but not "authority to bind the Party".
+        "\\bauthorit(?:y|ies)\\b(?!\\s+to\\s+(?!which\\b|whom\\b|whose\\b))",
+      ],
+      despiteRetention: [
+        "\\bdisclose\\b",
+        "\\bdisclosing\\b(?!\\s+(?:part(?:y|ies)|person|entity|company)\\b)",
+      ],
+    },
+  },
   parties: [
     "\\bbetween\\b",
     "\\bcorporation\\b",
@@ -356,14 +449,116 @@ const HINTS: Record<CategoryId, string[]> = {
   ],
 };
 
-const HINT_PATTERNS: [CategoryId, RegExp][] = CATEGORY_IDS.map((category) => [
-  category,
-  new RegExp(HINTS[category].join("|"), "i"),
-]);
+/** The topics of each category, in the order the lists above give them. Empty for a category with none. */
+export const HINT_TOPICS: Readonly<Record<CategoryId, readonly string[]>> = (() => {
+  const topics = {} as Record<CategoryId, readonly string[]>;
+  for (const category of CATEGORY_IDS) {
+    const hints = HINTS[category];
+    topics[category] = Array.isArray(hints) ? [] : Object.keys(hints);
+  }
+  return topics;
+})();
+
+/** A sentence about returning, destroying or keeping copies. See `TopicFragments.unlessRetention`. */
+const RETENTION_SENTENCE = new RegExp(
+  [...RETURN_DESTRUCTION_WORDS, "\\bretain(?:s|ed|ing)?\\b", "\\bretention\\b", "\\barchiv"].join(
+    "|",
+  ),
+  "i",
+);
+
+// Cut after . ; : ! ? that is followed by white space, so "Section 4.2" is not cut. A cut in the
+// wrong place (an abbreviation) can only separate a retention word from the phrase it would have
+// silenced, which keeps the hint.
+const SENTENCE_END = /(?<=[.;:!?])\s+/;
+
+interface CompiledTopic {
+  topic: string | undefined;
+  always: RegExp | null;
+  unlessRetention: RegExp | null;
+  despiteRetention: RegExp | null;
+}
+
+const compile = (fragments: string[] | undefined): RegExp | null =>
+  fragments === undefined || fragments.length === 0 ? null : new RegExp(fragments.join("|"), "i");
+
+const COMPILED: [CategoryId, CompiledTopic[]][] = CATEGORY_IDS.map((category) => {
+  const hints = HINTS[category];
+  return [
+    category,
+    Array.isArray(hints)
+      ? [
+          {
+            topic: undefined,
+            always: compile(hints),
+            unlessRetention: null,
+            despiteRetention: null,
+          },
+        ]
+      : Object.entries(hints).map(([topic, fragments]) => ({
+          topic,
+          always: compile(fragments.always),
+          unlessRetention: compile(fragments.unlessRetention),
+          despiteRetention: compile(fragments.despiteRetention),
+        })),
+  ];
+});
+
+function hintsTopic(view: string, topic: CompiledTopic): boolean {
+  if (topic.always?.test(view)) return true;
+  const guarded = topic.unlessRetention;
+  if (guarded === null || !guarded.test(view)) return false;
+  const lifted = topic.despiteRetention;
+  return view
+    .split(SENTENCE_END)
+    .some(
+      (sentence) =>
+        guarded.test(sentence) &&
+        (!RETENTION_SENTENCE.test(sentence) || (lifted?.test(sentence) ?? false)),
+    );
+}
+
+/** One kind of keyword hint on a span. The topic is absent for a category that has none. */
+export interface KeywordHint {
+  category: CategoryId;
+  topic?: string;
+}
+
+// Plain code-unit order, as in annotate.ts: the result must not depend on the machine's locale.
+const compareText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * The hints a span raises, by category and then topic, in alphabetical order. A span can hint
+ * several categories and, within a category that has topics, several topics.
+ */
+export function keywordHints(view: string): KeywordHint[] {
+  const found: KeywordHint[] = [];
+  for (const [category, topics] of COMPILED) {
+    for (const topic of topics) {
+      if (!hintsTopic(view, topic)) continue;
+      found.push(topic.topic === undefined ? { category } : { category, topic: topic.topic });
+    }
+  }
+  return found.sort(
+    (a, b) => compareText(a.category, b.category) || compareText(a.topic ?? "", b.topic ?? ""),
+  );
+}
 
 /** The categories a span is hinted for, in alphabetical order. */
 export function keywordCategories(view: string): CategoryId[] {
-  return HINT_PATTERNS.filter(([, pattern]) => pattern.test(view))
-    .map(([category]) => category)
-    .sort();
+  return [...new Set(keywordHints(view).map((hint) => hint.category))];
+}
+
+/**
+ * Whether a hint with this topic counts for a rule that lists these topics. A rule that lists none
+ * (an empty list, or a record that has no such field) takes every hint of its category, and a hint
+ * with no topic, such as one stored before topics existed, counts for every rule: both leave the
+ * behaviour of a playbook without topics exactly as it was.
+ */
+export function hintCountsFor(
+  hintTopics: readonly string[] | undefined,
+  topic: string | undefined,
+): boolean {
+  if (hintTopics === undefined || hintTopics.length === 0 || topic === undefined) return true;
+  return hintTopics.includes(topic);
 }
