@@ -1,5 +1,7 @@
 {
   "extends": "../tsconfig.base.json",
-  "compilerOptions": { "allowImportingTsExtensions": false },
-  "include": ["*.ts", "../fixtures/*.ts"]
+  "compilerOptions": {
+    "allowImportingTsExtensions": false
+  },
+  "include": ["*.ts", "../fixtures/*.ts", "../fixtures/parol/*.ts"]
 }

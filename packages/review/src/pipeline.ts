@@ -405,7 +405,7 @@ function fallbackExplanation(rule: Rule, status: Finding["status"]): string {
 // The playbook, not the model, decides whether a clause that is absent matters. For a rule that
 // forbids something, a contract without it is what the playbook wants, whatever the model called
 // that and whether or not the rule is marked required.
-function settledStatus(rule: Rule, status: RuleCheck["status"]): Finding["status"] {
+export function settledStatus(rule: Rule, status: RuleCheck["status"]): Finding["status"] {
   if (rule.kind === "absence") {
     return status === "missing" || status === "not_applicable" ? "compliant" : status;
   }

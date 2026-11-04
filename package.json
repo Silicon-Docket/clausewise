@@ -17,7 +17,11 @@
     "test": "vitest run",
     "fixtures": "tsx tools/make-fixtures.ts",
     "clausewise": "node apps/cli/bin/clausewise.mjs",
-    "eval": "tsx evals/src/run.ts"
+    "eval": "tsx evals/src/run.ts",
+    "parol": "tsx apps/parol/src/main.ts",
+    "parol:seed": "tsx apps/parol/src/seed.ts",
+    "fixtures:parol": "tsx tools/make-parol-fixtures.ts",
+    "eval:parol": "tsx evals/src/parol/run.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

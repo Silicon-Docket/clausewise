@@ -1,0 +1,142 @@
+name: Parol NDA (Recipient)
+version: 1.0.0
+description: Fictional practice-group playbook for the Parol demonstration. It is invented
+  client policy, not a statement of law, and must not be used for a real matter.
+contractTypes: [nda]
+perspective: We act for the party that expects to receive most of the information under a mutual
+  or one-way NDA. The client's exact legal name is given at intake. We want narrow, time-limited,
+  workable obligations that bind both parties equally.
+rules:
+  - id: pty-1
+    category: parties
+    title: Parties correctly identified
+    severity: medium
+    required: true
+    standard: The agreement names each party by its full legal name and entity type, our client's
+      name matches the name given at intake exactly, and it is clear which party discloses and
+      which receives, or that both do.
+    unacceptable: Our client is named as a different entity, such as a parent or affiliate, or
+      affiliates of either party are made parties without being listed by name.
+    fallbackLanguage: '[Client legal name], a [jurisdiction] [entity type] ("[Short name]")'
+    escalateWhen:
+      - id: entity-differs
+        text: The agreement names a different entity in our client's group from the one given at
+          intake.
+    guidance: Correct the entity name in the preamble and the signature block. Never guess an
+      entity type.
+
+  - id: def-1
+    category: ci-definition
+    title: Scope of Confidential Information
+    severity: medium
+    required: true
+    standard: Confidential Information is information marked or identified as confidential, or
+      that a reasonable person would understand to be confidential from its nature or the
+      circumstances of disclosure.
+    fallback: Only information disclosed in writing and marked confidential, or disclosed orally
+      and identified as confidential in writing within 30 days.
+    unacceptable: All information of any kind, in any form, whether or not marked or identified as
+      confidential.
+    fallbackLanguage: '"Confidential Information" means non-public information disclosed by the
+      Disclosing Party to the Receiving Party that is marked or identified as confidential at the
+      time of disclosure, or that a reasonable person would understand to be confidential given its
+      nature and the circumstances of disclosure.'
+
+  - id: exc-1
+    category: exclusions
+    title: Four standard exclusions
+    severity: high
+    required: true
+    standard: Confidential Information excludes information that (a) is or becomes public through
+      no fault of the recipient, (b) the recipient already knew without a duty of confidence, (c)
+      the recipient develops independently without using the discloser's information, and (d) the
+      recipient receives from a third party without a duty of confidence.
+    unacceptable: Any of the four is missing, or an exclusion requires proof by contemporaneous
+      written records only.
+    fallbackLanguage: Confidential Information does not include information that (a) is or becomes
+      generally available to the public other than through a breach of this Agreement by the
+      Receiving Party; (b) was known to the Receiving Party without a duty of confidentiality
+      before disclosure; (c) is independently developed by the Receiving Party without use of the
+      Disclosing Party's Confidential Information; or (d) is received by the Receiving Party from a
+      third party without a duty of confidentiality.
+
+  - id: pds-1
+    category: permitted-disclosures
+    title: Disclosure to representatives
+    severity: medium
+    required: true
+    standard: The recipient may share Confidential Information with its and its affiliates'
+      employees, officers, contractors and professional advisers who need to know it for the
+      purpose and are bound by confidentiality duties no less protective than the agreement.
+    unacceptable: Advisers or affiliates are excluded, or each disclosure needs the discloser's
+      prior written consent.
+    fallbackLanguage: The Receiving Party may disclose Confidential Information to its and its
+      affiliates' employees, officers, contractors and professional advisers who need to know it
+      for the Purpose and who are bound by obligations of confidentiality no less protective than
+      those in this Agreement.
+
+  - id: pds-2
+    category: permitted-disclosures
+    title: Disclosure required by law
+    severity: medium
+    required: true
+    standard: A dedicated clause lets the recipient disclose what law, regulation or court order
+      requires, with prompt notice to the discloser where legally permitted and reasonably
+      practicable.
+    unacceptable: No right to make a legally required disclosure, or a duty to resist disclosure at
+      the recipient's own cost.
+    fallbackLanguage: The Receiving Party may disclose Confidential Information to the extent
+      required by law, regulation or order of a court or governmental authority, provided that,
+      where legally permitted and reasonably practicable, it gives the Disclosing Party prompt
+      notice so that the Disclosing Party may seek a protective order at its own cost.
+    guidance: A general duty of confidence elsewhere in the agreement is not such a clause.
+
+  - id: dur-1
+    category: duration
+    title: Duration of confidentiality obligations
+    severity: high
+    required: true
+    standard: Obligations end three years or less after each disclosure. Continued protection of
+      trade secrets for as long as they remain trade secrets is acceptable.
+    fallback: Obligations end five years or less after the agreement ends.
+    unacceptable: Obligations that are perpetual or have no stated end, for information that is
+      not a trade secret.
+    fallbackLanguage: The obligations of each Receiving Party under this Agreement shall continue
+      for three (3) years from the date of each disclosure of Confidential Information, except that
+      obligations with respect to any trade secret shall continue for so long as it remains a trade
+      secret under applicable law.
+    escalateWhen:
+      - id: over-five-years
+        text: The stated period is longer than the fallback but finite, which is a business
+          decision.
+
+  - id: ret-1
+    category: return-destruction
+    title: Return or destruction of information
+    severity: low
+    required: false
+    standard: On written request the recipient returns or destroys Confidential Information within
+      30 days or longer, and may keep copies required by law or held in routine backups, which
+      remain confidential.
+    unacceptable: A deadline shorter than 30 days, or a duty to purge routine backups.
+    fallbackLanguage: Within thirty (30) days after the Disclosing Party's written request, the
+      Receiving Party shall return or destroy the Disclosing Party's Confidential Information,
+      except that it may retain copies required by law or held in routine backup systems, which
+      remain subject to this Agreement.
+    guidance: An officer's certificate of destruction is not a deviation on its own.
+
+  - id: gov-1
+    category: governing-law
+    title: Governing law and forum
+    severity: medium
+    required: true
+    standard: The agreement is governed by the law of Delaware, New York, or England and Wales, and
+      any exclusive forum is in one of those places.
+    unacceptable: A governing law or an exclusive forum outside the approved list.
+    fallbackLanguage: This Agreement is governed by the laws of the State of Delaware, and the
+      parties submit to the exclusive jurisdiction of the state and federal courts located in
+      Delaware.
+    escalateWhen:
+      - id: forum-outside-list
+        text: The governing law or exclusive forum is outside the approved list. Forum is a
+          business decision for the responsible attorney.

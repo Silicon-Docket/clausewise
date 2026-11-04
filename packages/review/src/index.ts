@@ -1,6 +1,12 @@
-export { anchorEdit, type AnchorResult } from "./anchor.js";
+export {
+  anchorEdit,
+  locateQuote,
+  normalizeForAnchor,
+  type AnchorResult,
+  type QuoteLocation,
+} from "./anchor.js";
 export { ReviewError } from "./errors.js";
-export { contextFloor, reviewContract, windowReserve } from "./pipeline.js";
+export { contextFloor, reviewContract, settledStatus, windowReserve } from "./pipeline.js";
 export {
   buildRulePrompt,
   estimateTokens,

@@ -226,6 +226,52 @@ function scan(paragraph: ClauseParagraph, quote: string): Scan {
   return first ? { count, inWord, first } : { count, inWord };
 }
 
+/** Where a quote sits inside one piece of text, as `locateQuote` finds it. */
+export type QuoteLocation =
+  | {
+      found: "one";
+      /** Offsets into the text as it appears in the document, not the normalized form. */
+      start: number;
+      end: number;
+      /** The exact document text at [start, end). */
+      original: string;
+    }
+  | {
+      found: "many";
+      /** How many times the quote occurs. The offsets are those of the first occurrence. */
+      count: number;
+      start: number;
+      end: number;
+    }
+  | {
+      found: "none";
+      /** True when the words occur only inside longer words, which does not count as a match. */
+      onlyInsideWords: boolean;
+    };
+
+/**
+ * Finds a quote inside one piece of text, under the same normalization and the same whole-word
+ * rule that `anchorEdit` applies to an edit, so a quote that anchors an edit also verifies as
+ * evidence and the reverse. A quote that is empty after normalization is not found. The result
+ * never repeats the quote or the text.
+ */
+export function locateQuote(text: string, quote: string): QuoteLocation {
+  const needle = trimSpace(normalize(quote).text);
+  if (needle === "") return { found: "none", onlyInsideWords: false };
+  const found = scan({ id: "", text }, needle);
+  const first = found.first;
+  if (first === undefined) return { found: "none", onlyInsideWords: found.inWord > 0 };
+  if (found.count > 1) {
+    return { found: "many", count: found.count, start: first.start, end: first.end };
+  }
+  return {
+    found: "one",
+    start: first.start,
+    end: first.end,
+    original: text.slice(first.start, first.end),
+  };
+}
+
 // Removes whitespace from the sides where the quote lost it, and nothing else.
 function trimEdges(text: string, leading: boolean, trailing: boolean): string {
   let start = 0;

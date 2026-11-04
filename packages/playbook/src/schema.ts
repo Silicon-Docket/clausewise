@@ -19,6 +19,11 @@ const visible = z
   .string()
   .refine(hasVisibleText, "must contain a visible character, not only spaces or invisible ones");
 
+export const EscalateWhenSchema = z.strictObject({
+  id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, "use lowercase letters, digits and hyphens"),
+  text: visible,
+});
+
 export const RuleSchema = z.strictObject({
   id: z
     .string()
@@ -43,11 +48,28 @@ export const RuleSchema = z.strictObject({
   unacceptable: visible.optional(),
   /** Free-form advice on how to word a fix. It is not a further test of the standard. */
   guidance: visible.optional(),
+  /** Which part of the agreement the rule belongs to. Several rules may share a category. */
+  category: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9-]*$/, "use lowercase letters, digits and hyphens")
+    .optional(),
+  /**
+   * Approved wording a reviewer may offer when the standard is not met. Unlike `fallback`, which
+   * describes a position, this is text, so a tool can show it verbatim or adapt it.
+   */
+  fallbackLanguage: visible.optional(),
+  /** Situations that go to an attorney whatever the status, each with a stable id to cite. */
+  escalateWhen: z.array(EscalateWhenSchema).optional(),
 });
 
 export const PlaybookSchema = z
   .strictObject({
     name: visible,
+    /** Semantic version of this playbook, such as 1.0.0. Tools that pin a version require it. */
+    version: z
+      .string()
+      .regex(/^\d+\.\d+\.\d+$/, "use three numbers separated by dots, such as 1.0.0")
+      .optional(),
     description: visible.optional(),
     contractTypes: z.array(visible).min(1),
     /**
@@ -76,6 +98,17 @@ export const PlaybookSchema = z
         });
       }
       seen.add(rule.id);
+      const escalationIds = new Set<string>();
+      rule.escalateWhen?.forEach((item, j) => {
+        if (escalationIds.has(item.id)) {
+          ctx.addIssue({
+            code: "custom",
+            message: `duplicate escalateWhen id "${item.id}" in rule "${rule.id}"`,
+            path: ["rules", i, "escalateWhen", j, "id"],
+          });
+        }
+        escalationIds.add(item.id);
+      });
     });
   });
 

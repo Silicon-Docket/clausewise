@@ -13,3 +13,6 @@ evals/results/*
 *.redlined.docx
 *.report.json
 *.summary.md
+
+# Parol's local database and matter files, which hold whatever documents were uploaded
+data/

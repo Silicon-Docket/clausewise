@@ -1,0 +1,27 @@
+{
+  "name": "@clausewise/parol",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@clausewise/docx": "workspace:*",
+    "@clausewise/llm": "workspace:*",
+    "@clausewise/playbook": "workspace:*",
+    "@clausewise/review": "workspace:*",
+    "@hono/node-server": "^2.1.6",
+    "docx": "^9.12.0",
+    "hono": "^4.13.16",
+    "tsx": "^4.23.15",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "jszip": "^3.10.2"
+  }
+}
