@@ -17,6 +17,7 @@
     "test": "vitest run",
     "fixtures": "tsx tools/make-fixtures.ts",
     "clausewise": "node apps/cli/bin/clausewise.mjs",
+    "web": "tsx apps/web/src/main.ts",
     "eval": "tsx evals/src/run.ts"
   },
   "devDependencies": {

@@ -20,3 +20,4 @@ export type {
   User,
 } from "./types.js";
 export { processReviewJob, type JobOutcome, type ReviewWorkerDeps } from "./worker.js";
+export { runWorker, type WorkerLoopOptions } from "./loop.js";
