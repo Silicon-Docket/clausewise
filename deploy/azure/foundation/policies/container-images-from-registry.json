@@ -1,0 +1,133 @@
+{
+  "displayName": "Clausewise: container apps and jobs must run images from the firm's registry, by digest",
+  "policyType": "Custom",
+  "mode": "Indexed",
+  "description": "Denies a container app or Container Apps job if any container or init container image is not in the given registry or is not referenced by digest (@sha256:). A tag can be moved to other content; a digest cannot.",
+  "metadata": {
+    "category": "Clausewise",
+    "version": "1.0.0"
+  },
+  "parameters": {
+    "loginServer": {
+      "type": "String",
+      "metadata": {
+        "displayName": "Registry login server",
+        "description": "The login server of the only registry images may come from, such as contoso.azurecr.io."
+      }
+    },
+    "effect": {
+      "type": "String",
+      "metadata": {
+        "displayName": "Effect",
+        "description": "Deny refuses the request. Audit only reports it."
+      },
+      "allowedValues": ["Deny", "Audit", "Disabled"],
+      "defaultValue": "Deny"
+    }
+  },
+  "policyRule": {
+    "if": {
+      "anyOf": [
+        {
+          "allOf": [
+            {
+              "field": "type",
+              "equals": "Microsoft.App/containerApps"
+            },
+            {
+              "anyOf": [
+                {
+                  "count": {
+                    "field": "Microsoft.App/containerApps/template.containers[*]",
+                    "where": {
+                      "anyOf": [
+                        {
+                          "field": "Microsoft.App/containerApps/template.containers[*].image",
+                          "notLike": "[concat(parameters('loginServer'), '/*')]"
+                        },
+                        {
+                          "field": "Microsoft.App/containerApps/template.containers[*].image",
+                          "notContains": "@sha256:"
+                        }
+                      ]
+                    }
+                  },
+                  "greater": 0
+                },
+                {
+                  "count": {
+                    "field": "Microsoft.App/containerApps/template.initContainers[*]",
+                    "where": {
+                      "anyOf": [
+                        {
+                          "field": "Microsoft.App/containerApps/template.initContainers[*].image",
+                          "notLike": "[concat(parameters('loginServer'), '/*')]"
+                        },
+                        {
+                          "field": "Microsoft.App/containerApps/template.initContainers[*].image",
+                          "notContains": "@sha256:"
+                        }
+                      ]
+                    }
+                  },
+                  "greater": 0
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "field": "type",
+              "equals": "Microsoft.App/jobs"
+            },
+            {
+              "anyOf": [
+                {
+                  "count": {
+                    "field": "Microsoft.App/jobs/template.containers[*]",
+                    "where": {
+                      "anyOf": [
+                        {
+                          "field": "Microsoft.App/jobs/template.containers[*].image",
+                          "notLike": "[concat(parameters('loginServer'), '/*')]"
+                        },
+                        {
+                          "field": "Microsoft.App/jobs/template.containers[*].image",
+                          "notContains": "@sha256:"
+                        }
+                      ]
+                    }
+                  },
+                  "greater": 0
+                },
+                {
+                  "count": {
+                    "field": "Microsoft.App/jobs/template.initContainers[*]",
+                    "where": {
+                      "anyOf": [
+                        {
+                          "field": "Microsoft.App/jobs/template.initContainers[*].image",
+                          "notLike": "[concat(parameters('loginServer'), '/*')]"
+                        },
+                        {
+                          "field": "Microsoft.App/jobs/template.initContainers[*].image",
+                          "notContains": "@sha256:"
+                        }
+                      ]
+                    }
+                  },
+                  "greater": 0
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "then": {
+      "effect": "[parameters('effect')]"
+    }
+  }
+}
