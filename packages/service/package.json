@@ -1,0 +1,25 @@
+{
+  "name": "@clausewise/service",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./memory": "./src/memory.ts",
+    "./node": "./src/node.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@clausewise/docx": "workspace:*",
+    "@clausewise/llm": "workspace:*",
+    "@clausewise/playbook": "workspace:*",
+    "@clausewise/review": "workspace:*"
+  },
+  "devDependencies": {
+    "@clausewise/cli": "workspace:*",
+    "jszip": "^3.10.2"
+  }
+}
