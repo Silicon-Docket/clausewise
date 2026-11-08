@@ -13,6 +13,9 @@ independent and not affiliated with any of them.
 > before you point it at a real contract. The web app, Docker image and Word add-in do not
 > exist yet.
 
+The plan for a web app and Word add-in that run inside a firm's own Azure tenant, with no
+stored secrets and no outbound internet, is in [docs/azure-in-tenant.md](docs/azure-in-tenant.md).
+
 ## What it does
 
 ```sh
