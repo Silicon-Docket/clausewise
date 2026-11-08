@@ -135,16 +135,21 @@ It lists the rules and marks the absence rules.
 
 Everything is set through environment variables. `pnpm clausewise --help` lists them all.
 
-| Variable                        | Meaning                                                                            |
-| ------------------------------- | ---------------------------------------------------------------------------------- |
-| `CLAUSEWISE_PROVIDER`           | `anthropic` (default), `openai` or `openai-compatible`                             |
-| `CLAUSEWISE_MODEL`              | Model name. Defaults to `claude-sonnet-5-5` for anthropic only                     |
-| `ANTHROPIC_API_KEY`             | Required for anthropic                                                             |
-| `OPENAI_API_KEY`                | Required for openai                                                                |
-| `CLAUSEWISE_BASE_URL`           | Required for openai-compatible, for example `http://localhost:11434/v1` for Ollama |
-| `CLAUSEWISE_MAX_CONTEXT_TOKENS` | Review in parts when the contract is longer than this                              |
-| `CLAUSEWISE_CONCURRENCY`        | Rule checks in flight at once. Default 4                                           |
-| `CLAUSEWISE_FALLBACK`           | `default` lets the Anthropic API rerun a declined request on a second model        |
+| Variable                        | Meaning                                                                                                                                                   |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CLAUSEWISE_PROVIDER`           | `anthropic` (default), `openai`, `openai-compatible` or `azure-openai`                                                                                    |
+| `CLAUSEWISE_MODEL`              | Model name. Defaults to `claude-sonnet-5-5` for anthropic only                                                                                            |
+| `ANTHROPIC_API_KEY`             | Required for anthropic                                                                                                                                    |
+| `OPENAI_API_KEY`                | Required for openai                                                                                                                                       |
+| `CLAUSEWISE_BASE_URL`           | Required for openai-compatible, for example `http://localhost:11434/v1` for Ollama, and for azure-openai, `https://<resource>.openai.azure.com/openai/v1` |
+| `AZURE_CLIENT_ID`               | azure-openai only: the user-assigned managed identity to sign in as                                                                                       |
+| `CLAUSEWISE_MAX_CONTEXT_TOKENS` | Review in parts when the contract is longer than this                                                                                                     |
+| `CLAUSEWISE_CONCURRENCY`        | Rule checks in flight at once. Default 4                                                                                                                  |
+| `CLAUSEWISE_FALLBACK`           | `default` lets the Anthropic API rerun a declined request on a second model                                                                               |
+
+`azure-openai` takes no key. It signs in with the managed identity of the Azure Container Apps or
+App Service app it runs in, so it works only there; `CLAUSEWISE_MODEL` is the name of the
+deployment. See [docs/azure-in-tenant.md](docs/azure-in-tenant.md).
 
 Use a model with reliable structured output. Small local models may need a short context and
 will give weaker findings. The context limit has to leave room for a clause or two on top of the

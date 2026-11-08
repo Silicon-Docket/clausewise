@@ -57,12 +57,19 @@ Where your contract goes:
   server such as Ollama.
 
 Environment variables:
-  CLAUSEWISE_PROVIDER             anthropic (default), openai or openai-compatible.
-  CLAUSEWISE_MODEL                The model name. Required unless the provider is anthropic.
+  CLAUSEWISE_PROVIDER             anthropic (default), openai, openai-compatible or azure-openai.
+  CLAUSEWISE_MODEL                The model name, or for azure-openai the deployment name.
+                                  Required unless the provider is anthropic.
   ANTHROPIC_API_KEY               Your Anthropic API key. Required for the anthropic provider.
   OPENAI_API_KEY                  Your OpenAI API key. Required for the openai provider.
   CLAUSEWISE_API_KEY              The key for an openai-compatible server. Optional.
-  CLAUSEWISE_BASE_URL             The API root. Required for openai-compatible, optional otherwise.
+  CLAUSEWISE_BASE_URL             The API root. Required for openai-compatible and azure-openai
+                                  (https://<resource>.openai.azure.com/openai/v1), optional
+                                  otherwise.
+  AZURE_CLIENT_ID                 azure-openai only: the user-assigned managed identity to sign
+                                  in as. azure-openai takes no key and runs only inside Azure
+                                  Container Apps or App Service, which set IDENTITY_ENDPOINT and
+                                  IDENTITY_HEADER.
   CLAUSEWISE_MAX_OUTPUT_TOKENS    Most tokens in one model response. Default 16000.
   CLAUSEWISE_EFFORT               Anthropic only: low, medium, high, xhigh or max.
   CLAUSEWISE_CONCURRENCY          How many rule checks run at once. Default 4.

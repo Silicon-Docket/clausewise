@@ -5,6 +5,12 @@ export {
   type AnthropicUsageAttempt,
 } from "./anthropic.js";
 export { loadLlmConfig } from "./config.js";
+export {
+  AZURE_OPENAI_RESOURCE,
+  createManagedIdentityTokenSource,
+  type ManagedIdentityConfig,
+  type TokenSource,
+} from "./managed-identity.js";
 export { ModelRequestError, createObjectGenerator } from "./generator.js";
 export type { ModelRequestKind } from "./request-error.js";
 export {

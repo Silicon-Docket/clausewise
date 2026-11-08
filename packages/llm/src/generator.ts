@@ -16,6 +16,11 @@ import {
 } from "./anthropic.js";
 import { connectionNotes, isLocalHostname, parseUrl } from "./endpoint.js";
 import {
+  createManagedIdentityTokenSource,
+  withBearerToken,
+  type TokenSource,
+} from "./managed-identity.js";
+import {
   ModelRequestError,
   classifyProviderError,
   isFatalKind,
@@ -58,6 +63,11 @@ function describeDestination(config: LlmConfig): string {
         : "a remote server you configured";
       return `OpenAI-compatible server (${[url.host, ...(through ? [] : [where]), ...notes].join(", ")})`;
     }
+    case "azure-openai": {
+      const url = parseUrl(config.baseUrl);
+      if (url === undefined) return "Azure OpenAI (address not set)";
+      return `Azure OpenAI (${[url.host, "signed in with a managed identity", ...connectionNotes(url)].join(", ")})`;
+    }
   }
 }
 
@@ -66,8 +76,13 @@ function describeDestination(config: LlmConfig): string {
 // what the disclosure says.
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
 
-// Anthropic goes through its own SDK in anthropic.ts, so only these two reach the AI SDK.
-type AiSdkConfig = LlmConfig & { provider: "openai" | "openai-compatible" };
+// Anthropic goes through its own SDK in anthropic.ts, so only these reach the AI SDK.
+type AiSdkConfig = LlmConfig & { provider: "openai" | "openai-compatible" | "azure-openai" };
+
+// The SDK reads OPENAI_API_KEY from the environment when it is given no key, and would send it to
+// Azure. This fixed value stops that, and withBearerToken replaces it on every request, so it is
+// never sent anywhere.
+const AZURE_PLACEHOLDER_KEY = "managed-identity";
 
 function usesAiSdk(config: LlmConfig): config is AiSdkConfig {
   return config.provider !== "anthropic";
@@ -75,7 +90,26 @@ function usesAiSdk(config: LlmConfig): config is AiSdkConfig {
 
 // Optional fields are spread in only when set. The SDK's option types reject an explicit undefined,
 // and an unset key must stay unset so a keyless local server gets no Authorization header at all.
-function buildModel(config: AiSdkConfig, fetchOverride: typeof globalThis.fetch | undefined) {
+function buildModel(
+  config: AiSdkConfig,
+  fetchOverride: typeof globalThis.fetch | undefined,
+  tokenSource: TokenSource | undefined,
+) {
+  if (config.provider === "azure-openai") {
+    if (config.baseUrl === undefined || tokenSource === undefined) {
+      throw new LlmConfigError(
+        "azure-openai needs CLAUSEWISE_BASE_URL and a managed identity. Load the settings with " +
+          "loadLlmConfig.",
+      );
+    }
+    // Chat Completions rather than the Responses API: every Azure OpenAI deployment offers it,
+    // and it keeps nothing unless asked to.
+    return createOpenAI({
+      apiKey: AZURE_PLACEHOLDER_KEY,
+      baseURL: config.baseUrl,
+      fetch: refuseRedirects(withBearerToken(tokenSource, fetchOverride)),
+    }).chat(config.model);
+  }
   const shared = {
     ...(config.apiKey === undefined ? {} : { apiKey: config.apiKey }),
     // Every request goes through the wrapper, with or without a stand-in for the network.
@@ -115,6 +149,9 @@ function callSettings(config: AiSdkConfig): CallSettings {
     case "openai-compatible":
       // Local models drift between runs, and a rule check should give the same answer twice.
       return { temperature: 0 };
+    case "azure-openai":
+      // Reasoning deployments reject a temperature, so sampling is left to the deployment.
+      return {};
   }
 }
 
@@ -162,6 +199,25 @@ function providerBody(responseBody: string | undefined): ProviderBody {
 }
 
 function hints(config: AiSdkConfig): Record<ModelRequestKind, string> {
+  if (config.provider === "azure-openai") {
+    return {
+      auth:
+        "Check that the managed identity has the Cognitive Services OpenAI User role on this " +
+        "resource, and that AZURE_CLIENT_ID names it.",
+      permission:
+        "Check that the managed identity has the Cognitive Services OpenAI User role on this " +
+        "resource.",
+      not_found:
+        "Check that CLAUSEWISE_MODEL is the name of a deployment on this resource, and that " +
+        "CLAUSEWISE_BASE_URL ends in /openai/v1.",
+      billing: "Check the quota of this deployment and the state of the subscription.",
+      rate_limit: "Lower CLAUSEWISE_CONCURRENCY, or raise the deployment's quota.",
+      overloaded: "",
+      server: "",
+      network: "",
+      other: "",
+    };
+  }
   const keyName = config.provider === "openai" ? "OPENAI_API_KEY" : "CLAUSEWISE_API_KEY";
   return {
     auth: `Check that ${keyName} is a valid, active key for this server.`,
@@ -187,7 +243,7 @@ type Attempt<T> = { ok: true; value: T } | { ok: false; truncated: boolean };
  */
 export function createObjectGenerator(
   config: LlmConfig,
-  overrides?: { model?: LanguageModel } & AnthropicOverrides,
+  overrides?: { model?: LanguageModel; tokenSource?: TokenSource } & AnthropicOverrides,
 ): ObjectGenerator {
   // A bare string would be resolved by the AI SDK's default provider, the Vercel AI Gateway, and
   // the document would leave for a service nobody configured.
@@ -205,7 +261,19 @@ export function createObjectGenerator(
     }
     return createAnthropicGenerator(config, overrides);
   }
-  const model = overrides?.model ?? buildModel(config, overrides?.fetch);
+  // azure-openai gets its token before each call as well as on the wire, so that an identity that
+  // cannot sign in is reported as such, not as a connection the SDK could not make.
+  const tokenSource =
+    overrides?.tokenSource ??
+    (config.provider === "azure-openai" &&
+    config.azure !== undefined &&
+    overrides?.model === undefined
+      ? createManagedIdentityTokenSource(
+          config.azure,
+          overrides?.fetch === undefined ? {} : { fetch: overrides.fetch },
+        )
+      : undefined);
+  const model = overrides?.model ?? buildModel(config, overrides?.fetch, tokenSource);
   const settings = callSettings(config);
   const who = `${config.provider} (${config.model})`;
   const hintFor = hints(config);
@@ -263,6 +331,7 @@ export function createObjectGenerator(
 
   async function attempt<T>(request: GenerateObjectRequest<T>): Promise<Attempt<T>> {
     const name = request.schemaName === undefined ? "" : wireName(request.schemaName);
+    if (tokenSource !== undefined) await tokenSource.token(request.signal);
     let result;
     try {
       result = await generateText({

@@ -1,6 +1,6 @@
 import type { ZodType } from "zod";
 
-export type ProviderName = "anthropic" | "openai" | "openai-compatible";
+export type ProviderName = "anthropic" | "openai" | "openai-compatible" | "azure-openai";
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface LlmConfig {
@@ -43,6 +43,17 @@ export interface LlmConfig {
    * Streaming starts only above a CLAUSEWISE_MAX_OUTPUT_TOKENS of 21333.
    */
   fallback?: "default" | undefined;
+  /**
+   * azure-openai only, and always set for it. That provider takes no key: it signs in with the
+   * managed identity of the Azure service it runs in. The platform's SSRF header is deliberately
+   * not kept here, because the platform rotates it; it is read when a token is requested.
+   */
+  azure?: {
+    /** The local token service, from IDENTITY_ENDPOINT. */
+    identityEndpoint: string;
+    /** The user-assigned identity to sign in as, from AZURE_CLIENT_ID. Unset: system-assigned. */
+    clientId: string | undefined;
+  };
 }
 
 export interface GenerateObjectRequest<T> {

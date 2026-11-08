@@ -1,7 +1,12 @@
 import { BaseUrlError, normalizeBaseUrl } from "./endpoint.js";
 import { LlmConfigError, type Effort, type LlmConfig, type ProviderName } from "./types.js";
 
-const PROVIDERS: readonly ProviderName[] = ["anthropic", "openai", "openai-compatible"];
+const PROVIDERS: readonly ProviderName[] = [
+  "anthropic",
+  "openai",
+  "openai-compatible",
+  "azure-openai",
+];
 const EFFORTS: readonly Effort[] = ["low", "medium", "high", "xhigh", "max"];
 
 const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5-5";
@@ -64,6 +69,12 @@ function readModel(env: Env, provider: ProviderName): string {
   const model = read(env, "CLAUSEWISE_MODEL");
   if (model !== undefined) return model;
   if (provider === "anthropic") return DEFAULT_ANTHROPIC_MODEL;
+  if (provider === "azure-openai") {
+    return fail(
+      "CLAUSEWISE_MODEL is required when CLAUSEWISE_PROVIDER is azure-openai. " +
+        "Set it to the name of the model deployment on your Azure OpenAI resource.",
+    );
+  }
   return fail(
     `CLAUSEWISE_MODEL is required when CLAUSEWISE_PROVIDER is ${provider}. ` +
       "Set it to the exact model name your account or server offers.",
@@ -90,6 +101,15 @@ function readApiKey(env: Env, provider: ProviderName): string | undefined {
       );
     case "openai-compatible":
       return read(env, "CLAUSEWISE_API_KEY");
+    case "azure-openai":
+      // A key would only work if key access were left on, which the Azure deployment turns off.
+      if (read(env, "CLAUSEWISE_API_KEY") !== undefined) {
+        fail(
+          "azure-openai takes no key: it signs in with the managed identity of the Azure service " +
+            "it runs in. Unset CLAUSEWISE_API_KEY.",
+        );
+      }
+      return undefined;
   }
 }
 
@@ -102,10 +122,18 @@ function readBaseUrl(env: Env, provider: ProviderName): string | undefined {
           "Set it to your server's API root, for example http://localhost:11434/v1 for Ollama.",
       );
     }
+    if (provider === "azure-openai") {
+      fail(
+        "CLAUSEWISE_BASE_URL is required when CLAUSEWISE_PROVIDER is azure-openai. Set it to " +
+          "your resource's v1 API root, https://<resource>.openai.azure.com/openai/v1.",
+      );
+    }
     return undefined;
   }
   try {
-    return normalizeBaseUrl(raw);
+    const baseUrl = normalizeBaseUrl(raw);
+    if (provider === "azure-openai") checkAzureBaseUrl(baseUrl);
+    return baseUrl;
   } catch (error) {
     // The reason never repeats the URL, which can carry a password.
     if (error instanceof BaseUrlError)
@@ -114,6 +142,54 @@ function readBaseUrl(env: Env, provider: ProviderName): string | undefined {
       );
     throw error;
   }
+}
+
+// Azure OpenAI answers a wrong path with a bare 404, so the shape is checked before anything is
+// sent. The v1 API takes no api-version, which is why the root ends in /openai/v1.
+function checkAzureBaseUrl(baseUrl: string): void {
+  if (!baseUrl.startsWith("https://")) {
+    throw new BaseUrlError("For azure-openai it must start with https://.");
+  }
+  if (!/\/openai\/v1$/i.test(baseUrl)) {
+    throw new BaseUrlError(
+      "For azure-openai it must be the v1 API root, ending in /openai/v1, as in " +
+        "https://<resource>.openai.azure.com/openai/v1.",
+    );
+  }
+}
+
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// The token service is local to the app and set by the platform, so these variables being absent
+// means the process is not running where azure-openai can sign in, which is worth saying before
+// any contract is read.
+function readAzure(env: Env, provider: ProviderName): LlmConfig["azure"] {
+  if (provider !== "azure-openai") return undefined;
+  const clientId = read(env, "AZURE_CLIENT_ID");
+  const endpoint = read(env, "IDENTITY_ENDPOINT");
+  if (endpoint === undefined || read(env, "IDENTITY_HEADER") === undefined) {
+    fail(
+      "azure-openai signs in with the managed identity of the Azure service it runs in, but " +
+        "IDENTITY_ENDPOINT and IDENTITY_HEADER are not both set: this process is not running in " +
+        "Azure Container Apps or App Service.",
+    );
+  }
+  let identityEndpoint: string;
+  try {
+    identityEndpoint = normalizeBaseUrl(endpoint);
+  } catch (error) {
+    if (error instanceof BaseUrlError) {
+      return fail(`IDENTITY_ENDPOINT is not usable. ${error.message}`);
+    }
+    throw error;
+  }
+  if (clientId !== undefined && !GUID.test(clientId)) {
+    fail(
+      "AZURE_CLIENT_ID must be the client id of a user-assigned identity, a GUID. Fix the " +
+        "value, or unset it to use the system-assigned identity.",
+    );
+  }
+  return { identityEndpoint, clientId };
 }
 
 function readEffort(env: Env, provider: ProviderName): Effort | undefined {
@@ -179,5 +255,10 @@ export function loadLlmConfig(env: Record<string, string | undefined>): LlmConfi
     maxRetries: readInteger(env, "CLAUSEWISE_MAX_RETRIES", DEFAULT_MAX_RETRIES, 0),
   };
   const fallback = readFallback(env, provider, config.baseUrl);
-  return fallback === undefined ? config : { ...config, fallback };
+  const azure = readAzure(env, provider);
+  return {
+    ...config,
+    ...(fallback === undefined ? {} : { fallback }),
+    ...(azure === undefined ? {} : { azure }),
+  };
 }
