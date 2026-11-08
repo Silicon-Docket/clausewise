@@ -37,8 +37,17 @@ nothing goes stale; the associate chooses.
 warnings appear straight away and a resumed run needs no second parse. The run's ingest stage reads
 the stored spans back.
 
+**Deviation (step 6).** A reviewer can change their own decision on a finding until the memo is
+exported, but cannot overwrite another reviewer's: the second one is refused (409 `decision_conflict`)
+and the finding page says why. The design is silent on two reviewers on one matter.
+
+**Deviation (step 8).** The Re-run form says that the findings are replaced and that decisions
+already made on them stop counting. A re-run that fails, is cancelled or is interrupted leaves the
+matter out of date and not ready, because its earlier decisions have already stopped counting.
+
 **Deviation (step 9).** Once a memo is exported, decisions are refused until a re-run, so that the
-memo always matches the decisions it was built from. The design is silent on this.
+memo always matches the decisions it was built from. The design is silent on this. Exporting the same
+decisions of the same run again returns the memo on record and does not supersede it with a copy.
 
 ## Screen sketches
 
@@ -91,7 +100,8 @@ S1b. Matter page
 | Warnings (shown only when there are any; they do not stop a review)                     |
 |   ! Reads like an instruction to software: D1-p1 in the NDA (matched                    |
 |     addresses_ai_assistant, addresses_automated_reviewer, mark_all_compliant).          |
-|     It is reviewed as text and cannot change anything.                                  |
+|     The review gives it to the model as document text, and Parol cannot show that a    |
+|     model ignored it. Read it yourself; p counts paragraphs from zero.                  |
 |                                                                                         |
 | Client and playbook  Our client [ ... ]  Playbook [ Parol NDA (Recipient) 1.0.1 ... v ] |
 |                                                                                         |
@@ -144,7 +154,7 @@ disclosure. Filters are All, Open, Escalated and Out of date.
 |                                                |                                        |
 |                                                | WHAT THE REVIEW FOUND                  |
 |                                                |   Discrepancy, Explanation             |
-|                                                | CHECKS  9 passed, 0 failed, 3 n/a      |
+|                                                | CHECKS  10 passed, 0 failed, 3 n/a     |
 |                                                |   Passed  Quotes appear word for word  |
 |                                                |   ...                                  |
 |                                                | PLAYBOOK RULE, SUGGESTED LANGUAGE,     |
@@ -156,8 +166,9 @@ The table is ordered by severity, then status, then rule key. The rows are the s
 demonstration under workflow v2 (simulated reader); under v1 the same table shows Duration as
 Compliant and Return as Deviation, which is the retrieval gap the worked example is about. The
 evidence pane is the worked example in [document 4](04-worked-example.md). The checks panel lists
-every check the finding went through, with Passed, Failed or Not applicable (twelve for this finding:
-nine passed and three not applicable), so a flag is always explained by the check that raised it.
+every check the finding went through, with Passed, Failed or Not applicable (thirteen for this finding:
+ten passed and three not applicable, counted from the database of a seeded run), so a flag is always
+explained by the check that raised it.
 
 ### S3. Review decision
 
@@ -298,9 +309,14 @@ Every request passes the shell and then, for a matter, the authorization layer b
 service that reads matter data, calls a model or writes a file. As built:
 
 - The shell runs in a fixed order: request context (an id for the request and the security headers on
-  every response, errors included), the host guard, the body limit (the upload limit plus 64 KiB for
-  multipart framing), then the route. With the demo identity on, the host guard refuses any request
-  whose address or `Host` header is not this machine, which is the defence against DNS rebinding.
+  every response, errors included), the host guard, a refusal of a request address that has a user
+  or password part (400, before the body limit reads anything), the body limit (the upload limit plus
+  64 KiB for multipart framing), then the route. With the demo identity on, the host guard refuses
+  any request whose address or `Host` header is not this machine, which is the defence against DNS
+  rebinding. Below the shell, the server's own wrapper answers a request that Node's parser rejects,
+  that has no `Host`, or whose `Transfer-Encoding` does not end in `chunked`, with a short page that
+  carries the same headers and one access line (see
+  [document 6](06-access-and-governance.md#demo-identity)).
 - The demo identity is a list of seeded people, not authentication. The session cookie `parol_session`
   is signed with HMAC-SHA256 under a server secret, is `HttpOnly` and `SameSite=Strict` (and `Secure`
   when `PAROL_SECURE_COOKIES=1`), and expires after eight hours. Only the user id is in it; names and
@@ -368,8 +384,8 @@ stateDiagram-v2
   ready --> draft: a document is removed
   ready --> running: start run
   running --> in_review: run succeeded
-  running --> ready: run failed or cancelled
-  running --> stale: an input changed during the run
+  running --> ready: first review failed or cancelled
+  running --> stale: an input changed during the run, or a re-run failed or was cancelled
   in_review --> review_complete: every current finding decided
   review_complete --> in_review: allowed by the table but taken by no code
   review_complete --> exported: memo exported
@@ -387,7 +403,15 @@ stateDiagram-v2
 ```
 
 An input that moves the matter to `stale` is a new or removed document, another operative version,
-a stated date, the client's legal name, the playbook version or a re-run request. A reviewer who
+a stated date, the client's legal name, the playbook version or a re-run request. A review that
+ends without results (failed, cancelled, or interrupted by a restart) returns the matter to `ready`
+only when no review ever saved findings on it. When it holds findings of an earlier review, which a
+re-run made stale, `ready` would read as if the matter had never been reviewed and would hide the
+decisions that no longer count, so it stays `stale` (reason `rerun_requested`, "A new review was
+requested."). A matter that went stale while its first review was running holds no findings to read
+the reason from, so the reason is read from the last `inputs.changed` audit event and worded "while
+the review was running". The Re-run form says that the findings are replaced and the decisions stop
+counting, and that an exported memo stays on record. A reviewer who
 changes a decision while the matter is `review_complete` records a new decision that replaces the
 old (the old stays in the history, marked stale), and the matter stays `review_complete`; once the
 memo is exported, decisions are refused until a re-run. An exported memo stays on record after a matter goes stale,

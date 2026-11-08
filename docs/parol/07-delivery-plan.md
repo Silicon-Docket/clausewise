@@ -7,7 +7,16 @@ it belongs to. The hours are the plan's estimates; actual hours were not tracked
 reports no actual effort. **Never run live:** no model has been called, so there is no baseline and
 no improvement cycle, and no score, latency or cost of any model exists. The only numbers from a run
 anywhere in this folder come from a selftest oracle or a scripted simulated reader and are labelled
-so. Departures from the plan are collected under [Implementation deviations](#implementation-deviations).
+so. Departures from the plan are collected under [Implementation deviations](#implementation-deviations),
+and the design claims that the code does not satisfy, with a severity each, under
+[Known gaps](#known-gaps).
+
+**Last verified, 8 November 2026.** `pnpm lint`, `pnpm typecheck`, `pnpm fixtures:parol --check`,
+`pnpm eval --selftest` and `pnpm eval:parol --selftest` each exited 0, and `pnpm exec vitest run`
+reported 285 test files and 8,765 tests (8,764 passed and 1 skipped, in the CLI package): 72 files
+and 2,741 tests under `packages`, 162 files and 4,961 tests under `apps/parol`, 35 files and 647
+tests under `evals`, and 16 files and 416 tests under `apps/cli`. The dataset has 6 of the 26
+planned cases (48 rule slots, nine files), the demonstration playbook has 8 rules, and the gates are 14. These counts move with every test added, so run the commands instead of trusting this line.
 
 Two weeks for one engineer. Estimates are focused hours: about 35 planned hours in each 40-hour
 week, leaving 5 to 6 hours of buffer. Every item ends with the repository's own checks passing (`pnpm lint && pnpm typecheck &&
@@ -106,9 +115,9 @@ or a command; commands marked "run by hand" were run while this status was writt
 | W1.2  | Done   | `apps/parol/src/auth/authorize.ts` is the only file that makes an `AuthorizedMatter`; `test/auth/brand.test.ts` and `brand-typed.test.ts` scan for forgeries; `test/server/shell-routes.test.ts` fails for a matter route registered without the guard (shown on synthetic routes inside the test, not by editing a real route); `test/routes/authorization.test.ts` is the probe matrix over every route.           |
 | W1.3  | Done   | `apps/parol/src/ingest/`, `src/services/uploads.ts`. Tests: `test/ingest/parity.test.ts` (DOCX and TXT segment alike), `test/services/uploads.test.ts` (an identical file is stored once), `test/ingest/references.test.ts` ("Section 6.1 of the Agreement is deleted"), `test/ingest/hostile.test.ts` and `test/services/uploads.test.ts` (a file that cannot be read stores nothing).                              |
 | W1.4  | Done   | `packages/playbook/test/parol-fields.test.ts`; `apps/parol/test/playbooks/` (shipped and demo playbooks validate); `apps/parol/test/store/playbooks.test.ts` and `triggers.test.ts` (an approved version cannot be updated at the database). The playbook is `apps/parol/playbooks/parol-nda-recipient.yaml`, version 1.0.1.                                                                                         |
-| W1.5  | Done   | `apps/parol/src/prompts/registry.ts` and `workflows.ts`; `test/prompts/registry.test.ts` (one changed character of a prompt changes its hash) and `workflows.test.ts`. `@clausewise/review` exports `locateQuote`, `normalizeForAnchor` and `settledStatus`; `pnpm exec vitest run packages` passes (71 files, 2693 tests, run by hand).                                                                             |
+| W1.5  | Done   | `apps/parol/src/prompts/registry.ts` and `workflows.ts`; `test/prompts/registry.test.ts` (one changed character of a prompt changes its hash) and `workflows.test.ts`. `@clausewise/review` exports `locateQuote`, `normalizeForAnchor` and `settledStatus`; `pnpm exec vitest run packages` passes (72 files, 2741 tests, run by hand).                                                                             |
 | W1.6  | Done   | `apps/parol/src/services/runner.ts` and `src/stages/{extract,retrieve,analyze}.ts`. Tests: `test/services/runs-failures.test.ts` (a failed run resumes and does not ask again for what it has), `test/stages/analyze-repair.test.ts` (one repair, then `output_invalid`), `test/integration/layers.test.ts` (eight findings for the worked example).                                                                 |
-| W1.7  | Done   | `apps/parol/src/stages/verify.ts` and `stages/checks/`. Tests: `test/stages/verify*.test.ts`, and `verify-worked-example.test.ts`, whose first case is the `PAROL-D05` v1 trail passing every check while the finding is wrong, labelled "the known gap". Fifteen check ids exist; the list is in [document 3](03-data-model-and-contracts.md).                                                                      |
+| W1.7  | Done   | `apps/parol/src/stages/verify.ts` and `stages/checks/`. Tests: `test/stages/verify*.test.ts`, and `verify-worked-example.test.ts`, whose first case is the `PAROL-D05` v1 trail passing every check while the finding is wrong, labelled "the known gap". Sixteen check ids exist; the list is in [document 3](03-data-model-and-contracts.md).                                                                      |
 | W1.8  | Done   | `apps/parol/src/server/pages/run.tsx`, `finding.tsx`; `src/store/repo-matters.ts` (`applyInputChange`). Tests: `test/routes/decision.test.ts`, `test/routes/forged-ids.test.ts` (409 for an old content hash), `test/integration/layers.test.ts` (a changed document makes findings and decisions stale and blocks export).                                                                                          |
 | W1.9  | Done   | `apps/parol/src/export/`. Tests: `test/export/gates.test.ts` (export with an undecided finding is refused), `memo.test.ts`, `determinism.test.ts`, `libreoffice.test.ts` (converts the memo where `soffice` is installed, as it is here; Word itself was never available).                                                                                                                                           |
 | W1.10 | Done   | `pnpm eval:parol --selftest` (run by hand: status accuracy 48 of 48 for a scripted oracle); `evals/test/parol-run-dataset.test.ts` and `parol-cli-exit.test.ts` alter an answer key, a case file or a hash and expect exit 2; `pnpm eval:parol` without `--yes` prints the plan and a cost upper bound and exits 3 (run by hand). The optional live baseline was not run: no key was available.                      |
@@ -176,8 +185,9 @@ effort.
 ## Spend
 
 Live evaluation runs use the Clausewise spend guard: the plan is printed first, nothing is sent
-without `--yes`, and a per-request cap holds the run to `--max-cost`. For scale, the Clausewise
-README's bound for one of its NDA fixtures is about 46,000 to 49,000 input tokens for 10 calls. The
+without `--yes`, and a per-request cap holds the run to `--max-cost`. For scale, the bound in
+`evals/README.md` for each of Clausewise's two NDA fixtures is 46,181 and 48,581 input tokens for 10
+calls. That is an upper bound for a different tool and playbook, not a Parol figure. The
 plan assumed roughly 15 Parol calls per case (one extract, eight analyze, up to eight support
 checks, fewer when a rule needs none). With the support check off in v1 and v2, the runner's own
 plan counts 9 calls per case (one extract and eight analyze), 63 calls for the six development cases
@@ -258,6 +268,56 @@ Status against each line, today:
 - The README says what was measured, on what, and what was not. **Met** by `apps/parol/README.md`,
   which says that no score was measured, and by this folder's status paragraphs.
 
+## Known gaps
+
+The design claims that the built system does not satisfy, in one place, each with a severity. They
+were found by the documentation writers and verified here against the code, or by the three attack
+reviews of the build. The severity is this document's own judgement and not a measurement. **High**:
+a control the design relied on is absent or can be bypassed, or a claim the project exists to make
+cannot be made. **Medium**: a control or a measure is weaker than the design said, and a reader of a
+result must know. **Low**: an edge, a demonstration limit or a cosmetic mismatch. None of these gaps
+is hidden elsewhere: each is also stated where it matters, in the document named in the last column.
+Nothing below was small and safe enough to fix without changing what a number means, which is why
+they are listed and not fixed; the ones that were small have been fixed (see the end of this section).
+
+| #   | Gap                                                                                                                                                                                                                                                                                              | Severity | Described in                                                                                     |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- | ------------------------------------------------------------------------------------------------ |
+| 1   | No live model has ever been called, so there is no baseline, no improvement cycle and no score, latency or cost for any model. Every result in this folder comes from a selftest oracle or a scripted simulated reader                                                                           | High     | [5](05-evaluation.md#the-runner), [EXP-001](experiments/EXP-001.md)                              |
+| 2   | The held-out set (12 cases) and 8 of the 14 development cases are not written, so `EXP-001` cannot be frozen, no held-out hash exists and `--split heldout` stops with "no cases"                                                                                                                | High     | [5](05-evaluation.md#dataset)                                                                    |
+| 3   | The model support check is wired but pinned by neither registered workflow, and its 40-pair calibration set is not written: every finding reads "Support not checked", and G11 is never evaluated                                                                                                | High     | [3](03-data-model-and-contracts.md#quotation-validity-versus-substantive-support)                |
+| 4   | Gate G1 (unauthorized-data exposure) has no input: the authorization matrix is an application test and the canary matters do not exist. G1 and G11 are never evaluated, and the decision rule needs every gate evaluated, so it cannot reach "promote"                                           | High     | [5](05-evaluation.md#supplementary-suites)                                                       |
+| 5   | The application's own model calls have no spend guard; only `pnpm eval:parol` has `--max-cost`. A review through the server is bounded by its call count, not by a cost                                                                                                                          | High     | [7](#spend), [6](06-access-and-governance.md#run-provenance)                                     |
+| 6   | Statuses are not settled in code against required and absence rules: `settledStatus` is called by no stage. Only `not_applicable` on a required rule, or from a selection, is escalated; `missing` for the optional rule `ret-1` is not corrected                                                | Medium   | [3](03-data-model-and-contracts.md#deterministic-checks-and-model-judgment)                      |
+| 7   | The `parties` check passes when the client's name is in any span of the bundle, and for a whole-document bundle that is any occurrence (a signature block, say); its page label says "in the parties passage"                                                                                    | Medium   | [3](03-data-model-and-contracts.md#deterministic-checks-and-model-judgment)                      |
+| 8   | `defined_term` finds a term no span defines, and not a term defined twice in different ways; its label "Defined terms are defined once" says more than it checks                                                                                                                                 | Low      | [3](03-data-model-and-contracts.md#deterministic-checks-and-model-judgment)                      |
+| 9   | Precedence rules 3 (an amendment that disagrees without an express reference) and 4 (inconsistent passages in one document) are only in the analysis prompt. A model that fails to report such a conflict is not corrected                                                                       | Medium   | [3](03-data-model-and-contracts.md#retrieval-boundaries-and-provenance)                          |
+| 10  | The supersession check (check set C2) is built and enabled by no registered workflow, so the worked example's v1 gap passes verification. The candidate that would pin it (v3) is not registered                                                                                                 | Medium   | [4](04-worked-example.md)                                                                        |
+| 11  | A run does not record the model the provider reported, nor token counts or cost (the columns exist and stay empty), because the generator returns only the parsed answer; the memo says "not reported". Provenance does not show which model snapshot answered                                   | Medium   | [6](06-access-and-governance.md#run-provenance)                                                  |
+| 12  | The evaluation runner composes the stage functions itself and does not call the application's run engine; a later change to `services/runner.ts` does not reach the evaluation unless two tests (rule concurrency, a layers test) notice. It writes a results file and never the `eval_*` tables | Medium   | [2](02-experience-and-architecture.md#architecture)                                              |
+| 13  | A quote that occurs more than once in its paragraph is valid for the application and shown with a note, but the scorer counts it as displayed and not verified, so it can fail G2 and G5 and lower strict recall for a valid quote                                                               | Medium   | [5](05-evaluation.md#metrics)                                                                    |
+| 14  | The held-out seal is a warning and a contamination note, not a lock, and the ledger records only live runs. Record and replay of model responses is not built, so a scoring change means running the cases again                                                                                 | Medium   | [5](05-evaluation.md#the-runner)                                                                 |
+| 15  | The `AuthorizedMatter` brand guards the service layer and not the store, the run engine or the memo builder, so a module that imported them directly would compile without authorization. Matter-id-first store methods and database triggers contain it                                         | Medium   | [6](06-access-and-governance.md#authorization)                                                   |
+| 16  | Approval of a playbook and promotion of a workflow have no route or page, and the store accepts any existing user as the actor; the demo admin approves the playbook at start-up                                                                                                                 | Medium   | [6](06-access-and-governance.md#authorization)                                                   |
+| 17  | Nothing deletes an expired matter (`listExpiredMatters` is called by no application code), and nothing verifies the audit hash chain (`verifyAuditChain` is called only by tests)                                                                                                                | Medium   | [6](06-access-and-governance.md#retention-and-deletion)                                          |
+| 18  | How a real model treats hostile document text is unobserved. The `instruction_like_text` check flags a finding that cites a flagged paragraph; a model that follows such a paragraph and cites a genuine clause is flagged only in the warnings                                                  | Medium   | [6](06-access-and-governance.md#documents-are-data)                                              |
+| 19  | Removing a document deletes the evidence rows that earlier, stale findings cited from it (19 evidence rows became 17 on a copy of the seeded database), so a superseded finding no longer shows every passage it cited                                                                           | Medium   | [3](03-data-model-and-contracts.md#invalidation)                                                 |
+| 20  | Pilot tooling is not built: feedback capture, the pilot measures, the training matter T01 and the quickstart page; the comparison page S4 is a command-line report only                                                                                                                          | Medium   | [8](08-pilot-and-enablement.md), [2](02-experience-and-architecture.md)                          |
+| 21  | Keyboard reachability of every action and accessibility conformance were not tested; the memo was converted by LibreOffice and never opened in Word                                                                                                                                              | Low      | [7](#status-of-the-week-two-items)                                                               |
+| 22  | An ambiguous quote has no offsets, so the inspector cannot highlight it; the design highlighted each place                                                                                                                                                                                       | Low      | [3](03-data-model-and-contracts.md#quotation-validity-versus-substantive-support)                |
+| 23  | Evaluation latency is timed from the start of extract to the end of verify and not from queued to succeeded; cost per run exists only for the Anthropic provider; G13's absolute budget has no command-line option                                                                               | Low      | [5](05-evaluation.md#metrics)                                                                    |
+| 24  | The homoglyph table covers only the letters of `contract` and the `c` of a header, and the hidden-text rule reads direct run formatting only (a colour set by a style, near-white greys and sizes between 2 and 5 points are not caught)                                                         | Low      | [6](06-access-and-governance.md#documents-are-data)                                              |
+| 25  | A Word file of about 97 KB with 15,000 one-line paragraphs held the single-threaded server for a few seconds in an attack review (not re-measured here); there is no rate limit and no paragraph cap beyond the parser's limits                                                                  | Low      | [6](06-access-and-governance.md#deferred-until-production)                                       |
+| 26  | Sign-out revocation is kept in memory, so a copied cookie works again after a restart with a fixed `PAROL_COOKIE_SECRET`; the demo identity is not authentication                                                                                                                                | Low      | [6](06-access-and-governance.md#demo-identity)                                                   |
+| 27  | A refusal that the parser reports after the application has sent response headers is not logged, and the memo marked "Earlier review" on the pages keeps its JSON status `current`                                                                                                               | Low      | [6](06-access-and-governance.md#demo-identity), [3](03-data-model-and-contracts.md#invalidation) |
+| 28  | The retry that settles a run whose end cannot be written has no upper bound, and a second reviewer cannot override the first reviewer's decision (they must wait for a change or a re-run)                                                                                                       | Low      | [6](06-access-and-governance.md#recovery-from-partial-failures)                                  |
+| 29  | CI pins Node 22 and not a minor version, and the "removing the guard from a real route fails the coverage test" criterion of W1.2 was shown on synthetic routes only                                                                                                                             | Low      | [7](#risks)                                                                                      |
+
+**Fixed in this round, because they were small, safe and covered by a test:** the demonstration
+playbook test now compares the hint-topics column of the rules table in document 3 as well as the
+other five columns (it compared five and failed when the sixth was added); the stale comment in
+`evals/src/parol/timing.ts` that said no run produces latency records; and the comment in
+`apps/parol/src/store/repo-runs.ts` that said an interrupted run returns its matter to `ready`.
+
 ## Implementation deviations
 
 Where the build departs from the plan on purpose, with the reason in one sentence. The departures
@@ -322,7 +382,10 @@ attorney)`, `Lee Okafor (legal engineer)` and `Sam Patel (admin)`. There is one 
   removes (`FileStore.sweepOrphans`), and not rows that name a missing file.
 - **State machines** have edges the diagrams did not draw: matter `running` to `stale`, `ready` to
   `draft`, `review_complete` back to `in_review`, and `in_review` or `review_complete` to `deleted`;
-  run `failed` to `queued` (resume) and cancel from any active state (`src/store/states.ts`).
+  run `failed` to `queued` (resume) and cancel from any active state (`src/store/states.ts`). A
+  review that ends without results returns the matter to `ready` only when it has no findings from
+  an earlier review; otherwise it stays `stale`, so that the decisions that no longer count are not
+  hidden behind a `ready` matter.
 - **Audit** has actions beyond the plan's list: `matter.update`, `matter.status`, `document.remove`,
   `version.stated_date`, `prompt.register` and `workflow.register`.
 - **Errors carry no ids or caller text** (`NotFoundError` takes an entity kind only; the active run's
@@ -364,8 +427,13 @@ attorney)`, `Lee Okafor (legal engineer)` and `Sam Patel (admin)`. There is one 
 
 ### Verification
 
-- **Fifteen check ids**, not the shorter list of the plan: `evidence_set`, `defined_term`,
-  `model_abstained`, `status_forced` and `superseded_evidence` are additions (document 3 lists them).
+- **Sixteen check ids**, not the shorter list of the plan: `evidence_set`, `defined_term`,
+  `instruction_like_text`, `model_abstained`, `status_forced` and `superseded_evidence` are additions
+  (document 3 lists them). `instruction_like_text` was added after an attack review: a quote from a
+  paragraph that reads like an instruction to software verifies like any other quote, so a cited
+  passage in such a paragraph now escalates the finding. A `not_applicable` answer on a required
+  rule, or from a selection, is also escalated by `citation_shape`, and a missing or unreadable stated
+  date on either side of a superseded label is now a conflict and no longer accepted as later.
 - **Known gaps** that the plan did not have: the `parties` check passes when the client's name
   appears anywhere in the bundle, not only in the parties passage; `defined_term` does not find a
   term defined twice; precedence rules 3 and 4 of document 3 are only in the prompt; a figure that
@@ -404,7 +472,9 @@ attorney)`, `Lee Okafor (legal engineer)` and `Sam Patel (admin)`. There is one 
 - **Not built:** routes for spans, feedback, playbook import and approval, workflow promotion and
   evaluations. `PATCH /api/matters/:id` takes one kind of change per request.
 - **Upload status.** An identical file answers 200, not 201, with the `duplicate_document` warning,
-  and stores nothing.
+  and stores nothing. If it arrives with a stated date different from the stored one, it is refused
+  with 409 `duplicate_stated_date` and the date is not applied, because the version may not be the
+  governing one.
 - **Notices** that a page shows after a redirect carry a signed `nt` parameter, so a link cannot
   forge one. A refused form (a decision or an upload) is answered with its own page, the status and
   an error notice, and a refused decision keeps what the reviewer typed unless the finding has
@@ -426,12 +496,28 @@ attorney)`, `Lee Okafor (legal engineer)` and `Sam Patel (admin)`. There is one 
   signed-in reviewer's whatever reviewer a request names.
 - **Stand-in banners.** Pages and the memo's provenance appendix say when the reader was a scripted
   stand-in (`apps/parol/src/stand-in.ts`).
+- **Refusals below the application.** A request Node's parser rejects, one with no `Host`, one with
+  a `Transfer-Encoding` that does not end in `chunked`, and one whose address has a user part get a
+  short page with the security headers and one access line (`src/server/middleware/rejected.ts`).
+- **One server per data folder.** An exclusive lock on `parol.lock` (`src/boot/instance-lock.ts`)
+  stops a second `pnpm parol` from marking the first one's runs interrupted.
+- **Settling a run.** When the database cannot be written at the end of a run, the runner tries again
+  until it can, so the run is not left `analyzing` with nothing executing.
+- **Decisions.** A second reviewer cannot overwrite the first reviewer's decision (409
+  `decision_conflict`); exporting the same decisions again returns the memo on record and does not
+  supersede it with an identical copy.
+- **Stale and earlier memos.** A memo whose review a newer run replaced is labelled "Earlier review"
+  on the pages, and downloads under a name that marks it superseded once it is.
 
 ### Memo
 
 - **Open items** also lists an accepted or edited finding whose conclusion is `undetermined`, which
   the plan did not say, because the memo would otherwise state no conclusion for that rule and not
   say so. A reviewer's change of an evidence role reaches the memo.
+- **Document warnings.** When an upload raised warnings (unread content, tracked changes read as
+  accepted, a paragraph that reads like an instruction to software, no text), the memo prints a
+  section for them before the open items, with counts and locations and no document text, and the
+  open items point to it.
 - **Rejected findings** show a decision line and a pointer to the appendix, which gives the
   reviewer's reason and the status the workflow proposed, and nothing of the finding's text.
 - **Reproducible file.** The memo's timestamps are rewritten to the export date, so two exports of

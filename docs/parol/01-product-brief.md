@@ -1,5 +1,14 @@
 # 1. Product brief and role mapping
 
+**Implementation status.** The product described in the brief is built as `apps/parol` for steps 1
+to 6 of the list below, and runs on a laptop against a scripted simulated reader that is not a
+language model. Deferred and marked **Not yet built**: feedback capture (part of step 7), the screens
+for the legal engineer and the practice manager, the pilot metrics and the go/no-go memo (a template
+in [document 8](08-pilot-and-enablement.md)). The discovery questions have not been asked of anyone.
+The improvement cycle has **never run live**: no real model has been called, so no claim about a
+model's accuracy, latency or cost exists. The Evidence column of the role mapping now names files
+that exist; where a feature is a plan, the Parol feature cell says so.
+
 ## The brief
 
 **Problem.** An associate who receives an incoming NDA compares it, clause by clause, with the
@@ -23,12 +32,23 @@ bounded, attorney-supervised workflow for that task:
 6. Export a DOCX review memorandum built only from reviewed results.
 7. Capture feedback and compare workflow versions before anything is released to a pilot.
 
+**Status of the list.** Steps 1 to 6 are built. In step 7, comparing workflow versions is built as a
+command (`pnpm eval:parol`, over the six development cases written so far) and **feedback capture is
+not built**: a decision stores its kind, a free-text reason and the fields an edit changed, but
+there is no reason code, no rating and no report of a missed issue.
+
 **What makes it worth showing.** A controlled improvement cycle: run a baseline on synthetic
 documents, find a meaningful failure, trace it to its cause, change one thing (a prompt, the
 retrieval step or a playbook rule), run a held-out regression suite with every version pinned, and
 recommend whether to promote the change, weighing quality, latency and cost. The design separates
 quotation validity (the words exist where cited) from substantive support (the conclusion follows
 from them), and it escalates with a named reason instead of inventing a confidence score.
+
+**Status.** The machinery is built (pinned runs, a pin-checking comparison, gates, a held-out seal),
+but **the cycle has not been carried out**: there is no live baseline, and the held-out set is not
+written. Quotation validity is checked in code and built. The check of substantive support is wired
+and **off** in both registered workflow versions, so findings say "not checked". Escalation with a
+named reason is built.
 
 **Users.**
 
@@ -39,25 +59,40 @@ from them), and it escalates with a named reason instead of inventing a confiden
 | Legal engineer (owner)       | Keep the workflow accurate and improve it safely       | Playbook versions, prompts, evaluations |
 | Practice manager (sponsor)   | Decide whether to pilot, expand or roll back           | Pilot metrics, go/no-go memo            |
 
+**Status of the roles.** The application has matter roles (associate, reviewer, viewer) and four
+seeded demo people: Alex Ruiz (associate), Dana Whitfield (reviewing attorney), Lee Okafor (legal
+engineer) and Sam Patel (admin). The legal engineer has no screens: playbook versions, prompts and
+workflow versions are registered from code and a YAML file at start-up, and evaluations run from the
+command line. The practice manager has no screens either; the pilot metrics are **Not yet built**
+and the go/no-go memo exists as a template only.
+
 **In scope.** Supplied DOCX and TXT files; one NDA plus up to two amendments per matter; seven
 playbook categories (parties, definition of confidential information, exclusions, permitted
 disclosures, confidentiality duration, return or destruction, governing law); one practice group;
-local single-machine deployment; synthetic data.
+local single-machine deployment; synthetic data. All of it is built as stated: the matter refuses a
+third amendment, the seeded playbook has eight rules in the seven categories, and the server listens
+on this machine only while the demo identity is on.
 
 **Deferred.** PDF and OCR, a Word add-in, document management integrations, email intake,
 counterparty redlines sent from the tool, multi-practice expansion, single sign-on, multi-level
-approval, and any real client document.
+approval, and any real client document. All of it is still deferred; nothing in this list has been
+started.
 
 **Non-goals.** Parol does not give legal advice, does not decide anything, does not send
 anything to a counterparty, and does not claim that its playbook reflects applicable law.
 
 **Portfolio success criteria** (for the project, not for adoption):
 
-- The workflow runs end to end on the synthetic cases, from intake to exported memo.
+- The workflow runs end to end on the synthetic cases, from intake to exported memo. **Status:**
+  met for the worked example only, and with the scripted simulated reader (document 7 names the
+  tests).
 - The improvement cycle is carried out on real model runs and its numbers are reported as measured,
-  including a result that does not favour the revision if that is what happens.
+  including a result that does not favour the revision if that is what happens. **Status: not met.**
+  No live run has happened.
 - Every claim in the write-up is bounded by what the evidence supports: consistency with a
-  fictional playbook, not professional legal quality, until a qualified review is done.
+  fictional playbook, not professional legal quality, until a qualified review is done. **Status:**
+  kept so far: every output of a selftest or a simulated reader is labelled as such, and no score of
+  any model exists to be overclaimed.
 
 ## Before and after
 
@@ -73,10 +108,21 @@ The "before" process is a hypothesis to validate in discovery, not an observatio
 | 6    | Writes a memo by hand                                                           | Memo is generated from reviewed findings only, with provenance                       | Editing and sending the memo     |
 | 7    | No record of what was wrong with the first pass                                 | Corrections and feedback are stored and feed the next evaluation round               | Deciding what to change          |
 
+**Status of the "after" column.** Steps 1 to 6 exist in the app. In step 4 the suggested wording
+carries a label that says whether it is the playbook's approved text, that text adapted to the
+documents, or wording the workflow wrote. In step 7 corrections are stored as decisions with a
+reason, but **feedback is not built** and nothing feeds a correction into an evaluation round
+automatically; that is a manual step for the legal engineer.
+
 ## Discovery questions
 
 Asked of associates, supervising attorneys and the practice's knowledge management lead before
 building. Each answer changes a design decision, noted in brackets.
+
+**Status.** None of these questions has been asked of anyone, and the answers a build would have
+needed were assumed instead (one reviewing attorney, a 30 day retention in the demo, DOCX and TXT
+only, the fictional playbook). The assumptions are listed in the [README](README.md#assumptions) and
+in [document 6](06-access-and-governance.md). The list remains the set of questions to ask.
 
 **The workflow today**
 
@@ -138,19 +184,19 @@ reference data.
 
 ### Cravath, AI / Legal Workflow Engineer (posting read)
 
-| Responsibility or qualification in the posting (summarized)                                 | Parol feature                                                                     | Evidence in the repository                    |
-| ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------- |
-| Design, build, test and refine AI workflows for practice groups                             | The seven-stage workflow with versioned configuration                             | `apps/parol`, workflow versions table         |
-| Develop prompts, workflow templates, evaluation methods and quality standards               | Prompt registry with hashes; workflow version manifests; rubric; release gates    | Document 3, document 5                        |
-| Turn practice requirements into specifications, prompt libraries and knowledge repositories | Discovery questions to playbook YAML with categories, fallbacks, escalation rules | Demo playbook, document 1                     |
-| Track KPIs and attorney satisfaction; use data to guide iteration                           | Correction capture, feedback, pilot measures, comparison of versions              | Document 5, document 8                        |
-| Support pilots and proofs of concept, with success criteria and deployment recommendations  | Pilot plan, acceptance criteria, go/no-go memo, rollback plan                     | Document 8                                    |
-| Contribute to training and adoption                                                         | Quickstart and a 20-minute training exercise with an answer key                   | Document 8                                    |
-| Give feedback to vendors and internal technology teams                                      | Configure versus build analysis; failure reports with traced evidence             | This document, failure analysis in document 5 |
-| Report on workflow performance                                                              | Evaluation reports and promotion recommendations                                  | Document 5                                    |
-| RAG, context management, model limitations, evaluation techniques                           | Bounded retrieval, context budget, conflict handling, held-out regression         | Document 3, document 5                        |
-| Identify failure modes, design test cases, evaluate output for accuracy and consistency     | 26 synthetic cases, repeated runs, stability measures                             | Document 5                                    |
-| Hands-on experience with an enterprise AI platform building multi-step workflows            | **Not demonstrated.** The mapping below shows how each stage would be configured  | Configure versus build table                  |
+| Responsibility or qualification in the posting (summarized)                                 | Parol feature                                                                                                                                                                                  | Evidence in the repository                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Design, build, test and refine AI workflows for practice groups                             | The seven-stage workflow with versioned configuration                                                                                                                                          | `apps/parol/src/prompts/workflows.ts` (versions v1 and v2), `apps/parol/src/services/runner.ts`, the `workflow_versions` table in `apps/parol/migrations/001_init.sql`        |
+| Develop prompts, workflow templates, evaluation methods and quality standards               | Prompt registry with hashes; workflow version manifests; release gates in code; rubric (a plan: it is a human review step and has no code)                                                     | `apps/parol/src/prompts/registry.ts`, `apps/parol/src/prompts/workflows.ts`, `evals/src/parol/gates.ts`; the rubric is in [document 5](05-evaluation.md)                      |
+| Turn practice requirements into specifications, prompt libraries and knowledge repositories | Discovery questions to playbook YAML with categories, fallbacks, escalation rules (the questions have not been asked; the playbook is invented)                                                | `apps/parol/playbooks/parol-nda-recipient.yaml`; the questions are in this document                                                                                           |
+| Track KPIs and attorney satisfaction; use data to guide iteration                           | Correction capture (built: decisions and edits are stored); feedback and pilot measures (**Not built**); comparison of versions (command line only)                                            | `reviews` and `feedback` tables in `apps/parol/migrations/001_init.sql`, `evals/src/parol/compare.ts`; [document 8](08-pilot-and-enablement.md) is a plan                     |
+| Support pilots and proofs of concept, with success criteria and deployment recommendations  | Pilot plan, acceptance criteria, go/no-go memo, rollback plan (a plan; no pilot has run)                                                                                                       | [Document 8](08-pilot-and-enablement.md)                                                                                                                                      |
+| Contribute to training and adoption                                                         | Quickstart and a 20-minute training exercise with an answer key (**Not built**: the run steps are in the app README, and the training matter is not seeded)                                    | `apps/parol/README.md`; the exercise is in [document 8](08-pilot-and-enablement.md)                                                                                           |
+| Give feedback to vendors and internal technology teams                                      | Configure versus build analysis (a reasoned expectation, checked against no product); failure reports with traced evidence (a format in document 5; none exists, because nothing was run live) | This document; [document 5](05-evaluation.md)                                                                                                                                 |
+| Report on workflow performance                                                              | Evaluation reports and promotion recommendations (the report code is built; its only runs are of a selftest oracle and a simulated reader)                                                     | `evals/src/parol/report.ts`, `evals/src/parol/compare.ts`, [`EXP-001.md`](experiments/EXP-001.md) (a draft with no results)                                                   |
+| RAG, context management, model limitations, evaluation techniques                           | Bounded retrieval, context budget, conflict handling, held-out regression (the held-out set is empty)                                                                                          | `apps/parol/src/stages/retrieve.ts`, `apps/parol/src/stages/clause-refs.ts`, `budgetTokens` in `apps/parol/src/prompts/workflows.ts`, the held-out seal in `evals/src/parol/` |
+| Identify failure modes, design test cases, evaluate output for accuracy and consistency     | 26 synthetic cases planned, 6 written; repeated runs and stability measures are in the scorer and have not been run on a model                                                                 | `fixtures/parol/cases.ts`, `fixtures/parol/answer-keys.json`, `evals/src/parol/score.ts`, `evals/src/parol/stats.ts`                                                          |
+| Hands-on experience with an enterprise AI platform building multi-step workflows            | **Not demonstrated.** The mapping below shows how each stage would be configured                                                                                                               | Configure versus build table                                                                                                                                                  |
 
 ### Holland & Knight, AI Legal Engineer (posting not retrieved: unverified)
 
@@ -160,7 +206,9 @@ attorney review, pilot measurement, training and continuous improvement. Each th
 feature: discovery (document 1), reusable prompts (prompt registry), knowledge retrieval (playbook
 retrieval and bounded context), evaluations (document 5), attorney review (review gates), pilot
 measurement and training (document 8), continuous improvement (the improvement cycle). Check this
-against the posting text before relying on it.
+against the posting text before relying on it. Of these, the prompt registry, playbook retrieval
+and the review gates are built; pilot measurement and the training matter are **Not built**; the
+improvement cycle has **not been run**.
 
 ### Secondary references
 
@@ -171,11 +219,16 @@ against the posting text before relying on it.
 | Thomson Reuters, Legal Engineer, AI Adoption    | No         | Adoption measures and training (from the project request only). The link's address names an AI Solutions Architect requisition, so confirm which role it is         |
 | Latitude Legal, Legal Engineer, AI and Workflow | Yes        | Assessing workflows, configuring existing tools and recommending build or buy, prompts and playbooks with guardrails and quality checks, training, measuring impact |
 
+The themes in this table are the ones the design addresses. In the build, only the playbook as
+data, the evaluation design and the review controls exist; pilots, workshops, training and adoption
+measures are plans in [document 8](08-pilot-and-enablement.md).
+
 ### What the project does not demonstrate
 
 Several postings ask for things a portfolio project cannot show: a law degree or years of practice,
 hands-on administration of an enterprise legal AI platform, real stakeholder management, and
-on-call operations. The write-up should say so rather than imply otherwise.
+on-call operations. It also does not yet show a result from a real model: nothing has been run
+live. The write-up should say so rather than imply otherwise.
 
 ## Configure versus build
 
@@ -196,6 +249,13 @@ own documentation, not a statement of what any product does.
 | Invalidating findings and approvals when inputs change     | Unknown                                                           | **Yes**, it is a supervision control the practice owns                                          |
 | Pilot instrumentation (corrections, time, satisfaction)    | Usage analytics often exist; correction and time data rarely do   | **Yes**, for a go/no-go decision grounded in the group's own data                               |
 | Memo export with provenance                                | Partly, as document generation                                    | Light custom work for the provenance appendix                                                   |
+
+**What was built from this table.** Built: the playbook as versioned data, explicit escalation
+reasons, invalidation of findings and approvals when inputs change, a memo with a provenance
+appendix, and the machinery of the held-out suite (dataset format, scoring, gates, a pin-checking
+comparison). Built but off: the separate check of substantive support. **Not built:** the pilot
+instrumentation. The right-hand column is still a reasoned expectation, not a finding about any
+product.
 
 The likely shape in a firm: configure the review itself in the licensed product and keep the
 evaluation suite, answer keys, gates and pilot measurement as the legal engineer's own assets,

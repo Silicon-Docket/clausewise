@@ -211,11 +211,36 @@ pnpm eval --selftest # run the evaluation harness against a scripted model
 | `evals/`            | The evaluation harness, for measuring findings against a live model    |
 | `playbooks/`        | Starter playbooks                                                      |
 | `fixtures/`         | Synthetic contracts and the findings a correct review should produce   |
-| `docs/parol/`       | Parol design: review workflow and evaluation pilot (not built)         |
+| `apps/parol`        | Parol, an attorney-supervised NDA review demo (see [Parol](#parol))    |
+| `docs/parol/`       | Parol design documents and their status (see [Parol](#parol))          |
 
 Tests use scripted stand-ins for the model (`@clausewise/llm/testing`, `@clausewise/review/testing`),
 so the suite needs no network or key. The contracts in `fixtures/` were written for this project.
 Do not add real client documents or text copied from other products.
+
+## Parol
+
+Parol is a second application in this repository, separate from the `clausewise` command: an
+attorney-supervised NDA review workflow with an evaluation of its own. It is a demonstration for
+synthetic documents, and it is not the Clausewise web app on the roadmap below.
+
+**What exists.** `apps/parol` is a local web app. An associate uploads an NDA and amendments to a
+matter and picks an approved playbook; a review reads them against each rule of a fictional
+playbook; every finding shows the exact passages it rests on; code checks that those passages are
+in the documents; a reviewing attorney decides each finding; a change to the documents makes earlier
+decisions stop counting; and the decided findings export as a Word memorandum. The dataset and the
+scoring code are in `fixtures/parol` and `evals/src/parol` (`pnpm eval:parol`), with 6 of the 26
+planned cases written.
+
+**What does not exist.** No live model has ever read a document in Parol, so there is no accuracy,
+latency or cost figure for any model. The demonstration runs a scripted simulated reader that
+answers one worked example and is not a language model (`PAROL_SCRIPTED=1`). The sign-in is a demo
+picker without passwords and is not authentication. Not built: the evaluation comparison page,
+feedback and pilot measures, PDF documents, the Word add-in, and the held-out evaluation cases.
+
+**Where to start.** [apps/parol/README.md](apps/parol/README.md) has the run steps, a two minute
+walk-through and the full table of what is built. The design, with the status of each part, is in
+[docs/parol](docs/parol/README.md).
 
 ## Roadmap
 

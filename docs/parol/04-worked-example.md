@@ -188,20 +188,21 @@ never trusted to write an id.
 
 Verify under v1 and v2 (the trail the inspector shows; the detail column is the v2 finding's):
 
-| Check                  | Kind          | v1             | v2             | Detail, v2                                                      |
-| ---------------------- | ------------- | -------------- | -------------- | --------------------------------------------------------------- |
-| `quote_exists`         | deterministic | pass           | pass           | 3 verified, 0 ambiguous                                         |
-| `span_in_bundle`       | deterministic | pass           | pass           | 3 cited spans all in the bundle                                 |
-| `evidence_set`         | deterministic | pass           | pass           | 3 passages cited                                                |
-| `citation_shape`       | deterministic | pass           | pass           | status deviation is cited as it requires                        |
-| `numeric_consistency`  | deterministic | pass           | pass           | 1 figure stated, each in a verified quote or the rule: 2 years  |
-| `precedence_labels`    | deterministic | pass           | pass           | roles agree with the precedence rules over 3 cited (3 verified) |
-| `parties`              | deterministic | not applicable | not applicable | the rule is not in the parties category                         |
-| `missing_confirmation` | deterministic | not applicable | not applicable | status deviation claims no absence                              |
-| `playbook_escalation`  | deterministic | not applicable | not applicable | the analysis matched no escalation condition                    |
-| `defined_term`         | deterministic | pass           | pass           | every defined term in 3 quotes is defined                       |
-| `model_abstained`      | deterministic | pass           | pass           | the analysis stated status deviation                            |
-| `fallback_basis`       | deterministic | not applicable | pass           | approved_adapted, similarity 0.94 against 0.60                  |
+| Check                   | Kind          | v1             | v2             | Detail, v2                                                                       |
+| ----------------------- | ------------- | -------------- | -------------- | -------------------------------------------------------------------------------- |
+| `quote_exists`          | deterministic | pass           | pass           | 3 verified, 0 ambiguous                                                          |
+| `span_in_bundle`        | deterministic | pass           | pass           | 3 cited spans all in the bundle                                                  |
+| `evidence_set`          | deterministic | pass           | pass           | 3 passages cited                                                                 |
+| `citation_shape`        | deterministic | pass           | pass           | status deviation is cited as it requires                                         |
+| `numeric_consistency`   | deterministic | pass           | pass           | 1 figure stated, each in a verified quote or the rule: 2 years                   |
+| `precedence_labels`     | deterministic | pass           | pass           | roles agree with the precedence rules over 3 cited (3 verified)                  |
+| `parties`               | deterministic | not applicable | not applicable | the rule is not in the parties category                                          |
+| `missing_confirmation`  | deterministic | not applicable | not applicable | status deviation claims no absence                                               |
+| `playbook_escalation`   | deterministic | not applicable | not applicable | the analysis matched no escalation condition                                     |
+| `defined_term`          | deterministic | pass           | pass           | every defined term in 3 quotes is defined                                        |
+| `instruction_like_text` | deterministic | pass           | pass           | 3 cited passages, none in a paragraph that reads like an instruction to software |
+| `model_abstained`       | deterministic | pass           | pass           | the analysis stated status deviation                                             |
+| `fallback_basis`        | deterministic | not applicable | pass           | approved_adapted, similarity 0.94 against 0.60                                   |
 
 Under v1 the quote occurs once in `D1-p19`, the figures stated (two years in the quote, three in the
 rule) are in the verified quote or the rule, and nothing cites the amendment, so no row fails.
@@ -211,8 +212,8 @@ validity and local support are not enough, and why the failure is worth a contro
 
 **Deviation.** The earlier draft had a model `support` row that passed because the checker "is
 shown only D1-p19", and called the precedence row `precedence`. The checks have the names above;
-six more exist (`evidence_set`, `parties`, `missing_confirmation`, `playbook_escalation`,
-`defined_term` and `model_abstained`); and neither v1 nor v2 pins the support prompt, so no
+seven more exist (`evidence_set`, `parties`, `missing_confirmation`, `playbook_escalation`,
+`defined_term`, `instruction_like_text` and `model_abstained`); and neither v1 nor v2 pins the support prompt, so no
 `support` row appears and every cited passage reads "Support not checked".
 The support check is wired (`createSupportChecker`, prompt `support.p1`), and a test with a scripted
 checker shows what the earlier draft said: given only `D1-p19`, it agrees. Its error rates are to be
@@ -260,7 +261,9 @@ Analyze returns (source: the scripted simulated reader; `c40` is `D2-p3`, `c20` 
 }
 ```
 
-The verify table above shows the v2 trail: all twelve rows pass or do not apply. `precedence_labels`
+The verify table above shows the v2 trail: all thirteen rows pass or do not apply (ten pass and
+three do not apply; under v1 the finding's thirteen rows are nine passes and four that do not
+apply). Both counts were read from the database of a seeded run. `precedence_labels`
 passes because `D2-p3` deletes 6.1, the amendment is dated after the NDA (15 September against
 2 February 2026), and `D1-p19` is labelled superseded. `fallback_basis` passes because the
 fallback is the playbook's approved text with "this Agreement" changed to "Section 4" and the clause
@@ -298,7 +301,7 @@ The issue table has one row per rule, with five columns, and the inspector besid
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Evidence, location          | "Section 6.1 of the Agreement is deleted in its entirety" (Amendment No. 1 (v1), Section 2, paragraph 3), governing. "shall continue for two (2) years from the date of each disclosure" (Mutual NDA (v1), Section 6.1, paragraph 19), superseded and struck through. "Sections 4, 5 and 8 survive any termination or expiration of this Agreement" (Mutual NDA (v1), Section 9.3, paragraph 29), supporting. |
 | Discrepancy and explanation | As in the analysis output above.                                                                                                                                                                                                                                                                                                                                                                              |
-| Checks                      | 9 passed, 0 failed, 3 not applicable. Each cited passage reads "Quote found" and "Support not checked".                                                                                                                                                                                                                                                                                                       |
+| Checks                      | 10 passed, 0 failed, 3 not applicable. Each cited passage reads "Quote found" and "Support not checked".                                                                                                                                                                                                                                                                                                      |
 | Applicable playbook rule    | DUR-1, Parol NDA (Recipient) 1.0.1. Standard: three years or less after each disclosure. Unacceptable: no stated end for non-trade-secret information.                                                                                                                                                                                                                                                        |
 | Suggested fallback language | As in the analysis output above. Basis: approved playbook text, adapted to these documents.                                                                                                                                                                                                                                                                                                                   |
 | Review status or escalation | Verified; no escalation. Not decided. Only the reviewing attorney sees the decision form.                                                                                                                                                                                                                                                                                                                     |
@@ -332,9 +335,10 @@ and the new finding decided. An end-to-end test walks this through over HTTP.
 
 ## 6. Memo excerpt
 
-The exported DOCX has a heading block (title, Re, Client, Date), an Open items section, a summary
-table of all eight rules, one section per finding, "Appendix A. Considered and rejected" and
-"Appendix B. Provenance". The text below is the DUR-1 section and the provenance appendix of the
+The exported DOCX has a heading block (title, Re, Client, Date), a "Document warnings" section when
+an upload raised warnings (counts and locations only, and none for this example), an Open items
+section, a summary table of all eight rules, one section per finding, "Appendix A. Considered and
+rejected" and "Appendix B. Provenance". The text below is the DUR-1 section and the provenance appendix of the
 memo the application produced from the v2 review after the edit above and acceptance of the other
 seven findings (source: the simulated reader; the matter and run ids and the dates are those of one
 run on 4 November 2026 and differ in every run):

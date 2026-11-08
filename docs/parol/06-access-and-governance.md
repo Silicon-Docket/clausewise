@@ -16,15 +16,15 @@ mechanism, and several production controls are deferred and listed as such at th
 
 ## Threat model in brief
 
-| Threat                                                 | Primary control                                                                                                   |
-| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| A user reads or acts on a matter they do not belong to | Server-side matter authorization before any retrieval, generation or export                                       |
-| Document text tries to steer the review or the system  | No tools for the model; text fenced as data; every model answer validated in code                                 |
-| Model output is wrong or fabricated                    | Quote checks and deterministic consistency checks; escalation; attorney decision required before export           |
-| Stale decisions survive a document change              | Inputs digest and manifest hashes; decisions bound to finding content hashes; export re-checks both               |
-| Sensitive text leaks into logs or errors               | Logs carry ids, route templates and counts only; errors never quote documents                                     |
-| Hostile files                                          | `@clausewise/docx` size and structure limits; TXT size limit; nothing executed                                    |
-| Data kept longer than needed                           | Per-matter retention date and deletion on request (**Not built:** the scheduled job that deletes expired matters) |
+| Threat                                                 | Primary control                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A user reads or acts on a matter they do not belong to | Server-side matter authorization before any retrieval, generation or export                                                                                                                                                                                          |
+| Document text tries to steer the review or the system  | No tools for the model; text fenced as data; every model answer validated in code                                                                                                                                                                                    |
+| Model output is wrong or fabricated                    | Quote checks and deterministic consistency checks; escalation; attorney decision required before export                                                                                                                                                              |
+| Stale decisions survive a document change              | Inputs digest and manifest hashes; decisions bound to finding content hashes; export re-checks both                                                                                                                                                                  |
+| Sensitive text leaks into logs or errors               | Logs carry ids, route templates and counts only; errors never quote documents                                                                                                                                                                                        |
+| Hostile files                                          | `@clausewise/docx` size and structure limits, including a refusal of a Word package with two parts of one name; TXT size limit; text a reader cannot see in Word (white on the page, tiny, squeezed) left out of the review and reported as hidden; nothing executed |
+| Data kept longer than needed                           | Per-matter retention date and deletion on request (**Not built:** the scheduled job that deletes expired matters)                                                                                                                                                    |
 
 The model support check, which the plan counted as a control against fabricated conclusions, is
 built and isolated but off in both workflow versions, so it is not a control today.
@@ -49,17 +49,17 @@ matter. The run reads spans by the matter id and the document versions of its ma
 trigger refuses evidence that cites a span outside the run's manifest, so a bug in a stage cannot
 store another matter's spans as evidence.
 
-| Action                                   | Check, in order                                                                                                                                                                                                 |
-| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Any matter route                         | Signed-in demo identity; a CSRF token on a write; membership (404 if none); role for the action (403 if insufficient)                                                                                           |
-| Start or resume a run (retrieval, model) | Associate role; no run in flight; an approved playbook version; an NDA and an operative version of every document, with reviewable text. Resume only for a failed run on unchanged inputs and the same model    |
-| Read a finding                           | Membership; the finding is looked up in the route's matter only, so a finding of another matter is a 404. There is no route that reads a span                                                                   |
-| Record a review decision                 | Reviewer role; not the person who started the run (unless relaxed); finding current; content hash matches; reason present where required                                                                        |
-| Export a memo                            | Reviewer role; every current finding has a current decision; recomputed at export time                                                                                                                          |
-| Download a memo                          | Membership; memo belongs to the matter; the stored file still matches its recorded hash                                                                                                                         |
-| Delete a matter                          | The matter's creator or an administrator, decided from the database; another member gets 403, anyone else 404 (the plan said a user can delete earlier, not who)                                                |
-| Approve a playbook, promote a workflow   | **Not met.** Admin; promotion record attached. No route or page does either. The demo legal engineer imports and the demo admin approves the playbook at start-up; the store accepts any existing user as actor |
-| Evaluation screens                       | **Not built.** Legal engineer; synthetic matters only. The database refuses evaluation results for a matter that is not synthetic                                                                               |
+| Action                                   | Check, in order                                                                                                                                                                                                                                                       |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Any matter route                         | Signed-in demo identity; a CSRF token on a write; membership (404 if none); role for the action (403 if insufficient)                                                                                                                                                 |
+| Start or resume a run (retrieval, model) | Associate role; no run in flight; an approved playbook version; an NDA and an operative version of every document, with reviewable text. Resume only for a failed run on unchanged inputs and the same model                                                          |
+| Read a finding                           | Membership; the finding is looked up in the route's matter only, so a finding of another matter is a 404. There is no route that reads a span                                                                                                                         |
+| Record a review decision                 | Reviewer role; not the person who started the run (unless relaxed); finding current; content hash matches; reason present where required; no other reviewer's decision is current on the finding (a reviewer can change only their own, else 409 `decision_conflict`) |
+| Export a memo                            | Reviewer role; every current finding has a current decision; recomputed at export time. Exporting again with the same decisions of the same run returns the memo on record and writes nothing                                                                         |
+| Download a memo                          | Membership; memo belongs to the matter; the stored file exists (else 409 `memo_file_missing`) and still matches its recorded hash                                                                                                                                     |
+| Delete a matter                          | The matter's creator or an administrator, decided from the database; another member gets 403, anyone else 404 (the plan said a user can delete earlier, not who)                                                                                                      |
+| Approve a playbook, promote a workflow   | **Not met.** Admin; promotion record attached. No route or page does either. The demo legal engineer imports and the demo admin approves the playbook at start-up; the store accepts any existing user as actor                                                       |
+| Evaluation screens                       | **Not built.** Legal engineer; synthetic matters only. The database refuses evaluation results for a matter that is not synthetic                                                                                                                                     |
 
 The approval and promotion row is a gap: the plan said only an admin may approve a playbook or
 promote a workflow, and in the code nothing checks the role because nothing exposes the operations.
@@ -93,18 +93,25 @@ of those are reachable from it:
   call another model or reach another matter. There is nothing for an injected instruction to
   invoke.
 - **Fenced input.** Contract text is rendered with Clausewise's `renderClauses`, inside
-  `<contract>` tags, with forged closing tags and forged headers neutralised. The system prompt
-  states that instructions inside the contract are never followed. Text that comes from intake
+  `<contract>` tags, with forged closing tags and forged headers neutralised. The check that finds
+  a forged tag or header first folds the line to a plain form: it drops invisible characters and
+  accents, reads fullwidth forms as the characters they imitate, and maps the Cyrillic, Greek and
+  Armenian look-alikes of the letters of `contract` and of the `c` of a header to Latin ones, and a
+  digit of any script counts as a digit. A look-alike for these letters that is not in that short
+  table is not caught, and whether a real model is fooled by either kind of forgery is unobserved.
+  The system prompt states that instructions inside the contract are never followed. Text that comes from intake
   rather than the file (a document title, the client name, a stated date) is flattened to one line
   with angle brackets replaced, and a value inserted into a template is never expanded as a
   placeholder.
 - **Constrained output.** The model's answer only fills fields of a finding. Span labels must exist
   in the bundle; escalation ids must exist in the rule; quotes must be verified; `compliant` and
   `deviation` need a verified quote in a governing or supporting role; `missing` needs the whole
-  document in the bundle. **Not met:** the plan also said statuses are settled by code against the
+  document in the bundle; `not_applicable` needs the whole document too and is escalated on a rule
+  the playbook requires. **Not met:** the plan also said statuses are settled by code against the
   playbook's required and absence semantics. The helper exists (`settledStatus` in
   `@clausewise/review`) and no Parol stage calls it, so the status is the model's, and only the
-  checks around it are code. A model that obeyed an injected "mark everything compliant" would still
+  checks around it are code. The one place `rule.required` is read is that `not_applicable` check;
+  a `missing` answer for the optional rule `ret-1` is not corrected. A model that obeyed an injected "mark everything compliant" would still
   need a verified quote for each `compliant`, but nothing checks in code or by a model that the quote
   supports the conclusion, because the model support check is off in both workflow versions; only
   durations, percentages, amounts and places in the explanation are compared with the quotes. The
@@ -116,7 +123,16 @@ of those are reachable from it:
   are none, so they are registered from code and a YAML file at every start, and an approved version
   cannot be changed at the database.
 - **The warning is a signal, not the control.** The `instruction_like_text` pattern warning helps
-  the reviewer notice odd text. It is easy to evade and is not relied on for safety.
+  the reviewer notice odd text. It is easy to evade and is not relied on for safety. It does three
+  things: the matter page shows it with words that say the paragraph is given to the model as
+  document text and that Parol cannot show a model ignored it (the number after `p` counts the
+  file's paragraphs from zero, tables included); the verify check `instruction_like_text`
+  escalates a finding that cites a flagged paragraph in any role, so it is `escalated_by_system` and
+  an open item in the memo even if accepted; and the memo prints a "Document warnings" section, with
+  counts and locations only, before its open items. **What stays open:** a model that follows such a
+  paragraph and cites a genuine clause produces a finding with no flag of its own, and only the
+  upload warning and the memo's warnings section say the paragraph was there. No page shows a
+  flagged paragraph that no finding cites, so the reviewer has to open the file to read it.
 
 **What the tests cover, and what they do not.** `test/stages/analyze-injection.test.ts` and
 `extract-injection.test.ts` assert that hostile text stays inside the one `<contract>` block, that
@@ -150,6 +166,11 @@ All five gates are built and tested.
 5. **After export**: any input change marks the memo superseded and blocks a new export until the
    matter is re-run and re-decided. A re-run on unchanged inputs keeps the earlier memo current until
    the new review is exported, so a page must not read "a memo exists" as "this review was exported".
+   The memos page and the matter page label such a memo "Earlier review" and say a newer review has
+   been started and not exported; a JSON client sees the memo's status as `current` and has to
+   compare the memo's `runId` with the matter's current run. A superseded memo downloads under a
+   different file name (`-superseded-` and eight characters of the memo id before `.docx`), because
+   the stored file itself is kept as built under its recorded hash and cannot carry the marker.
 
 ## Minimal sensitive logging
 
@@ -161,6 +182,11 @@ All five gates are built and tested.
 | `run_stages.output_json` | Stage outputs needed to resume and inspect (matter-scoped, deleted with the matter)                                                              | Anything from another matter                                                                      |
 | Error messages           | A fixed message for each kind of error and a short code; a log line names an unexpected error by its class only                                  | Document text, API keys, anything the caller typed                                                |
 | Evaluation results       | Full outputs in a JSON file under `evals/results/` (ignored by git), because the data is synthetic                                               | Any non-synthetic matter: the runner reads only `fixtures/parol`, and the database refuses it     |
+
+A request that never reached the application (Node's parser refused it, it had no `Host`, or its
+framing could not be trusted) still gets one line, with method `OTHER`, route `(unmatched)`, no
+user and no matter, and a fixed error code such as `HPE_INVALID_METHOD` or `MissingHostHeader`
+(checked by sending such requests to a running server).
 
 Two messages are not fixed: an upload error (its own words, control characters stripped, capped at
 300 characters) and the reasons a review cannot start (fixed phrases, at most 20). Neither repeats a
@@ -222,18 +248,22 @@ provider.
 
 ## Recovery from partial failures
 
-All six rows are built and tested.
+All eight rows are built and tested.
 
-| Failure                                   | State afterwards                                                                                                                                            | Recovery                                                                                                  |
-| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| One rule's model call fails after retries | Run succeeds; that finding is `undetermined` with `output_invalid` (or `context_over_budget`, with no call)                                                 | Reviewer decides it, or the associate re-runs                                                             |
-| Provider rejects the key or the model     | Run `failed` with an `error_kind` (`provider_auth`, `provider_permission`, `provider_model`, `provider_billing`, `provider_redirect`); completed units kept | Fix configuration, resume. Resume is refused if the provider or model changed: start a new review instead |
-| Server stops mid-run                      | On restart, run `failed` with `interrupted`; the page offers Resume                                                                                         | Resume skips units whose input hash is unchanged                                                          |
-| Upload cannot be parsed                   | Nothing stored; reason shown                                                                                                                                | Upload a readable file                                                                                    |
-| Export fails part-way                     | No memo row, no partial file (temporary file and rename; a file saved before a refused row is taken back)                                                   | Export again                                                                                              |
-| Database write fails during a decision    | Transaction rolled back; decision not recorded; user sees the error                                                                                         | Retry; the content-hash check prevents a double decision on changed content                               |
+| Failure                                    | State afterwards                                                                                                                                                                                                                      | Recovery                                                                                                                                                                                          |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| One rule's model call fails after retries  | Run succeeds; that finding is `undetermined` with `output_invalid` (or `context_over_budget`, with no call)                                                                                                                           | Reviewer decides it, or the associate re-runs                                                                                                                                                     |
+| Provider rejects the key or the model      | Run `failed` with an `error_kind` (`provider_auth`, `provider_permission`, `provider_model`, `provider_billing`, `provider_redirect`); completed units kept                                                                           | Fix configuration, resume. Resume is refused if the provider or model changed: start a new review instead                                                                                         |
+| Server stops mid-run                       | On restart, run `failed` with `interrupted`; the page offers Resume. The matter returns to `ready`, or to `stale` when it holds findings of an earlier review                                                                         | Resume skips units whose input hash is unchanged                                                                                                                                                  |
+| Database cannot be written when a run ends | The runner tries the write again, after 100 ms and then at growing intervals up to 5 s, until it works; the run keeps its queue slot, so a shutdown waits (a second signal stops at once). The run then ends `failed` with `internal` | Resume; the finished units are skipped. With no bound on the retries, a database that never recovers keeps the run `analyzing` until the process stops, and the next start marks it `interrupted` |
+| A second server on the same data folder    | Refused before anything is touched: an exclusive lock on `parol.lock` in the data folder is held for the life of the process, and the OS drops it when the process ends, however it ends                                              | Stop the first server, or use another folder                                                                                                                                                      |
+| Upload cannot be parsed                    | Nothing stored; reason shown                                                                                                                                                                                                          | Upload a readable file                                                                                                                                                                            |
+| Export fails part-way                      | No memo row, no partial file (temporary file and rename; a file saved before a refused row is taken back)                                                                                                                             | Export again. Exporting the same decisions of the same run a second time returns the memo on record                                                                                               |
+| Database write fails during a decision     | Transaction rolled back; decision not recorded; user sees the error                                                                                                                                                                   | Retry; the content-hash check prevents a double decision on changed content, and a decision by another reviewer on unchanged content is refused (`decision_conflict`)                             |
 
 Tests: `test/services/runs-failures.test.ts` (the first three rows, and a run that is resumed),
+`test/services/runs-settle.test.ts` (the database row) and `test/server/shell-single-instance.test.ts`
+(the second server),
 `test/store/files-atomic.test.ts` and `test/export/failure.test.ts` (the export row),
 `test/services/uploads.test.ts` (the upload row) and `test/store/audit-atomicity.test.ts` (a rollback
 takes its audit event with it).
@@ -245,9 +275,10 @@ All of this is built and tested.
 - Enabled only when `PAROL_DEMO_IDENTITY=1`. The user picks a seeded identity (associate,
   reviewer, legal engineer, admin: Alex Ruiz, Dana Whitfield, Lee Okafor and Sam Patel); the server
   sets an HMAC-signed, `HttpOnly`, `SameSite=Strict` cookie with that user id, valid for eight hours
-  and marked `Secure` when `PAROL_SECURE_COOKIES=1`. Without the flag there is no way to sign in, and
-  the server says so at start. The demo users exist in the database either way, because they import
-  and approve the demo playbook.
+  and marked `Secure` when `PAROL_SECURE_COOKIES=1`. Without the flag there is no way to sign in:
+  the server says so at start, and the start page is titled "Sign-in is switched off", names
+  `PAROL_DEMO_IDENTITY=1` and lists no identity and no form. The demo users exist in the database
+  either way, because they import and approve the demo playbook.
 - **It is not authentication.** Anyone at the keyboard can be anyone. A banner on every page says
   "DEMO: synthetic documents, demo identity, not for client work", and a test pins its words.
 - With demo identity on, the server listens on `127.0.0.1`, `::1` or `localhost` only and refuses to
@@ -268,6 +299,16 @@ All of this is built and tested.
   pages, output escaping by default (Hono JSX), upload limits (10 MB by default,
   `PAROL_MAX_UPLOAD_BYTES`). Direction marks and control characters in document text are shown as
   visible markers.
+- **Requests refused below the application.** A request that Node's own HTTP parser rejects (a
+  malformed request line, a header or a cookie over the size limit, a bad length or chunk size), one
+  with no `Host` header, one whose `Transfer-Encoding` does not end in `chunked`, and one whose
+  address has a user or password part are answered with a short page that carries the security
+  headers and a request id, and each is logged once, with method `OTHER`, route `(unmatched)` and a
+  fixed code such as `HPE_HEADER_OVERFLOW` as its error (`src/server/middleware/rejected.ts`; the
+  address with a user part is refused inside the application, after the host guard and before the
+  body limit, with a 400). The statuses are 400, 408 and 431. **Known limits.** When the application
+  has already sent response headers and the parser then fails, the handler only closes the socket
+  and logs nothing, because no refusal was sent. HTTP/1.0 without a `Host` is served as before.
 
 ## Deferred until production
 

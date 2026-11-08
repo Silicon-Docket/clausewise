@@ -408,6 +408,12 @@ out for each split section from the repeats that finished, and a section that is
 held-out split with three repeats says in its report that its gates are indicative and not a
 promotion result.
 
+**Gates evaluated today, counted from the reports.** A one-repeat run of the development split (the
+selftest, or the simulated reader) evaluates nine of the fourteen gates, G2 to G10, and lists G1,
+G11, G12, G13 and G14 as not evaluated. Two repeats add G14, and a comparison against a baseline
+adds G12; G13 needs a live run and a baseline. No run can evaluate G1 or G11, so at most twelve of the fourteen are
+reachable today, and none has been evaluated for a model.
+
 **Small numbers.** With 18 expected flags, one miss moves recall by 5.6 points, and 17 of 18 has a
 95 percent Wilson interval of roughly 0.74 to 0.99. The gates are therefore counts first and
 percentages second, and the report prints intervals beside every rate. A difference of one or two
@@ -595,21 +601,24 @@ What the comparison shows, and why:
   cites the uncured Section 7.2 (a false alarm) to `compliant` through the amendment (the side
   effect of hypothesis H2). The cause is retrieval: R2 adds the amendment spans `D2-p3` and `D2-p4`
   to the bundles of the clauses they change, the reader reads the passages it is shown, and nothing
-  else moves. The other 46 slots are identical. - **Most of the failures are the reader declining.**
-  It reads only the worked example, so five of the six cases (40 of 48 slots) are `undetermined` and
-  escalated as `model_abstained`. That is why accuracy, extraction recall and the unnecessary
-  escalation rate are poor under both versions and unchanged between them. The one required
-  escalation that is met (`PAROL-D12`, `parties_mismatch`) is raised by the deterministic parties
-  check even though the reader declined. - **No gate result is a result.** G4, G5 and G7 pass under
-  v2 because the reader flags one slot, correctly, and abstains on the rest, which a count of silent
-  misses and a precision rate do not penalise. G1 and G11 are not evaluated in either run, G13 has
-  no latency or cost to read, and at one repeat G12 and G14 have nothing to compare. With `--runs 2`
-  the comparison evaluates G12 and G14 and both pass, and the same two slots change; stability is
-  1.0 because the reader is a table. - **The decision rule is not applied.** The comparison states
-  that a comparison involving a simulated run says nothing about any model. - **Refusals work.**
-  Asking for `--runs 2` against a one-repeat baseline is refused, naming `repeats`, before anything
-  runs; so is comparing a simulated baseline with a selftest candidate, naming `model` and `mode`.
-  Nothing was written in either case.
+  else moves. The other 46 slots are identical.
+- **Most of the failures are the reader declining.** It reads only the worked example, so five of
+  the six cases (40 of 48 slots) are `undetermined` and escalated as `model_abstained`. That is why
+  accuracy, extraction recall and the unnecessary escalation rate are poor under both versions and
+  unchanged between them. The one required escalation that is met (`PAROL-D12`, `parties_mismatch`)
+  is raised by the deterministic parties check even though the reader declined.
+- **No gate result is a result.** G4, G5 and G7 pass under v2 because the reader flags one slot,
+  correctly, and abstains on the rest, which a count of silent misses and a precision rate do not
+  penalise. G1 and G11 are not evaluated in either run, G13 has no latency or cost to read, and at
+  one repeat G12 and G14 have nothing to compare. With `--runs 2` the comparison table evaluates G12
+  (its "SWF not higher than baseline" row) and G14, and both pass, and the same two slots change;
+  stability is 1.0 because the reader is a table. The candidate's own gate table, written without
+  the baseline, still lists G12 as not evaluated.
+- **The decision rule is not applied.** The comparison states that a comparison involving a
+  simulated run says nothing about any model.
+- **Refusals work.** Asking for `--runs 2` against a one-repeat baseline is refused, naming
+  `repeats`, before anything runs; so is comparing a simulated baseline with a selftest candidate,
+  naming `model` and `mode`. Nothing was written in either case.
 
 ## The improvement cycle
 
