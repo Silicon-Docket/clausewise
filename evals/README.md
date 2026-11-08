@@ -254,3 +254,12 @@ another product.
 - The harness scores statuses and edits, not the quality of the explanations or of the wording of
   a suggested clause. Read those yourself in the JSON.
 - Nothing here has been run against a live model, and the prices have not been checked.
+
+## Parol
+
+The Parol NDA review workflow has its own dataset (`fixtures/parol`) and its own command,
+`pnpm eval:parol`, which scores the Parol stages against answer keys and checks the release gates.
+`pnpm eval:parol --selftest` and `--simulate` need no key, send nothing and are labelled as not a
+measurement of any model; a live run needs `--yes` and a key, and none has been made. Results go to
+`evals/results/parol-<UTC time>.json`. What is built, the metrics and the gates are in
+[docs/parol/05-evaluation.md](../docs/parol/05-evaluation.md).

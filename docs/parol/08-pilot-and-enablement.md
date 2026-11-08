@@ -1,9 +1,24 @@
 # 8. Pilot and enablement
 
+**Implementation status.** This is a hypothetical pilot plan and no pilot has run. What the demo can
+back today is the review workflow itself: a matter, uploads, a review, attorney decisions, invalidation
+and a Word memo, exercised against a scripted simulated reader and not a language model. Not built:
+the training matter T01 and its completion record, a quickstart page, feedback capture (reason
+codes, missed-issue report, rating), timers, the pilot measures and the rollback switch. Of the seven
+training steps, three are supported by the seeded matter, two partly, and two not (the tables below
+say which). No pilot number, rate or time exists, and none may be taken from the seeded matters or
+the simulated reader. Nothing here has been run against a live model.
+
 **This is a hypothetical pilot plan.** No pilot has run. The demo seeds activity so the screens
 have something to show; seeded events are flagged synthetic, and the pilot measures exclude them.
 Nothing seeded, simulated or produced by the author's own testing may be described as adoption,
 usage or time saved.
+
+**Deviation.** The seed (`pnpm parol:seed`) creates two matters, both flagged synthetic (every matter
+the application creates is), and, only with `--run`, one or two reviews of the first matter. It seeds
+no decisions, timers, ratings or other activity, and the pilot measures page that would exclude
+seeded events does not exist. The two matters belong to demo identities, so they are also easy to
+exclude by user.
 
 ## Pilot design
 
@@ -28,19 +43,31 @@ the associate has seen the documents before.
 **Phase 2, assisted use (weeks 3 to 5).** New NDAs go through Parol with attorney review. Time,
 decisions, corrections, missed-issue reports and ratings are recorded.
 
+**What the software supports today.** Only part of this design can be run with the code that exists.
+
+| Need                                                   | Today                                                                                                                                                                                                                                         |
+| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Matters, uploads, a review, decisions, a memo          | Built. Exercised with the simulated reader only; no real NDA has been through it, and the demo identity is not authentication                                                                                                                 |
+| A workflow version promoted through the gates, pinned  | **Not built.** The store can mark a workflow version `pilot` with a promotion record, and a review then defaults to the latest one, but no route or page does it, and no version has been promoted: `v1` and `v2` are both candidates         |
+| Timers: active minutes per NDA, associate and attorney | **Not built.** No start and stop button, no stored minutes. Without them no time claim may be made (see Measures)                                                                                                                             |
+| Phase 0 and shadow-mode issue lists and their slot comparison | **Not built.** The slot comparison exists only between a run and the evaluation answer keys                                                                                                                                            |
+| Corrections, missed-issue reports, ratings              | **Not built.** A decision stores its kind and a free-text reason, and an edit stores the changed fields; there are no reason codes, no missed-issue report and no rating                                                                       |
+| The pilot measures and their CSV                       | **Not built** (see Measures)                                                                                                                                                                                                                  |
+| Real participants, identities and documents            | **Not available.** The identities are four demo users without passwords, and nothing here has had a security review                                                                                                                           |
+
 ## Attorney acceptance criteria
 
 Proposed with the reviewing attorneys before the pilot starts, and not changed during it.
 
-| #   | Criterion                                                                                                   | Measured by                                      |
-| --- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| A1  | No exported memo contains a quotation that is not in the document                                           | Export-time re-verification; spot check          |
-| A2  | In shadow mode, every high-severity issue on the reviewers' reference list is flagged or escalated by Parol | Slot comparison with phase 0 lists               |
-| A3  | At least 80 percent of findings are accepted, or edited with what the reviewer marks as a minor edit        | Decisions and edit size                          |
-| A4  | A reviewer can check any finding's evidence without leaving the page                                        | Observation during training                      |
-| A5  | Median answer of at least 4 of 5 to "I would use this for my next NDA"                                      | Post-matter rating                               |
-| A6  | Median active time per NDA (associate plus attorney) is no worse than the phase 0 median                    | Timers, both phases                              |
-| A7  | No unauthorized access event and no instruction-driven change in output                                     | Audit log, evaluation suite on the pilot version |
+| #   | Criterion                                                                                                   | Measured by                                      | Today                                                                                                                                                              |
+| --- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A1  | No exported memo contains a quotation that is not in the document                                           | Export-time re-verification; spot check          | Re-verification at export is built and tested (a quote that no longer matches stops the export). The spot check is a human step                                    |
+| A2  | In shadow mode, every high-severity issue on the reviewers' reference list is flagged or escalated by Parol | Slot comparison with phase 0 lists               | **Not built:** no reference-list entry and no comparison against it                                                                                                |
+| A3  | At least 80 percent of findings are accepted, or edited with what the reviewer marks as a minor edit        | Decisions and edit size                          | **Not built:** decisions and edits are stored, but there is no minor-edit marker and no computation                                                                |
+| A4  | A reviewer can check any finding's evidence without leaving the page                                        | Observation during training                      | The review page opens each finding's passages, highlighted, in an inspector beside the issue table; the observation has not been done                               |
+| A5  | Median answer of at least 4 of 5 to "I would use this for my next NDA"                                      | Post-matter rating                               | **Not built:** no rating                                                                                                                                           |
+| A6  | Median active time per NDA (associate plus attorney) is no worse than the phase 0 median                    | Timers, both phases                              | **Not built:** no timers                                                                                                                                           |
+| A7  | No unauthorized access event and no instruction-driven change in output                                     | Audit log, evaluation suite on the pilot version | The audit log is built and tested but records changes, not refusals; refusals appear only as a status in the access log, which goes to standard output and is not stored. The evaluation suite has been run only against a scripted oracle and a simulated reader |
 
 ## Training exercise (20 minutes)
 
@@ -48,19 +75,48 @@ Uses the seeded training matter T01: the documents of evaluation case `PAROL-D05
 paragraph from `PAROL-D08` added to the NDA and one planted finding. T01 is never used in evaluation.
 The trainer has the answer key; the trainee does not.
 
-| Step | Task                                                                                                                                                   | What it teaches                                  | Answer key                                                                                         |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| 1    | Create the matter, upload the NDA and the amendment, pick the playbook version                                                                         | Intake, operative versions, the destination line | NDA operative; playbook 1.0.0                                                                      |
-| 2    | Read the warning on the NDA. What will Parol do with that paragraph?                                                                                   | Documents are data                               | Nothing: it is reviewed as text; the warning only draws attention                                  |
-| 3    | Open DUR-1. Which passage governs, and why is the Section 6.1 quote marked superseded?                                                                 | Evidence roles, amendments                       | Amendment Section 2 deletes 6.1                                                                    |
-| 4    | The trainer has planted a finding (seeded in the training matter only) whose quote exists but does not support it. Find it and reject it with a reason | Quote validity is not support                    | The planted `pds-1` finding quotes the definition clause, which says nothing about representatives |
-| 5    | Escalate a finding you would send to a partner, with a reason                                                                                          | Escalation is a decision                         | Any reasoned choice; DUR-1 is the natural one, because the amendment reverses an agreed term       |
-| 6    | Upload a corrected amendment. What happened to your decisions?                                                                                         | Invalidation                                     | All stale; export blocked until re-run and re-decided                                              |
-| 7    | Re-run, decide, export the memo, and find your rejected finding in it                                                                                  | Export gate, memo structure                      | It is in the rejected appendix                                                                     |
+**Not built: T01.** No training matter exists. What the seed creates is the matter "Lanternfish /
+Corvane NDA", whose two documents are the committed files of case `PAROL-D05`
+(`fixtures/parol/files/parol-d05-nda.docx` and `parol-d05-amendment-1.txt`). It has no instruction
+paragraph and no planted finding. The simulated reader that reviews it is a table written in advance
+from those two documents: it answers from the passages it is shown, so a planted finding cannot be
+added, and it declines (every rule `undetermined`, escalated) any document in which a single
+paragraph was changed. The exercise below is therefore a design. The last column says what the seeded
+matter supports today.
 
-Completion is recorded per step; trainees who miss steps 3 or 4 repeat them with the trainer.
+| Step | Task                                                                                                                                                   | What it teaches                                  | Answer key                                                                                                                | Today                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | Create the matter, upload the NDA and the amendment, pick the playbook version                                                                         | Intake, operative versions, the destination line | NDA operative; playbook 1.0.1 (the design said 1.0.0)                                                                     | **Supported.** The matters page creates a matter, the matter page takes the two files and lists only approved playbook versions (one: 1.0.1), and a line says where document text is sent. The seeded matter has already been through this step                                                                                                                                                                                                                        |
+| 2    | Read the warning on the NDA. What will Parol do with that paragraph?                                                                                   | Documents are data                               | Nothing: it is reviewed as text; the warning only draws attention                                                         | **Not supported by the seeded matter:** its NDA has no instruction paragraph, so there is no warning. The warning does appear for `fixtures/parol/files/parol-d08-nda.docx` uploaded to a matter for the client `Larkspur Freight Systems, Inc.`, but the simulated reader declines that document, so the review of it says nothing about what a model would do with the paragraph                                                                                      |
+| 3    | Open DUR-1. Which passage governs, and why is the Section 6.1 quote marked superseded?                                                                 | Evidence roles, amendments                       | Amendment Section 2 deletes 6.1                                                                                           | **Supported under workflow v2 only.** The picker on the matter page starts on v1, under which DUR-1 reads `Compliant`; the trainee has to run the review under v2, and then the inspector shows the amendment as governing and Section 6.1 struck through as superseded                                                                                                                                                                                                  |
+| 4    | The trainer has planted a finding (seeded in the training matter only) whose quote exists but does not support it. Find it and reject it with a reason | Quote validity is not support                    | The planted `pds-1` finding quotes the definition clause, which says nothing about representatives                        | **Not built.** There is no planted finding. The closest thing is the v1 review of the seeded matter: DUR-1 quotes Section 6.1 correctly, the quote is verified, and the conclusion is wrong because retrieval never showed the reader the amendment. That teaches the same point, from a different finding, and it is a property of the simulated reader and not of a model                                                                                              |
+| 5    | Escalate a finding you would send to a partner, with a reason                                                                                          | Escalation is a decision                         | Any reasoned choice; DUR-1 is the natural one, because the amendment reverses an agreed term                              | **Supported.** Signed in as the reviewing attorney, the decision form has Escalate and requires a reason                                                                                                                                                                                                                                                                                                                                                               |
+| 6    | Upload a corrected amendment. What happened to your decisions?                                                                                         | Invalidation                                     | All stale; export blocked until re-run and re-decided                                                                     | **Partly.** A changed version of the amendment makes every finding and decision stale and blocks export, as a changed stated date does. But the simulated reader declines any edited paragraph, so the re-run is all `undetermined`. An identical file is stored once with a duplicate warning and changes nothing, and a re-saved file with the same text is stored unused and does not make the review stale, so what happens depends on what is uploaded                |
+| 7    | Re-run, decide, export the memo, and find your rejected finding in it                                                                                  | Export gate, memo structure                      | It is in the rejected appendix                                                                                            | **Partly.** Re-running, deciding all eight findings and exporting works, a rejected finding is in the memo's appendix, and export is refused while any finding is undecided. After step 6 with the simulated reader the review is all `undetermined`, so the memo is mostly open items. The memo states that the reader was a scripted stand-in                                                                                                                         |
+
+Completion is recorded per step; trainees who miss steps 3 or 4 repeat them with the trainer. **Not
+built:** nothing records completion of a step.
 
 ## Quickstart
+
+**Not built:** the quickstart page. What exists is `apps/parol/README.md`, and these are the
+commands it gives to run the demonstration (Node 22 and pnpm 10, from the Clausewise folder). The seed
+(with `--run v1 --run v2`) and the server were run for this review with the data folder set to a
+scratch folder; `pnpm install` was not:
+
+```sh
+pnpm install
+PAROL_DEMO_IDENTITY=1 pnpm parol:seed
+PAROL_DEMO_IDENTITY=1 PAROL_SCRIPTED=1 pnpm parol
+```
+
+Then open <http://127.0.0.1:8787> and choose an identity. `PAROL_SCRIPTED=1` makes the simulated
+reader read the documents, so nothing is sent anywhere. Without it the server needs a provider key
+and sends the text of every document to that provider, which is not for anything but synthetic
+documents. Add `--run v1 --run v2` to the seed to have both reviews of the first matter made for
+you.
+
+The ten steps below are the design. The notes after them say which exist.
 
 1. Sign in with your pilot identity. The banner tells you which environment you are in.
 2. **New matter**: name it, type your client's exact legal name, add your reviewing attorney.
@@ -79,16 +135,25 @@ Completion is recorded per step; trainees who miss steps 3 or 4 repeat them with
 What Parol will not do: decide anything, send anything to the other side, or review PDFs,
 footnotes, headers or pictures. When documents change, earlier decisions stop counting.
 
+**What exists of these steps today.** Steps 2 to 6, 8 and 9 exist: the matters page has a form for
+the matter name, the client's name, the reviewing attorney and the playbook; the matter page has the
+documents and stated dates, the operative version, the start button and the line about where text is
+sent; the issue table and the evidence inspector are on the review page; the decision form and the
+memo export follow. Step 1 is the demo identity picker, not a pilot identity, and its
+banner is the one on every page. **Not built:** step 7 (there are no notes for the reviewer) and step
+10 (no rating and no "Report a missed issue"). The headings and wording of the pages are the
+application's, and the steps above are a paraphrase.
+
 ## Feedback collection
 
-| Channel                       | When                          | What                                                                            |
-| ----------------------------- | ----------------------------- | ------------------------------------------------------------------------------- |
-| Reason code on edit or reject | Every such decision           | wrong status, wrong evidence, missed context, bad fallback, unclear, other      |
-| Report a missed issue         | Any time on a matter          | Rule (or "not covered"), location, note. The main source for recall in real use |
-| Post-matter rating            | At export                     | "I would use this for my next NDA", 1 to 5, optional comment                    |
-| Weekly pulse                  | Fridays, three questions      | Trust in findings, time spent checking, the worst moment of the week            |
-| Interviews                    | Mid-pilot and end, 20 minutes | What they stopped checking, what they never trust, what they would change       |
-| Office hours                  | Twice a week, 30 minutes      | Questions; observed use                                                         |
+| Channel                       | When                          | What                                                                            | Today                                                                                                   |
+| ----------------------------- | ----------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Reason code on edit or reject | Every such decision           | wrong status, wrong evidence, missed context, bad fallback, unclear, other      | **Not built.** The decision form takes a free-text reason; the `feedback` table has a column for a code |
+| Report a missed issue         | Any time on a matter          | Rule (or "not covered"), location, note. The main source for recall in real use | **Not built.** No route, form or page; the `feedback` table and the `feedback.add` permission exist     |
+| Post-matter rating            | At export                     | "I would use this for my next NDA", 1 to 5, optional comment                    | **Not built.** Same table, no form                                                                      |
+| Weekly pulse                  | Fridays, three questions      | Trust in findings, time spent checking, the worst moment of the week            | A process, not software; nothing to build                                                               |
+| Interviews                    | Mid-pilot and end, 20 minutes | What they stopped checking, what they never trust, what they would change       | A process, not software                                                                                 |
+| Office hours                  | Twice a week, 30 minutes      | Questions; observed use                                                         | A process, not software                                                                                 |
 
 The legal engineer triages feedback weekly into failure records using the taxonomy in
 [document 5](05-evaluation.md#root-cause-taxonomy). A change prompted by feedback is made as a new
@@ -109,6 +174,15 @@ Computed from stored events, excluding synthetic users and seeded matters.
 | Satisfaction          | Median and distribution of the post-matter rating                             | Ratings given (with the response rate shown) |
 | Active time           | Median active minutes per NDA, associate and attorney separately and combined | Timed NDAs, per phase                        |
 | Shadow-mode agreement | Reference-list issues that Parol flagged or escalated, by severity            | Reference-list issues                        |
+
+**Not built:** the measures. No page, query or CSV script computes any row of this table. What the
+database holds that a script could use: matters (with a `synthetic` flag and the creator), runs and
+their workflow versions, findings with the escalations the system raised, decisions with their kind,
+reason and changed fields, memos (so exports) and the audit log. What it does not hold: active time,
+ratings, missed-issue reports, reason codes, the pilot week of a matter, which participants were
+trained, or any reference list for shadow mode. Until those exist, the Completion, Correction rate
+and Escalation rate rows are computable in principle, and the Repeat usage, Missed-issue rate,
+Satisfaction, Active time and Shadow-mode agreement rows are not.
 
 **Time claims.** A difference in time is reported only as medians from phase 0 and phase 2 with
 their sample sizes, attorney review time included, and with the caveat that documents differ

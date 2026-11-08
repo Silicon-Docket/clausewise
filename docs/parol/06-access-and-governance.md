@@ -1,48 +1,88 @@
 # 6. Access, review and governance
 
-The public demo uses synthetic documents only. The controls below are real in the code, but the
-identity behind them is a labelled demo mechanism, and several production controls are deferred
-and listed as such at the end.
+**Implementation status.** Built and tested: matter authorization on the server (one 404 for a
+stranger, a missing and a deleted matter), the `AuthorizedMatter` brand with forgery scans, route
+coverage, CSRF, a strict CSP and a host guard, document text fenced as data, logs that carry no
+text, immutable findings, decisions and memos, the export gate, invalidation, matter deletion,
+recovery and the demo identity. **Not built:** the job that deletes expired matters, an audit
+verification command, administrator-only approval and promotion, evaluation screens, token and cost
+records, the debug capture. **Weaker than the design:** the brand guards the service layer and not
+the store; statuses are not settled in code; the parties check; no spend guard. **Never run live:**
+how a real model treats hostile text is unobserved; the injection tests use scripted models.
+
+The demo uses synthetic documents only. The controls below are real in the code, except where a
+**Not met** or **Not built** note says otherwise, but the identity behind them is a labelled demo
+mechanism, and several production controls are deferred and listed as such at the end.
 
 ## Threat model in brief
 
-| Threat                                                 | Primary control                                                                         |
-| ------------------------------------------------------ | --------------------------------------------------------------------------------------- |
-| A user reads or acts on a matter they do not belong to | Server-side matter authorization before any retrieval, generation or export             |
-| Document text tries to steer the review or the system  | No tools for the model; text fenced as data; every outcome decided or validated in code |
-| Model output is wrong or fabricated                    | Quote and support checks; escalation; attorney decision required before export          |
-| Stale decisions survive a document change              | Manifest hashes; decisions bound to finding content hashes; export re-checks both       |
-| Sensitive text leaks into logs or errors               | Logs carry ids, hashes and counts only; errors never quote documents                    |
-| Hostile files                                          | `@clausewise/docx` size and structure limits; TXT size limit; nothing executed          |
-| Data kept longer than needed                           | Per-matter retention date and a deletion job                                            |
+| Threat                                                 | Primary control                                                                                                   |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| A user reads or acts on a matter they do not belong to | Server-side matter authorization before any retrieval, generation or export                                       |
+| Document text tries to steer the review or the system  | No tools for the model; text fenced as data; every model answer validated in code                                 |
+| Model output is wrong or fabricated                    | Quote checks and deterministic consistency checks; escalation; attorney decision required before export           |
+| Stale decisions survive a document change              | Inputs digest and manifest hashes; decisions bound to finding content hashes; export re-checks both               |
+| Sensitive text leaks into logs or errors               | Logs carry ids, route templates and counts only; errors never quote documents                                     |
+| Hostile files                                          | `@clausewise/docx` size and structure limits; TXT size limit; nothing executed                                    |
+| Data kept longer than needed                           | Per-matter retention date and deletion on request (**Not built:** the scheduled job that deletes expired matters) |
+
+The model support check, which the plan counted as a control against fabricated conclusions, is
+built and isolated but off in both workflow versions, so it is not a control today.
 
 ## Authorization
 
-**Where it is enforced.** One middleware resolves `(user, matter, role)` for every route under
-`/api/matters/:id` and the matching pages. Services that read matter data accept only an
-`AuthorizedMatter` value, a branded TypeScript type that only the middleware can construct, so code
-that reaches the store, the workflow runner, the model layer or the exporter without passing
-authorization does not compile. The workflow runner receives a `RunManifest` built from an
-`AuthorizedMatter`, and retrieval queries filter on the manifest's document version ids, so even a
-bug in a stage cannot pull another matter's spans.
+**Where it is enforced.** One guard resolves `(user, matter, role)` for every route under
+`/api/matters/:id` and the matching pages. **Deviation.** It is not a middleware but the route
+declaration itself: every route is registered through `defineMatterRoute`
+(`apps/parol/src/server/matter-route.ts`), which resolves the person, checks the CSRF token on a
+write, authorizes against the database and only then calls the handler. A matter route registered
+any other way is found by a scan. Services that read matter data accept only an `AuthorizedMatter`
+value, a branded TypeScript type that only `authorizeMatter` (`src/auth/authorize.ts`) constructs.
 
-| Action                                   | Check, in order                                                                                 |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Any matter route                         | Signed-in demo identity; membership (404 if none); role for the action (403 if insufficient)    |
-| Start or resume a run (retrieval, model) | Associate role; matter `ready` or `stale`; approved playbook version; exactly one operative NDA |
-| Read a span or finding                   | Membership; the span's or finding's `matter_id` equals the route's matter                       |
-| Record a review decision                 | Reviewer role; finding current; content hash matches; reason present where required             |
-| Export a memo                            | Reviewer role; every current finding has a current decision; recomputed at export time          |
-| Download a memo                          | Membership; memo belongs to the matter                                                          |
-| Approve a playbook, promote a workflow   | Admin; promotion record attached                                                                |
-| Evaluation screens                       | Legal engineer; synthetic matters only                                                          |
+**Not met in full.** The plan said that code reaching the store, the workflow runner, the model
+layer or the exporter without passing authorization would not compile. That holds for the service
+layer. The repository, the run engine and the memo builder take a matter id, not the brand, so a new
+module that imported the store directly would compile without authorization. What contains it is
+that every store method that reads or writes by run, finding, span, review or memo takes the matter
+id first and checks the row belongs to it, and that database triggers keep every row inside its own
+matter. The run reads spans by the matter id and the document versions of its manifest, and a
+trigger refuses evidence that cites a span outside the run's manifest, so a bug in a stage cannot
+store another matter's spans as evidence.
 
-**Tests.** The authorization probe matrix in [document 5](05-evaluation.md#supplementary-suites)
-runs in the unit suite as well as in evaluations, and a test enumerates the router's matter routes
-and fails if any lacks the middleware, so a new route cannot ship unprotected by accident.
+| Action                                   | Check, in order                                                                                                                                                                                                 |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Any matter route                         | Signed-in demo identity; a CSRF token on a write; membership (404 if none); role for the action (403 if insufficient)                                                                                           |
+| Start or resume a run (retrieval, model) | Associate role; no run in flight; an approved playbook version; an NDA and an operative version of every document, with reviewable text. Resume only for a failed run on unchanged inputs and the same model    |
+| Read a finding                           | Membership; the finding is looked up in the route's matter only, so a finding of another matter is a 404. There is no route that reads a span                                                                   |
+| Record a review decision                 | Reviewer role; not the person who started the run (unless relaxed); finding current; content hash matches; reason present where required                                                                        |
+| Export a memo                            | Reviewer role; every current finding has a current decision; recomputed at export time                                                                                                                          |
+| Download a memo                          | Membership; memo belongs to the matter; the stored file still matches its recorded hash                                                                                                                         |
+| Delete a matter                          | The matter's creator or an administrator, decided from the database; another member gets 403, anyone else 404 (the plan said a user can delete earlier, not who)                                                |
+| Approve a playbook, promote a workflow   | **Not met.** Admin; promotion record attached. No route or page does either. The demo legal engineer imports and the demo admin approves the playbook at start-up; the store accepts any existing user as actor |
+| Evaluation screens                       | **Not built.** Legal engineer; synthetic matters only. The database refuses evaluation results for a matter that is not synthetic                                                                               |
+
+The approval and promotion row is a gap: the plan said only an admin may approve a playbook or
+promote a workflow, and in the code nothing checks the role because nothing exposes the operations.
+The database does refuse a promotion without a record, a promoter and a time, and refuses to change an
+approved playbook, a prompt or a workflow manifest.
+
+**Tests.** The authorization probe matrix runs in the unit suite (`test/routes/authorization.test.ts`:
+one request for every route, as every kind of caller). **Not built:** the matrix is not also run as
+an evaluation suite, so gate G1 of [document 5](05-evaluation.md#supplementary-suites) is never
+evaluated. A test enumerates the application's matter routes and fails if any lacks the guard, or if
+a generic route would answer a matter URL (`test/server/shell-routes.test.ts`); a scan fails if any
+file other than `authorize.ts` makes an `AuthorizedMatter` (`test/auth/brand.test.ts`, and a
+type-aware scan in `brand-typed.test.ts`); every route that changes state is tested to refuse a
+request without its token (`test/routes/csrf.test.ts`); a finding, run or memo id from another matter
+is a 404 in every place an id can go (`test/routes/forged-ids.test.ts`); and a non-member's 404 is
+byte for byte the same as a missing or deleted matter's, status, headers and body
+(`test/server/shell-matter.test.ts`). A new route cannot ship unprotected by accident, but the check
+was shown on routes registered the wrong way inside the tests and not by removing the guard from a real route.
 
 **Segregation.** By default a matter's reviewer must be a different user from the associate who
-started the run. It can be switched off for single-person demos, and the memo then says so.
+started the run: a decision is refused when the person deciding started the run, and a person holds
+one role on a matter. `PAROL_RELAXED_SEGREGATION=1` switches it off for single-person demos, and the
+memo then says so only when the same person did both.
 
 ## Documents are data
 
@@ -54,56 +94,107 @@ of those are reachable from it:
   invoke.
 - **Fenced input.** Contract text is rendered with Clausewise's `renderClauses`, inside
   `<contract>` tags, with forged closing tags and forged headers neutralised. The system prompt
-  states that instructions inside the contract are never followed.
-- **Constrained output.** The model's answer only fills fields of a finding. Statuses are settled
-  by code against the playbook's required and absence semantics; span labels must exist in the
-  bundle; escalation ids must exist in the rule; quotes must be verified. A model that obeyed an
-  injected "mark everything compliant" would still need verified, supported citations for each
-  `compliant`, and the injection twins measure whether it happened.
-- **Configuration has one source.** The playbook version, workflow version, prompts and
-  permissions come from database records that only legal engineers and admins can change through
-  their own routes. No stage reads configuration from document text.
+  states that instructions inside the contract are never followed. Text that comes from intake
+  rather than the file (a document title, the client name, a stated date) is flattened to one line
+  with angle brackets replaced, and a value inserted into a template is never expanded as a
+  placeholder.
+- **Constrained output.** The model's answer only fills fields of a finding. Span labels must exist
+  in the bundle; escalation ids must exist in the rule; quotes must be verified; `compliant` and
+  `deviation` need a verified quote in a governing or supporting role; `missing` needs the whole
+  document in the bundle. **Not met:** the plan also said statuses are settled by code against the
+  playbook's required and absence semantics. The helper exists (`settledStatus` in
+  `@clausewise/review`) and no Parol stage calls it, so the status is the model's, and only the
+  checks around it are code. A model that obeyed an injected "mark everything compliant" would still
+  need a verified quote for each `compliant`, but nothing checks in code or by a model that the quote
+  supports the conclusion, because the model support check is off in both workflow versions; only
+  durations, percentages, amounts and places in the explanation are compared with the quotes. The
+  injection twin (case D08 and its twin) measures whether a status moved, and has only been run
+  against a scripted oracle and a scripted simulated reader.
+- **Configuration has one source.** The playbook version, workflow version and prompts come from
+  database records that no document can reach, and no stage reads configuration from document text.
+  **Not built:** the plan had legal engineers and admins change them through their own routes; there
+  are none, so they are registered from code and a YAML file at every start, and an approved version
+  cannot be changed at the database.
 - **The warning is a signal, not the control.** The `instruction_like_text` pattern warning helps
   the reviewer notice odd text. It is easy to evade and is not relied on for safety.
 
+**What the tests cover, and what they do not.** `test/stages/analyze-injection.test.ts` and
+`extract-injection.test.ts` assert that hostile text stays inside the one `<contract>` block, that
+forged tags and headers are defused, that nothing from a document appears outside the block, and
+that a status comes only from the model's structured answer. `test/services/hostile-run.test.ts`
+reviews the D08 document, which carries an embedded instruction, and shows a warning and a review
+equal to its twin's. `test/stages/verify-hostile.test.ts`, `test/export/hostile.test.ts` and
+`test/pages/hostile.test.ts` feed hostile strings to the checks, the memo and the pages, and
+`test/ingest/hostile.test.ts` and `limits.test.ts` feed hostile files to the parsers. The scripted
+models in these tests do not read the prompt, so they cannot show that a language model resists an
+injected instruction. That is what the injection twins are for, and no language model has read one.
+
 ## Review gates
 
+All five gates are built and tested.
+
 1. **Before a run**: an approved playbook version and exactly one operative NDA version; duplicate
-   and near-duplicate uploads resolved.
+   and near-duplicate uploads resolved. An identical file is stored once and warned about; a file
+   with the same text and a different hash is stored unused, with a warning, until the associate
+   chooses it, and does not make the review stale.
 2. **After verify**: findings that failed a check are marked `escalated_by_system` and show the
    failed check; unverified quotes are struck through and excluded from export.
-3. **Decision**: only a reviewer decides. Edit, reject and escalate need a reason. Each decision is
-   bound to the finding content it was made on.
+3. **Decision**: only a reviewer decides. Edit, reject and escalate need a reason, and an edit must
+   change something. Each decision is bound to the finding content it was made on, and a decision on
+   content that has moved on is a 409.
 4. **Export**: every current finding has a current decision. Escalated findings appear in an "Open
-   items" section at the top of the memo, never silently dropped. Rejected findings are listed in an
-   appendix so a later reader can see what was considered.
+   items" section at the top of the memo, never silently dropped, and so does an accepted or edited
+   finding whose conclusion is `undetermined`. Rejected findings are listed in an appendix so a later
+   reader can see what was considered, with the reviewer's reason and the status the workflow
+   proposed, and nothing of their text.
 5. **After export**: any input change marks the memo superseded and blocks a new export until the
-   matter is re-run and re-decided.
+   matter is re-run and re-decided. A re-run on unchanged inputs keeps the earlier memo current until
+   the new review is exported, so a page must not read "a memo exists" as "this review was exported".
 
 ## Minimal sensitive logging
 
-| Where                    | What is recorded                                                                     | What is never recorded                              |
-| ------------------------ | ------------------------------------------------------------------------------------ | --------------------------------------------------- |
-| Server log (stdout)      | Request id, route template, status, latency, user id, matter id                      | Bodies, file names, document text, quotes, prompts  |
-| `audit_events`           | Action, actor, target ids, hashes, counts; hash-chained                              | Document text, quotes, finding text, review reasons |
-| `model_calls`            | Stage, rule, prompt version, request hash, outcome, tokens, latency, estimated cost  | Prompt text, response text                          |
-| `run_stages.output_json` | Stage outputs needed to resume and inspect (matter-scoped, deleted with the matter)  | Anything from another matter                        |
-| Error messages           | Error kind and ids, written not to quote the document or a key (the Clausewise rule) | Document text, API keys                             |
-| Evaluation results       | Full outputs, because the data is synthetic                                          | Any non-synthetic matter (the runner refuses)       |
+| Where                    | What is recorded                                                                                                                                 | What is never recorded                                                                            |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| Server log (stdout)      | Request id, method, route template, status, latency, user id, matter id (as the database confirmed it), error class                              | Bodies, headers, query strings, path values, file names, document text, quotes, prompts, messages |
+| `audit_events`           | Action, actor, target ids, hashes, counts; hash-chained and append-only; every string at most 200 characters, two levels deep                    | Document text, quotes, finding text, review reasons, titles, client names                         |
+| `model_calls`            | Stage, rule, prompt version, request hash, outcome, latency. **Not built:** tokens and estimated cost (the columns exist and nothing fills them) | Prompt text, response text                                                                        |
+| `run_stages.output_json` | Stage outputs needed to resume and inspect (matter-scoped, deleted with the matter)                                                              | Anything from another matter                                                                      |
+| Error messages           | A fixed message for each kind of error and a short code; a log line names an unexpected error by its class only                                  | Document text, API keys, anything the caller typed                                                |
+| Evaluation results       | Full outputs in a JSON file under `evals/results/` (ignored by git), because the data is synthetic                                               | Any non-synthetic matter: the runner reads only `fixtures/parol`, and the database refuses it     |
 
-A debug capture of full prompts exists only for synthetic matters behind an explicit environment
-flag, and the server refuses to enable it for a matter whose `synthetic` flag is off.
+Two messages are not fixed: an upload error (its own words, control characters stripped, capped at
+300 characters) and the reasons a review cannot start (fixed phrases, at most 20). Neither repeats a
+document.
+
+**Enforced by tests.** `test/e2e/access-log.test.ts` runs the whole story of the worked example with a
+marker planted in every field a person can type or upload, and then finds none of it in the access
+log, the service log, the audit trail or any error page. `test/server/shell-log.test.ts` does the
+same for a body, a query string, a header, a file name and a path id.
+`test/store/no-text-leaks.test.ts` and `test/services/privacy.test.ts` scan every table and column
+for a planted marker, and check that the tables that hold text by design are the only ones that do.
+`test/stages/verify-hostile.test.ts` checks that no check detail or escalation holds document text.
+
+**Not built:** the debug capture of full prompts for synthetic matters behind an environment flag.
+Nothing in the code records a prompt or a response, so there is nothing to leak, and nothing to
+inspect when a model call misbehaves except its hash and outcome.
 
 ## Retention and deletion
 
-- Each matter has `retain_until` (default 30 days in the demo). A daily job deletes expired
-  matters; a user can delete earlier.
-- Deletion removes the matter's files, then its rows (documents, spans, runs, findings, evidence,
-  reviews, memos, feedback) by cascade in one transaction, then compacts the database. An audit
-  event records the deletion with ids and counts only; earlier audit events keep their ids and
-  hashes, which reveal no text.
+- Each matter has `retain_until` (default 30 days in the demo), shown on the matters list.
+  **Not built:** the daily job that deletes expired matters. The store can list expired matters
+  (`listExpiredMatters`) and a test shows the job in four lines, but nothing in the application calls
+  it, so an expired matter stays until someone deletes it. A matter's creator or an administrator can
+  delete it earlier, from the matter page or `DELETE /api/matters/:id`; a review in flight is
+  cancelled first.
+- **Deviation.** Deletion removes the matter's rows (documents, spans, runs, findings, evidence,
+  reviews, memos, feedback) in one transaction, then its files, then compacts the database
+  (`secure_delete` is on, then `VACUUM`). The plan had the files first. A stop between the two steps
+  now leaves a folder that no row names, and the sweep at start-up removes it. An audit event records
+  the deletion with ids and counts only; earlier audit events keep their ids and hashes, which reveal
+  no text. `test/store/retention.test.ts` checks that no row of the deleted matter remains and that
+  no text of it is left in the database file.
 - File deletion on modern disks is not secure erasure. Production would rely on encrypted storage
-  and key destruction; the demo states the limit.
+  and key destruction. This document states the limit; the demo itself does not say it anywhere.
 - The model provider is outside this control. With prompt caching, the provider may keep text for
   a short time under its own terms; production needs a provider agreement on retention and
   training, or a local model.
@@ -117,29 +208,66 @@ it. The memo's appendix prints the same in readable form, and each quotation is 
 against the stored text at export. A run can therefore be reproduced from its manifest, subject to
 the stochastic limits in [document 5](05-evaluation.md#pinning-and-repeatability).
 
+**Not met in full.** Built and tested: the manifest (with the requested provider and model, the
+stated dates and the document labels), each call's prompt version, request hash, outcome and
+latency, each stage's input and output hashes, who started the run, and the memo's appendix. The
+quotation re-check at export is built (`test/export/gates.test.ts`). **Not built:** the model the
+provider reports as having answered is never recorded (the run's `model_reported` stays empty, and
+the memo says "reported by the provider: not reported"), and the token counts and the cost of each
+call are never recorded, because the generator interface returns only the parsed object. A run's
+provenance therefore does not show which model snapshot answered, which matters for any provider
+that moves an alias, and the application cannot report what a review cost. The evaluation runner
+reads the reported model and the usage itself, for evaluation runs only, and has never met a real
+provider.
+
 ## Recovery from partial failures
 
-| Failure                                   | State afterwards                                                    | Recovery                                                                    |
-| ----------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| One rule's model call fails after retries | Run succeeds; that finding is `undetermined` with `output_invalid`  | Reviewer decides it, or the associate re-runs                               |
-| Provider rejects the key or the model     | Run `failed` with `error_kind`; completed units kept                | Fix configuration, resume                                                   |
-| Server stops mid-run                      | On restart, run `failed` with `interrupted`                         | Resume skips units whose input hash is unchanged                            |
-| Upload cannot be parsed                   | Nothing stored; reason shown                                        | Upload a readable file                                                      |
-| Export fails part-way                     | No memo row, no partial file (temporary file and rename)            | Export again                                                                |
-| Database write fails during a decision    | Transaction rolled back; decision not recorded; user sees the error | Retry; the content-hash check prevents a double decision on changed content |
+All six rows are built and tested.
+
+| Failure                                   | State afterwards                                                                                                                                            | Recovery                                                                                                  |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| One rule's model call fails after retries | Run succeeds; that finding is `undetermined` with `output_invalid` (or `context_over_budget`, with no call)                                                 | Reviewer decides it, or the associate re-runs                                                             |
+| Provider rejects the key or the model     | Run `failed` with an `error_kind` (`provider_auth`, `provider_permission`, `provider_model`, `provider_billing`, `provider_redirect`); completed units kept | Fix configuration, resume. Resume is refused if the provider or model changed: start a new review instead |
+| Server stops mid-run                      | On restart, run `failed` with `interrupted`; the page offers Resume                                                                                         | Resume skips units whose input hash is unchanged                                                          |
+| Upload cannot be parsed                   | Nothing stored; reason shown                                                                                                                                | Upload a readable file                                                                                    |
+| Export fails part-way                     | No memo row, no partial file (temporary file and rename; a file saved before a refused row is taken back)                                                   | Export again                                                                                              |
+| Database write fails during a decision    | Transaction rolled back; decision not recorded; user sees the error                                                                                         | Retry; the content-hash check prevents a double decision on changed content                               |
+
+Tests: `test/services/runs-failures.test.ts` (the first three rows, and a run that is resumed),
+`test/store/files-atomic.test.ts` and `test/export/failure.test.ts` (the export row),
+`test/services/uploads.test.ts` (the upload row) and `test/store/audit-atomicity.test.ts` (a rollback
+takes its audit event with it).
 
 ## Demo identity
 
+All of this is built and tested.
+
 - Enabled only when `PAROL_DEMO_IDENTITY=1`. The user picks a seeded identity (associate,
-  reviewer, legal engineer, admin); the server sets an HMAC-signed, `HttpOnly`, `SameSite=Strict`
-  cookie with that user id.
+  reviewer, legal engineer, admin: Alex Ruiz, Dana Whitfield, Lee Okafor and Sam Patel); the server
+  sets an HMAC-signed, `HttpOnly`, `SameSite=Strict` cookie with that user id, valid for eight hours
+  and marked `Secure` when `PAROL_SECURE_COOKIES=1`. Without the flag there is no way to sign in, and
+  the server says so at start. The demo users exist in the database either way, because they import
+  and approve the demo playbook.
 - **It is not authentication.** Anyone at the keyboard can be anyone. A banner on every page says
-  "DEMO: synthetic documents, demo identity, not for client work".
-- With demo identity on, the server binds to `127.0.0.1` only and refuses to start on another
-  address.
+  "DEMO: synthetic documents, demo identity, not for client work", and a test pins its words.
+- With demo identity on, the server listens on `127.0.0.1`, `::1` or `localhost` only and refuses to
+  start on another address (`PAROL_HOST=0.0.0.0` exits 1 with an explanation; checked by running it).
+- **Added: a host guard.** With demo identity on, a request whose address or `Host` header is not one
+  of those names is answered 403 (`src/server/middleware/host-guard.ts`). Binding to loopback keeps
+  other machines out; it does not stop a web page from reaching the server by a hostile name that
+  points at 127.0.0.1 (DNS rebinding), which would let that page read every page and post every form
+  of a passwordless demo.
+- **Sign-out** ends the session on the server for that cookie until it would have expired, but the
+  record is in memory: after a restart with a fixed `PAROL_COOKIE_SECRET` a cookie copied before
+  sign-out works again until its eight hours end. With the default random secret a restart ends every
+  session.
 - Real controls that are in the demo regardless of identity: authorization on every route, CSRF
-  tokens on every form, a strict Content Security Policy with no inline script, output escaping by
-  default (Hono JSX), upload limits.
+  tokens on every form (a visitor with no session gets a short-lived anonymous cookie that the
+  sign-in form's token is bound to, so sign-in itself cannot be forged), a strict Content Security
+  Policy with no inline script and no grant for images or fonts, `X-Frame-Options`, `no-store` on
+  pages, output escaping by default (Hono JSX), upload limits (10 MB by default,
+  `PAROL_MAX_UPLOAD_BYTES`). Direction marks and control characters in document text are shown as
+  visible markers.
 
 ## Deferred until production
 
@@ -151,3 +279,25 @@ a local model); a penetration test; dependency and vulnerability management in C
 retention with the firm's records policy and legal holds; concurrent multi-user editing; rate
 limiting; accessibility conformance testing; and a formal change-approval process for playbook and
 workflow promotions.
+
+## Planned here and not built
+
+These are controls this document described for the demo itself, not production extras, and the
+code does not have them. Each is also noted where it appears above.
+
+- The scheduled job that deletes expired matters. The functions exist and nothing calls them.
+- A command or page that verifies the audit hash chain. `verifyAuditChain` exists in the store and
+  is tested; only tests call it, so tampering would not be noticed by anyone running the application.
+- Administrator-only approval of a playbook and promotion of a workflow, with a screen for each.
+  Today the operations are not reachable, and the store does not check the actor's role.
+- The evaluation screens and the legal-engineer role check on them.
+- The authorization probes and the exposure scan as an evaluation suite (gate G1).
+- Token counts, cost and the provider-reported model in each run's provenance.
+- A spend guard on the application's own model calls. Only `pnpm eval:parol` has one.
+- The debug capture of prompts for synthetic matters.
+- Authorization carried by type into the store and the run engine, so that a module that skips the
+  service layer would not compile.
+- Status settlement in code against `required` and absence rules, and a parties check that looks for
+  the client's name in the parties passage and not anywhere in the bundle.
+- Any measurement of how a real model treats hostile document text. No model has read a document in
+  this project.
