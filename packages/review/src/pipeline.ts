@@ -151,7 +151,7 @@ function kindOf(error: ModelRequestError): string | undefined {
  * same for every call. This only words what the user should check, and never repeats the
  * provider's own text, which can quote the prompt, or the address a redirect points to.
  */
-function fatalError(error: unknown, model: string): ReviewError | undefined {
+function fatalError(error: unknown, model: string, provider: string): ReviewError | undefined {
   if (!(error instanceof ModelRequestError)) return undefined;
   if (error.fatal !== true && !isRedirect(error)) return undefined;
   const shown = safeLabel(model) ?? "the configured model";
@@ -159,7 +159,11 @@ function fatalError(error: unknown, model: string): ReviewError | undefined {
     error.statusCode === undefined
       ? "The model provider answered with an error, so no rule can be checked."
       : `The model provider answered HTTP ${error.statusCode}, so no rule can be checked.`;
-  switch (kindOf(error)) {
+  const kind = kindOf(error);
+  // azure-openai signs in with a managed identity and has no key, so advice about a key would send
+  // the user looking for something that does not exist.
+  if (provider === "azure-openai" && kind !== "redirect") return azureFatalError(lead, kind, shown);
+  switch (kind) {
     case "auth":
       return new ReviewError(
         `${lead} Check the API key: the provider rejected it, so it may be wrong, expired or revoked (model: ${shown}).`,
@@ -183,6 +187,32 @@ function fatalError(error: unknown, model: string): ReviewError | undefined {
     default:
       return new ReviewError(
         `${lead} Check the API key, its permissions and the model name (${shown}).`,
+      );
+  }
+}
+
+function azureFatalError(lead: string, kind: string | undefined, shown: string): ReviewError {
+  const role =
+    "Check that this service's managed identity has the Cognitive Services OpenAI User role on " +
+    "the Azure OpenAI resource";
+  switch (kind) {
+    case "auth":
+      return new ReviewError(
+        `${lead} ${role}, and that AZURE_CLIENT_ID names that identity (deployment: ${shown}).`,
+      );
+    case "permission":
+      return new ReviewError(`${lead} ${role} (deployment: ${shown}).`);
+    case "not_found":
+      return new ReviewError(
+        `${lead} Check that CLAUSEWISE_MODEL names a deployment on the resource (${shown}) and that CLAUSEWISE_BASE_URL ends in /openai/v1.`,
+      );
+    case "billing":
+      return new ReviewError(
+        `${lead} Check the deployment's quota and the state of the Azure subscription (deployment: ${shown}).`,
+      );
+    default:
+      return new ReviewError(
+        `${lead} ${role}, and check the deployment name (${shown}) and CLAUSEWISE_BASE_URL.`,
       );
   }
 }
@@ -670,7 +700,7 @@ async function runChecks(args: {
       });
       outcome = readAnswer(answer);
     } catch (error) {
-      const fatal = fatalError(error, generator.model);
+      const fatal = fatalError(error, generator.model, generator.provider);
       if (fatal !== undefined) {
         halt(fatal);
         return;
