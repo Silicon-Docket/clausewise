@@ -10,8 +10,8 @@ independent and not affiliated with any of them.
 > **Status: pre-alpha.** The command line works end to end against scripted models and
 > recorded requests, but it has **not yet been run against a live model**, and Word itself was
 > never available to check the output. Expect rough edges, and read [Known limits](#known-limits)
-> before you point it at a real contract. The web app, Docker image and Word add-in do not
-> exist yet.
+> before you point it at a real contract. The web API runs only in local mode, on your own
+> machine, with no web pages yet. The Docker image and the Word add-in do not exist yet.
 
 The plan for a web app and Word add-in that run inside a firm's own Azure tenant, with no
 stored secrets and no outbound internet, is in [docs/azure-in-tenant.md](docs/azure-in-tenant.md).
@@ -69,6 +69,24 @@ Exit codes:
 | 1    | Something went wrong, including a review in which no rule could be checked. Nothing is written.                                         |
 | 2    | `--fail-on` was set and an item at that severity or above is open. A rule that could not be checked counts as open at its own severity. |
 | 130  | Interrupted with Ctrl-C. Nothing is written.                                                                                            |
+
+### The web API, locally
+
+`pnpm web` starts the review API on `127.0.0.1:8787`, reachable from this machine only, with
+the reviews run in the same process and everything kept in memory until it stops. It takes
+the same model settings as the command line and prints where contract text goes before it
+starts. There are no web pages yet: the API is for trying the web flow and for development.
+Every other mode is refused until Entra ID sign-in exists. See
+[docs/azure-in-tenant.md](docs/azure-in-tenant.md) for where this is going.
+
+| Request                                | Does                                                                     |
+| -------------------------------------- | ------------------------------------------------------------------------ |
+| `GET /api/playbooks`                   | The playbooks in `playbooks/`                                            |
+| `POST /api/reviews`                    | Creates a review from `{"playbookId", "fileName", "client"?, "author"?}` |
+| `PUT /api/reviews/{id}/contract`       | Takes the `.docx` as the request body                                    |
+| `POST /api/reviews/{id}/start`         | Checks the file opens in the Word engine, then queues the review         |
+| `GET /api/reviews/{id}`                | The review's status, and its open items once done                        |
+| `GET /api/reviews/{id}/results/{kind}` | `redlined`, `report` or `summary`, as the command line's files           |
 
 ## Principles
 
