@@ -28,8 +28,9 @@ Running inside Azure adds three more:
 
 - **No stored secrets.** Every component signs in with Entra ID and a managed identity. Key
   access is turned off by Azure Policy.
-- **No outbound internet.** The network refuses it. The only service that sees contract text is
-  the model service the firm deployed (section 5).
+- **No general internet access.** The network allows only the Microsoft endpoints that Container
+  Apps itself needs, and refuses everything else (section 3.1). The only service that sees
+  contract text is the model service the firm deployed (section 5).
 - **The firm owns every permission.** The firm creates the network, the data stores and every
   role assignment with its own rights. A provider, if there is one, cannot change them.
 
@@ -63,8 +64,7 @@ flowchart LR
   subgraph firm["Firm's Azure tenant"]
     direction TB
     subgraph found["Foundation: deployed by the firm, with its own rights"]
-      NET["VNet, NSG, routes<br/>no outbound internet"]
-      ENV["Container Apps environment<br/>(internal)"]
+      NET["VNet, NSG, routes<br/>no general internet access"]
       PG["PostgreSQL Flexible Server<br/>Entra ID only"]
       BLOB["Blob Storage<br/>shared keys disabled"]
       Q["Storage queue"]
@@ -73,6 +73,7 @@ flowchart LR
       POL["Azure Policy guardrails"]
     end
     subgraph app["Application"]
+      ENV["Container Apps environment<br/>(internal)"]
       WEB["web: interface and API"]
       WRK["worker: reviews"]
       ADD["Word add-in host"]
@@ -91,15 +92,23 @@ flowchart LR
 
 ### 3.1 The foundation
 
-The firm deploys the foundation once, from a template in this repository, using its own Owner
-rights. It changes only when the firm deploys a newer version of the template.
+The firm deploys the foundation once, from the template in `deploy/azure/`, with its own rights.
+It changes only when the firm deploys a newer version of the template. Azure Owner on the
+subscription is not enough on its own: the template also creates the sign-in app registration in
+Entra ID, which needs an Entra role that can create applications, such as Application Developer
+or Cloud Application Administrator. Assigning sign-in groups needs Entra ID P1 or P2, and
+Microsoft's what-if preview does not cover the Entra resources.
 
 - **Network.** A VNet with subnets for the Container Apps environment and for private endpoints.
-  An NSG and user-defined routes deny outbound internet traffic. Microsoft documents
-  user-defined routes and firewall egress for Container Apps environments on workload profiles,
-  so the environment uses workload profiles.
-- **Container Apps environment,** internal, so it is reachable only from the firm's network.
-  Section 3.4 covers how users reach it.
+  An NSG and user-defined routes allow outbound traffic only to the private endpoints and to the
+  Microsoft service tags that Container Apps on workload profiles requires (its container
+  registry, Entra ID and Azure Monitor), and deny everything else. Those Microsoft endpoints are
+  shared by every Azure tenant, so this is not a closed network (section 7.3).
+- **The Container Apps environment,** internal, so it is reachable only from the firm's network.
+  The firm creates it with the foundation, but it sits in the application resource group:
+  deploying an app into an environment needs permission to join it, and a provider holds roles
+  on the application group only. Joining is all that permission allows; it cannot change the
+  environment's network settings. Section 3.4 covers how users reach it.
 - **Azure Database for PostgreSQL Flexible Server,** with Entra ID authentication only, private
   access and point-in-time restore. It holds playbooks, review records, reports and the audit
   log.
@@ -123,7 +132,7 @@ rights. It changes only when the firm deploys a newer version of the template.
 
 | Component       | Does                                                                                                                                                |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `web`           | The interface and the API. Validates Entra ID tokens, checks access, issues upload URLs, queues reviews, serves results.                            |
+| `web`           | The interface and the API. Validates Entra ID tokens, checks access, takes uploads, queues reviews, serves results.                                 |
 | `worker`        | Runs reviews: reads the `.docx`, segments it, checks each rule, anchors edits and writes the redlined result, using the same packages the CLI uses. |
 | `addin`         | Static files for the Word add-in. One build serves every firm: its URLs come from configuration at run time, not from the build.                    |
 | `migrate` (job) | Database migrations, run before each release.                                                                                                       |
@@ -136,8 +145,9 @@ rights. It changes only when the firm deploys a newer version of the template.
 **There are no stored secrets.** The web interface is a single-page app that signs in with MSAL
 and PKCE, a public-client flow that needs no client secret. The API validates Entra ID tokens.
 Every component reaches PostgreSQL, Blob Storage, the queue and the model service with its
-managed identity. Uploads go straight to Blob Storage with user delegation SAS tokens, which are
-signed with Entra credentials and keep working with shared keys disabled.
+managed identity. Contracts are uploaded through the API, which streams them to Blob Storage.
+A browser cannot upload to Blob Storage directly, because it has no public endpoint, and a
+browser outside the firm's network could not reach its private one.
 
 ### 3.3 Releases
 
@@ -160,9 +170,10 @@ deployed:
 
 ## 4. How a review runs
 
-1. The interface asks the API for an upload URL. The API checks the user's access and returns a
-   short-lived user delegation SAS for one blob.
-2. The browser uploads the `.docx` straight to Blob Storage, and the API queues a review job.
+1. The interface creates a review and uploads the `.docx` to the API, which checks the user's
+   access and stores the file in Blob Storage.
+2. The API opens the file with the Word engine, refusing anything that is not a usable `.docx`
+   as the command line does, and queues a review job.
 3. The worker reads the file with the same size and structure limits as the command line,
    splits it into clauses and checks each playbook rule with the model.
 4. Each proposed edit is anchored as it is today: it becomes a tracked change only if the quoted
@@ -275,8 +286,16 @@ Entra identities that the provider does not hold.
 The application's own identity can read everything the application stores, and a release is
 code that runs as that identity. Four things keep that risk small and visible:
 
-- **No outbound path.** The network denies internet egress, and the provider holds no role on
-  the network.
+- **A narrow outbound path.** The network denies everything except the private endpoints and
+  the Microsoft endpoints Container Apps needs, and the provider holds no role on the network.
+  Those Microsoft endpoints are shared by every Azure tenant, so a hostile release could in
+  principle send data to another tenant's Azure Monitor resource. Closing that needs Azure
+  Monitor Private Link with private-only ingestion, or Azure Firewall with domain rules (section
+  10).
+- **The database administrator.** The `migrate` job's identity is a PostgreSQL Entra
+  administrator, because only an administrator can create the database roles the other
+  identities sign in with. Under delegation, a release the provider rolls out runs its
+  migrations as that administrator.
 - **Open source releases.** Every image is built from this public repository, signed and pinned
   by digest, so the firm can see exactly what it runs.
 - **Release approval.** A firm can require its own approval of each release digest.
@@ -322,6 +341,12 @@ code that runs as that identity. Four things keep that risk small and visible:
 3. **Managed Identity Operator:** whether updating a revision that references user-assigned
    identities needs anything more. Test it in phase 1.
 4. **Tracked changes in the add-in:** Word's API or a `.docx` round trip (section 4).
+5. **Closing the shared Microsoft endpoints** (section 7.3): Azure Monitor Private Link with
+   private-only ingestion, or Azure Firewall with domain rules, and what either costs.
+6. **The foundation template's unconfirmed points,** listed in `deploy/azure/README.md`: a route
+   table that drops everything but the required service tags, the Container Apps policy aliases
+   for images, and whether the environment's default domain is served with a certificate that
+   browsers trust.
 
 ---
 

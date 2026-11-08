@@ -14,7 +14,9 @@ independent and not affiliated with any of them.
 > machine, with no web pages yet. The Docker image and the Word add-in do not exist yet.
 
 The plan for a web app and Word add-in that run inside a firm's own Azure tenant, with no
-stored secrets and no outbound internet, is in [docs/azure-in-tenant.md](docs/azure-in-tenant.md).
+stored secrets and no general internet access, is in
+[docs/azure-in-tenant.md](docs/azure-in-tenant.md). The first Azure template is in
+[deploy/azure/](deploy/azure/README.md).
 
 ## What it does
 
