@@ -242,6 +242,25 @@ export function createUploads(deps: ServiceDeps, present: Presenter) {
     };
   }
 
+  /**
+   * `duplicateResult`, unless the upload carried a stated date that the stored version does not
+   * have. An identical file is not stored again, so the date would be dropped without a word, and
+   * the stated date decides which amendment governs. The person is told to change the date where it
+   * is kept, which stales the review as any change of a date does.
+   */
+  function duplicateOf(
+    matterId: string,
+    existing: DocumentVersionRow,
+    statedDate: string | null,
+  ): UploadResult {
+    if (statedDate !== null && statedDate !== existing.statedDate)
+      throw new ConflictError(
+        "duplicate_stated_date",
+        "the file is already in the matter and was not stored again, so the stated date was not applied; change the date on the existing version",
+      );
+    return duplicateResult(matterId, existing);
+  }
+
   function removeQuietly(storagePath: string, matterId: string): void {
     try {
       files.remove(storagePath);
@@ -335,6 +354,9 @@ export function createUploads(deps: ServiceDeps, present: Presenter) {
    * An amendment without one would take D1 and the review could not read the matter at all.
    */
   function checkPlacement(matterId: string, kind: DocumentKind): void {
+    // A matter deleted while its upload was being read has no documents, which would read as "upload
+    // the NDA first". It is gone, as it is for every other request that names it.
+    if (repo.getMatter(matterId) === undefined) throw new NotFoundError("matter");
     const existing = repo.listDocuments(matterId);
     if (kind === "amendment" && !existing.some((d) => d.kind === "nda"))
       throw new ValidationError("nda_first", "upload the NDA before an amendment");
@@ -370,7 +392,7 @@ export function createUploads(deps: ServiceDeps, present: Presenter) {
 
     const fileSha256 = sha256Hex(bytes);
     const known = repo.findVersionByFileSha256(matterId, fileSha256);
-    if (known !== undefined) return duplicateResult(matterId, known);
+    if (known !== undefined) return duplicateOf(matterId, known, input.statedDate);
 
     const parsed = await parseDocument({ bytes, mediaType });
     const textSha256 = documentTextSha256(parsed.paragraphs);
@@ -380,7 +402,7 @@ export function createUploads(deps: ServiceDeps, present: Presenter) {
     // written to. Another upload may have stored these bytes, or taken the label this one was
     // going to have, while this one was being parsed.
     const raced = repo.findVersionByFileSha256(matterId, fileSha256);
-    if (raced !== undefined) return duplicateResult(matterId, raced);
+    if (raced !== undefined) return duplicateOf(matterId, raced, input.statedDate);
     checkPlacement(matterId, input.kind);
 
     // A dry run of ingest with the new document in place, before anything is written: a document
@@ -438,7 +460,7 @@ export function createUploads(deps: ServiceDeps, present: Presenter) {
       removeQuietly(storagePath, matterId);
       if (isDuplicateConflict(error)) {
         const existing = repo.findVersionByFileSha256(matterId, fileSha256);
-        if (existing !== undefined) return duplicateResult(matterId, existing);
+        if (existing !== undefined) return duplicateOf(matterId, existing, input.statedDate);
       }
       throw error;
     }
@@ -461,7 +483,7 @@ export function createUploads(deps: ServiceDeps, present: Presenter) {
     const fileSha256 = sha256Hex(bytes);
     const known = repo.findVersionByFileSha256(matterId, fileSha256);
     if (known !== undefined) {
-      const duplicate = duplicateResult(matterId, known);
+      const duplicate = duplicateOf(matterId, known, input.statedDate);
       return { versionId: duplicate.versionId, warnings: duplicate.warnings };
     }
 
@@ -469,10 +491,12 @@ export function createUploads(deps: ServiceDeps, present: Presenter) {
     const textSha256 = documentTextSha256(parsed.paragraphs);
     const loaded = await loadGoverning(matterId, documentId);
 
-    // From here to the end of the transaction nothing waits (see addDocument).
+    // From here to the end of the transaction nothing waits (see addDocument). The document, or its
+    // matter, may have been deleted while the file was being read.
+    if (repo.getDocument(matterId, documentId) === undefined) throw new NotFoundError("document");
     const raced = repo.findVersionByFileSha256(matterId, fileSha256);
     if (raced !== undefined) {
-      const duplicate = duplicateResult(matterId, raced);
+      const duplicate = duplicateOf(matterId, raced, input.statedDate);
       return { versionId: duplicate.versionId, warnings: duplicate.warnings };
     }
 
@@ -526,7 +550,7 @@ export function createUploads(deps: ServiceDeps, present: Presenter) {
       if (isDuplicateConflict(error)) {
         const existing = repo.findVersionByFileSha256(matterId, fileSha256);
         if (existing !== undefined) {
-          const duplicate = duplicateResult(matterId, existing);
+          const duplicate = duplicateOf(matterId, existing, input.statedDate);
           return { versionId: duplicate.versionId, warnings: duplicate.warnings };
         }
       }

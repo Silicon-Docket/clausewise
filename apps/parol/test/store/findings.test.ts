@@ -732,7 +732,7 @@ describe("export readiness", () => {
 });
 
 describe("recordMemo", () => {
-  it("records a memo for a fully decided run, supersedes the last one, and exports the matter", () => {
+  it("records a memo for a fully decided run and exports the matter", () => {
     const e = exported(w);
     expect(e.memo).toMatchObject({
       status: "current",
@@ -742,12 +742,44 @@ describe("recordMemo", () => {
     expect(e.memo.reviewIds).toEqual(e.reviews.map((r) => r.id));
     expect(w.repo.getMatter(e.m.id)?.status).toBe("exported");
     expect(w.repo.getCurrentMemo(e.m.id)?.id).toBe(e.memo.id);
+    const event = w.repo.listAuditEvents({ matterId: e.m.id, action: "memo.export" })[0];
+    expect(event?.detail).toMatchObject({
+      runId: e.run.id,
+      fileSha256: e.memo.fileSha256,
+      reviews: 3,
+    });
+  });
 
-    // A second export of the same decisions replaces the first as the current memo.
+  it("returns the memo on record, and writes nothing, when the same decisions are exported again", () => {
+    const e = exported(w);
     w.clock.tick();
-    const second = w.repo.recordMemo(e.m.id, {
+    const again = w.repo.recordMemo(e.m.id, {
       runId: e.run.id,
       reviewIds: e.reviews.map((r) => r.id),
+      fileSha256: sha256Hex("another file of the same decisions"),
+      storagePath: fakePath(e.m.id),
+      exportedBy: ACTORS.reviewer,
+    });
+    // A memo is superseded because the documents or the playbook changed after it was made, and
+    // nothing did: the first stays the current one.
+    expect(again).toEqual(e.memo);
+    expect(w.repo.listMemos(e.m.id).map((x) => [x.id, x.status])).toEqual([[e.memo.id, "current"]]);
+    expect(w.repo.listAuditEvents({ matterId: e.m.id, action: "memo.export" })).toHaveLength(1);
+    expect(w.repo.getMatter(e.m.id)?.status).toBe("exported");
+  });
+
+  it("supersedes the memo on record when the decisions are those of a later review", () => {
+    const e = exported(w);
+    w.clock.tick();
+    // A re-run on unchanged inputs keeps the memo; the next review has decisions of its own.
+    w.repo.applyInputChange(e.m.id, { reason: "rerun_requested", actorId: ACTORS.associate });
+    const next = startRun(w, e.m);
+    const findings = saveAll(w, e.m, next);
+    succeed(w, e.m, next);
+    const reviews = decideAll(w, e.m.id, findings);
+    const second = w.repo.recordMemo(e.m.id, {
+      runId: next.id,
+      reviewIds: reviews.map((r) => r.id),
       fileSha256: sha256Hex("second memo"),
       storagePath: fakePath(e.m.id),
       exportedBy: ACTORS.reviewer,
@@ -756,12 +788,6 @@ describe("recordMemo", () => {
     expect(w.repo.getCurrentMemo(e.m.id)?.id).toBe(second.id);
     expect(w.repo.listMemos(e.m.id).map((x) => x.id)).toEqual([second.id, e.memo.id]);
     expect(w.repo.getMatter(e.m.id)?.status).toBe("exported");
-    const event = w.repo.listAuditEvents({ matterId: e.m.id, action: "memo.export" })[0];
-    expect(event?.detail).toMatchObject({
-      runId: e.run.id,
-      fileSha256: e.memo.fileSha256,
-      reviews: 3,
-    });
   });
 
   it("is blocked, with the blockers, while anything is undecided", () => {

@@ -105,19 +105,32 @@ const UNREVIEWED: [keyof DocxInspection, string][] = [
   ["images", "images"],
 ];
 
-/** Counts only: what the Word file holds that the review never shows the model. */
+// Tracked changes are read, in their accepted form, which is the only reason they are listed apart
+// from the content above. A deleted figure and the figure typed over it read as the agreed text, so
+// a lawyer who looks at the file in Word (where both show) has to be told the two views differ.
+const READ_AS_ACCEPTED: [keyof DocxInspection, string][] = [
+  ["trackedInsertions", "tracked_insertions"],
+  ["trackedDeletions", "tracked_deletions"],
+];
+
+/** Counts only: what the Word file holds that the review never shows the model, or shows differently. */
 function unreviewedDetail(
   inspection: DocxInspection | null,
   clauseLikeContents: number,
 ): string | undefined {
-  const parts =
+  const counts = (list: [keyof DocxInspection, string][]): string[] =>
     inspection === null
       ? []
-      : UNREVIEWED.filter(([key]) => inspection[key] > 0).map(
-          ([key, name]) => `${name}=${inspection[key]}`,
-        );
-  if (clauseLikeContents > 0) parts.push(`toc_entries=${clauseLikeContents}`);
-  return parts.length === 0 ? undefined : `not reviewed: ${parts.join(", ")}`;
+      : list
+          .filter(([key]) => inspection[key] > 0)
+          .map(([key, name]) => `${name}=${inspection[key]}`);
+  const unread = counts(UNREVIEWED);
+  if (clauseLikeContents > 0) unread.push(`toc_entries=${clauseLikeContents}`);
+  const accepted = counts(READ_AS_ACCEPTED);
+  const parts: string[] = [];
+  if (unread.length > 0) parts.push(`not reviewed: ${unread.join(", ")}`);
+  if (accepted.length > 0) parts.push(`read as accepted: ${accepted.join(", ")}`);
+  return parts.length === 0 ? undefined : parts.join("; ");
 }
 
 // A line of a table of contents is a short heading, usually with a page number or leader dots

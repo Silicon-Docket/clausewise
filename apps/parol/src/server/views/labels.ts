@@ -197,6 +197,7 @@ export const CHECK_LABEL = {
   missing_confirmation: "A finding of missing is not contradicted by candidate passages",
   playbook_escalation: "Playbook conditions for escalation",
   defined_term: "Defined terms are defined once",
+  instruction_like_text: "Cited paragraphs do not read like an instruction to software",
   support: "A second check agrees the cited passages support the conclusion",
   model_abstained: "The workflow stated a status",
   status_forced: "The status was kept as the workflow stated it",
@@ -231,13 +232,13 @@ export const WARNING_LABEL: Record<WarningCode, string> = {
 
 export const WARNING_MEANING: Record<WarningCode, string> = {
   instruction_like_text:
-    "This paragraph reads like an instruction to software. It is reviewed as text and cannot change anything.",
+    "This paragraph reads like an instruction to software. The review gives it to the model as document text, and Parol cannot show that a model ignored it. Read the paragraph yourself and check any finding that cites it. In the label, the number after p counts the paragraphs of the file from zero, tables included.",
   duplicate_document:
     "This document has the same text as another document in the matter. Keep only the one you need.",
   near_duplicate_version:
     "This version is almost the same as the version before it. Check that you uploaded the right file.",
   unreviewed_content:
-    "This Word file holds footnotes, headers, hidden text or comments. They are not reviewed, so read them yourself.",
+    "This Word file holds footnotes, headers, hidden text or comments that the review does not read, or tracked changes that are not resolved, which the review reads as if every change had been accepted. Read the file yourself.",
   no_reviewable_text: "This file has no text that can be reviewed.",
 };
 

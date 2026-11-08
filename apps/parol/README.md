@@ -51,8 +51,9 @@ PAROL_DEMO_IDENTITY=1 pnpm parol:seed
 PAROL_DEMO_IDENTITY=1 PAROL_SCRIPTED=1 pnpm parol
 ```
 
-Then open <http://127.0.0.1:8787> and choose a demo identity. Stop the server with Ctrl-C; it
-waits for a review in progress.
+Then open <http://127.0.0.1:8787> and choose a demo identity. Without `PAROL_DEMO_IDENTITY=1` the
+start page says "Sign-in is switched off" and names that variable, and lists no identity. Stop the
+server with Ctrl-C; it waits for a review in progress, and a second Ctrl-C stops it at once.
 
 `pnpm parol:seed` opens the data folder, registers the prompts, the two workflow versions, the
 approved playbook (`parol-nda-recipient` 1.0.1) and the demo users, and creates two matters through
@@ -110,13 +111,15 @@ What was left out of the script in document 9, and why:
   every rule comes out undetermined and escalated.
 - The memo (1:52 there) needs every finding decided. After Dana has decided the eight findings of
   the current review she can press Export memo. The memo is headed as a draft for attorney review
-  of synthetic documents. Its provenance appendix says "Model: requested simulated
-  parol-simulated-reader; reported by the provider: not reported." A line after it, "Stand-in
-  reader", says that the findings were produced by a scripted program and not a language model.
+  of synthetic documents. When an upload raised warnings (unread content, an instruction-like
+  paragraph), a "Document warnings" section comes before the open items. Its provenance appendix
+  says "Model: requested simulated parol-simulated-reader; reported by the provider: not reported."
+  A line after it, "Stand-in reader", says that the findings were produced by a scripted program and
+  not a language model.
   The explanations in the memo still read as written analysis, so a memo from this demonstration
   should not leave it without that being said aloud.
-- Four more lines of document 9 are not as written:
-  - 0:10 gives playbook 1.0.0. The seeded playbook is 1.0.1, and the matter page shows that.
+- Document 9 and the demonstration agree on the playbook at 0:10. The seeded playbook is 1.0.1, and
+  the matter page shows that. Three other lines of document 9 are not as written:
   - 0:35 says Duration is a deviation. That is the answer under workflow version v2. The picker
     on the matter page starts on v1, which says `Compliant`, as the walk-through above uses.
   - 0:52 describes a model support check that asks whether the passages establish the
@@ -181,6 +184,10 @@ relative to where you ran the command. Git ignores `data/`.
 
 - `parol.sqlite` is the database: matters, document text, findings, decisions, the audit log.
 - `matters/<matter id>/` holds the uploaded files and the exported memos.
+- `parol.lock` holds no data. The server keeps an exclusive lock on it for as long as it runs, so
+  only one server can use a data folder at a time: a second `pnpm parol` on the same folder exits
+  with a message saying so, before it touches anything. The system drops the lock when the first
+  server ends, however it ends.
 
 To start again, stop the server, delete the folder, and seed:
 

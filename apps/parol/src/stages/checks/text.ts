@@ -8,11 +8,25 @@ import { normalizeForAnchor } from "@clausewise/review";
 /** The comparison form of a name or a phrase: quotes and dashes folded, spaces collapsed, lower case. */
 export const fold = (text: string): string => normalizeForAnchor(text).trim().toLowerCase();
 
-export const asText = (value: unknown): string => (typeof value === "string" ? value : "");
+// A NUL, which the store refuses, and a surrogate with no partner, which JSON writes as an escape
+// but a database stores as the replacement character. Left in, the first fails the whole run for
+// one rule's answer, and the second changes the text between the hash taken when the finding is
+// made and the hash taken when the memo is exported, so the finding could never be exported.
+const UNCARRIABLE =
+  /\u0000|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+
+/**
+ * Text from a model in a form the store and the hashes carry unchanged: a NUL and a lone surrogate
+ * become U+FFFD, which a reader sees as a replacement mark. Everything else is left as it is.
+ */
+export const carriable = (text: string): string => text.replace(UNCARRIABLE, "\ufffd");
+
+export const asText = (value: unknown): string =>
+  typeof value === "string" ? carriable(value) : "";
 
 /** A string, or null for anything else. A blank string is null too: it says nothing. */
 export const asTextOrNull = (value: unknown): string | null =>
-  typeof value === "string" && value.trim() !== "" ? value : null;
+  typeof value === "string" && value.trim() !== "" ? carriable(value) : null;
 
 /** First `max` UTF-16 units. Callers use it only on text they will not compare afterwards. */
 export const clip = (text: string, max: number): string =>

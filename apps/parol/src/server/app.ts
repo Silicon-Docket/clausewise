@@ -10,7 +10,7 @@ import type { AppDeps } from "./deps.js";
 import { bodyMediaType, formString, readForm } from "./http.js";
 import { defineRoute } from "./matter-route.js";
 import { requestContext } from "./middleware/context.js";
-import { hostGuard } from "./middleware/host-guard.js";
+import { hostGuard, refuseUserInfo } from "./middleware/host-guard.js";
 import { NOT_FOUND, errorResponse, toSafeError, type RenderError } from "./middleware/errors.js";
 import { SIGN_IN_INTENT, SIGN_OUT_INTENT, FIELDS } from "./pages/forms.js";
 import { urls } from "./urls.js";
@@ -90,6 +90,8 @@ export function createApp(deps: AppDeps, options: AppOptions = {}): Hono {
   // headers, the request id and a log line.
   app.use("*", requestContext(authDeps, { log, renderError: options.renderError }));
   app.use("*", hostGuard(config));
+  // Before the body limit, which is the first thing to read the request and would fail on it.
+  app.use("*", refuseUserInfo());
   app.use("*", bodyLimit({ maxSize: config.maxUploadBytes + UPLOAD_MARGIN_BYTES }));
 
   app.onError((err, c) => {

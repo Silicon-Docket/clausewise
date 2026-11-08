@@ -125,6 +125,18 @@ export function createRunsApi(ctx: Ctx, matters: MattersApi, playbooks: Playbook
   const { get, all, run, tx } = ctx;
   const { requireMatter, requireUser, transitionMatter } = matters.internal;
 
+  /**
+   * Where a matter goes when its run ends without results (failed, cancelled, interrupted). With
+   * nothing ever produced it is ready for a first review. With results from an earlier review, which
+   * a re-run made stale, "ready" would read as if the matter had never been reviewed, and the
+   * decisions that no longer count would go unmentioned: it is out of date until a review finishes.
+   */
+  function leaveRunning(matterId: string): void {
+    if (requireMatter(matterId).status !== "running") return;
+    const earlier = get("SELECT 1 AS one FROM findings WHERE matter_id = ? LIMIT 1", matterId);
+    transitionMatter(matterId, earlier === undefined ? "ready" : "stale");
+  }
+
   // --- reading ------------------------------------------------------------------------------
 
   const getRun = (matterId: string, runId: string): RunRow | undefined => {
@@ -396,7 +408,7 @@ export function createRunsApi(ctx: Ctx, matters: MattersApi, playbooks: Playbook
           now,
           runId,
         );
-        if (requireMatter(matterId).status === "running") transitionMatter(matterId, "ready");
+        leaveRunning(matterId);
       }
       ctx.audit({
         actorId: opts.actorId ?? null,
@@ -416,8 +428,9 @@ export function createRunsApi(ctx: Ctx, matters: MattersApi, playbooks: Playbook
 
   /**
    * Called once at boot, before the server accepts requests. Every run left in flight by the last
-   * process becomes `failed` with `interrupted`, its matter returns to `ready`, and resume picks
-   * it up by input hash. This is the one method that is not scoped to a matter: at boot there is no
+   * process becomes `failed` with `interrupted`, its matter leaves `running` (for `ready`, or for
+   * `stale` when it holds findings of an earlier review; see `leaveRunning`), and resume picks it
+   * up by input hash. This is the one method that is not scoped to a matter: at boot there is no
    * request and no matter, only whatever a crash left behind.
    */
   function markInterruptedOnBoot(): { matterId: string; runId: string }[] {
@@ -440,7 +453,7 @@ export function createRunsApi(ctx: Ctx, matters: MattersApi, playbooks: Playbook
           now,
           r.id,
         );
-        if (requireMatter(r.matter_id).status === "running") transitionMatter(r.matter_id, "ready");
+        leaveRunning(r.matter_id);
         ctx.audit({
           actorId: null,
           matterId: r.matter_id,

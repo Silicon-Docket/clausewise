@@ -34,6 +34,7 @@ import {
   citationShape,
   definedTerm,
   evidenceSet,
+  instructionLikeText,
   missingConfirmation,
   modelAbstained,
   numericConsistency,
@@ -87,6 +88,7 @@ const CHECK_ORDER = [
   "missing_confirmation",
   "playbook_escalation",
   "defined_term",
+  "instruction_like_text",
   "support",
   "model_abstained",
   "status_forced",
@@ -308,6 +310,7 @@ export const verifyFinding: VerifyFinding = async (args): Promise<VerifyResult> 
     outputs.set("missing_confirmation", missingConfirmation(ctx));
     outputs.set("playbook_escalation", playbookEscalation(ctx));
     outputs.set("defined_term", definedTerm(ctx));
+    outputs.set("instruction_like_text", instructionLikeText(ctx));
   }
   if (enabled.has("C2")) outputs.set("superseded_evidence", supersededEvidence(items, index));
 

@@ -8,13 +8,33 @@ import { globalRoleLabel } from "../views/labels.js";
 export interface SignInPageProps {
   chrome: Chrome;
   users: UserOption[];
+  /**
+   * False when the server was started without the demo identity: the people exist, but nobody can
+   * sign in as one. Absent means on, which is how a page built before this setting behaves.
+   */
+  signInEnabled?: boolean;
 }
 
 /**
  * The demo identity picker. It is not authentication: anyone at the keyboard can be anyone. The
  * page says so, because the permanent banner alone is easy to stop seeing.
+ *
+ * With sign-in off it says that instead of offering a choice, and how it is turned on: the warning
+ * the server prints when it starts is on the operator's terminal, not where the visitor is looking,
+ * and "no identities have been set up" would be untrue.
  */
 export function SignInPage(props: SignInPageProps) {
+  if (props.signInEnabled === false) {
+    return (
+      <Layout title="Sign-in is switched off" chrome={props.chrome}>
+        <h1>Sign-in is switched off</h1>
+        <p class="lead">
+          This server was started without the demo identity, so nobody can sign in. Whoever runs the
+          server can turn it on by starting it with <code>PAROL_DEMO_IDENTITY=1</code>.
+        </p>
+      </Layout>
+    );
+  }
   return (
     <Layout title="Choose a demo identity" chrome={props.chrome}>
       <h1>Choose a demo identity</h1>

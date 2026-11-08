@@ -275,6 +275,70 @@ describe("limits", () => {
     await expect(parseDocx(lying)).rejects.toThrow(/maxZipEntries/);
   });
 
+  // Two entries with one name are read by JSZip as the last one, and by LibreOffice as a file that
+  // cannot be loaded. A consumer that picks the other entry would show a person different words
+  // from the ones the review read, so such a package is refused rather than read one way.
+  describe("two entries with the same part name", () => {
+    const first = utf8(documentXml(para(run("1. Term. ALPHA two (2) years."))));
+    const second = utf8(documentXml(para(run("1. Term. BETA seven (7) years."))));
+    const entry = (name: string, data: Uint8Array) => ({ name, data });
+    const duplicated = (names: [string, string] = ["word/document.xml", "word/document.xml"]) =>
+      craftZip([
+        entry("[Content_Types].xml", utf8("<Types/>")),
+        entry(names[0], first),
+        entry(names[1], second),
+      ]);
+
+    it.each<[string, [string, string]]>([
+      ["the document part", ["word/document.xml", "word/document.xml"]],
+      ["the document part under another case", ["word/document.xml", "Word/Document.xml"]],
+    ])("refuses %s, whichever copy comes first", async (_what, names) => {
+      for (const buf of [duplicated(names), duplicated([names[1], names[0]])]) {
+        await expect(parseDocx(buf)).rejects.toThrow(DocxError);
+        await expect(parseDocx(buf)).rejects.toThrow(/same name/);
+        await expect(inspectDocx(buf)).rejects.toThrow(/same name/);
+        await expect(applyRedline(buf, { edits: [edit(0, 1, "y")] }, { date })).rejects.toThrow(
+          /same name/,
+        );
+      }
+    });
+
+    it("refuses a repeated side part too, not only the document", async () => {
+      const buf = craftZip([
+        entry("[Content_Types].xml", utf8("<Types/>")),
+        entry("word/document.xml", first),
+        entry("word/comments.xml", utf8("<w:comments/>")),
+        entry("word/comments.xml", utf8("<w:comments/>")),
+      ]);
+      await expect(parseDocx(buf)).rejects.toThrow(/same name/);
+    });
+
+    it("never repeats a part name in the message", async () => {
+      const buf = craftZip([
+        entry("[Content_Types].xml", utf8("<Types/>")),
+        entry("word/SECRET-NAME.xml", first),
+        entry("word/secret-name.xml", second),
+        entry("word/document.xml", first),
+      ]);
+      const error = await parseDocx(buf).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(error).toBeInstanceOf(DocxError);
+      expect((error as Error).message).not.toMatch(/secret/i);
+    });
+
+    it("still reads a package whose parts all have different names", async () => {
+      const ok = craftZip([
+        entry("[Content_Types].xml", utf8("<Types/>")),
+        entry("word/document.xml", first),
+        entry("word/media/image1.png", new Uint8Array([1, 2, 3])),
+        entry("word/media/image2.png", new Uint8Array([1, 2, 3])),
+      ]);
+      expect((await parseDocx(ok)).paragraphs[0]?.text).toContain("ALPHA");
+    });
+  });
+
   it("checks the size a part declares before inflating any of it", async () => {
     const zip = await openPackage(await buildDocx(body), { maxDocumentXmlBytes: 100 });
     const entry = zip.file("word/document.xml")!;

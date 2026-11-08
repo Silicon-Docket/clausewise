@@ -29,12 +29,22 @@ export const STALE_FALLBACK = "The inputs changed after this review.";
 export const staleReasonPhrase = (code: string | null): string =>
   (code !== null && Object.hasOwn(STALE_PHRASES, code) ? STALE_PHRASES[code] : undefined) ??
   STALE_FALLBACK;
+/**
+ * The same reasons for a matter whose first review was stopped by the change before it had saved a
+ * finding: there was no finished review to be "after", and nothing was decided.
+ */
+export const staleWhileRunningPhrase = (code: string | null): string =>
+  staleReasonPhrase(code).replace(/ after this review\.$/, " while the review was running.");
 
 export const CANNOT_DECIDE = {
   role: "Only the reviewing attorney can record a decision.",
   segregation: "A reviewer cannot decide findings of a review they started.",
   stale: "The documents or the playbook changed after this finding. Run the review again.",
+  // A re-run on unchanged inputs: nothing the review read has changed, so it must not be said to.
+  replaced: "A newer review replaced this one. Decide the findings of the current review.",
   exported: "The memo is exported. Decisions can change only after a new review.",
+  decidedByAnother:
+    "Another reviewer has already decided this finding. Their decision stands until they change it or the review is run again.",
   notOpen: "The matter is not open for review.",
   runNotCurrent: "This finding belongs to a review that is no longer current.",
 } as const;

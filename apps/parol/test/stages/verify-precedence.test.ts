@@ -165,20 +165,28 @@ describe("precedence_labels: a span labelled superseded", () => {
       ]);
     });
 
+    // The analysis prompt (rule 4a) says that when either date is not given the rule cannot be
+    // applied and the passages conflict. The check used to take such an amendment as later and
+    // print "Passed", which told the reviewer the opposite of what the model had been told.
     it.each([
       ["the amendment", { D2: null }],
       ["the NDA", { D1: null }],
       ["an amendment date nobody can read", { D2: "15 September 2026" }],
       ["an impossible date", { D2: "2026-13-45" }],
     ])(
-      "accepts the amendment as later when the date of %s is missing, and says so",
+      "raises conflicting_sources, and so forces undetermined, when the date of %s is missing",
       async (_, dates) => {
         const { finding } = await run({ dates });
-        expect(codes(finding)).toEqual([]);
-        expect(check(finding, "precedence_labels").outcome).toBe("pass");
-        expect(check(finding, "precedence_labels").detail).toContain(
-          "stated date missing for D1 or D2, so evidence 1 (D2-p3) is taken as later because it expressly refers to clause 6.1",
-        );
+        expect(finding.escalations).toEqual([
+          {
+            code: "conflicting_sources",
+            detail:
+              "evidence 2 (D1-p19) is labelled superseded by an amendment, but a stated date is missing for D1 or D2, so the documents do not say which governs",
+          },
+        ]);
+        expect(check(finding, "precedence_labels").outcome).toBe("fail");
+        expect(finding.status).toBe("undetermined");
+        expect(finding.verificationState).toBe("escalated_by_system");
       },
     );
   });

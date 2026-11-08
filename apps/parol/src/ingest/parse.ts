@@ -69,6 +69,12 @@ function uploadErrorFor(error: unknown): UploadError {
   if (/over the limit/i.test(message)) {
     return new UploadError("This file is too large or too complex to review.");
   }
+  if (/two parts with the same name/i.test(message)) {
+    return new UploadError(
+      "This Word file holds two parts with the same name, so what Word shows could differ from what " +
+        'would be reviewed. Open it in Word, save it as a normal "Word Document (.docx)" and upload it again.',
+    );
+  }
   return new UploadError(
     "This file could not be read as a Word document. It may be damaged, or it may not be a .docx.",
   );

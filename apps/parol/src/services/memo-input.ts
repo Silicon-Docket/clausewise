@@ -41,6 +41,26 @@ export function buildMemoInput(args: {
     return known;
   };
 
+  // Only the warnings of the versions this run read: a warning about a replaced version says
+  // nothing about the review the memo reports. The memo repeats what the matter page tells the
+  // associate, so a reader of the file alone also learns what the review could not see.
+  const labelOf = new Map(run.manifest.documents.map((d) => [d.documentVersionId, d.label]));
+  const documentWarnings: NonNullable<MemoInput["documentWarnings"]> = repo
+    .listIngestWarnings(matterId, [...labelOf.keys()])
+    .flatMap((w) => {
+      const label = labelOf.get(w.documentVersionId);
+      if (label === undefined) return [];
+      const span = w.spanId === null ? undefined : spanById.get(w.spanId);
+      return [
+        {
+          label,
+          code: w.code,
+          location: span === undefined ? null : formatLocation(span),
+          detail: w.detail,
+        },
+      ];
+    });
+
   const memoFindings: MemoFinding[] = findings.map((record) => {
     const review = record.currentReview;
     return {
@@ -102,6 +122,7 @@ export function buildMemoInput(args: {
         ]),
       ].map((id) => [id, spanOf(id).text]),
     ),
+    documentWarnings,
     findings: memoFindings,
     ruleSeverities: Object.fromEntries(rules.map((r) => [r.key, r.severity])),
     ruleTitles: Object.fromEntries(rules.map((r) => [r.key, r.title])),

@@ -53,3 +53,19 @@ export function formatAccessLine(entry: AccessLogEntry): string {
     fields.push(`error=${ERROR_NAME.test(entry.errorName) ? entry.errorName : "Error"}`);
   return fields.join(" ");
 }
+
+/**
+ * Responses whose request was answered below the application while the application was still
+ * working on it (a body that Node's parser found malformed after the request had been handed on).
+ * The client was told what the wire layer sent and the wire layer logged it, so a second line with
+ * the status the application would have sent would describe an answer nobody received.
+ */
+const answeredBelow = new WeakSet<object>();
+
+export function markAnsweredBelow(response: object): void {
+  answeredBelow.add(response);
+}
+
+export function wasAnsweredBelow(response: unknown): boolean {
+  return typeof response === "object" && response !== null && answeredBelow.has(response);
+}

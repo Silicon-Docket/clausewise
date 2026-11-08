@@ -567,8 +567,10 @@ describe("a matter whose documents changed after the review", () => {
       readable(first(parseHtml(paneHtml), (el) => el.name === "ol" && hasClass(el, "history"))),
     ).toContain("Out of date");
 
-    // The memo made before is kept on record, and the pages call it superseded.
-    expect(view.memos).toEqual([{ ...memo, status: "superseded" }]);
+    // The memo made before is kept on record, and the pages call it superseded. Its download name
+    // says so too, so it cannot be mistaken for the memo that replaces it.
+    const supersededName = `${memo.fileName.replace(/\.docx$/, "")}-superseded-${memo.memoId.slice(5, 13)}.docx`;
+    expect(view.memos).toEqual([{ ...memo, status: "superseded", fileName: supersededName }]);
     const memosHtml = render(
       MemosPage({
         chrome,
@@ -580,7 +582,7 @@ describe("a matter whose documents changed after the review", () => {
     );
     const memosRoot = checkInvariants(memosHtml, { actions: actionsOf(r) });
     expect(readable(first(memosRoot, (el) => el.name === "table"))).toContain("Superseded");
-    expect(readable(first(memosRoot, (el) => el.name === "table"))).toContain(memo.fileName);
+    expect(readable(first(memosRoot, (el) => el.name === "table"))).toContain(supersededName);
     expect(readable(first(memosRoot, (el) => el.name === "table"))).toContain(
       memo.fileSha256.slice(0, 12),
     );

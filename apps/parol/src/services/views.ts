@@ -95,6 +95,13 @@ export interface RunSummary {
   errorKind: string | null;
   /** True while the run's inputs are the matter's current inputs. */
   current: boolean;
+  /**
+   * True for a failed run that a resume would accept: its inputs are unchanged and the provider
+   * and model now configured are the ones it started on. A run on other inputs is not `current`; a
+   * run on another model is current and not resumable, and the way on is a new review. Optional so
+   * that a summary built before it existed still fits; absent, a page falls back to `current`.
+   */
+  resumable?: boolean;
   progress: RunProgress | null;
   findingCount: number;
 }

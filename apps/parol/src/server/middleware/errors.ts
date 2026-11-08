@@ -15,7 +15,7 @@ import {
   StaleRunError,
   ValidationError,
 } from "../../store/errors.js";
-import { isApiPath } from "../http.js";
+import { answersInJson, isApiPath } from "../http.js";
 import { urls } from "../urls.js";
 
 /**
@@ -47,9 +47,11 @@ const TITLES: Record<number, string> = {
   401: "Sign in first",
   403: "You may not do that",
   404: "Page not found",
+  408: "That request took too long",
   409: "That conflicts with the current state",
   413: "That upload is too large",
   422: "That file could not be accepted",
+  431: "That request was too large",
   500: "Something went wrong",
 };
 export const titleFor = (status: number): string => TITLES[status] ?? TITLES[500]!;
@@ -219,7 +221,7 @@ export function errorResponse(
   requestId: string,
   render: RenderError = builtinErrorPage,
 ): Response {
-  if (isApiPath(c.req.path)) {
+  if (answersInJson(c)) {
     // Only a server fault carries the request id: the 4xx bodies stay byte-identical for the same
     // kind of failure, which is what keeps a missing matter and a forbidden one indistinguishable.
     const body = {

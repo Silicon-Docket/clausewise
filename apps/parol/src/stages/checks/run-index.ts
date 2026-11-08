@@ -43,6 +43,11 @@ export interface RunIndex {
   operationsBySpan: ReadonlyMap<SpanId, readonly Operation[]>;
   /** Every term some span of the run defines, folded. */
   definedTerms: readonly string[];
+  /**
+   * Spans that ingest flagged as reading like an instruction to an automated reader. The flag is
+   * a pattern match, so it is a reason to look and never proof of an attack.
+   */
+  instructionSpans: ReadonlySet<SpanId>;
 }
 
 const CHANGING: ReadonlySet<string> = new Set(["deletes", "replaces", "amends"]);
@@ -75,7 +80,12 @@ export function buildRunIndex(ingest: IngestOutput, manifest: RunManifest): RunI
   const operationsBySpan = new Map<SpanId, Operation[]>();
   const definedTerms: string[] = [];
   const seenTerms = new Set<string>();
+  const instructionSpans = new Set<SpanId>();
   for (const annotation of ingest.annotations) {
+    if (annotation.kind === "instruction_like") {
+      if (spansById.has(annotation.spanId)) instructionSpans.add(annotation.spanId);
+      continue;
+    }
     if (annotation.kind === "defines_term") {
       const term = fold(annotation.term);
       if (term !== "" && !seenTerms.has(term)) {
@@ -100,7 +110,7 @@ export function buildRunIndex(ingest: IngestOutput, manifest: RunManifest): RunI
     else own.push(operation);
   }
 
-  return { spansById, docs, operations, operationsBySpan, definedTerms };
+  return { spansById, docs, operations, operationsBySpan, definedTerms, instructionSpans };
 }
 
 export const docOf = (index: RunIndex, span: SourceSpan): DocInfo =>

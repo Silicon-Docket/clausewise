@@ -4,6 +4,7 @@ import { buildMemo } from "../export/memo.js";
 import {
   ConflictError,
   ExportBlockedError,
+  FileStoreError,
   NotFoundError,
   type ExportBlocker,
   type FindingRecord,
@@ -109,8 +110,16 @@ export function createReviewService(deps: ServiceDeps, present: Presenter): Revi
       // The file first, the row second, and the file taken back if the row is refused (a decision
       // changed while the document was being built, or an input changed).
       const storagePath = files.save(matterId, bytes);
+      const takeBack = (): void => {
+        try {
+          files.remove(storagePath);
+        } catch {
+          deps.log(`memo export: a stored file could not be removed (matter ${matterId})`);
+        }
+      };
+      let memo;
       try {
-        const memo = repo.recordMemo(matterId, {
+        memo = repo.recordMemo(matterId, {
           runId: run.id,
           reviewIds: findings.flatMap((f) =>
             f.currentReview === null ? [] : [f.currentReview.id],
@@ -119,15 +128,14 @@ export function createReviewService(deps: ServiceDeps, present: Presenter): Revi
           storagePath,
           exportedBy: am.principal.userId,
         });
-        return present.memoSummary(memo);
       } catch (error) {
-        try {
-          files.remove(storagePath);
-        } catch {
-          deps.log(`memo export: a stored file could not be removed (matter ${matterId})`);
-        }
+        takeBack();
         throw error;
       }
+      // This review's memo was already on record (a second click, a second request at the same
+      // moment): the record kept the first, so the file just built is a copy to take back.
+      if (memo.storagePath !== storagePath) takeBack();
+      return present.memoSummary(memo);
     },
 
     listMemos(am) {
@@ -140,7 +148,19 @@ export function createReviewService(deps: ServiceDeps, present: Presenter): Revi
       // A memo of another matter is looked up in this matter only, so it is as good as absent.
       const memo = repo.getMemo(am.matterId, memoId);
       if (memo === undefined) throw memoNotFound();
-      const bytes = files.read(memo.storagePath);
+      let bytes: Buffer;
+      try {
+        bytes = files.read(memo.storagePath);
+      } catch (error) {
+        // The record outlived its file. Like a file that was changed, that is a disagreement
+        // between the record and the disk and not a fault; the path is not repeated.
+        const missing =
+          (error instanceof FileStoreError && error.code === "missing") ||
+          (error as NodeJS.ErrnoException).code === "ENOENT";
+        if (missing)
+          throw new ConflictError("memo_file_missing", "the stored memo file is missing");
+        throw error;
+      }
       if (sha256Hex(bytes) !== memo.fileSha256)
         throw new ConflictError(
           "memo_file_changed",

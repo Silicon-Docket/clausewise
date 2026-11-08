@@ -21,6 +21,7 @@ import type {
   SourceSpan,
   SupportAnswer,
   VerifiedFinding,
+  WarningCode,
   WorkflowManifest,
 } from "./contracts.js";
 import type { Severity } from "@clausewise/playbook";
@@ -252,6 +253,21 @@ export interface MemoInput {
   }[];
   /** Current text of every span a finding cites, keyed by span id, for re-verifying each quote. */
   spanTexts: Record<string, string>;
+  /**
+   * What the upload said about the documents the run read: Word content the review did not read,
+   * tracked changes it read as accepted, and paragraphs that read like an instruction to software.
+   * Optional so that a caller written before the memo carried warnings still compiles; absent
+   * means none were recorded.
+   */
+  documentWarnings?: {
+    /** `D1`, `D2` or `D3`. */
+    label: string;
+    code: WarningCode;
+    /** Where the paragraph is, in the words the memo uses for passages. Null for a whole document. */
+    location: string | null;
+    /** The stored detail: ids, counts and pattern names. The memo reads counts from it, nothing else. */
+    detail: string;
+  }[];
   /** One per rule, in playbook order. */
   findings: MemoFinding[];
   /** Counts of rules by severity, to show on the summary. */

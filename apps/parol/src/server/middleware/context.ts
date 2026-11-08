@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { Context, MiddlewareHandler } from "hono";
 import { matchedRoutes } from "hono/route";
 import { beginRequest, requestState, type AuthDeps } from "../../auth/request.js";
-import { UNMATCHED_ROUTE, formatAccessLine } from "./access-log.js";
+import { UNMATCHED_ROUTE, formatAccessLine, wasAnsweredBelow } from "./access-log.js";
 import { errorResponse, toSafeError, type RenderError } from "./errors.js";
 import { applySecurityHeaders } from "./security-headers.js";
 
@@ -63,6 +63,8 @@ export function requestContext(deps: AuthDeps, options: ContextOptions): Middlew
       applySecurityHeaders(headers, { path: c.req.path, https });
       for (const cookie of state.pendingCookies.values()) headers.append("Set-Cookie", cookie);
     });
+    // The HTTP adapter hands the server's response object to the application as `env.outgoing`.
+    if (wasAnsweredBelow((c.env as { outgoing?: unknown } | undefined)?.outgoing)) return;
     try {
       options.log(
         formatAccessLine({

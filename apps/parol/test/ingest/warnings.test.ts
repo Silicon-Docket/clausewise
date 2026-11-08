@@ -1,3 +1,4 @@
+import { DeletedTextRun, Document, InsertedTextRun, Packer, Paragraph, TextRun } from "docx";
 import { describe, expect, it } from "vitest";
 import { buildIngest } from "../../src/ingest/ingest.js";
 import { parseDocument } from "../../src/ingest/parse.js";
@@ -34,11 +35,79 @@ describe("unreviewed_content", () => {
     ]);
   });
 
-  it("is silent for a clean file, a text file and tracked changes alone", () => {
+  it("is silent for a clean file and a text file", () => {
     expect(withInspection({})).toEqual([]);
     expect(buildIngest({ documents: [documentFrom("D1", SHORT_NDA)] }).warnings).toEqual([]);
-    // Tracked changes are shown to the model in their accepted form, so they are not hidden.
-    expect(withInspection({ trackedInsertions: 3, trackedDeletions: 2 })).toEqual([]);
+  });
+
+  // The model is shown tracked changes in their accepted form, so a deleted figure and the figure
+  // typed over it read as the agreed text. That is not hidden content, but a lawyer who is not told
+  // the file holds unresolved changes cannot know the text they see in Word is not the text read.
+  it.each<[string, Partial<typeof NO_INSPECTION>, string]>([
+    ["insertions", { trackedInsertions: 3 }, "read as accepted: tracked_insertions=3"],
+    ["deletions", { trackedDeletions: 2 }, "read as accepted: tracked_deletions=2"],
+    [
+      "both",
+      { trackedInsertions: 3, trackedDeletions: 2 },
+      "read as accepted: tracked_insertions=3, tracked_deletions=2",
+    ],
+    [
+      "tracked changes beside content that is not read",
+      { comments: 1, trackedInsertions: 1, trackedDeletions: 1 },
+      "not reviewed: comments=1; read as accepted: tracked_insertions=1, tracked_deletions=1",
+    ],
+  ])("warns for tracked %s, with counts only", (_name, counts, detail) => {
+    expect(withInspection(counts)).toEqual([
+      { code: "unreviewed_content", documentVersionId: "dv_d1", detail },
+    ]);
+  });
+
+  it("warns for a real Word file whose term was changed with tracked changes, and carries no words of it", async () => {
+    const document = new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph("MUTUAL NONDISCLOSURE AGREEMENT"),
+            new Paragraph({
+              children: [
+                new TextRun("4. Term. The obligations shall continue for "),
+                new DeletedTextRun({
+                  text: "SECRET-DELETED-WORDS three (3) years",
+                  id: 1,
+                  author: "A. Counterparty",
+                  date: "2026-01-01T00:00:00Z",
+                }),
+                new InsertedTextRun({
+                  text: "an unlimited period",
+                  id: 2,
+                  author: "A. Counterparty",
+                  date: "2026-01-01T00:00:00Z",
+                }),
+                new TextRun(" after termination."),
+              ],
+            }),
+          ],
+        },
+      ],
+    });
+    const parsed = await parseDocument({
+      bytes: new Uint8Array(await Packer.toBuffer(document)),
+      mediaType: "docx",
+    });
+    // The accepted text is what the model reads, and the deleted words are in no span.
+    expect(parsed.paragraphs.map((p) => p.text).join("\n")).toContain("an unlimited period");
+    expect(parsed.paragraphs.map((p) => p.text).join("\n")).not.toContain("SECRET-DELETED");
+    const warnings = buildIngest({
+      documents: [documentFrom("D1", parsed.paragraphs, { inspection: parsed.inspection })],
+    }).warnings;
+    expect(warnings).toEqual([
+      {
+        code: "unreviewed_content",
+        documentVersionId: "dv_d1",
+        detail: "read as accepted: tracked_insertions=1, tracked_deletions=1",
+      },
+    ]);
+    expect(JSON.stringify(warnings)).not.toContain("SECRET");
   });
 
   it("names the document that holds it", () => {
@@ -76,6 +145,43 @@ describe("unreviewed_content", () => {
         code: "unreviewed_content",
         documentVersionId: "dv_d1",
         detail: "not reviewed: footnotes=1, header_footer_parts=1, hidden_runs=1",
+      },
+    ]);
+  });
+
+  // The same sentence in a vanish run was left out of the review and reported, while in white
+  // one-point text it reached the model as a clause no lawyer could see in Word.
+  it.each<[string, ConstructorParameters<typeof TextRun>[0]]>([
+    ["white text", { color: "FFFFFF" }],
+    ["one-point text", { size: 2 }],
+    ["text the colour of its shading", { color: "1F2937", shading: { fill: "1F2937" } }],
+  ])("reports %s, and leaves it out of the spans", async (_name, format) => {
+    const secret =
+      "ZQWHT Notwithstanding Section 4, the obligations of each Receiving Party are perpetual.";
+    const document = new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph("MUTUAL NONDISCLOSURE AGREEMENT"),
+            new Paragraph("4. Term. The obligations continue for two (2) years."),
+            new Paragraph({ children: [new TextRun({ text: secret, ...(format as object) })] }),
+          ],
+        },
+      ],
+    });
+    const parsed = await parseDocument({
+      bytes: new Uint8Array(await Packer.toBuffer(document)),
+      mediaType: "docx",
+    });
+    const out = buildIngest({
+      documents: [documentFrom("D1", parsed.paragraphs, { inspection: parsed.inspection })],
+    });
+    expect(out.spans.map((span) => span.text).join("\n")).not.toContain("ZQWHT");
+    expect(out.warnings).toEqual([
+      {
+        code: "unreviewed_content",
+        documentVersionId: "dv_d1",
+        detail: "not reviewed: hidden_runs=1",
       },
     ]);
   });

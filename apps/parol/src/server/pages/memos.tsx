@@ -7,67 +7,100 @@ import { Layout, csrfField, type Chrome } from "./layout.js";
 /**
  * The memos of a matter. The newest is current; one made before the documents or playbook changed
  * stays on record and is marked superseded, because it no longer describes the matter.
+ *
+ * A review started again on unchanged documents leaves the memo of the earlier review current
+ * until the new review is exported (docs/parol/06, gate 5), so "current" alone would read as "the
+ * review on screen was exported". When `currentRunId` is given, a current memo that belongs to any
+ * other run is labelled as the record of an earlier review, and the page says why. A page that does
+ * not know which review is on screen leaves `currentRunId` out and gets the plain labels.
  */
-export function MemoList(props: { matterId: string; memos: MemoSummary[] }) {
+export function MemoList(props: {
+  matterId: string;
+  memos: MemoSummary[];
+  /** The review the matter shows now, or null when there is none yet. */
+  currentRunId?: string | null | undefined;
+}) {
   if (props.memos.length === 0) {
     return <p class="empty">No memo has been exported yet.</p>;
   }
+  const earlier = (memo: MemoSummary): boolean =>
+    memo.status === "current" &&
+    props.currentRunId !== undefined &&
+    memo.runId !== props.currentRunId;
   return (
-    <ScrollBox label="Exported memos">
-      <table class="data-table">
-        <caption class="sr-only">Exported memos</caption>
-        <thead>
-          <tr>
-            <th scope="col">File</th>
-            <th scope="col">Status</th>
-            <th scope="col">Exported</th>
-            <th scope="col">By</th>
-            <th scope="col">Review</th>
-            <th scope="col">Fingerprint</th>
-          </tr>
-        </thead>
-        <tbody>
-          {props.memos.map((memo) => (
+    <>
+      <ScrollBox label="Exported memos">
+        <table class="data-table">
+          <caption class="sr-only">Exported memos</caption>
+          <thead>
             <tr>
-              <th scope="row">
-                <a href={urls.memoFile(props.matterId, memo.memoId)} download>
-                  <RevealedText value={memo.fileName} />
-                </a>
-              </th>
-              <td>
-                {memo.status === "current" ? (
-                  <Chip tone="ok" shape="circle">
-                    Current
-                  </Chip>
-                ) : (
-                  <Chip
-                    tone="neutral"
-                    shape="bar"
-                    title="The documents or playbook changed after this memo was made."
-                  >
-                    Superseded
-                  </Chip>
-                )}
-              </td>
-              <td>
-                <Time value={memo.exportedAt} />
-              </td>
-              <td>
-                <RevealedText value={memo.exportedByName} />
-              </td>
-              <td>
-                <a href={urls.run(props.matterId, memo.runId)}>Open the review</a>
-              </td>
-              <td>
-                <code class="hash" title={memo.fileSha256}>
-                  {shortHash(memo.fileSha256, 12)}
-                </code>
-              </td>
+              <th scope="col">File</th>
+              <th scope="col">Status</th>
+              <th scope="col">Exported</th>
+              <th scope="col">By</th>
+              <th scope="col">Review</th>
+              <th scope="col">Fingerprint</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </ScrollBox>
+          </thead>
+          <tbody>
+            {props.memos.map((memo) => (
+              <tr>
+                <th scope="row">
+                  <a href={urls.memoFile(props.matterId, memo.memoId)} download>
+                    <RevealedText value={memo.fileName} />
+                  </a>
+                </th>
+                <td>
+                  {earlier(memo) ? (
+                    <Chip
+                      tone="warn"
+                      shape="diamond"
+                      title="A newer review of these documents has not been exported."
+                    >
+                      Earlier review
+                    </Chip>
+                  ) : memo.status === "current" ? (
+                    <Chip tone="ok" shape="circle">
+                      Current
+                    </Chip>
+                  ) : (
+                    <Chip
+                      tone="neutral"
+                      shape="bar"
+                      title="The documents or playbook changed after this memo was made."
+                    >
+                      Superseded
+                    </Chip>
+                  )}
+                </td>
+                <td>
+                  <Time value={memo.exportedAt} />
+                </td>
+                <td>
+                  <RevealedText value={memo.exportedByName} />
+                </td>
+                <td>
+                  <a href={urls.run(props.matterId, memo.runId)}>
+                    {earlier(memo) ? "Open the earlier review" : "Open the review"}
+                  </a>
+                </td>
+                <td>
+                  <code class="hash" title={memo.fileSha256}>
+                    {shortHash(memo.fileSha256, 12)}
+                  </code>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </ScrollBox>
+      {props.memos.some(earlier) ? (
+        <p class="hint">
+          A memo marked Earlier review records a previous review of these documents. A newer review
+          has been started and has not been exported.
+        </p>
+      ) : null}
+    </>
   );
 }
 
@@ -114,6 +147,8 @@ export interface MemosPageProps {
   canExport: boolean;
   /** Why the export button is disabled, as a fixed phrase, or null. */
   exportBlockedReason: string | null;
+  /** The review the matter shows now, or null when there is none. See `MemoList`. */
+  currentRunId?: string | null | undefined;
 }
 
 export function MemosPage(props: MemosPageProps) {
@@ -128,7 +163,11 @@ export function MemosPage(props: MemosPageProps) {
       />
       <h1>Memos</h1>
       <Section id="memo-list" title="Exported memos">
-        <MemoList matterId={props.matter.id} memos={props.memos} />
+        <MemoList
+          matterId={props.matter.id}
+          memos={props.memos}
+          currentRunId={props.currentRunId}
+        />
       </Section>
       {props.canExport ? (
         <Section id="export" title="Export a memo">

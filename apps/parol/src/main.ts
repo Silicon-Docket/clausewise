@@ -18,8 +18,19 @@ import { createSimulatedModel } from "./demo/simulated-model.js";
 import { createApp } from "./server/app.js";
 import { renderErrorPage } from "./server/pages/error.js";
 import type { AppConfig, AppDeps } from "./server/deps.js";
-import { rejectedRequestHandler } from "./server/middleware/rejected.js";
-import { FileStore, createRepository, openDatabase, type Repository } from "./store/index.js";
+import {
+  guardRequests,
+  rejectedRequestHandler,
+  wireErrorHandler,
+} from "./server/middleware/rejected.js";
+import { acquireInstanceLock } from "./boot/instance-lock.js";
+import {
+  FileStore,
+  createRepository,
+  openDatabase,
+  type Database,
+  type Repository,
+} from "./store/index.js";
 
 /**
  * Starting the server. `parseEnv` turns the environment into settings and refuses the unsafe
@@ -285,67 +296,89 @@ export async function start(
   );
 
   mkdirSync(settings.dataDir, { recursive: true, mode: 0o700 });
-  const db = openDatabase(join(settings.dataDir, "parol.sqlite"));
-  const repo = createRepository(db);
-  const files = new FileStore(join(settings.dataDir, "matters"));
+  // Before anything in the folder is opened or changed. Starting marks the runs it finds in flight
+  // as interrupted, and a second server on this folder would do that to the first one's live runs.
+  const lock = acquireInstanceLock(settings.dataDir);
+  if (lock === null)
+    throw new StartupError(
+      "another Parol server is already using this data folder. Stop it first, or give this one a " +
+        "folder of its own with PAROL_DATA_DIR.",
+    );
+  let db: Database | undefined;
+  try {
+    const opened = openDatabase(join(settings.dataDir, "parol.sqlite"));
+    db = opened;
+    const repo = createRepository(opened);
+    const files = new FileStore(join(settings.dataDir, "matters"));
 
-  // The demonstration playbook is imported and approved by the demo users, so they exist whether
-  // or not signing in as one is switched on.
-  registerAll(repo, { seedDemoUsers: true });
-  markInterruptedRuns(repo, log);
-  sweepOrphanFiles(repo, files, log);
+    // The demonstration playbook is imported and approved by the demo users, so they exist whether
+    // or not signing in as one is switched on.
+    registerAll(repo, { seedDemoUsers: true });
+    markInterruptedRuns(repo, log);
+    sweepOrphanFiles(repo, files, log);
 
-  const now = (): Date => new Date();
-  const services = createServices({
-    repo,
-    files,
-    generator,
-    config: { relaxedSegregation: settings.relaxedSegregation },
-    now,
-    log,
-  });
-  const config: AppConfig = {
-    demoIdentity: settings.demoIdentity,
-    cookieSecret: settings.cookieSecret,
-    secureCookies: settings.secureCookies,
-    maxUploadBytes: settings.maxUploadBytes,
-    relaxedSegregation: settings.relaxedSegregation,
-  };
-  const deps: AppDeps = { repo, services, config, now };
-  const app = createApp(deps, { log, renderError: renderErrorPage });
+    const now = (): Date => new Date();
+    const services = createServices({
+      repo,
+      files,
+      generator,
+      config: { relaxedSegregation: settings.relaxedSegregation },
+      now,
+      log,
+    });
+    const config: AppConfig = {
+      demoIdentity: settings.demoIdentity,
+      cookieSecret: settings.cookieSecret,
+      secureCookies: settings.secureCookies,
+      maxUploadBytes: settings.maxUploadBytes,
+      relaxedSegregation: settings.relaxedSegregation,
+    };
+    const deps: AppDeps = { repo, services, config, now };
+    const app = createApp(deps, { log, renderError: renderErrorPage });
 
-  // The page and API routes are a module of their own. Until it exists the server serves the
-  // shell only (health check, sign-in, static files), and says so.
-  const routes = await optionalRoutes();
-  if (routes === null)
-    notice("notice: the page and API routes are not installed; serving the shell only");
-  else routes(app, deps);
+    // The page and API routes are a module of their own. Until it exists the server serves the
+    // shell only (health check, sign-in, static files), and says so.
+    const routes = await optionalRoutes();
+    if (routes === null)
+      notice("notice: the page and API routes are not installed; serving the shell only");
+    else routes(app, deps);
 
-  const server = await listen(app, settings, log);
-  const bound = (server.address() as AddressInfo | null)?.port ?? settings.port;
-  notice(
-    `Parol is listening on http://${settings.host.includes(":") ? `[${settings.host}]` : settings.host}:${bound}`,
-  );
+    const server = await listen(app, settings, log);
+    const bound = (server.address() as AddressInfo | null)?.port ?? settings.port;
+    notice(
+      `Parol is listening on http://${settings.host.includes(":") ? `[${settings.host}]` : settings.host}:${bound}`,
+    );
 
-  let closing: Promise<void> | undefined;
-  const close = (): Promise<void> =>
-    (closing ??= (async () => {
-      await new Promise<void>((done) => {
-        const idle = (server as { closeIdleConnections?: () => void }).closeIdleConnections;
-        // A connection kept open for the next request would hold the stop until its keep-alive
-        // timer ran out. Those in use are left alone, and swept as each one finishes.
-        const sweep = setInterval(() => idle?.call(server), 50);
-        server.close(() => {
-          clearInterval(sweep);
-          done();
+    let closing: Promise<void> | undefined;
+    const close = (): Promise<void> =>
+      (closing ??= (async () => {
+        await new Promise<void>((done) => {
+          const idle = (server as { closeIdleConnections?: () => void }).closeIdleConnections;
+          // A connection kept open for the next request would hold the stop until its keep-alive
+          // timer ran out. Those in use are left alone, and swept as each one finishes.
+          const sweep = setInterval(() => idle?.call(server), 50);
+          server.close(() => {
+            clearInterval(sweep);
+            done();
+          });
+          idle?.call(server);
         });
-        idle?.call(server);
-      });
-      await services.runs.idle();
-      db.close();
-    })());
+        await services.runs.idle();
+        opened.close();
+        lock.release();
+      })());
 
-  return { app, server, settings, repo, port: bound, close };
+    return { app, server, settings, repo, port: bound, close };
+  } catch (error) {
+    // The server did not start: give the folder back, so that the next try can have it.
+    try {
+      db?.close();
+    } catch {
+      // Already closed. The error that matters is the one being thrown.
+    }
+    lock.release();
+    throw error;
+  }
 }
 
 type RouteInstaller = (app: Hono, deps: AppDeps) => void;
@@ -375,7 +408,8 @@ async function optionalRoutes(): Promise<RouteInstaller | null> {
 /**
  * Serves the application with @hono/node-server. `serve` is not used because it takes no error
  * handler, and the adapter's own answer to a request it cannot read (a bad Host header, a
- * backslash in the path) is a bare 400 with none of the headers every other response carries.
+ * backslash in the path) is a bare 400 with none of the headers every other response carries. The
+ * same goes for what Node's parser refuses before the adapter is reached.
  */
 function listen(
   app: Hono,
@@ -383,11 +417,16 @@ function listen(
   log: (line: string) => void,
 ): Promise<ServerType> {
   return new Promise((resolveListening, reject) => {
+    const wire = { log, https: settings.secureCookies };
     const listener = getRequestListener(app.fetch, {
       hostname: settings.host,
-      errorHandler: rejectedRequestHandler({ log, https: settings.secureCookies }),
+      errorHandler: rejectedRequestHandler(wire),
     });
-    const server = createServer(listener);
+    // Node answers a request it cannot parse, or one without a Host, with a bare status line. The
+    // handler and the guard give those the headers, the request id and the log line of any other
+    // answer (middleware/rejected.ts).
+    const server = createServer({ requireHostHeader: false }, guardRequests(wire, listener));
+    server.on("clientError", wireErrorHandler(wire));
     server.once("error", reject);
     server.listen(settings.port, settings.host, () => resolveListening(server));
   });

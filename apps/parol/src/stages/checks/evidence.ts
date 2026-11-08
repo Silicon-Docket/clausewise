@@ -10,6 +10,7 @@ import {
 } from "../../contracts.js";
 import { verifyQuote } from "../../quotes.js";
 import type { RunIndex } from "./run-index.js";
+import { carriable } from "./text.js";
 
 /**
  * A quote shorter than this, once normalised, is not evidence: "the Agreement" or "two (2)" occurs
@@ -126,7 +127,8 @@ export function classifyEvidence(
     }
     const spanId = entry["spanId"];
     const role = entry["role"];
-    const raw = entry["quote"];
+    // Cleaned before it is checked, so that the quote that is stored is the quote that was found.
+    const raw = carriable(entry["quote"]);
 
     const span = index.spansById.get(spanId);
     if (span === undefined) {

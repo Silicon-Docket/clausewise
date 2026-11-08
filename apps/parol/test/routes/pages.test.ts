@@ -65,7 +65,12 @@ describe("the start page", () => {
     const site = makeSite({ demoIdentity: false });
     const visitor = site.anonymous();
     const page = await visitor.page("/");
-    expect(readable(page.root)).toContain("No demo identities have been set up.");
+    // The people exist and sign-in is off; the page used to say none had been set up.
+    const text = readable(page.root);
+    expect(text).toContain("Sign-in is switched off");
+    expect(text).toContain("PAROL_DEMO_IDENTITY=1");
+    expect(text).not.toContain("No demo identities have been set up");
+    expect(text).not.toContain("pick a person to act as");
     expect(all(page.root, (el) => attr(el, "name") === FIELDS.userId)).toEqual([]);
     const token = await visitor.apiToken();
     const response = await visitor.send("POST", "/session", {

@@ -58,7 +58,7 @@ export interface ParagraphScan {
   atoms: Atom[];
   barriers: Barrier[];
   text: string;
-  /** Runs formatted as hidden text that hold something Word would otherwise show. */
+  /** Runs formatted as hidden text, or as text a reader cannot see, that hold something Word would otherwise show. */
   hiddenRuns: number;
   /** How many fields are still open at the end of the paragraph. */
   exitDepth: number;
@@ -110,10 +110,85 @@ function barrierOfRunChild(node: Element): BarrierKind | undefined {
   }
 }
 
+// Text that Word shows but a person cannot read is as good as hidden, and is treated the same way:
+// left out of the text and counted. What is looked at is direct formatting on the run, and the few
+// cases that are plainly unreadable. A colour or size that comes from a style is not seen, and
+// neither is a pale grey on white or a size between two and five points, so this is a guard against
+// the obvious ways to put words in front of a reviewer that the lawyer cannot see, not a promise.
+// Text that Word hides only in its web view (w:webHidden) is not counted: Word writes it into the
+// page numbers of every table of contents, and it shows on the page.
+const WHITE = "ffffff";
+/** Half-points. Under 2 points a line of text is a smudge on paper and on a screen. */
+const MIN_READABLE_HALF_POINTS = 4;
+/** Percent of normal width. A tenth of the width leaves letters that overlap into a line. */
+const MIN_READABLE_SCALE = 10;
+/** Twentieths of a point. Five points off every character puts the next one on top of it. */
+const MAX_READABLE_CONDENSING = -100;
+
+/** The w:val of a property as a number; NaN when the attribute is missing, empty or not a number. */
+function numberOf(el: Element | undefined): number {
+  const value = el ? getW(el, "val") : null;
+  return value === null || value.trim() === "" ? Number.NaN : Number(value);
+}
+
+const hexOf = (value: string | null): string | null =>
+  value !== null && /^[0-9a-f]{6}$/i.test(value) ? value.toLowerCase() : null;
+
+/** The colour a shading paints: its pattern colour when it is solid, its fill otherwise. */
+function shadingColor(shd: Element | undefined): string | null {
+  if (!shd) return null;
+  return hexOf(getW(shd, getW(shd, "val") === "solid" ? "color" : "fill"));
+}
+
+/** What sits behind a run: its highlight or shading, then the paragraph's, then a table cell's. Null is the page. */
+function backgroundOf(run: Element, rPr: Element): string | null {
+  const highlight = wChild(rPr, "highlight");
+  const name = highlight ? (getW(highlight, "val") ?? "").toLowerCase() : "";
+  if (name !== "" && name !== "none") {
+    return name === "white" ? WHITE : name === "black" ? "000000" : `highlight:${name}`;
+  }
+  const own = shadingColor(wChild(rPr, "shd"));
+  if (own !== null) return own;
+  for (let n = run.parentNode; n; n = n.parentNode) {
+    if (!(n as Element).localName || (n as Element).namespaceURI !== W_NS) continue;
+    const el = n as Element;
+    const pr =
+      el.localName === "p"
+        ? wChild(el, "pPr")
+        : el.localName === "tc"
+          ? wChild(el, "tcPr")
+          : undefined;
+    const behind = shadingColor(pr ? wChild(pr, "shd") : undefined);
+    if (behind !== null) return behind;
+  }
+  return null;
+}
+
+function isInvisiblyFormatted(run: Element, rPr: Element): boolean {
+  const half = numberOf(wChild(rPr, "sz"));
+  if (Number.isFinite(half) && half < MIN_READABLE_HALF_POINTS) return true;
+
+  const percent = numberOf(wChild(rPr, "w"));
+  if (Number.isFinite(percent) && percent < MIN_READABLE_SCALE) return true;
+
+  const twips = numberOf(wChild(rPr, "spacing"));
+  if (Number.isFinite(twips) && twips <= MAX_READABLE_CONDENSING) return true;
+
+  const color = wChild(rPr, "color");
+  if (!color) return false;
+  const theme = (getW(color, "themeColor") ?? "").toLowerCase();
+  const text = theme === "background1" || theme === "bg1" ? WHITE : hexOf(getW(color, "val"));
+  return text !== null && text === (backgroundOf(run, rPr) ?? WHITE);
+}
+
 function isHiddenRun(run: Element): boolean {
   const rPr = wChild(run, "rPr");
   if (!rPr) return false;
-  return onOff(wChild(rPr, "vanish")) || onOff(wChild(rPr, "specVanish"));
+  return (
+    onOff(wChild(rPr, "vanish")) ||
+    onOff(wChild(rPr, "specVanish")) ||
+    isInvisiblyFormatted(run, rPr)
+  );
 }
 
 function blockerOfContainer(localName: string): Blocker | undefined {

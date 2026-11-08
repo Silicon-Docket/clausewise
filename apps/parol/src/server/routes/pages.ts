@@ -113,8 +113,10 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
           c,
           SignInPage({
             chrome: { userName: null, csrfToken: csrfToken(c) },
-            // With the demo identity off nobody can be anyone, so there is nobody to pick.
+            // With the demo identity off nobody can be anyone, so there is nobody to pick, and the
+            // page says that sign-in is off instead of offering an empty list.
             users: config.demoIdentity ? matters.users() : [],
+            signInEnabled: config.demoIdentity,
           }),
         );
       return sendPage(
@@ -333,7 +335,15 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
     path: "/matters/:matterId/runs/:runId/resume",
     action: "run.resume",
     handler: (c, am) => {
-      runs.resume(am, param(c, "runId"));
+      try {
+        runs.resume(am, param(c, "runId"));
+      } catch (error) {
+        // The page that offered the button was made before the model was changed. "Reload and try
+        // again" cannot help; the matter's page, with the reason in words, can.
+        const refusal = refusalOf(error);
+        if (refusal === null || refusal.code !== "run_model_changed") throw error;
+        return matterPage(c, am, refusal);
+      }
       return redirectWithNotice(c, am.principal, urls.matter(am.matterId), "review-resumed");
     },
   });
@@ -446,6 +456,7 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
             relaxedSegregation: view.segregationRelaxed,
           }),
           exportBlockedReason: exportBlockedReason(view),
+          currentRunId: view.currentRun?.id ?? null,
         }),
       );
     },

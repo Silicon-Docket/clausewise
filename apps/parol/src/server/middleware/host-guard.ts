@@ -1,5 +1,6 @@
 import type { MiddlewareHandler } from "hono";
 import { ForbiddenError } from "../../services/errors.js";
+import { ValidationError } from "../../store/errors.js";
 import type { AppConfig } from "../deps.js";
 
 /** The names a browser on this machine uses for it. `URL` keeps the brackets on an IPv6 address. */
@@ -47,6 +48,27 @@ export function hostGuard(config: Pick<AppConfig, "demoIdentity">): MiddlewareHa
         if (named === null || !LOOPBACK_NAMES.has(named)) throw new ForbiddenError("host");
       }
     }
+    await next();
+  };
+}
+
+/**
+ * Refuses a request whose address carries a user part (`GET http://user:pw@host/ ...`). Nothing in
+ * Parol reads one, and the HTTP adapter accepts the address but cannot build a request from it: it
+ * fails the first time the request is read, which would answer a malformed request as a server
+ * fault with a logged TypeError. A part that names no one (`http://:@host/`) is dropped when the
+ * address is parsed, so it is not refused. Runs with the demo identity on or off.
+ */
+export function refuseUserInfo(): MiddlewareHandler {
+  return async (c, next) => {
+    let named = false;
+    try {
+      const address = new URL(c.req.url);
+      named = address.username !== "" || address.password !== "";
+    } catch {
+      // An address that does not parse has no user part to refuse; the host check owns it.
+    }
+    if (named) throw new ValidationError("bad_target", "the address of the request is not valid");
     await next();
   };
 }

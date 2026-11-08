@@ -196,6 +196,8 @@ const REFUSAL_PHRASES: Readonly<Record<string, string>> = {
     "The finding changed after this page was opened. It is shown again as it is now. Read it and decide again.",
   stale_finding:
     "This finding is out of date because the documents or the playbook changed. Run the review again to decide it.",
+  decision_conflict:
+    "Another reviewer has already decided this finding, so your decision was not recorded. Their decision stands until they change it or the review is run again.",
   matter_exported:
     "The memo has been exported, so decisions can change only after the review is run again.",
   matter_not_in_review: "The matter is not open for review.",
@@ -209,6 +211,10 @@ const REFUSAL_PHRASES: Readonly<Record<string, string>> = {
   matter_changed:
     "The documents of the matter changed while the file was being read. Upload it again.",
   bad_date: "The stated date must be a real date.",
+  duplicate_stated_date:
+    "That file is already in the matter, so it was not stored again and the stated date you entered was not applied. Change the date on the existing version.",
+  run_model_changed:
+    "This review was started on a different provider or model than the one now in use, so it cannot be resumed. Start a new review instead.",
 };
 
 const REFUSAL_BY_STATUS: Readonly<Record<400 | 409 | 422, string>> = {

@@ -101,9 +101,10 @@ const isAmendment = (index: RunIndex, span: SourceSpan): boolean =>
  *
  *  - A span labelled superseded needs a cited amendment span that changes its clause, in an
  *    amendment dated no earlier than an NDA (later than an earlier amendment). When either date is
- *    missing the amendment is accepted as later only because it expressly refers to the clause,
- *    and the detail says the date was missing. An amendment dated before the NDA does not
- *    supersede it. Two amendments with equal or missing dates cannot be ordered: a conflict.
+ *    missing the two cannot be ordered and the passages conflict, which is what the analysis
+ *    prompt tells the model (rule 4a): an amendment that expressly refers to the clause is not
+ *    taken as later on that ground alone. An amendment dated before the NDA does not supersede
+ *    it. Two amendments with equal or missing dates cannot be ordered: a conflict.
  *  - A governing span cited together with a governing amendment span that changes its clause is
  *    inconsistent: the earlier text should be labelled superseded.
  *  - Two governing amendment spans that change the same clause: the earlier is superseded, and
@@ -120,7 +121,6 @@ export function precedenceLabels(
 ): CheckOutput {
   const escalations: Escalation[] = [];
   const problems: string[] = [];
-  const notes: string[] = [];
   const violate = (detail: string): void => {
     escalations.push({ code: "superseded_evidence", detail });
     problems.push(detail);
@@ -145,21 +145,22 @@ export function precedenceLabels(
     );
     let backed = false;
     let unordered = false;
+    let undated: string | null = null;
     for (const b of backers) {
       const order = orderOf(sdoc, docOf(index, b.span));
       if (order === "later") backed = true;
-      else if (sdoc.kind === "nda" && (order === "equal" || order === "unknown")) {
-        backed = true;
-        if (order === "unknown") {
-          notes.push(
-            `stated date missing for ${sdoc.label} or ${b.span.docLabel}, so ${refOf(items, b)} is taken as later because it expressly refers to clause ${clause ?? "?"}`,
-          );
-        }
-      } else if (order !== "earlier") unordered = true;
+      // The same day governs for an NDA (the amendment is "not earlier"), and not between amendments.
+      else if (sdoc.kind === "nda" && order === "equal") backed = true;
+      else if (order === "unknown") undated ??= b.span.docLabel;
+      else if (order !== "earlier") unordered = true;
     }
     const ref = refOf(items, s);
     if (backed) continue;
-    if (unordered) {
+    if (undated !== null) {
+      clash(
+        `${ref} is labelled superseded by an amendment, but a stated date is missing for ${sdoc.label} or ${undated}, so the documents do not say which governs`,
+      );
+    } else if (unordered) {
       clash(
         `${ref} is labelled superseded by an amendment whose stated date does not put it after ${sdoc.label}`,
       );
@@ -242,11 +243,8 @@ export function precedenceLabels(
       kind: "deterministic",
       outcome: failed ? "fail" : "pass",
       detail: failed
-        ? bounded([...problems, ...notes])
-        : bounded([
-            `roles agree with the precedence rules over ${items.length} cited (${usable} verified)`,
-            ...notes,
-          ]),
+        ? bounded(problems)
+        : `roles agree with the precedence rules over ${items.length} cited (${usable} verified)`,
     },
     escalations,
   };

@@ -236,6 +236,34 @@ describe("parseDocument for plain text", () => {
   });
 });
 
+describe("a Word file with two parts of one name", () => {
+  // "word/settings.xml" and "word/document.xml" are the same length, so renaming one entry in its
+  // local and central headers leaves a well-formed zip with two entries called word/document.xml.
+  // A reader that keeps one of them and a reader that keeps the other would show different words.
+  async function duplicated(): Promise<Uint8Array> {
+    const bytes = await docxBytes(["1. Term. The obligations continue for two (2) years."]);
+    const from = encode("word/settings.xml");
+    const to = encode("word/document.xml");
+    const patched = bytes.slice();
+    let renamed = 0;
+    for (let at = 0; at + from.length <= patched.length; at++) {
+      if (from.every((byte, i) => patched[at + i] === byte)) {
+        patched.set(to, at);
+        renamed++;
+      }
+    }
+    expect(renamed).toBeGreaterThanOrEqual(2);
+    return patched;
+  }
+
+  it("is refused with words of ours, and the name of a part is not repeated", async () => {
+    const error = await refusal(parseDocument({ bytes: await duplicated(), mediaType: "docx" }));
+    expect(error.message).toMatch(/two parts with the same name/);
+    expect(error.message).not.toContain("document.xml");
+    expect(error.message).not.toContain("settings");
+  });
+});
+
 describe("the media type", () => {
   it("refuses a type that is neither docx nor txt", async () => {
     const error = await refusal(

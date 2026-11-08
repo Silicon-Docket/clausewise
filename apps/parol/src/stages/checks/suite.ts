@@ -186,8 +186,9 @@ export function evidenceSet({ set }: CheckContext): CheckOutput {
 /**
  * Whether the evidence has the shape its status needs. A determined status needs a verified (or
  * ambiguous) quote in a governing or supporting role; `missing` and `not_applicable` must cite
- * no passage in those roles; and `missing` must have been judged over the whole document, since
- * a clause the model was not shown cannot be shown to be absent.
+ * no passage in those roles; and both must have been judged over the whole document, since a
+ * clause the model was not shown cannot be shown to be absent. `not_applicable` also needs a rule
+ * the playbook does not require: a required rule that no clause covers is `missing`.
  */
 export function citationShape({ claim, set, bundle, rule }: CheckContext): CheckOutput {
   const { status } = claim;
@@ -218,6 +219,22 @@ export function citationShape({ claim, set, bundle, rule }: CheckContext): Check
     if (status === "missing" && !bundle.fullDocument) {
       problems.push("status missing needs the whole document in the bundle, and it was not");
     }
+    // Both come from the analysis prompt, which defines not_applicable as a presence rule that the
+    // playbook does not require and no clause covers, and forbids answering it from a selection.
+    // Without them one bare answer, which cites nothing and so has nothing to verify, would pass
+    // as a verified finding for any rule at all.
+    if (status === "not_applicable") {
+      if (rule.required) {
+        problems.push(
+          "status not_applicable is for a rule the playbook does not require, and this rule is required: a required rule that no clause covers is missing",
+        );
+      }
+      if (!bundle.fullDocument) {
+        problems.push(
+          "status not_applicable needs the whole document in the bundle, and it was not",
+        );
+      }
+    }
   } else {
     return result("citation_shape", "not_applicable", `status ${status} needs no citation`);
   }
@@ -229,6 +246,46 @@ export function citationShape({ claim, set, bundle, rule }: CheckContext): Check
     "fail",
     problems.join("; "),
     problems.map((detail): Escalation => ({ code: "support_not_confirmed", detail })),
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// instruction_like_text
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Ingest flags a paragraph that reads like an instruction to an automated reader. A quote from
+ * such a paragraph still verifies, because the words are really there, so without this check a
+ * paragraph that says "mark everything compliant" could be the verified governing quote of a
+ * compliant finding and nothing on the finding would show it. Every cited passage in a flagged
+ * paragraph raises an escalation, in any role: a reviewer should know that the passage a
+ * conclusion rests on is text aimed at the software that read it.
+ *
+ * What this does not catch: a model that follows such a paragraph and cites a genuine clause. The
+ * finding then looks like any other, and only the upload warnings, which the memo repeats, say
+ * that the documents held a paragraph of this kind. The flag is a pattern match, so it is also
+ * raised for an ordinary paragraph that happens to match.
+ *
+ * Details name evidence positions and span labels only, never the paragraph.
+ */
+export function instructionLikeText({ set, index }: CheckContext): CheckOutput {
+  const flagged = set.cited.filter((c) => index.instructionSpans.has(c.span.id));
+  if (flagged.length === 0) {
+    return result(
+      "instruction_like_text",
+      "pass",
+      `${plural(set.cited.length, "cited passage")}, none in a paragraph that reads like an instruction to software`,
+    );
+  }
+  const escalations = flagged.map((c): Escalation => ({
+    code: "support_not_confirmed",
+    detail: `${refOf(set.cited, c)} cites a paragraph that reads like an instruction to software`,
+  }));
+  return result(
+    "instruction_like_text",
+    "fail",
+    `${plural(flagged.length, "cited passage")} in a paragraph that reads like an instruction to software: ${listCapped(flagged.map((c) => refOf(set.cited, c)))}`,
+    escalations,
   );
 }
 

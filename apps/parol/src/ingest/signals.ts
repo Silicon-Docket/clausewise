@@ -7,9 +7,11 @@ import { CATEGORY_IDS, type CategoryId } from "../contracts.js";
 /**
  * Text that reads as an instruction to an automated reader. THIS IS A SIGNAL FOR A HUMAN, NOT A
  * SECURITY CONTROL. It exists so a reviewer notices odd wording; it is trivially evaded (a
- * paraphrase, another language, letters spaced apart, look-alike characters) and nothing relies
- * on it. The controls are elsewhere: the model has no tools, contract text is fenced as data,
- * and every status is settled or validated in code.
+ * paraphrase, another language, letters spaced apart, look-alike characters) and no decision
+ * rests on it. It is only ever shown to a person: as an upload warning, in the memo, and as a flag
+ * on a finding that cites such a paragraph (the verify check `instruction_like_text`). The controls
+ * are elsewhere: the model has no tools, contract text is fenced as data, and every status is
+ * settled or validated in code.
  *
  * Each pattern records only its own name. The matched words never leave this function, so no
  * warning, log line or audit detail can carry document text.

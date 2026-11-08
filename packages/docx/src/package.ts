@@ -49,13 +49,28 @@ function u32At(bytes: Uint8Array, at: number): number {
   return (u16At(bytes, at) | (u16At(bytes, at + 2) << 16)) >>> 0;
 }
 
+/** The entry names compared as OPC compares part names: without regard to the case of ASCII letters. */
+function foldedName(buf: Uint8Array, start: number, length: number): string {
+  let out = "";
+  for (let i = start; i < Math.min(buf.length, start + length); i++) {
+    const byte = buf[i] ?? 0;
+    out += String.fromCharCode(byte >= 0x41 && byte <= 0x5a ? byte + 0x20 : byte);
+  }
+  return out;
+}
+
 /**
  * Counts the entries in the zip's central directory by walking its headers, stopping once the
- * count passes `stopAfter`. Zip readers allocate an object per entry before they let anyone look
- * at the count, and the count in the end record is only a claim, so the walk is what bounds the
- * work. Returns 0 when the layout is not the plain one, which leaves the check to the reader.
+ * count passes `stopAfter`, and notes whether two of them have the same name. Zip readers allocate
+ * an object per entry before they let anyone look at the count, and the count in the end record is
+ * only a claim, so the walk is what bounds the work. A zip reader keeps one entry per name, so a
+ * repeated name cannot be seen after the package is opened; it is seen here. Returns a count of 0
+ * when the layout is not the plain one, which leaves the check to the reader.
  */
-function centralDirectoryEntries(buf: Uint8Array, stopAfter: number): number {
+function walkCentralDirectory(
+  buf: Uint8Array,
+  stopAfter: number,
+): { entries: number; repeatedName: boolean } {
   let end = -1;
   const lowest = Math.max(0, buf.length - 22 - 0xffff);
   for (let i = buf.length - 22; i >= lowest; i--) {
@@ -64,14 +79,23 @@ function centralDirectoryEntries(buf: Uint8Array, stopAfter: number): number {
       break;
     }
   }
-  if (end < 0) return 0;
+  if (end < 0) return { entries: 0, repeatedName: false };
   let at = u32At(buf, end + 16);
   let count = 0;
+  let repeatedName = false;
+  const names = new Set<string>();
   while (at + 46 <= buf.length && u32At(buf, at) === CENTRAL_DIRECTORY_ENTRY) {
-    if (++count > stopAfter) return count;
-    at += 46 + u16At(buf, at + 28) + u16At(buf, at + 30) + u16At(buf, at + 32);
+    if (++count > stopAfter) return { entries: count, repeatedName };
+    const nameLength = u16At(buf, at + 28);
+    // A folder entry is not a part, and a zip tool may list "word/" and "Word/" side by side.
+    if (!repeatedName && buf[at + 46 + nameLength - 1] !== 0x2f) {
+      const name = foldedName(buf, at + 46, nameLength);
+      if (names.has(name)) repeatedName = true;
+      else names.add(name);
+    }
+    at += 46 + nameLength + u16At(buf, at + 30) + u16At(buf, at + 32);
   }
-  return count;
+  return { entries: count, repeatedName };
 }
 
 export async function openPackage(buf: Uint8Array, limits?: Partial<DocxLimits>): Promise<JSZip> {
@@ -85,8 +109,18 @@ export async function openPackage(buf: Uint8Array, limits?: Partial<DocxLimits>)
         "(encrypted). Open it in Word, remove the password or save it as a normal .docx, and try again.",
     );
   }
-  if (centralDirectoryEntries(buf, resolved.maxZipEntries) > resolved.maxZipEntries) {
+  const directory = walkCentralDirectory(buf, resolved.maxZipEntries);
+  if (directory.entries > resolved.maxZipEntries) {
     throw limitError("The file", "maxZipEntries", resolved);
+  }
+  // Word and LibreOffice do not agree on which of two parts with one name is the real one (the
+  // second is read here, and LibreOffice refuses the file), so the words a person sees could differ
+  // from the words that were read. The message names no part: a name comes from the file.
+  if (directory.repeatedName) {
+    throw new DocxError(
+      "Not a .docx file: it holds two parts with the same name, so it cannot be read reliably. " +
+        "Open it in Word and save it again as a normal .docx.",
+    );
   }
   let zip: JSZip;
   try {

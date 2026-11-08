@@ -103,3 +103,30 @@ export const UNKNOWN_ESCALATION_PLAIN =
   "The workflow raised a flag that this memo has no wording for.";
 
 export const SEVERITIES_IN_ORDER = ["high", "medium", "low"] as const;
+
+/**
+ * The counts an unreviewed-content warning carries, by the key ingest writes, named for a reader.
+ * The stored detail is read for these keys and for nothing else, so a detail can never put words
+ * of its own into the memo.
+ */
+export const UNREAD_PART_LABEL: Record<string, readonly [one: string, many: string]> = {
+  footnotes: ["footnote", "footnotes"],
+  endnotes: ["endnote", "endnotes"],
+  header_footer_parts: ["header or footer part", "header and footer parts"],
+  comments: ["comment", "comments"],
+  hidden_runs: ["run of hidden text", "runs of hidden text"],
+  images: ["picture", "pictures"],
+  toc_entries: [
+    "table of contents entry that reads like a clause",
+    "table of contents entries that read like clauses",
+  ],
+};
+
+/** Tracked changes are read, as if accepted, so they are told apart from what is not read at all. */
+export const UNRESOLVED_CHANGE_LABEL: Record<string, readonly [one: string, many: string]> = {
+  tracked_insertions: ["tracked insertion", "tracked insertions"],
+  tracked_deletions: ["tracked deletion", "tracked deletions"],
+};
+
+/** Flagged paragraphs named in the memo before the rest are only counted. */
+export const MAX_WARNING_LOCATIONS = 5;

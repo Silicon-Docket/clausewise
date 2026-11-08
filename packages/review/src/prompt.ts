@@ -30,8 +30,9 @@ const NEUTRAL_ANGLE = "\u2039";
 // "</contractor>" is something else.
 const spelled = (word: string): string => [...word].join(String.raw`\s*`);
 const CLOSING_TAG = new RegExp(String.raw`<\s*/\s*${spelled("contract")}(?![\p{L}\p{N}_])`, "gu");
+// A digit of any script, since a model reads "[c\u0669\u0669]" as a header like "[c99]".
 const FORGED_LINE_START = new RegExp(
-  String.raw`^\s*(?:(<)\s*${spelled("contract")}|(\[)\s*c\s*\d)`,
+  String.raw`^\s*(?:(<)\s*${spelled("contract")}|(\[)\s*c\s*\p{Nd})`,
   "u",
 );
 // Characters that turn into "<" or "[" under compatibility normalisation: the fullwidth and small
@@ -39,8 +40,31 @@ const FORGED_LINE_START = new RegExp(
 const COULD_BE_ANGLE = /[<\ufe64\uff1c]/;
 const COULD_BE_ANGLE_OR_BRACKET = /[[<\ufe47\ufe64\uff1c\uff3b]/;
 
+// Letters of other scripts drawn like the Latin letters of the two words the guards look for
+// ("contract", and the "c" of a header), as lower-case code points after case folding, so a capital
+// Cyrillic Es arrives here as the small one. Compatibility folding does not reach them: they are
+// letters of their own, not compatibility forms, so a forged "</\u0441ontract>" read as plain text
+// without this table. It is a short list of the pairs that matter to these guards and not the
+// Unicode confusables table: a look-alike for another letter changes nothing here, because no
+// guard spells a word with it, and a look-alike for these letters that is not listed is not caught.
+const LOOKALIKES: ReadonlyMap<string, string> = new Map(
+  (
+    [
+      ["a", "\u0430\u03b1\u0251"],
+      ["c", "\u0441\u03f2\u1d04\u217d"],
+      ["o", "\u043e\u03bf\u1d0f\u0585\u0ce6"],
+      ["n", "\u0578\u03bd\u0576"],
+      ["t", "\u0442\u03c4\u1d1b"],
+      ["r", "\u0433\u0280\u1d26"],
+    ] as const
+  ).flatMap(([latin, imitations]) => [...imitations].map((letter) => [letter, latin] as const)),
+);
+
 interface Skeleton {
-  /** Lower case, in compatibility form, without invisible characters; a run of white space is one space. */
+  /**
+   * Lower case, in compatibility form, without invisible characters and with look-alike letters
+   * replaced by the Latin ones; a run of white space is one space.
+   */
   text: string;
   /** For each unit of `text`, the offset in the source of the character it came from. */
   origin: number[];
@@ -51,9 +75,11 @@ function skeletonOf(source: string): Skeleton {
   const origin: number[] = [];
   let at = 0;
   for (const char of source) {
-    // Compatibility forms turn the fullwidth "<" and "/" and the letters of other scripts that
-    // are drawn like Latin ones into the characters they imitate.
-    const folded = char < "\u0080" ? char : char.normalize("NFKC");
+    // Compatibility forms turn the fullwidth "<" and "/" into the characters they imitate. The
+    // decomposed form is used so that a Latin letter with an accent, written as one code point,
+    // falls apart into the letter and a mark, and the mark is dropped below like any other.
+    // Letters of other scripts that are only drawn like Latin ones are mapped by LOOKALIKES.
+    const folded = char < "\u0080" ? char : char.normalize("NFKD");
     for (const part of folded) {
       if (INVISIBLE.test(part)) {
         if (WORD_BREAK.test(part) && chars.at(-1) !== " ") {
@@ -63,7 +89,7 @@ function skeletonOf(source: string): Skeleton {
         continue;
       }
       for (const unit of part.toLowerCase()) {
-        chars.push(unit);
+        chars.push(LOOKALIKES.get(unit) ?? unit);
         origin.push(at);
       }
     }

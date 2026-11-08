@@ -14,11 +14,14 @@ import { MemoGateError } from "./errors.js";
 import {
   CATEGORY_LABEL,
   ESCALATION_PLAIN,
+  MAX_WARNING_LOCATIONS,
   ROLE_LABEL,
   ROLE_ORDER,
   SEVERITIES_IN_ORDER,
   SHORT_HASH_LENGTH,
   UNKNOWN_ESCALATION_PLAIN,
+  UNREAD_PART_LABEL,
+  UNRESOLVED_CHANGE_LABEL,
   type Decision,
 } from "./labels.js";
 import { containBidi, printableId, sanitizeXmlText, truncateQuote } from "./sanitize.js";
@@ -117,6 +120,11 @@ export interface ProvenanceView {
   segregationRelaxed: boolean;
 }
 
+/** One sentence about what the upload said of a document, in the memo's own words. */
+export interface DocumentWarningView {
+  text: string;
+}
+
 export interface MemoPlan {
   matterName: string;
   clientLegalName: string;
@@ -126,6 +134,8 @@ export interface MemoPlan {
   playbookVersion: string;
   exportedOn: string;
   exportedAt: Date;
+  /** Empty when the upload raised nothing the memo's reader needs to know. */
+  documentWarnings: DocumentWarningView[];
   findings: FindingView[];
   open: FindingView[];
   rejected: FindingView[];
@@ -146,6 +156,140 @@ const clean = (value: unknown): string => containBidi(sanitizeXmlText(value));
  */
 const shortHash = (value: unknown): string =>
   containBidi(Array.from(sanitizeXmlText(value).trim()).slice(0, SHORT_HASH_LENGTH).join(""));
+
+const WARNING_CODES_IN_MEMO: readonly string[] = [
+  "unreviewed_content",
+  "instruction_like_text",
+  "no_reviewable_text",
+];
+
+const countWord = (count: number, [one, many]: readonly [string, string]): string =>
+  `${count} ${count === 1 ? one : many}`;
+
+/** `a`, `a and b`, `a, b and c`. */
+function joinWords(items: readonly string[]): string {
+  if (items.length <= 1) return items.join("");
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+/**
+ * Reads `key=count` pairs out of a stored warning detail and keeps the keys the vocabulary names.
+ * The detail is ids, counts and pattern names, but it is stored data, so nothing else is taken
+ * from it, and a count that is not a whole number is ignored.
+ */
+function countsIn(
+  detail: unknown,
+  vocabulary: Record<string, readonly [string, string]>,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  if (typeof detail !== "string") return out;
+  for (const match of detail.matchAll(/(?:^|[\s:,;])([a-z_]+)=(\d{1,9})(?=$|[\s,;])/g)) {
+    const key = match[1]!;
+    if (!has(vocabulary, key)) continue;
+    out.set(key, (out.get(key) ?? 0) + Number(match[2]));
+  }
+  return out;
+}
+
+function sentencesFor(
+  documentName: string,
+  warnings: readonly NonNullable<MemoInput["documentWarnings"]>[number][],
+): string[] {
+  const out: string[] = [];
+  const unread = new Map<string, number>();
+  const unresolved = new Map<string, number>();
+  const flagged: string[] = [];
+  let withoutText = false;
+  let unreadUnnamed = false;
+  for (const warning of warnings) {
+    if (warning.code === "unreviewed_content") {
+      const before = unread.size + unresolved.size;
+      for (const [key, count] of countsIn(warning.detail, UNREAD_PART_LABEL)) {
+        unread.set(key, (unread.get(key) ?? 0) + count);
+      }
+      for (const [key, count] of countsIn(warning.detail, UNRESOLVED_CHANGE_LABEL)) {
+        unresolved.set(key, (unresolved.get(key) ?? 0) + count);
+      }
+      if (unread.size + unresolved.size === before) unreadUnnamed = true;
+    } else if (warning.code === "instruction_like_text") {
+      flagged.push(
+        typeof warning.location === "string" && clean(warning.location).trim() !== ""
+          ? clean(warning.location).replace(/\s+/g, " ").trim()
+          : "a paragraph the memo cannot place",
+      );
+    } else if (warning.code === "no_reviewable_text") {
+      withoutText = true;
+    }
+  }
+  const unreadWords = Object.keys(UNREAD_PART_LABEL)
+    .filter((key) => (unread.get(key) ?? 0) > 0)
+    .map((key) => countWord(unread.get(key)!, UNREAD_PART_LABEL[key]!));
+  if (unreadWords.length > 0) {
+    out.push(
+      `${documentName}: the review did not read ${joinWords(unreadWords)} in the Word file. Nothing in this memorandum accounts for them.`,
+    );
+  } else if (unreadUnnamed && unresolved.size === 0) {
+    out.push(
+      `${documentName}: the Word file holds content the review did not read. Nothing in this memorandum accounts for it.`,
+    );
+  }
+  const unresolvedWords = Object.keys(UNRESOLVED_CHANGE_LABEL)
+    .filter((key) => (unresolved.get(key) ?? 0) > 0)
+    .map((key) => countWord(unresolved.get(key)!, UNRESOLVED_CHANGE_LABEL[key]!));
+  if (unresolvedWords.length > 0) {
+    out.push(
+      `${documentName}: the Word file holds ${joinWords(unresolvedWords)} that were not resolved. The review read the text as if every change had been accepted.`,
+    );
+  }
+  if (flagged.length > 0) {
+    const one = flagged.length === 1;
+    const shown = flagged.slice(0, MAX_WARNING_LOCATIONS);
+    const rest = flagged.length - shown.length;
+    const places = rest > 0 ? `${shown.join(", ")} and ${rest} more` : joinWords(shown);
+    out.push(
+      `${documentName}: ${flagged.length} ${one ? "paragraph reads" : "paragraphs read"} like an instruction to software: ${places}. The review gave ${one ? "it" : "them"} to the model as document text, and nothing here shows that the model ignored ${one ? "it" : "them"}. Read ${one ? "it" : "them"} in the file and check the findings against ${one ? "it" : "them"}.`,
+    );
+  }
+  if (withoutText) {
+    out.push(`${documentName}: the file has no paragraph with text the review could read.`);
+  }
+  return out;
+}
+
+/**
+ * What the upload said about the documents of the run, as sentences. The warnings are grouped by
+ * document, in the order of the document list, and only the ones that bear on how far the memo can
+ * be relied on are kept (duplicates of other files in the matter are not).
+ */
+function planDocumentWarnings(
+  input: MemoInput,
+  documents: { label: string; title: string; versionNo: number }[],
+): DocumentWarningView[] {
+  const given: unknown = input.documentWarnings;
+  if (!Array.isArray(given)) return [];
+  const items = (given as unknown[]).filter(
+    (item): item is NonNullable<MemoInput["documentWarnings"]>[number] =>
+      typeof item === "object" &&
+      item !== null &&
+      typeof (item as { label?: unknown }).label === "string" &&
+      WARNING_CODES_IN_MEMO.includes((item as { code?: unknown }).code as string),
+  );
+  const labels = [
+    ...new Set([
+      ...documents.map((doc) => doc.label),
+      ...items.map((item) => clean(item.label).trim()),
+    ]),
+  ];
+  const views: DocumentWarningView[] = [];
+  for (const label of labels) {
+    const own = items.filter((item) => clean(item.label).trim() === label);
+    if (own.length === 0) continue;
+    const doc = documents.find((candidate) => candidate.label === label);
+    const name = doc === undefined ? label : `${label} (${doc.title}, v${doc.versionNo})`;
+    for (const text of sentencesFor(name, own)) views.push({ text });
+  }
+  return views;
+}
 
 const EDIT_FIELDS = ["status", "discrepancy", "fallbackLanguage"] as const;
 
@@ -490,6 +634,7 @@ export function planMemo(input: MemoInput): MemoPlan {
   }));
 
   return {
+    documentWarnings: planDocumentWarnings(input, documents),
     matterName: clean(input.matter.name).replace(/\s+/g, " ").trim(),
     clientLegalName: clean(input.matter.clientLegalName).replace(/\s+/g, " ").trim(),
     documentList: listDocuments(documents.map((doc) => `${doc.title} (v${doc.versionNo})`)),

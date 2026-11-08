@@ -1,9 +1,11 @@
+import type { ObjectGenerator } from "@clausewise/llm";
 import type { AuthorizedMatter } from "../auth/types.js";
 import { roleAllows } from "../auth/actions.js";
 import type { DocLabel, MatterRole } from "../contracts.js";
 import { formatLocation } from "../location.js";
 import { loadPlaybook } from "../playbooks/load.js";
 import {
+  INPUT_CHANGE_REASONS,
   type FindingRecord,
   type MatterRow,
   type MemoRow,
@@ -13,7 +15,13 @@ import {
   type StoredIngestWarning,
 } from "../store/index.js";
 import type { ServiceConfig } from "./deps.js";
-import { CANNOT_DECIDE, UNKNOWN_USER_NAME, WARNING_ORDER, staleReasonPhrase } from "./phrases.js";
+import {
+  CANNOT_DECIDE,
+  UNKNOWN_USER_NAME,
+  WARNING_ORDER,
+  staleReasonPhrase,
+  staleWhileRunningPhrase,
+} from "./phrases.js";
 import type {
   DocumentView,
   EvidenceView,
@@ -38,6 +46,8 @@ export function createPresenter(
   repo: Repository,
   config: Pick<ServiceConfig, "relaxedSegregation">,
   liveProgress: (runId: string) => RunProgress | undefined,
+  /** The provider and model the process runs on now, which decide whether a failed run can resume. */
+  generator?: Pick<ObjectGenerator, "provider" | "model">,
 ) {
   const userName = (userId: string): string =>
     repo.getUser(userId)?.displayName ?? UNKNOWN_USER_NAME;
@@ -192,6 +202,10 @@ export function createPresenter(
     const progress =
       liveProgress(run.id) ??
       (run.status === "failed" || run.status === "cancelled" ? progressFromStages(run) : null);
+    const current =
+      run.status !== "superseded" &&
+      matter?.currentInputsSha256 !== null &&
+      matter?.currentInputsSha256 === run.inputsSha256;
     return {
       id: run.id,
       status: run.status,
@@ -206,10 +220,17 @@ export function createPresenter(
       finishedAt: run.finishedAt,
       startedByName: userName(run.startedBy),
       errorKind: run.errorKind,
-      current:
-        run.status !== "superseded" &&
-        matter?.currentInputsSha256 !== null &&
-        matter?.currentInputsSha256 === run.inputsSha256,
+      current,
+      // The same two conditions as `RunService.resume`, which decides again when it is asked.
+      ...(generator === undefined
+        ? {}
+        : {
+            resumable:
+              run.status === "failed" &&
+              current &&
+              run.modelProvider === generator.provider &&
+              run.modelRequested === generator.model,
+          }),
       progress,
       findingCount: repo.listFindings(run.matterId, run.id).length,
     };
@@ -222,7 +243,15 @@ export function createPresenter(
       const stale = repo.listFindings(matter.id, run.id).find((f) => f.validity === "stale");
       if (stale !== undefined) return staleReasonPhrase(stale.staleReason);
     }
-    return staleReasonPhrase(null);
+    // No review ever saved a finding: the first one was stopped by the change, so the reason is
+    // not on any finding. The store recorded it when it marked the run superseded.
+    const changes = repo.listAuditEvents({
+      matterId: matter.id,
+      action: "inputs.changed",
+      limit: 10_000,
+    });
+    const reason = changes[changes.length - 1]?.detail["reason"];
+    return staleWhileRunningPhrase(typeof reason === "string" ? reason : null);
   }
 
   // --- findings -----------------------------------------------------------------------------
@@ -265,12 +294,23 @@ export function createPresenter(
     if (run === undefined) return deny(CANNOT_DECIDE.runNotCurrent);
     if (!config.relaxedSegregation && run.startedBy === am.principal.userId)
       return deny(CANNOT_DECIDE.segregation);
-    if (f.validity !== "current" || run.status === "superseded") return deny(CANNOT_DECIDE.stale);
+    if (f.validity !== "current" || run.status === "superseded") {
+      // A finding that went stale only because a re-run replaced it has nothing wrong with its
+      // inputs, and "the documents changed" would hide that a newer review exists.
+      return deny(
+        f.staleReason === INPUT_CHANGE_REASONS.rerunRequested
+          ? CANNOT_DECIDE.replaced
+          : CANNOT_DECIDE.stale,
+      );
+    }
     if (matter.status === "exported") return deny(CANNOT_DECIDE.exported);
     if (matter.status !== "in_review" && matter.status !== "review_complete")
       return deny(CANNOT_DECIDE.notOpen);
     if (run.status !== "succeeded" || run.inputsSha256 !== matter.currentInputsSha256)
       return deny(CANNOT_DECIDE.runNotCurrent);
+    // The store refuses it too (`decision_conflict`); a form that cannot work is not offered.
+    if (f.currentReview !== null && f.currentReview.reviewerId !== am.principal.userId)
+      return deny(CANNOT_DECIDE.decidedByAnother);
     return { allowed: true, reason: null };
   }
 
@@ -327,11 +367,22 @@ export function createPresenter(
 
   // --- memos --------------------------------------------------------------------------------
 
-  /** `parol-memo-<matter id without its prefix>-<yyyymmdd>.docx`: ids and a date, no text of ours or theirs. */
+  /**
+   * `parol-memo-<matter id without its prefix>-<yyyymmdd>.docx`: ids and a date, no text of ours or
+   * theirs. A memo that a later one replaced has `-superseded-<start of its own id>` before the
+   * extension. The file cannot say so itself (it is stored as built, under the hash recorded at
+   * export), and two memos made on one day would otherwise download under the same name, with
+   * nothing to tell the replaced one from the memo that replaced it.
+   */
   function memoFileName(memo: MemoRow): string {
     const suffix = memo.matterId.replace(/^mat_/, "").replace(/[^A-Za-z0-9]/g, "");
     const date = memo.exportedAt.slice(0, 10).replace(/-/g, "");
-    return `parol-memo-${suffix}-${date}.docx`;
+    const own = memo.id
+      .replace(/^memo_/, "")
+      .replace(/[^A-Za-z0-9]/g, "")
+      .slice(0, 8);
+    const marker = memo.status === "superseded" ? `-superseded${own === "" ? "" : `-${own}`}` : "";
+    return `parol-memo-${suffix}-${date}${marker}.docx`;
   }
 
   function memoSummary(memo: MemoRow): MemoSummary {

@@ -232,9 +232,11 @@ describe("MatterPage warnings", () => {
   it("explains an instruction-like paragraph in plain words, and names where it is", () => {
     const root = page();
     const warnings = section(root, "warnings");
+    // The page must not promise what Parol cannot show: that a model ignored the paragraph.
     expect(readable(warnings)).toContain(
-      "This paragraph reads like an instruction to software. It is reviewed as text and cannot change anything.",
+      "This paragraph reads like an instruction to software. The review gives it to the model as document text, and Parol cannot show that a model ignored it.",
     );
+    expect(readable(warnings)).not.toContain("cannot change anything");
     expect(readable(warnings)).toContain("D1-p22 in Mutual NDA (D1)");
     expect(readable(warnings)).toContain("Reads like an instruction to software");
   });

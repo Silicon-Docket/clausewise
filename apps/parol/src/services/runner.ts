@@ -38,6 +38,13 @@ import type { RunProgress } from "./views.js";
 /** How many rules are analysed, and then verified, at once within one run. */
 export const RULE_CONCURRENCY = 3;
 
+/**
+ * How long to wait before trying to record a run's end again, by the number of tries so far. It
+ * levels off: a database that cannot be written (a full disk, a failing drive) may stay that way
+ * for a long time, and the run must still be settled the moment it can be.
+ */
+const SETTLE_RETRY_MS = [100, 250, 500, 1000, 2000, 5000] as const;
+
 /** What analyze made of one rule, kept as the stage's output so a resumed run does not repeat it. */
 type AnalysisOutcome =
   | { outcome: "draft"; draft: DraftFinding }
@@ -213,35 +220,73 @@ export function createRunEngine(deps: ServiceDeps) {
       say("succeeded");
     } catch (error) {
       try {
-        end(job, error, say);
-      } catch (inner) {
-        // Settling the run's end failed too. Nothing here may escape as an unhandled rejection.
-        say(`could not be settled (${inner instanceof Error ? inner.name : "unknown error"})`);
+        await settle(job, endingOf(job, error, say), say);
+      } catch {
+        // Nothing here may escape as an unhandled rejection. `settle` does not give up on a write
+        // that fails, so this is only the log line itself failing.
       }
     }
   }
 
-  /** Settles what a run's end means, from the store's state and the reason it stopped. */
-  function end(job: Job, error: unknown, say: (event: string) => void): void {
-    if (job.fatal !== null) return markFailed(job, job.fatal, say);
+  /** What a run's end comes to once the error that ended it has been read. */
+  type Ending =
+    | { how: "failed"; kind: RunErrorKind }
+    | { how: "cancelled" }
+    | { how: "quiet"; reason: StopReason };
+
+  /** Decides what a run's end means, from the store's state and the reason it stopped. Writes nothing. */
+  function endingOf(job: Job, error: unknown, say: (event: string) => void): Ending {
+    if (job.fatal !== null) return { how: "failed", kind: job.fatal };
     const stopped = stoppedFrom(error);
     if (stopped !== undefined && stopped.reason !== "failed") {
       const reason =
         stopped.reason === "ended" && job.stopReason !== null ? job.stopReason : stopped.reason;
-      if (reason === "cancelled") markCancelled(job, say);
-      else say(`stopped quietly (${reason})`);
-      return;
+      return reason === "cancelled" ? { how: "cancelled" } : { how: "quiet", reason };
     }
-    if (isAbort(error) && job.stopReason !== null) {
-      if (job.stopReason === "cancelled") markCancelled(job, say);
-      else say(`stopped quietly (${job.stopReason})`);
-      return;
-    }
+    if (isAbort(error) && job.stopReason !== null)
+      return job.stopReason === "cancelled"
+        ? { how: "cancelled" }
+        : { how: "quiet", reason: job.stopReason };
     // Only the kind of the error is logged: a message can carry what the stage was reading.
     const code = error instanceof StoreError ? ` ${error.code}` : "";
     const name = error instanceof Error ? error.name : "unknown error";
     say(`failed, internal (${name}${code})`);
-    markFailed(job, "internal", say);
+    return { how: "failed", kind: "internal" };
+  }
+
+  /**
+   * Records how a run ended. A write that fails for a reason of the database's own (the disk, not
+   * the run) is tried again until it works. Giving up would leave the run `analyzing` and its matter
+   * `running` with nothing executing: it would refuse a new review (a run is in flight), refuse a
+   * resume (it is not failed), and offer only a cancel, which cannot be resumed from. Settling as
+   * `failed` is what makes the completed units resumable. The job stays in the queue meanwhile, so
+   * the slot stays taken and a shutdown waits for the run to be settled.
+   *
+   * A refusal from the store (the run was cancelled, deleted or superseded in the meantime) is the
+   * answer and is not retried: `apply` handles it.
+   */
+  async function settle(job: Job, ending: Ending, say: (event: string) => void): Promise<void> {
+    for (let tries = 0; ; tries += 1) {
+      try {
+        apply(job, ending, say);
+        if (tries > 0) say(`settled after ${tries} failed ${tries === 1 ? "try" : "tries"}`);
+        return;
+      } catch (error) {
+        // The name only: a driver's message can quote a path or a statement.
+        if (tries === 0)
+          say(
+            `could not be settled (${error instanceof Error ? error.name : "unknown error"}), trying again`,
+          );
+        const wait = SETTLE_RETRY_MS[Math.min(tries, SETTLE_RETRY_MS.length - 1)] as number;
+        await new Promise<void>((resolve) => setTimeout(resolve, wait));
+      }
+    }
+  }
+
+  function apply(job: Job, ending: Ending, say: (event: string) => void): void {
+    if (ending.how === "failed") markFailed(job, ending.kind, say);
+    else if (ending.how === "cancelled") markCancelled(job, say);
+    else say(`stopped quietly (${ending.reason})`);
   }
 
   function markFailed(job: Job, kind: RunErrorKind, say: (event: string) => void): void {

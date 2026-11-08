@@ -546,7 +546,7 @@ function RunsTable(props: {
                 />
               </td>
               <td>
-                {props.canStart && run.status === "failed" && run.current ? (
+                {props.canStart && run.status === "failed" && (run.resumable ?? run.current) ? (
                   <form method="post" action={urls.runResume(props.matterId, run.id)}>
                     {csrfField(props.chrome.csrfToken)}
                     <button type="submit" class="button button-small">
@@ -554,7 +554,11 @@ function RunsTable(props: {
                     </button>
                   </form>
                 ) : props.canStart && run.status === "failed" ? (
-                  <span class="muted">Out of date, start a new review</span>
+                  <span class="muted">
+                    {run.current
+                      ? "Started on another model, start a new review"
+                      : "Out of date, start a new review"}
+                  </span>
                 ) : (
                   <span class="muted">None</span>
                 )}
@@ -582,6 +586,12 @@ function StartSection(props: { chrome: Chrome; view: MatterView; canStart: boole
     reasons.push(RUN_ALREADY_ACTIVE);
   const blocked = reasons.length > 0;
   const hasEarlierRun = view.runs.length > 0;
+  // A review with findings on it, started again, makes them stale and takes the decisions with them
+  // (docs/parol/03). A matter that is already out of date has been told so by its banner.
+  const replacesResults =
+    view.matter.status === "in_review" ||
+    view.matter.status === "review_complete" ||
+    view.matter.status === "exported";
   return (
     <Section id="start" title={hasEarlierRun ? "Run the review again" : "Start the review"}>
       <p class="destination">
@@ -605,6 +615,16 @@ function StartSection(props: { chrome: Chrome; view: MatterView; canStart: boole
               each playbook rule.
             </p>
           )}
+          {replacesResults ? (
+            <p class="hint" id="start-replaces">
+              Running the review again replaces the findings on this matter. Decisions already made
+              on them stop counting, and the new findings have to be decided again before a memo can
+              be exported.
+              {view.matter.status === "exported"
+                ? " The memo already exported stays on record as the memo of the earlier review."
+                : ""}
+            </p>
+          ) : null}
           {view.workflows !== undefined && view.workflows.length > 1 ? (
             <Field
               id="start-workflow"
@@ -843,10 +863,17 @@ export function MatterPage(props: MatterPageProps) {
         <section class="banner banner-stale" aria-labelledby="stale-heading">
           <h2 id="stale-heading">Results are out of date</h2>
           <p>{view.staleReason}</p>
-          <p>
-            Earlier decisions no longer apply and the memo cannot be exported until the review is
-            run again and the new findings are decided.
-          </p>
+          {view.runs.some((r) => r.findingCount > 0) ? (
+            <p>
+              Earlier decisions no longer apply and the memo cannot be exported until the review is
+              run again and the new findings are decided.
+            </p>
+          ) : (
+            <p>
+              The review was stopped before it saved any findings, so there are no decisions to
+              lose. Run it again to review the documents as they are now.
+            </p>
+          )}
           {canRerun ? (
             <form method="post" action={urls.runs(matter.id)}>
               {csrfField(chrome.csrfToken)}
@@ -923,7 +950,11 @@ export function MatterPage(props: MatterPageProps) {
       </Section>
 
       <Section id="memos" title="Memos">
-        <MemoList matterId={matter.id} memos={view.memos} />
+        <MemoList
+          matterId={matter.id}
+          memos={view.memos}
+          currentRunId={view.currentRun?.id ?? null}
+        />
         {canExport ? (
           <ExportMemoForm chrome={chrome} matterId={matter.id} blockedReason={exportBlocked} />
         ) : (

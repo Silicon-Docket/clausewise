@@ -285,14 +285,12 @@ describe("export", () => {
     expect(w.services.matters.view(am).matter.status).toBe("exported");
     expect(w.services.matters.view(am).memos).toEqual([memo]);
 
-    // Exporting again builds the same file (the date is an input), and replaces the record.
+    // Exporting again is the memo already on record: nothing new is built or stored, and the
+    // memo is not marked superseded, which would say the documents or the playbook had changed.
     const again = await w.services.reviews.exportMemo(reviewerAm);
-    expect(again.fileSha256).toBe(memo.fileSha256);
-    expect(w.services.reviews.listMemos(am).map((m) => m.status)).toEqual([
-      "current",
-      "superseded",
-    ]);
-    // The older memo can still be read.
+    expect(again).toEqual(memo);
+    expect(w.services.reviews.listMemos(am).map((m) => m.status)).toEqual(["current"]);
+    expect(storedFiles(w, matterId)).toHaveLength(3);
     expect((await w.services.reviews.memoFile(am, memo.memoId)).bytes.length).toBeGreaterThan(1000);
   });
 

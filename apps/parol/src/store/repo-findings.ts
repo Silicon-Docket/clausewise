@@ -618,8 +618,9 @@ export function createFindingsApi(
    * It checks, in this order, that the finding exists in this matter, that it is current and its
    * run is the matter's current one (`StaleFindingError`), that the matter is open for review, that
    * `findingContentSha256` is the finding's hash (`ContentMismatchError`), and that a reason is
-   * given where one is required. The finding's previous current decision becomes stale and the new
-   * one records `supersedesReviewId`. The matter's `in_review` / `review_complete` status follows.
+   * given where one is required, and that no other reviewer's decision is current on the finding
+   * (`ConflictError` `decision_conflict`). The finding's previous current decision, the same
+   * reviewer's, becomes stale and the new one records `supersedesReviewId`. The matter's `in_review` / `review_complete` status follows.
    */
   function recordReview(
     matterId: string,
@@ -685,7 +686,15 @@ export function createFindingsApi(
       requireUser(input.reviewerId);
       const edits = hasEdits ? normaliseEdits(input.edits, finding) : null;
 
+      // The content hash says the reviewer read this finding; it says nothing of whether they read
+      // the decision on it. Replacing another reviewer's decision would leave them unaware, and the
+      // memo is built from whichever decision is current. A reviewer changes their own.
       const previous = finding.currentReview;
+      if (previous && previous.reviewerId !== input.reviewerId)
+        throw new ConflictError(
+          "decision_conflict",
+          "another reviewer has already decided this finding",
+        );
       if (previous) run("UPDATE reviews SET validity = 'stale' WHERE id = ?", previous.id);
       const id = newId("rev");
       run(
@@ -814,7 +823,9 @@ export function createFindingsApi(
    * Readiness is recomputed inside this transaction, and `reviewIds` must be exactly the current
    * decisions of the run's findings: a decision changed while the document was being built makes
    * the insert fail instead of recording a memo that does not match the record. The matter's
-   * previous current memo is superseded and the matter becomes `exported`.
+   * previous current memo is superseded and the matter becomes `exported`, unless that memo was
+   * made from these very decisions of this run, in which case it is returned as it is and nothing
+   * is written. The caller sees that by `storagePath`, and takes back the file it saved.
    */
   function recordMemo(
     matterId: string,
@@ -845,6 +856,18 @@ export function createFindingsApi(
           "reviews_changed",
           "the decisions changed while the memo was being built",
         );
+
+      // The memo on record was made from exactly these decisions of this run. A second copy would
+      // supersede it, and a memo is shown as superseded only because the documents or the playbook
+      // changed after it was made: nothing did. The caller is handed the memo that is there.
+      const onRecord = getCurrentMemo(matterId);
+      if (
+        onRecord !== undefined &&
+        onRecord.runId === target.id &&
+        onRecord.reviewIds.length === ordered.length &&
+        onRecord.reviewIds.every((id, i) => id === ordered[i])
+      )
+        return onRecord;
 
       assertStoragePathFree({ get }, input.storagePath);
       run(

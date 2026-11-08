@@ -13,7 +13,7 @@ import { createUploads } from "./uploads.js";
  */
 export function createServices(deps: ServiceDeps): Services {
   const engine = createRunEngine(deps);
-  const present = createPresenter(deps.repo, deps.config, engine.progressOf);
+  const present = createPresenter(deps.repo, deps.config, engine.progressOf, deps.generator);
   const uploads = createUploads(deps, present);
   return {
     matters: createMatterService(deps, present, uploads, engine),

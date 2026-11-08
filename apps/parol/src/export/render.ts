@@ -142,13 +142,37 @@ function flagBullets(view: FindingView): Paragraph[] {
   );
 }
 
+/**
+ * What the upload said about the files: Word content the review did not read, tracked changes it
+ * read as accepted, and paragraphs that read like an instruction to software. It comes before the
+ * open items because a reader of the file alone cannot otherwise tell that the review did not see
+ * all of it, and the sentence under Provenance about quotations says nothing of that.
+ */
+function documentWarnings(plan: MemoPlan): Paragraph[] {
+  if (plan.documentWarnings.length === 0) return [];
+  return [
+    heading1("Document warnings"),
+    text(
+      "The upload of these documents raised the warnings below. Read the source files for each before relying on this memorandum.",
+    ),
+    ...plan.documentWarnings.map((warning) => bullet(runs(warning.text))),
+  ];
+}
+
 function openItems(plan: MemoPlan): Paragraph[] {
   const out: Paragraph[] = [heading1("Open items")];
+  // The list below is about findings only, so it points at the warnings: "None" read alone would
+  // say more than the memorandum can stand behind.
+  const pointer =
+    plan.documentWarnings.length > 0
+      ? [text("The upload raised document warnings, which are listed above.")]
+      : [];
   if (plan.open.length === 0) {
     out.push(
       text(
         "None. No finding was escalated by the reviewer, and no accepted finding is still escalated by the workflow.",
       ),
+      ...pointer,
     );
     return out;
   }
@@ -156,6 +180,7 @@ function openItems(plan: MemoPlan): Paragraph[] {
     text(
       "These findings need an attorney's attention before anyone relies on this memorandum. Each is also set out in full under Findings.",
     ),
+    ...pointer,
   );
   for (const view of plan.open) {
     out.push(
@@ -628,6 +653,7 @@ export async function renderMemo(plan: MemoPlan): Promise<Uint8Array> {
         },
         children: [
           ...headerBlock(plan),
+          ...documentWarnings(plan),
           ...openItems(plan),
           ...summary(plan),
           ...findings(plan),

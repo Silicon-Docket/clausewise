@@ -1,5 +1,6 @@
 import type { Context } from "hono";
 import { ValidationError } from "../store/errors.js";
+import { urls } from "./urls.js";
 
 /**
  * Small helpers the shell and the route modules share, so "is this the JSON API" and "read the
@@ -15,6 +16,22 @@ export function isApiPath(path: string): boolean {
 
 export function isApiRequest(c: Context): boolean {
   return isApiPath(c.req.path);
+}
+
+/** The routes that take a sign-in or a sign-out, from a form or from a script. */
+const SESSION_PATHS: ReadonlySet<string> = new Set([urls.session(), `${urls.session()}/end`]);
+
+/**
+ * Whether a refusal is told in JSON: for everything under `/api`, and for the session routes when
+ * the caller posted JSON, because a script that sends JSON needs an error code it can read and a
+ * browser that posts a form still gets the page. Success on those routes already follows the same
+ * rule. Every other page answers in HTML whatever it was sent.
+ */
+export function answersInJson(c: Context): boolean {
+  return (
+    isApiPath(c.req.path) ||
+    (SESSION_PATHS.has(c.req.path) && bodyMediaType(c) === "application/json")
+  );
 }
 
 export type FormFields = Record<string, string | File>;

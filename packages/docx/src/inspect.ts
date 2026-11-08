@@ -27,7 +27,11 @@ export interface DocxInspection {
   endnotes: number;
   /** Header and footer parts that contain any text. */
   headerFooterParts: number;
-  /** Runs formatted as hidden text, which Word does not display. */
+  /**
+   * Runs formatted as hidden text, which Word does not display, and runs formatted so that a
+   * reader cannot see them: white on the page, the colour of their shading, or too small, narrow or
+   * condensed to read.
+   */
   hiddenRuns: number;
   /** Pictures and drawings, not counting text boxes. */
   images: number;

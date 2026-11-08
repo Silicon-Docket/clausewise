@@ -400,8 +400,11 @@ describe("citation_shape", () => {
         clause: "2.1",
       },
     ]);
-    const run = (d: ReturnType<typeof draft>, fullDocument: boolean) =>
-      verify(d, { ingest: plain, bundleLabels: ["D1-p1", "D1-p2"], fullDocument });
+    const run = (
+      d: ReturnType<typeof draft>,
+      fullDocument: boolean,
+      r: ReturnType<typeof rule> = rule(),
+    ) => verify(d, { ingest: plain, bundleLabels: ["D1-p1", "D1-p2"], fullDocument, rule: r });
 
     it("passes missing over the whole document", async () => {
       const { finding } = await run(draft({ status: "missing" }), true);
@@ -444,19 +447,65 @@ describe("citation_shape", () => {
     });
 
     it("passes not_applicable with no such evidence and fails it with some", async () => {
+      const optional = rule({ required: false });
       expect(
-        check((await run(draft({ status: "not_applicable" }), false)).finding, "citation_shape")
-          .outcome,
+        check(
+          (await run(draft({ status: "not_applicable" }), true, optional)).finding,
+          "citation_shape",
+        ).outcome,
       ).toBe("pass");
       const { finding } = await run(
         draft({
           status: "not_applicable",
           evidence: [cite(plain, "D1-p2", "is governed by Delaware law", "supporting")],
         }),
-        false,
+        true,
+        optional,
       );
       expect(check(finding, "citation_shape").outcome).toBe("fail");
       expect(codes(finding)).toEqual(["support_not_confirmed"]);
+    });
+
+    // The analysis prompt says "never answer missing or not_applicable from a selection" and
+    // defines not_applicable as a presence rule that the playbook does not require. A bare answer
+    // that breaks either would otherwise be a verified finding with nothing for a reviewer to see.
+    it("fails not_applicable when the bundle is a selection, because it too is a whole-document claim", async () => {
+      const { finding } = await run(
+        draft({ status: "not_applicable" }),
+        false,
+        rule({ required: false }),
+      );
+      expect(check(finding, "citation_shape").outcome).toBe("fail");
+      expect(finding.escalations).toEqual([
+        {
+          code: "support_not_confirmed",
+          detail: "status not_applicable needs the whole document in the bundle, and it was not",
+        },
+      ]);
+      expect(finding.verificationState).toBe("escalated_by_system");
+    });
+
+    it("fails not_applicable on a rule the playbook requires, even over the whole document", async () => {
+      const { finding } = await run(draft({ status: "not_applicable" }), true, rule());
+      expect(check(finding, "citation_shape").outcome).toBe("fail");
+      expect(finding.escalations).toEqual([
+        {
+          code: "support_not_confirmed",
+          detail:
+            "status not_applicable is for a rule the playbook does not require, and this rule is required: a required rule that no clause covers is missing",
+        },
+      ]);
+      expect(finding.verificationState).toBe("escalated_by_system");
+    });
+
+    it("names both problems when a required rule is answered not_applicable from a selection", async () => {
+      const { finding } = await run(draft({ status: "not_applicable" }), false, rule());
+      expect(finding.escalations).toHaveLength(2);
+    });
+
+    it("still passes missing for a required rule over the whole document", async () => {
+      const { finding } = await run(draft({ status: "missing" }), true, rule());
+      expect(check(finding, "citation_shape").outcome).toBe("pass");
     });
   });
 
@@ -908,6 +957,7 @@ describe("missing_confirmation", () => {
       ingest: hinted,
       bundleLabels: ["D1-p1"],
       fullDocument: true,
+      rule: rule({ required: false }),
     });
     expect(check(finding, "missing_confirmation").outcome).toBe("not_applicable");
     expect(codes(finding)).toEqual([]);
@@ -1248,6 +1298,7 @@ describe("the verified finding", () => {
       "missing_confirmation",
       "playbook_escalation",
       "defined_term",
+      "instruction_like_text",
       "model_abstained",
       "status_forced",
       "fallback_basis",

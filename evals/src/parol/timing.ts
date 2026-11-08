@@ -1,7 +1,7 @@
 /**
- * Latency and cost records, and their aggregates. No run produces these records yet: the types
- * say what the runner must supply, and the functions turn a list of them into the p50, p95, mean
- * and maximum that document 5 and gate G13 ask for.
+ * Latency and cost records, and their aggregates. A live run supplies the records (a scripted run
+ * records none, because the speed of a stand-in is not a figure for any model), and the functions
+ * turn a list of them into the p50, p95, mean and maximum that document 5 and gate G13 ask for.
  */
 import { summarizeNumbers, type NumberSummary } from "./stats.js";
 

@@ -85,9 +85,17 @@ describe("the demo playbook matches the rules table in document 3", () => {
     expect(tableRows).toHaveLength(8);
   });
 
-  it("agrees on every rule's category, title, severity and whether it is required", () => {
+  it("agrees on every rule's category, title, severity, whether it is required and hint topics", () => {
+    // The table has a sixth column for the hint topics, which is empty for a rule that names none.
     expect(
-      demo.rules.map((r) => [r.key, r.category, r.title, r.severity, r.required ? "yes" : "no"]),
+      demo.rules.map((r) => [
+        r.key,
+        r.category,
+        r.title,
+        r.severity,
+        r.required ? "yes" : "no",
+        (r.hintTopics ?? []).join(", "),
+      ]),
     ).toEqual(tableRows);
   });
 

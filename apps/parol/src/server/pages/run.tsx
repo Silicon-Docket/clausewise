@@ -358,9 +358,15 @@ export function RunPage(props: RunPageProps) {
         <section class="banner banner-failed" aria-labelledby="run-failed-heading">
           <h2 id="run-failed-heading">This review did not finish</h2>
           <p>{runErrorMeaning(run.errorKind)}</p>
-          {run.current ? (
+          {run.current && (run.resumable ?? true) ? (
             <p>
               <a href={urls.matter(matter.id)}>Go to the matter to resume it</a>
+            </p>
+          ) : run.current ? (
+            <p>
+              It was started on a different provider or model than the one now in use, so it cannot
+              be resumed.{" "}
+              <a href={urls.matter(matter.id)}>Go to the matter to start a new review</a>
             </p>
           ) : (
             <p>
