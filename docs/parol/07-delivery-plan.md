@@ -221,8 +221,9 @@ the Markdown report. Cut 3 has been taken further than the plan allowed, because
 is not built either, so the pilot measures cannot be computed from stored events yet. Cut 4 is half
 taken: the support check is built and isolated but off in both workflow versions. **Deviation.** The
 cut says G5 would then be reported as not evaluated. G5 is scored from the answer keys and not from
-the support checker, so it is still evaluated with the check off; only G11 is not evaluated. Cuts 5
-and 6 do not apply yet, because no held-out case exists. None of the "never cut" items was cut:
+the support checker, so it is still evaluated with the check off; only G11 is not evaluated. Cut 2
+has been taken: findings are not carried across a playbook change, and a changed playbook version
+makes every finding out of date. Cuts 5 and 6 do not apply yet, because no held-out case exists. None of the "never cut" items was cut:
 authorization with its probe tests, quote verification, the export gate, invalidation, pinning and
 the held-out seal are built and tested; the held-out set itself is empty.
 

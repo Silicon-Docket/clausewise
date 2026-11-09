@@ -51,9 +51,9 @@ application's own model calls have none (see
 | 8   | [Pilot and enablement](08-pilot-and-enablement.md)               | Hypothetical pilot, acceptance criteria, training, feedback, measures, go/no-go, rollback    | Plan only; the training matter, feedback and measures are not built                                                                   |
 | 9   | [Demo, one-pager and postmortem](09-portfolio-materials.md)      | Two-minute demo script, portfolio one-pager outline, honest postmortem template              | Script partly backed by the demo; nothing recorded, written or measured                                                               |
 
-The improvement cycle is pre-registered in [experiments/EXP-001.md](experiments/EXP-001.md), a draft
-to freeze before the first baseline run. It has not been frozen and has not been run: it holds no
-measured table, and it cannot be frozen until the held-out set exists.
+The improvement cycle is specified in [experiments/EXP-001.md](experiments/EXP-001.md), a
+pre-registration draft to freeze before the first baseline run. It has not been frozen and has not
+been run: it holds no measured table, and it cannot be frozen until the held-out set exists.
 
 ## Assumptions
 

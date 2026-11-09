@@ -605,8 +605,8 @@ stopped by the change holds no finding, so its reason is read from the last `inp
 event and worded "while the review was running" (for example "The stated date of a document changed
 while the review was running."), and its banner does not talk about decisions that were never made.
 
-**Planned, not yet built.** Not built, and dropped by scope cut 2 in [document 7](07-delivery-plan.md#scope-cuts-in-order): when only the playbook
-version changes, findings for rules whose `rule_sha256` is unchanged are carried into the new run,
+**Not built.** Scope cut 2 in [document 7](07-delivery-plan.md#scope-cuts-in-order) drops it: when
+only the playbook version changes, findings for rules whose `rule_sha256` is unchanged are carried into the new run,
 labelled "carried from run r_0142", and their decisions need explicit re-confirmation rather than
 silently persisting.
 
@@ -1247,8 +1247,8 @@ struck through, never exported (the memo counts what it left out), and raises `q
 
 The support check is local by design, which is why it cannot catch a superseded clause on its own:
 the cited clause does support "two years". That gap is closed by retrieval (R2) and by a
-deterministic supersession check (check set C2), each measured separately; C2 is built and no
-registered workflow enables it. The checker is itself evaluated on a calibration set of supported and
+deterministic supersession check (check set C2), which are to be measured separately. R2 has been
+exercised only against the simulated reader, and C2 is built and no registered workflow enables it. The checker is itself evaluated on a calibration set of supported and
 deliberately unsupported pairs ([document 5](05-evaluation.md#support-calibration-set)). The scoring
 for that set is built; the set of pairs itself is not (`fixtures/parol` holds only the six
 development cases), so the gate that needs it cannot be evaluated.

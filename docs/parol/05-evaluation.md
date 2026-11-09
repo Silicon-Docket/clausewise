@@ -622,8 +622,8 @@ What the comparison shows, and why:
 
 ## The improvement cycle
 
-A controlled experiment, pre-registered in `docs/parol/experiments/EXP-001.md` before the
-baseline runs.
+A controlled experiment, specified in the draft protocol `docs/parol/experiments/EXP-001.md`,
+which is to be frozen before the baseline runs.
 
 1. **Freeze.** Dataset v1 (commit the held-out hash), playbook 1.0.1, workflow v1 (prompts P1,
    retrieval R1, verify checks C1), model, price table, evaluation version.
@@ -633,7 +633,7 @@ baseline runs.
    for that change.
 3. **Baseline on dev**, k = 3.
 4. **Choose the failure.** Rank failing slots by their SWF contribution summed over repeats.
-   Pre-registered hypothesis **H1**: because R1 retrieves by category and an amendment can change a
+   Hypothesis **H1**, written in the draft protocol: because R1 retrieves by category and an amendment can change a
    clause without using the category's vocabulary, `PAROL-D05` `dur-1` will come out as a verified
    `compliant` citing the deleted Section 6.1 (a high-severity silent miss with a valid quote). If
    the baseline does not show H1, the top-ranked observed failure is used instead, and the write-up
