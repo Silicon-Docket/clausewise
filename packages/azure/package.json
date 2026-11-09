@@ -1,0 +1,22 @@
+{
+  "name": "@clausewise/azure",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@clausewise/llm": "workspace:*",
+    "@xmldom/xmldom": "^0.9.12",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@clausewise/service": "workspace:*",
+    "@types/pg": "8.23.1"
+  }
+}
