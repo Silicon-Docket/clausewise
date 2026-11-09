@@ -1,17 +1,18 @@
 # Azure templates
 
-Status: written 8 November 2026 and **never deployed**. The templates compile and pass the Bicep
-linter (Bicep CLI 0.49.2, with the Microsoft Graph extension restored from the Microsoft Artifact
-Registry), but no part of them has run against a real subscription. Read
+Status: the foundation written 8 November 2026 and the application 9 November 2026, and both
+**never deployed**. The templates compile and pass the Bicep linter (Bicep CLI 0.49.2, with the
+Microsoft Graph extension restored from the Microsoft Artifact Registry), but no part of them has
+run against a real subscription. Read
 [What is not confirmed](#what-is-not-confirmed) before you deploy.
 
 These are the templates for running Clausewise inside a firm's own Azure tenant, as designed in
-[docs/azure-in-tenant.md](../../docs/azure-in-tenant.md). Only the first one exists:
+[docs/azure-in-tenant.md](../../docs/azure-in-tenant.md):
 
 | Template     | What it is                                                          | State   |
 | ------------ | ------------------------------------------------------------------- | ------- |
 | `foundation` | Deployed once by the firm, with its own rights (design section 3.1) | Written |
-| application  | `web`, `worker`, the add-in host and the `migrate` job              | Not yet |
+| application  | `web`, `worker` and the `migrate` job; later the add-in host        | Written |
 | delegation   | The optional Lighthouse delegation (design section 7)               | Not yet |
 
 ## What the foundation creates
@@ -244,6 +245,58 @@ assigned; none of the values below is a secret.
 The web app listens on port 8080 unless `PORT` says otherwise. Run `migrate` before the web app
 and the worker are first started, and again before each release; it is safe to run twice.
 
+## Deploy the application
+
+The application template, `application/main.bicep`, deploys into the application group and needs
+roles on that group only. It takes the foundation's outputs as one parameter, and the digest of a
+release of the server image, which the web app, the worker and the migrate job all run.
+
+1. **Collect the foundation's outputs,** none of which is secret, once per foundation deployment.
+   A provider with delegated management cannot read the subscription's deployments, so the firm
+   sends it this file.
+
+   ```sh
+   az deployment sub show --name clausewise-foundation --query properties.outputs --output json \
+     | jq '{"$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#", contentVersion: "1.0.0.0", parameters: {foundation: {value: with_entries(.value |= .value)}}}' \
+     > foundation.parameters.json
+   ```
+
+2. **Deploy a release.**
+
+   ```sh
+   az deployment group create \
+     --name clausewise-application \
+     --resource-group <applicationResourceGroupName> \
+     --template-file application/main.bicep \
+     --parameters @foundation.parameters.json \
+     --parameters imageDigest=sha256:<digest of the release's server image>
+   ```
+
+3. **Run the migrate job** and wait until its execution has succeeded. Until it has run once, the
+   web app answers API requests with an error, because the database has no tables.
+
+   ```sh
+   az containerapp job start --name migrate --resource-group <applicationResourceGroupName>
+   az containerapp job execution list --name migrate --resource-group <applicationResourceGroupName> --output table
+   ```
+
+4. **Open the app** at the `webUrl` output. It should be the foundation's `webUrl`, which sign-in
+   redirects to.
+
+**Upgrading.** Migrations follow expand-then-contract (design section 8), so the running release
+keeps working on the new schema. Upgrade in two deployments: first with `migrateImageDigest` set to
+the new release and `imageDigest` left at the running one, then run the migrate job; then again
+with `imageDigest` set to the new release and `migrateImageDigest` left out. In single revision
+mode Container Apps keeps the old web revision serving until the new one passes its probes. An
+old worker that is stopped hands its review back to the queue, and a new one takes it.
+
+**The image.** No release is published yet. The image builds from the repository root with
+`docker build --tag clausewise-server .`. Releases are to be published as
+`<upstreamImageRepository>/server`, which the foundation's cache rule maps to
+`<registryImagePrefix>/server`; the digest a release publishes is the `imageDigest` to deploy.
+The image holds Node.js, the bundled server and its third-party notices, and nothing else: no
+shell, no package manager. It runs as a non-root user and writes nothing to its file system.
+
 ## What is not confirmed
 
 Checked against Microsoft's documentation or the Azure Policy repository, but not by a
@@ -287,10 +340,21 @@ deployment:
   property name and type against them. It cannot check enumerated values, such as next hop types,
   deployment types or `azure-monitor` as a log destination; those were checked by reading, not by
   a tool.
+- **The application's roles.** That Container Apps Contributor, Container Apps Jobs Contributor
+  and Managed Identity Operator on the application group are enough to deploy the application
+  template: to create the apps and the job, join them to the environment and attach the
+  foundation's identities.
+- **Ingress in an internal environment.** That `external: true` makes the web app reachable from
+  the virtual network and the networks peered with it, at the foundation's `webUrl`, and from
+  nowhere else.
 - **Log Analytics with local authentication off** still accepts diagnostic settings. Microsoft
   lists only agents and the Data Collector API as affected.
 
 ## Open points for the later templates
+
+- **Migrations are started by hand.** A deployment cannot wait for a job to finish without a
+  deployment script, which would need a storage account with shared keys and outbound access, so
+  the migrate job is started between deployments, by a person or a release pipeline.
 
 - **Settled: the environment is in the application group.** Creating or updating a container
   app or job needs `Microsoft.App/managedEnvironments/join/action` on the environment, and a

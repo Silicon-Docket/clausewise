@@ -43,3 +43,37 @@ jobs:
             -c "CREATE ROLE clausewise_worker LOGIN" \
             -c "CREATE DATABASE clausewise_test OWNER clausewise_migrate"
       - run: pnpm test
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the server image
+        run: docker build --platform linux/amd64 --tag clausewise-server:ci .
+      - name: It runs as a non-root user and refuses to start without its settings
+        run: |
+          test "$(docker inspect --format '{{.Config.User}}' clausewise-server:ci)" = "65532:65532"
+          for command in web worker migrate; do
+            set +e
+            docker run --rm --read-only clausewise-server:ci "$command" 2> stderr.txt
+            code=$?
+            set -e
+            cat stderr.txt
+            test "$code" -eq 1
+            grep -q "^Missing settings" stderr.txt
+          done
+          set +e
+          docker run --rm --read-only clausewise-server:ci unknown
+          code=$?
+          set -e
+          test "$code" -eq 64
+
+  templates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the Azure templates
+        run: |
+          az bicep install
+          az bicep build --file deploy/azure/foundation/main.bicep --stdout > /dev/null
+          az bicep build --file deploy/azure/application/main.bicep --stdout > /dev/null

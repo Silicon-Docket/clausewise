@@ -10,12 +10,13 @@ independent and not affiliated with any of them.
 > **Status: pre-alpha.** The command line works end to end against scripted models and
 > recorded requests, but it has **not yet been run against a live model**, and Word itself was
 > never available to check the output. Expect rough edges, and read [Known limits](#known-limits)
-> before you point it at a real contract. The web app runs only in local mode, on your own
-> machine, as one plain page. The Docker image and the Word add-in do not exist yet.
+> before you point it at a real contract. The web app runs on your own machine as one plain
+> page, or in Azure from a container image that has never been deployed to a real subscription.
+> The Word add-in does not exist yet.
 
 The plan for a web app and Word add-in that run inside a firm's own Azure tenant, with no
 stored secrets and no general internet access, is in
-[docs/azure-in-tenant.md](docs/azure-in-tenant.md). The first Azure template is in
+[docs/azure-in-tenant.md](docs/azure-in-tenant.md). Its Azure templates are in
 [deploy/azure/](deploy/azure/README.md).
 
 ## What it does
@@ -110,10 +111,11 @@ managed identity, with no stored key or password:
 | `pnpm migrate`                       | Brings the database up to date and creates the web and worker roles. Run it before each release |
 
 Contracts and results are kept in Blob Storage, jobs in a Storage queue and review records in
-PostgreSQL. Every setting is checked before anything connects, and a missing one is named. The
-settings come from the foundation template's outputs; [deploy/azure/README.md](deploy/azure/README.md#application-settings)
-maps each one. These need the token service that Azure Container Apps runs beside each app, so
-they work only there; a container image and the template that deploys them are not written yet.
+PostgreSQL. Every setting is checked before anything connects, and a missing one is named. These
+need the token service that Azure Container Apps runs beside each app, so they work only there.
+All three run from one container image, `docker build --tag clausewise-server .`, chosen by its
+command (`web`, `worker` or `migrate`). [deploy/azure/README.md](deploy/azure/README.md) has the
+templates that deploy them and maps each setting to the foundation's outputs.
 
 ## Principles
 

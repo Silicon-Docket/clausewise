@@ -35,7 +35,8 @@ resource registry 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
 }
 
 // Clausewise's images are public, so the rule has no credential set. The wildcard maps every
-// repository under the upstream prefix, so web, worker, migrate and addin need one rule.
+// repository under the upstream prefix, so the server image (web, worker and migrate) and the
+// add-in host need one rule.
 resource cacheRule 'Microsoft.ContainerRegistry/registries/cacheRules@2025-04-01' = {
   parent: registry
   name: 'clausewise'

@@ -1,0 +1,14 @@
+# Only the repository's own files go into the build. A contract or its review left in the
+# working tree must never be copied in.
+.git
+.env
+.env.*
+**/node_modules
+dist
+out
+coverage
+evals/results
+*.tsbuildinfo
+*.redlined.docx
+*.report.json
+*.summary.md

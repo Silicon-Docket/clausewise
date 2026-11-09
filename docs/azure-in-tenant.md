@@ -1,8 +1,10 @@
 # Clausewise inside a firm's own Azure tenant
 
-Status: design, 8 November 2026. Nothing in this document is built yet. The web app, the
-Word add-in and the Azure templates it describes do not exist, as the README says. The
-command line is the only part of Clausewise that runs today.
+Status: design, 8 November 2026, partly built by 9 November 2026. The web app, the worker,
+the migrate job, their container image and both Azure templates (foundation and application)
+exist and have run end to end on a single machine against stand-ins for Azure, but have never
+been deployed to a real subscription. The Word add-in, the delegation template and published
+releases do not exist yet.
 
 This is the plan for running Clausewise as a web app and a Word add-in inside a firm's own
 Azure subscription, so that contracts never leave the firm's tenant except to the model
@@ -152,7 +154,9 @@ browser outside the firm's network could not reach its private one.
 ### 3.3 Releases
 
 Each release is a set of container images, built from this repository, signed, published with
-an SBOM and provenance, and referenced by digest. A firm can verify every image against the
+an SBOM and provenance, and referenced by digest. The web app, the worker and the migrate job
+share one image, `server`, so that all three always run the same release; the add-in host will
+be a second. A firm can verify every image against the
 source, or build its own. The firm's registry fetches images through its cache rule as an Azure
 service, not through the firm's network.
 
