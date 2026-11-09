@@ -28,7 +28,8 @@ export function azurePostgresPool(options: AzurePostgresOptions): pg.Pool {
     database: options.database,
     user: options.user,
     password: () => options.tokens.token(),
-    ssl: { rejectUnauthorized: true, servername: options.host },
+    // pg verifies the certificate against the host name, which it also sends as the server name.
+    ssl: { rejectUnauthorized: true },
     max: options.max ?? 5,
     connectionTimeoutMillis: 10_000,
     idleTimeoutMillis: 30_000,

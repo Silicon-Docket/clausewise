@@ -17,7 +17,6 @@ param appInsightsName string
 var roles = {
   storageBlobDataContributor: 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
   storageQueueDataMessageSender: 'c6a89b2d-59bc-44d0-9896-0f6e12d7b80a'
-  storageQueueDataMessageProcessor: '8a0f0c08-91a1-4084-bc3d-661d67233fed'
   cognitiveServicesOpenAiUser: '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
   acrPull: '7f951dda-4ed3-4680-a7ca-43fe172d538d'
   monitoringMetricsPublisher: '3913510d-42f4-4e42-8a64-420c390055eb'
@@ -93,13 +92,43 @@ resource webQueueSender 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-resource workerQueueProcessor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(queueStorage.id, workerPrincipalId, roles.storageQueueDataMessageProcessor)
+// The worker takes a job, deletes it once done, and hands it back early (Update Message, which
+// needs messages/write) when the review is busy elsewhere, when it is stopping or when storage or
+// the database failed. Storage Queue Data Message Processor has no write, and Storage Queue Data
+// Contributor could also create and delete queues, so the worker gets a role of its own: the
+// Message Processor's data actions plus write. Role names are unique in a tenant, so the name
+// carries this subscription and group.
+resource workerQueueRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
+  name: guid(resourceGroup().id, 'clausewise-review-queue-worker')
+  properties: {
+    roleName: 'Clausewise review queue worker, ${subscription().subscriptionId}, ${resourceGroup().name}'
+    description: 'Takes review jobs off the Clausewise queue, deletes them when done and makes them visible again to hand them back.'
+    type: 'CustomRole'
+    permissions: [
+      {
+        actions: []
+        notActions: []
+        dataActions: [
+          'Microsoft.Storage/storageAccounts/queueServices/queues/messages/read'
+          'Microsoft.Storage/storageAccounts/queueServices/queues/messages/process/action'
+          'Microsoft.Storage/storageAccounts/queueServices/queues/messages/write'
+        ]
+        notDataActions: []
+      }
+    ]
+    assignableScopes: [
+      resourceGroup().id
+    ]
+  }
+}
+
+resource workerQueue 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(queueStorage.id, workerPrincipalId, workerQueueRole.id)
   scope: queueStorage
   properties: {
     principalId: workerPrincipalId
     principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.storageQueueDataMessageProcessor)
+    roleDefinitionId: workerQueueRole.id
   }
 }
 

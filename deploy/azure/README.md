@@ -164,22 +164,30 @@ that period.
 
 ## Roles
 
-| Identity  | Role                                 | On                                       |
-| --------- | ------------------------------------ | ---------------------------------------- |
-| `web`     | Storage Blob Data Contributor        | The `contracts` and `results` containers |
-| `web`     | Storage Queue Data Message Sender    | The queue storage account                |
-| `web`     | Monitoring Metrics Publisher         | Application Insights                     |
-| `worker`  | Storage Blob Data Contributor        | The `contracts` and `results` containers |
-| `worker`  | Storage Queue Data Message Processor | The queue storage account                |
-| `worker`  | Cognitive Services OpenAI User       | The Azure OpenAI account                 |
-| `worker`  | Monitoring Metrics Publisher         | Application Insights                     |
-| all three | AcrPull                              | The registry                             |
-| `migrate` | Entra administrator (not Azure RBAC) | The PostgreSQL server                    |
+| Identity  | Role                                    | On                                       |
+| --------- | --------------------------------------- | ---------------------------------------- |
+| `web`     | Storage Blob Data Contributor           | The `contracts` and `results` containers |
+| `web`     | Storage Queue Data Message Sender       | The queue storage account                |
+| `web`     | Monitoring Metrics Publisher            | Application Insights                     |
+| `worker`  | Storage Blob Data Contributor           | The `contracts` and `results` containers |
+| `worker`  | Clausewise review queue worker (custom) | The queue storage account                |
+| `worker`  | Cognitive Services OpenAI User          | The Azure OpenAI account                 |
+| `worker`  | Monitoring Metrics Publisher            | Application Insights                     |
+| all three | AcrPull                                 | The registry                             |
+| `migrate` | Entra administrator (not Azure RBAC)    | The PostgreSQL server                    |
 
 The blob roles are on the two containers, not the account, so that neither identity can create or
 delete containers. Contracts are uploaded through the API rather than straight from the browser,
 because Blob Storage has no public endpoint and a browser outside the firm's network could not
 reach it, so no identity signs upload links and none holds Storage Blob Delegator.
+
+The worker hands a job back to the queue early (when the review is busy elsewhere, when the
+worker is stopping, or when storage or the database failed) by making its message visible again,
+which Azure Storage authorizes as `messages/write`. Storage Queue Data Message Processor does not
+include that, and Storage Queue Data Contributor would also let the worker create and delete
+queues, so the foundation defines a custom role with the Message Processor's data actions plus
+`messages/write`, assignable only in the foundation group. Creating it needs
+`Microsoft.Authorization/roleDefinitions/write`, which Owner has.
 
 ## Policy guardrails
 
@@ -269,8 +277,12 @@ deployment:
   creates the id), and that an internal environment serves its default domain with a certificate
   browsers trust.
 - **Queue scaling.** If the worker scales on queue length with its own identity, the scaler reads
-  the queue's message count. Storage Queue Data Message Processor may not cover that; Storage
-  Queue Data Reader would.
+  the queue's message count, which needs `Microsoft.Storage/storageAccounts/queueServices/queues/read`.
+  The worker's role does not include it, so the application template runs a fixed number of
+  workers for now.
+- **The worker's queue role.** Microsoft's table of data operations lists `messages/write` for
+  Update Message and `messages/process/action` for Get Messages and Delete Message; no deployment
+  has confirmed the custom role is enough.
 - **API versions** were chosen from those the Bicep type index knows, and Bicep checked every
   property name and type against them. It cannot check enumerated values, such as next hop types,
   deployment types or `azure-monitor` as a log destination; those were checked by reading, not by

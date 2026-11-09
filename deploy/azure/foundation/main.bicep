@@ -159,7 +159,7 @@ param signInAppDisplayName string = 'Clausewise'
 @description('Name the application template gives the web container app. Its address is https://<this>.<environment default domain>/.')
 param webAppName string = 'web'
 
-@description('HTTPS redirect URIs for sign-in, for a custom domain or the Word add-in\'s sign-in page. Empty means the web app\'s own address in the environment; otherwise list every address, the web interface\'s included. Their origins are also allowed to upload to Blob Storage.')
+@description('HTTPS redirect URIs for sign-in, for a custom domain or the Word add-in\'s sign-in page. Empty means the web app\'s own address in the environment; otherwise list every address, the web interface\'s included.')
 param spaRedirectUris string[] = []
 
 @description('Object ids of the Entra ID groups whose members may sign in. Leave empty to assign groups later in Enterprise applications.')
