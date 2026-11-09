@@ -14,3 +14,4 @@ export {
   type EntraOptions,
   type RejectReason,
 } from "./entra.js";
+export { PAGE_CSP, type PageConfig } from "./pages.js";

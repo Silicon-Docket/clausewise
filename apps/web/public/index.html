@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clausewise</title>
+    <link rel="stylesheet" href="/app.css" />
+    <script src="/vendor/msal-browser.min.js" defer></script>
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <h1>Clausewise</h1>
+      <span id="account"></span>
+      <button id="sign-in" type="button" hidden>Sign in</button>
+      <button id="sign-out" type="button" hidden>Sign out</button>
+    </header>
+    <main>
+      <p id="status" role="status">Loading.</p>
+      <section id="review" hidden>
+        <h2>Review a contract</h2>
+        <form id="review-form">
+          <label>
+            Playbook
+            <select id="playbook" required></select>
+          </label>
+          <label>
+            Contract (.docx)
+            <input id="contract" type="file" accept=".docx" required />
+          </label>
+          <label>
+            The party you act for (optional)
+            <input id="client" type="text" maxlength="200" />
+          </label>
+          <button type="submit">Review</button>
+        </form>
+        <div id="results" hidden>
+          <h2>Results</h2>
+          <p id="open"></p>
+          <button type="button" data-kind="redlined">Download the redlined contract</button>
+          <button type="button" data-kind="summary">Download the summary</button>
+          <button type="button" data-kind="report">Download the report</button>
+        </div>
+      </section>
+      <p class="note">
+        Findings are suggestions for a lawyer to review. They are not legal advice.
+      </p>
+    </main>
+  </body>
+</html>

@@ -10,8 +10,8 @@ independent and not affiliated with any of them.
 > **Status: pre-alpha.** The command line works end to end against scripted models and
 > recorded requests, but it has **not yet been run against a live model**, and Word itself was
 > never available to check the output. Expect rough edges, and read [Known limits](#known-limits)
-> before you point it at a real contract. The web API runs only in local mode, on your own
-> machine, with no web pages yet. The Docker image and the Word add-in do not exist yet.
+> before you point it at a real contract. The web app runs only in local mode, on your own
+> machine, as one plain page. The Docker image and the Word add-in do not exist yet.
 
 The plan for a web app and Word add-in that run inside a firm's own Azure tenant, with no
 stored secrets and no general internet access, is in
@@ -77,15 +77,18 @@ Exit codes:
 `pnpm web` starts the review API on `127.0.0.1:8787`, reachable from this machine only, with
 the reviews run in the same process and everything kept in memory until it stops. It takes
 the same model settings as the command line and prints where contract text goes before it
-starts. There are no web pages yet: the API is for trying the web flow and for development.
-Every other mode is refused until the Azure storage adapters exist. See
+starts. Open `http://localhost:8787/` for a plain page that reviews a contract and downloads the
+results, or call the API below directly. Every other mode is refused until the Azure storage
+adapters exist. See
 [docs/azure-in-tenant.md](docs/azure-in-tenant.md) for where this is going.
 
 Set `CLAUSEWISE_ENTRA_TENANT_ID` and `CLAUSEWISE_ENTRA_CLIENT_ID` (the foundation template's
 `tenantId` and `signInClientId` outputs) to require Entra ID sign-in as well: every request then
 needs an access token that Entra ID issued for that app registration, for the `access_as_user`
 scope, to a user of that tenant. Tokens obtained by any other app, ID tokens and app-only tokens
-are refused.
+are refused. The page then signs in with Microsoft (MSAL, authorization code flow with PKCE, no
+client secret) and sends that token. To try it, add `http://localhost:8787/` to the app
+registration as a single-page application redirect URI.
 
 | Request                                | Does                                                                     |
 | -------------------------------------- | ------------------------------------------------------------------------ |

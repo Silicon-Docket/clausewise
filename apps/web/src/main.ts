@@ -70,7 +70,10 @@ const server = await startLocal({
 });
 
 process.stderr.write(`Sending the contract text to: ${generator.disclosure}\n`);
-process.stderr.write(`Clausewise is running on this machine only, at ${server.url}\n`);
+// Entra ID accepts a plain-http redirect address only for localhost, so that is the address to
+// open, and the one to register for the page.
+const pageUrl = `http://localhost:${new URL(server.url).port}/`;
+process.stderr.write(`Clausewise is running on this machine only. Open ${pageUrl}\n`);
 process.stderr.write(
   entra === undefined
     ? "Sign-in: none beyond being on this machine.\n"

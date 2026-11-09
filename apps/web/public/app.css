@@ -1,0 +1,31 @@
+body {
+  font-family: system-ui, sans-serif;
+  margin: 0 auto;
+  max-width: 44rem;
+  padding: 1rem;
+  line-height: 1.5;
+}
+header {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+header h1 {
+  margin-right: auto;
+}
+form {
+  display: grid;
+  gap: 0.75rem;
+}
+label {
+  display: grid;
+  gap: 0.25rem;
+}
+#results button {
+  margin: 0.25rem 0.5rem 0.25rem 0;
+}
+.note {
+  color: #555;
+  font-size: 0.9rem;
+}

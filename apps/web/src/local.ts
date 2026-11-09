@@ -72,6 +72,10 @@ export async function startLocal(options: LocalOptions): Promise<{
             loopbackAuthenticator(() => port),
             entraAuthenticator(options.entra, options.entra.options),
           ),
+    pages:
+      options.entra === undefined
+        ? { signIn: false }
+        : { signIn: true, tenantId: options.entra.tenantId, clientId: options.entra.clientId },
     ...(options.onError === undefined ? {} : { onError: options.onError }),
   });
   const server = createServer((request, response) => void handler(request, response));

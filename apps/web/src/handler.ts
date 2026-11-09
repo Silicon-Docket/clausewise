@@ -6,6 +6,7 @@ import {
   type ReviewService,
   type User,
 } from "@clausewise/service";
+import { PAGE_CSP, pageAssets, type PageConfig } from "./pages.js";
 
 /** Who is asking, or undefined when the request carries no valid sign-in. */
 export type Authenticator = (request: IncomingMessage) => Promise<User | undefined>;
@@ -13,6 +14,8 @@ export type Authenticator = (request: IncomingMessage) => Promise<User | undefin
 export interface HandlerOptions {
   service: ReviewService;
   authenticate: Authenticator;
+  /** When set, the server also serves the web page, which signs in as this says. */
+  pages?: PageConfig;
   /** Largest contract upload, in bytes. Should match the service's own limit. Default 50 MiB. */
   maxContractBytes?: number;
   /** Told about an unexpected error. Never given a request body. */
@@ -165,9 +168,27 @@ export function createHandler(options: HandlerOptions) {
   const { service } = options;
   const maxContract = options.maxContractBytes ?? DEFAULT_MAX_CONTRACT_BYTES;
 
+  const assets = pageAssets();
+
   async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const method = request.method ?? "GET";
     const path = new URL(request.url ?? "/", "http://localhost").pathname;
+
+    // The page and its sign-in settings hold no data, so they need no sign-in: the page is what
+    // signs the user in.
+    if (options.pages !== undefined) {
+      if (path === "/api/config") {
+        if (method !== "GET") throw new HttpError(405, "Use GET.");
+        return sendJson(response, 200, options.pages);
+      }
+      const asset = method === "GET" ? await assets.get(path) : undefined;
+      if (asset !== undefined) {
+        return send(response, 200, asset.data, {
+          "content-type": asset.type,
+          "content-security-policy": PAGE_CSP,
+        });
+      }
+    }
 
     if (path === "/api/health") {
       if (method !== "GET") throw new HttpError(405, "Use GET.");
