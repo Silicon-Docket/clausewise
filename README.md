@@ -78,8 +78,14 @@ Exit codes:
 the reviews run in the same process and everything kept in memory until it stops. It takes
 the same model settings as the command line and prints where contract text goes before it
 starts. There are no web pages yet: the API is for trying the web flow and for development.
-Every other mode is refused until Entra ID sign-in exists. See
+Every other mode is refused until the Azure storage adapters exist. See
 [docs/azure-in-tenant.md](docs/azure-in-tenant.md) for where this is going.
+
+Set `CLAUSEWISE_ENTRA_TENANT_ID` and `CLAUSEWISE_ENTRA_CLIENT_ID` (the foundation template's
+`tenantId` and `signInClientId` outputs) to require Entra ID sign-in as well: every request then
+needs an access token that Entra ID issued for that app registration, for the `access_as_user`
+scope, to a user of that tenant. Tokens obtained by any other app, ID tokens and app-only tokens
+are refused.
 
 | Request                                | Does                                                                     |
 | -------------------------------------- | ------------------------------------------------------------------------ |

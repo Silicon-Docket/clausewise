@@ -9,6 +9,7 @@ import {
 } from "@clausewise/service";
 import { memoryBlobs, memoryQueue, memoryRecords } from "@clausewise/service/memory";
 import { directoryPlaybooks } from "@clausewise/service/node";
+import { allOf, entraAuthenticator, type EntraConfig, type EntraOptions } from "./entra.js";
 import { createHandler, type Authenticator } from "./handler.js";
 
 export interface LocalOptions {
@@ -17,6 +18,11 @@ export interface LocalOptions {
   limits?: ReviewWorkerDeps["limits"];
   /** Default 8787. 0 picks a free port. */
   port?: number;
+  /**
+   * When set, every request must also carry an Entra ID access token for this app registration,
+   * so sign-in can be tried against a real tenant before anything is deployed.
+   */
+  entra?: EntraConfig & { options?: EntraOptions };
   onError?: (error: unknown) => void;
 }
 
@@ -24,8 +30,8 @@ const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 const LOCAL_USER: User = { id: "local" };
 
 /**
- * The only sign-in local mode has: the request must come from this machine and name this server
- * by its loopback address. The Host check stops a web page in the user's own browser from reaching
+ * Local mode's own check, made with or without Entra ID: the request must come from this machine
+ * and name this server by its loopback address. The Host check stops a web page in the user's own browser from reaching
  * the server through a domain that resolves to 127.0.0.1 (DNS rebinding), which the address check
  * alone would let through.
  */
@@ -59,7 +65,13 @@ export async function startLocal(options: LocalOptions): Promise<{
   let port = 0;
   const handler = createHandler({
     service,
-    authenticate: loopbackAuthenticator(() => port),
+    authenticate:
+      options.entra === undefined
+        ? loopbackAuthenticator(() => port)
+        : allOf(
+            loopbackAuthenticator(() => port),
+            entraAuthenticator(options.entra, options.entra.options),
+          ),
     ...(options.onError === undefined ? {} : { onError: options.onError }),
   });
   const server = createServer((request, response) => void handler(request, response));

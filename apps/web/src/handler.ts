@@ -146,9 +146,15 @@ function send(
   response.end(body);
 }
 
-function sendJson(response: ServerResponse, status: number, value: unknown): void {
+function sendJson(
+  response: ServerResponse,
+  status: number,
+  value: unknown,
+  headers: Record<string, string> = {},
+): void {
   send(response, status, JSON.stringify(value), {
     "content-type": "application/json; charset=utf-8",
+    ...headers,
   });
 }
 
@@ -221,8 +227,12 @@ export function createHandler(options: HandlerOptions) {
     try {
       await route(request, response);
     } catch (error) {
-      if (error instanceof HttpError)
-        return sendJson(response, error.status, { error: error.message });
+      if (error instanceof HttpError) {
+        // Tells a client such as MSAL that a bearer token is what is missing.
+        const challenge: Record<string, string> =
+          error.status === 401 ? { "www-authenticate": "Bearer" } : {};
+        return sendJson(response, error.status, { error: error.message }, challenge);
+      }
       if (error instanceof ServiceError) {
         return sendJson(response, STATUS[error.code], { error: error.message });
       }
