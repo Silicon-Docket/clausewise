@@ -110,7 +110,7 @@ PAROL_DEMO_IDENTITY=1 pnpm parol:seed
 PAROL_DEMO_IDENTITY=1 PAROL_SCRIPTED=1 pnpm parol
 ```
 
-Then open <http://127.0.0.1:8787> and choose an identity. `PAROL_SCRIPTED=1` makes the simulated
+Then open `http://127.0.0.1:8787` and choose an identity. `PAROL_SCRIPTED=1` makes the simulated
 reader read the documents, so nothing is sent anywhere. Without it the server needs a provider key
 and sends the text of every document to that provider, which is not for anything but synthetic
 documents. Add `--run v1 --run v2` to the seed to have both reviews of the first matter made for

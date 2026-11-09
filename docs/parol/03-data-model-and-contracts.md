@@ -506,7 +506,8 @@ CREATE TABLE audit_events (
   target_id    TEXT NOT NULL,
   detail_json  TEXT NOT NULL,              -- ids, hashes, counts; never document text
   prev_hash    TEXT NOT NULL,
-  hash         TEXT NOT NULL               -- sha256(prev_hash || canonical row), tamper evident;
+  hash         TEXT NOT NULL               -- sha256(prev_hash || canonical row); tamper evident only
+                                           -- when verifyAuditChain is run, which no application code does;
                                            -- one chain for the whole database
 );
 ```
@@ -604,7 +605,7 @@ stopped by the change holds no finding, so its reason is read from the last `inp
 event and worded "while the review was running" (for example "The stated date of a document changed
 while the review was running."), and its banner does not talk about decisions that were never made.
 
-**Planned, not yet built.** Week two option (cut first if time runs short): when only the playbook
+**Planned, not yet built.** Not built, and dropped by scope cut 2 in [document 7](07-delivery-plan.md#scope-cuts-in-order): when only the playbook
 version changes, findings for rules whose `rule_sha256` is unchanged are carried into the new run,
 labelled "carried from run r_0142", and their decisions need explicit re-confirmation rather than
 silently persisting.

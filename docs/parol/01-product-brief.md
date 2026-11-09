@@ -16,11 +16,11 @@ practice group's playbook, writes up the exceptions, proposes fallback language,
 attorney's sign-off and sends a short memorandum. The work is repetitive but not trivial: the
 playbook changes, amendments quietly override the base agreement, defined terms move meaning
 between sections, and a missed perpetual confidentiality term is an expensive mistake. Generic AI
-assistance makes the first draft faster but adds two new risks: a finding that quotes the document
+assistance is assumed to make the first draft faster (not measured here) but adds two new risks: a finding that quotes the document
 correctly yet does not follow from the quote, and no way to tell whether a prompt change made the
 tool better or worse.
 
-**Product.** Parol (named for the parol evidence rule: only the written documents count) is one
+**Product.** Parol (the name borrows loosely from the parol evidence rule: the review relies only on the written documents) is one
 bounded, attorney-supervised workflow for that task:
 
 1. Create a matter and supply an NDA, an optional amendment and an approved playbook version.
@@ -212,12 +212,12 @@ improvement cycle has **not been run**.
 
 ### Secondary references
 
-| Posting                                         | Read?      | Themes that Parol demonstrates                                                                                                                                      |
-| ----------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Harvey, Legal Engineer (In-House)               | Yes        | Discovery, demos, training and onboarding; pilots and workshops; designing no-code playbooks and agents with stakeholders; relaying feedback to product             |
-| Legora, Technical Legal Engineer, Evals         | Title only | Evaluation design, answer keys, regression suites, stability (inferred from the title only)                                                                         |
-| Thomson Reuters, Legal Engineer, AI Adoption    | No         | Adoption measures and training (from the project request only). The link's address names an AI Solutions Architect requisition, so confirm which role it is         |
-| Latitude Legal, Legal Engineer, AI and Workflow | Yes        | Assessing workflows, configuring existing tools and recommending build or buy, prompts and playbooks with guardrails and quality checks, training, measuring impact |
+| Posting                                         | Read?      | Themes that Parol demonstrates                                                                                                                                                         |
+| ----------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Harvey, Legal Engineer (In-House)               | Yes        | Discovery, demos, training and onboarding; pilots and workshops; designing no-code playbooks and agents with stakeholders; relaying feedback to product                                |
+| Legora, Technical Legal Engineer, Evals         | Title only | Evaluation design, answer keys, regression suites, stability (inferred from the title only)                                                                                            |
+| Thomson Reuters, Legal Engineer, AI Adoption    | No         | Adoption measures and training (from the project request only). The address given in the project request names an AI Solutions Architect requisition, so the role title is unconfirmed |
+| Latitude Legal, Legal Engineer, AI and Workflow | Yes        | Assessing workflows, configuring existing tools and recommending build or buy, prompts and playbooks with guardrails and quality checks, training, measuring impact                    |
 
 The themes in this table are the ones the design addresses. In the build, only the playbook as
 data, the evaluation design and the review controls exist; pilots, workshops, training and adoption

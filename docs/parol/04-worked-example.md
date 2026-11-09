@@ -13,8 +13,10 @@ Not pinned by any workflow version: the model support check and the `superseded_
 (set C2). Departures from the earlier draft are marked **Deviation**.
 
 The analysis outputs below are **what the scripted simulated reader returned** when the application
-ran the documents through the stages (source: `apps/parol/src/demo`, workflow versions v1 and v2,
-4 November 2026). They illustrate the contract shapes and the hypothesised baseline failure. A real
+ran the documents through the stages (source: `apps/parol/src/demo`, workflow versions v1 and v2).
+The span tables, annotation counts and verify tables were read again from a seeded database on 8
+November 2026; the memo excerpt in section 6 comes from one demo run on 4 November 2026. They
+illustrate the contract shapes and the hypothesised baseline failure. A real
 model has not produced them.
 
 The example is evaluation case `PAROL-D05` ([document 5](05-evaluation.md#dataset)), and it is the
@@ -212,8 +214,10 @@ validity and local support are not enough, and why the failure is worth a contro
 
 **Deviation.** The earlier draft had a model `support` row that passed because the checker "is
 shown only D1-p19", and called the precedence row `precedence`. The checks have the names above;
-seven more exist (`evidence_set`, `parties`, `missing_confirmation`, `playbook_escalation`,
-`defined_term`, `instruction_like_text` and `model_abstained`); and neither v1 nor v2 pins the support prompt, so no
+seven more exist than the earlier draft's table had (`evidence_set`, `parties`,
+`missing_confirmation`, `playbook_escalation`, `defined_term`, `instruction_like_text` and
+`model_abstained`; all sixteen check ids are listed in
+[document 3](03-data-model-and-contracts.md#deterministic-checks-and-model-judgment)); and neither v1 nor v2 pins the support prompt, so no
 `support` row appears and every cited passage reads "Support not checked".
 The support check is wired (`createSupportChecker`, prompt `support.p1`), and a test with a scripted
 checker shows what the earlier draft said: given only `D1-p19`, it agrees. Its error rates are to be

@@ -167,8 +167,9 @@ demonstration under workflow v2 (simulated reader); under v1 the same table show
 Compliant and Return as Deviation, which is the retrieval gap the worked example is about. The
 evidence pane is the worked example in [document 4](04-worked-example.md). The checks panel lists
 every check the finding went through, with Passed, Failed or Not applicable (thirteen for this finding:
-ten passed and three not applicable, counted from the database of a seeded run), so a flag is always
-explained by the check that raised it.
+ten passed and three not applicable, counted from the database of a seeded run), so a flag that a
+check raised is explained by that check. A rule that was not analyzed (`output_invalid` or
+`context_over_budget`) has no checks, and its finding states the reason in words.
 
 ### S3. Review decision
 
@@ -334,7 +335,9 @@ service that reads matter data, calls a model or writes a file. As built:
 - Responses carry a content security policy that allows script, style and connections from the same
   origin only (`default-src 'none'`), no framing, `nosniff`, `no-referrer`, a permissions policy that
   denies browser features Parol does not use, and `Cache-Control: no-store` except for static files.
-  Errors are a fixed kind and message and never repeat what the request carried; the access log line
+  Errors are a fixed kind and message and do not repeat what the request carried, except an upload
+  error and the reasons a review cannot start (see
+  [document 6](06-access-and-governance.md#minimal-sensitive-logging)); the access log line
   holds ids, the route template, the status and the latency.
 
 **Deviation.** The design said the evaluation runner "calls the same workflow runner with synthetic
@@ -516,7 +519,7 @@ the inputs change, and for a decision also when a newer decision replaces it; it
 
 ## Stack decision
 
-**Recommendation: TypeScript on Node 22, inside the Clausewise monorepo, with SQLite through
+**Decision (built): TypeScript on Node 22, inside the Clausewise monorepo, with SQLite through
 `node:sqlite`, Hono for routing and server-rendered JSX, and the `docx` library for the memo.**
 
 Why not a new Python application, which the request allows: the repository already contains the
@@ -529,7 +532,7 @@ also split the evaluation harness from the code it measures.
 
 | Dependency               | New?                                                                          | Why it earns its place                                                                                                                                                                                                       | Alternative considered                                                               |
 | ------------------------ | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `@clausewise/*` packages | No                                                                            | Parsing, segmentation, playbook schema, model access, quote normalisation                                                                                                                                                    | Reimplementing: weeks of work, untested                                              |
+| `@clausewise/*` packages | No                                                                            | Parsing, segmentation, playbook schema, model access, quote normalisation                                                                                                                                                    | Reimplementing: weeks of work (the author's estimate), untested                      |
 | `zod`                    | No                                                                            | Already the schema library for model output and playbooks                                                                                                                                                                    | n/a                                                                                  |
 | `node:sqlite`            | No (built in)                                                                 | One file, no native build, transactions, enough for one machine. Available in Node 22 without a flag; it prints an experimental warning, so the store sits behind a small repository module                                  | `better-sqlite3`: mature but a native module; swap in if `node:sqlite` changes shape |
 | `hono`                   | Yes                                                                           | Small router with no runtime dependencies; its JSX escapes text by default, which matters when every page shows untrusted document text                                                                                      | Node's `http` plus hand-written escaping: easy to get one page wrong                 |

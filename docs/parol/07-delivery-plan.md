@@ -11,7 +11,7 @@ so. Departures from the plan are collected under [Implementation deviations](#im
 and the design claims that the code does not satisfy, with a severity each, under
 [Known gaps](#known-gaps).
 
-**Last verified, 8 November 2026.** `pnpm lint`, `pnpm typecheck`, `pnpm fixtures:parol --check`,
+**Last verified, 9 November 2026.** `pnpm lint`, `pnpm typecheck`, `pnpm fixtures:parol --check`,
 `pnpm eval --selftest` and `pnpm eval:parol --selftest` each exited 0, and `pnpm exec vitest run`
 reported 285 test files and 8,765 tests (8,764 passed and 1 skipped, in the CLI package): 72 files
 and 2,741 tests under `packages`, 162 files and 4,961 tests under `apps/parol`, 35 files and 647
@@ -311,6 +311,13 @@ they are listed and not fixed; the ones that were small have been fixed (see the
 | 27  | A refusal that the parser reports after the application has sent response headers is not logged, and the memo marked "Earlier review" on the pages keeps its JSON status `current`                                                                                                               | Low      | [6](06-access-and-governance.md#demo-identity), [3](03-data-model-and-contracts.md#invalidation) |
 | 28  | The retry that settles a run whose end cannot be written has no upper bound, and a second reviewer cannot override the first reviewer's decision (they must wait for a change or a re-run)                                                                                                       | Low      | [6](06-access-and-governance.md#recovery-from-partial-failures)                                  |
 | 29  | CI pins Node 22 and not a minor version, and the "removing the guard from a real route fails the coverage test" criterion of W1.2 was shown on synthetic routes only                                                                                                                             | Low      | [7](#risks)                                                                                      |
+
+**Attack reviews.** Three attack reviews of the running application (web and authorization, hostile
+documents, and lifecycle and stale results) reported 30 defects: 1 high, 7 medium and 22 low (8, 12
+and 10 per review). All three ran with scripted stand-ins in place of a model. Commit `620fb23`
+changes the code for 29 of them, each with a test; some of those fixes close only part of the
+problem, and what is left is in gaps 18, 24, 27 and 28. The thirtieth, a slow upload of a Word file
+with 15,000 one-line paragraphs, was not changed (gap 25).
 
 **Fixed in this round, because they were small, safe and covered by a test:** the demonstration
 playbook test now compares the hint-topics column of the rules table in document 3 as well as the

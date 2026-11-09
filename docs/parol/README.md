@@ -8,19 +8,24 @@ evaluation scoring and runner. Not built, and marked **Not built** or **Planned*
 describes it: the evaluation comparison page, feedback on findings, the pilot measures, the training
 matter, 20 of the 26 planned evaluation cases, and the held-out set. **Never run live:** no real model
 has been called. The demonstration uses a scripted simulated reader, which is not a language model, so
-no score, latency or cost of any model exists. Every number in these documents is a proposed gate, an
-estimate, a count taken from the code, or an empty cell.
+no score, latency or cost of any model exists. No number in these documents is a measurement of a
+model. Each is a proposed gate or target, an estimate, a count (of code, tests, cases or findings),
+an observation from a test or an attack review, or output from the selftest oracle (a program that
+answers from the answer key, so it scores perfectly by design) or the simulated reader, and the text
+says which.
 
-Parol is a portfolio project that demonstrates the work of an internal AI / Legal Workflow
-Engineer: discovering a legal workflow, encoding a practice group's playbook, building one bounded
-AI-assisted workflow with attorney review, measuring it with a held-out evaluation suite, and
-deciding with evidence whether a revision is ready for a pilot. The legal task is NDA review
-against a fictional practice-group playbook.
+Parol is a portfolio project that sets out the work of an internal AI / Legal Workflow Engineer:
+discovering a legal workflow, encoding a practice group's playbook, building one bounded
+AI-assisted workflow with attorney review, and measuring it with a held-out evaluation suite so
+that a revision can be judged on evidence before a pilot. The playbook and the workflow are built.
+Discovery has not been held, the held-out suite is not written and no revision has been judged. The
+legal task is NDA review against a fictional practice-group playbook.
 
-**The name.** Under the parol evidence rule, evidence from outside a written agreement cannot
-vary its terms. Parol applies the same discipline to its model: the only sources a finding may
-rely on are the documents in the matter, every conclusion must cite them, and text in those
-documents is evidence, never instruction.
+**The name.** In general terms, the parol evidence rule keeps outside evidence from contradicting
+the terms of a fully integrated written agreement, subject to exceptions. Parol borrows the idea
+loosely: the only sources a finding may rely on are the documents in the matter, every conclusion
+must cite them, and the review is told to treat text in those documents as evidence and never as
+instruction. Whether a real model does so has not been observed.
 
 It is a web application inside Clausewise (`apps/parol`), because Clausewise already holds most of
 the engine this needs: Word parsing, clause segmentation, a validated playbook format, a model layer
@@ -34,17 +39,17 @@ application's own model calls have none (see
 
 ## Documents
 
-| #   | Document                                                         | What it answers                                                                              | State                                                                                                        |
-| --- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| 1   | [Product brief and role mapping](01-product-brief.md)            | Problem, users, scope, job requirement to feature mapping, configure versus build, discovery | Design. The role mapping now points at files that exist; no discovery interview has been held                |
-| 2   | [Experience and architecture](02-experience-and-architecture.md) | User journey, screen sketches, architecture, stage graph, state machines, stack              | Built, except journey steps 5, 8, 10 and 11 and the screen S4                                                |
-| 3   | [Data model and contracts](03-data-model-and-contracts.md)       | Entities, invalidation, stage and API schemas, retrieval, verification, escalation           | Built as migrations 001 to 003 and the shared contracts; feedback and the evaluation endpoints are not built |
-| 4   | [Worked example](04-worked-example.md)                           | One finding end to end: passage, rule, finding, evidence, review, memo excerpt               | Run end to end with the simulated reader; its outputs are labelled as such                                   |
-| 5   | [Evaluation](05-evaluation.md)                                   | Dataset, answer keys, metrics and denominators, rubric, gates, the improvement cycle         | Scoring and runner built; 6 of 26 cases written; never run live                                              |
-| 6   | [Access, review and governance](06-access-and-governance.md)     | Authorization, documents as data, logging, retention, provenance, recovery, demo limits      | Controls built and tested; the gaps are listed in the document                                               |
-| 7   | [Delivery plan](07-delivery-plan.md)                             | Week one MVP, week two polish, dependencies, estimates, acceptance criteria, scope cuts      | Status of every work item, and the deviations                                                                |
-| 8   | [Pilot and enablement](08-pilot-and-enablement.md)               | Hypothetical pilot, acceptance criteria, training, feedback, measures, go/no-go, rollback    | Plan only; the training matter, feedback and measures are not built                                          |
-| 9   | [Demo, one-pager and postmortem](09-portfolio-materials.md)      | Two-minute demo script, portfolio one-pager outline, honest postmortem template              | Script partly backed by the demo; nothing recorded, written or measured                                      |
+| #   | Document                                                         | What it answers                                                                              | State                                                                                                                                 |
+| --- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | [Product brief and role mapping](01-product-brief.md)            | Problem, users, scope, job requirement to feature mapping, configure versus build, discovery | The product it describes is built for steps 1 to 6; the role mapping points at files that exist; no discovery interview has been held |
+| 2   | [Experience and architecture](02-experience-and-architecture.md) | User journey, screen sketches, architecture, stage graph, state machines, stack              | Built, except journey steps 5, 8, 10 and 11 and the screen S4                                                                         |
+| 3   | [Data model and contracts](03-data-model-and-contracts.md)       | Entities, invalidation, stage and API schemas, retrieval, verification, escalation           | Built as migrations 001 to 003 and the shared contracts; feedback and the evaluation endpoints are not built                          |
+| 4   | [Worked example](04-worked-example.md)                           | One finding end to end: passage, rule, finding, evidence, review, memo excerpt               | Run end to end with the simulated reader; its outputs are labelled as such                                                            |
+| 5   | [Evaluation](05-evaluation.md)                                   | Dataset, answer keys, metrics and denominators, rubric, gates, the improvement cycle         | Scoring and runner built; 6 of 26 cases written; never run live                                                                       |
+| 6   | [Access, review and governance](06-access-and-governance.md)     | Authorization, documents as data, logging, retention, provenance, recovery, demo limits      | Controls built and tested; the gaps are listed in the document                                                                        |
+| 7   | [Delivery plan](07-delivery-plan.md)                             | Week one MVP, week two polish, dependencies, estimates, acceptance criteria, scope cuts      | Status of every work item, and the deviations                                                                                         |
+| 8   | [Pilot and enablement](08-pilot-and-enablement.md)               | Hypothetical pilot, acceptance criteria, training, feedback, measures, go/no-go, rollback    | Plan only; the training matter, feedback and measures are not built                                                                   |
+| 9   | [Demo, one-pager and postmortem](09-portfolio-materials.md)      | Two-minute demo script, portfolio one-pager outline, honest postmortem template              | Script partly backed by the demo; nothing recorded, written or measured                                                               |
 
 The improvement cycle is pre-registered in [experiments/EXP-001.md](experiments/EXP-001.md), a draft
 to freeze before the first baseline run. It has not been frozen and has not been run: it holds no
@@ -52,7 +57,7 @@ measured table, and it cannot be frozen until the held-out set exists.
 
 ## Assumptions
 
-These were made so the design could proceed. None of them blocks it, and each is easy to revisit.
+These were made before the build began. None of them blocked it, and each is easy to revisit.
 
 1. **Home repository.** Of the three repositories in this workspace, Clausewise is the one whose
    purpose matches: it reviews NDAs against playbooks. PinCite (case citation checking) and

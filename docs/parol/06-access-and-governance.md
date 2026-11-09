@@ -86,8 +86,9 @@ memo then says so only when the same person did both.
 
 ## Documents are data
 
-Document text cannot change permissions, tools, workflow rules or the review outcome, because none
-of those are reachable from it:
+Document text cannot reach permissions, tools or workflow rules, because none of those are
+reachable from it. It can reach the review outcome, because the model reads it. The controls below
+limit what a model's answer can do, and how a real model treats hostile text has not been observed:
 
 - **No tools.** The model is called for structured output only. It cannot fetch, search, write,
   call another model or reach another matter. There is nothing for an injected instruction to
@@ -228,11 +229,13 @@ inspect when a model call misbehaves except its hash and outcome.
 ## Run provenance
 
 Every run records its input manifest (document version and text hashes, client name, playbook and
-workflow version hashes), the requested and reported model, each call's prompt version, request
-hash, outcome, tokens and latency, each stage's input and output hashes, and the user who started
-it. The memo's appendix prints the same in readable form, and each quotation is re-verified
-against the stored text at export. A run can therefore be reproduced from its manifest, subject to
-the stochastic limits in [document 5](05-evaluation.md#pinning-and-repeatability).
+workflow version hashes), the requested model, each call's prompt version, request hash, outcome and
+latency, each stage's input and output hashes, and the user who started it. It does not record the
+model the provider reports or the tokens used (see below). The memo's appendix prints the recorded
+fields in readable form, and each quotation is re-verified against the stored text at export. A run
+can be repeated from its manifest, subject to the stochastic limits in
+[document 5](05-evaluation.md#pinning-and-repeatability), but its record does not show which model
+snapshot answered.
 
 **Not met in full.** Built and tested: the manifest (with the requested provider and model, the
 stated dates and the document labels), each call's prompt version, request hash, outcome and

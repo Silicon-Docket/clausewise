@@ -476,8 +476,8 @@ scoring change means running the cases again.
   will usually not appear.
 - The cases were written by the same person who designed the prompts, so they share blind spots.
   The held-out set reduces leakage of wording, not of the author's assumptions.
-- The support checker is a model judging a model. Its error rates are measured on the calibration
-  set, not assumed.
+- The support checker is a model judging a model. Its error rates are to be measured on the
+  calibration set (not yet written), not assumed.
 
 ## The runner
 
