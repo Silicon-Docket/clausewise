@@ -15,3 +15,4 @@ export {
   type RejectReason,
 } from "./entra.js";
 export { PAGE_CSP, type PageConfig } from "./pages.js";
+export { startAzureWeb, type AzureWebOptions } from "./azure.js";

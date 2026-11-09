@@ -18,6 +18,8 @@
     "fixtures": "tsx tools/make-fixtures.ts",
     "clausewise": "node apps/cli/bin/clausewise.mjs",
     "web": "tsx apps/web/src/main.ts",
+    "worker": "tsx apps/worker/src/main.ts",
+    "migrate": "tsx apps/worker/src/migrate-main.ts",
     "eval": "tsx evals/src/run.ts"
   },
   "devDependencies": {

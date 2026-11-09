@@ -1,0 +1,22 @@
+{
+  "name": "@clausewise/worker",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@clausewise/azure": "workspace:*",
+    "@clausewise/llm": "workspace:*",
+    "@clausewise/service": "workspace:*"
+  },
+  "devDependencies": {
+    "@clausewise/review": "workspace:*",
+    "@clausewise/web": "workspace:*"
+  }
+}

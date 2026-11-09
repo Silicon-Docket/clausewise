@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@azure/msal-browser": "5.26.0",
+    "@clausewise/azure": "workspace:*",
     "@clausewise/llm": "workspace:*",
     "@clausewise/service": "workspace:*",
     "jose": "6.2.13"

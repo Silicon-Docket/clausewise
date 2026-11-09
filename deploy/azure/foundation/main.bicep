@@ -514,7 +514,9 @@ output applicationResourceGroupName string = applicationRg.name
 
 output containerAppsEnvironmentId string = appsEnvironment.outputs.environmentId
 output containerAppsEnvironmentDefaultDomain string = appsEnvironment.outputs.defaultDomain
-// The zones the firm's DNS has to forward to Azure for users to reach the app and Blob Storage.
+// Every private DNS zone the deployment uses. Users need only the last, the environment's own
+// domain, which the firm's DNS forwards to Azure; the others resolve private endpoints inside the
+// virtual network.
 output privateDnsZones string[] = concat(privateDns.outputs.zoneNames, [appsEnvironment.outputs.defaultDomain])
 output containerAppsEnvironmentStaticIp string = appsEnvironment.outputs.staticIp
 output containerAppsWorkloadProfileName string = appsEnvironment.outputs.workloadProfileName

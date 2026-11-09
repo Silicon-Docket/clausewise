@@ -98,9 +98,9 @@ not show the app registration.
 3. **Database roles.** Bicep cannot create roles inside PostgreSQL, so the foundation does not
    create them. The application's `migrate` job does, before its migrations: it signs in as its
    own identity, which the foundation makes an Entra administrator of the server, and calls
-   `pgaadauth_create_principal_with_oid` (or `pgaadauth_create_principal`) for the `web` and
-   `worker` identities, whose names and object ids are in the outputs. Only an Entra
-   administrator may call those functions, which is why `migrate` is one.
+   `pgaadauth_create_principal` with the names of the `web` and `worker` identities, from the
+   outputs, then grants each only what it needs. Only an Entra administrator may call that
+   function, which is why `migrate` is one.
 4. **Check the model.** Run the evaluation harness against the deployed model before anyone
    relies on it (design section 8).
 
@@ -205,6 +205,36 @@ container names and queue name; the Azure OpenAI endpoint, the v1 base URL (`CLA
 and the deployment name (`CLAUSEWISE_MODEL`); the Application Insights connection string (an
 address only, since local authentication is off); the Log Analytics workspace; and the sign-in
 client id and API scope.
+
+## Application settings
+
+The web app, the worker and the migrate job read these environment variables. All three are
+Container Apps resources in the application group, each with its own user-assigned identity.
+Container Apps sets `IDENTITY_ENDPOINT` and `IDENTITY_HEADER` itself once an identity is
+assigned; none of the values below is a secret.
+
+| Variable                         | Output                               | Web | Worker | Migrate |
+| -------------------------------- | ------------------------------------ | --- | ------ | ------- |
+| `AZURE_CLIENT_ID`                | `clientId` of the app's own identity | yes | yes    | yes     |
+| `CLAUSEWISE_POSTGRES_HOST`       | `postgresServerFqdn`                 | yes | yes    | yes     |
+| `CLAUSEWISE_POSTGRES_DATABASE`   | `postgresDatabaseName`               | yes | yes    | yes     |
+| `CLAUSEWISE_POSTGRES_USER`       | `name` of the app's own identity     | yes | yes    | yes     |
+| `CLAUSEWISE_BLOB_ENDPOINT`       | `contractsBlobEndpoint`              | yes | yes    |         |
+| `CLAUSEWISE_CONTRACTS_CONTAINER` | `contractsContainerName`             | yes | yes    |         |
+| `CLAUSEWISE_RESULTS_CONTAINER`   | `resultsContainerName`               | yes | yes    |         |
+| `CLAUSEWISE_QUEUE_ENDPOINT`      | `queueEndpoint`                      | yes | yes    |         |
+| `CLAUSEWISE_QUEUE_NAME`          | `reviewQueueName`                    | yes | yes    |         |
+| `CLAUSEWISE_WEB_MODE`            | `azure`                              | yes |        |         |
+| `CLAUSEWISE_ENTRA_TENANT_ID`     | `tenantId`                           | yes |        |         |
+| `CLAUSEWISE_ENTRA_CLIENT_ID`     | `signInClientId`                     | yes |        |         |
+| `CLAUSEWISE_PROVIDER`            | `azure-openai`                       |     | yes    |         |
+| `CLAUSEWISE_BASE_URL`            | `openAiBaseUrl`                      |     | yes    |         |
+| `CLAUSEWISE_MODEL`               | `openAiDeploymentName`               |     | yes    |         |
+| `CLAUSEWISE_WEB_ROLE`            | `webIdentity.name`                   |     |        | yes     |
+| `CLAUSEWISE_WORKER_ROLE`         | `workerIdentity.name`                |     |        | yes     |
+
+The web app listens on port 8080 unless `PORT` says otherwise. Run `migrate` before the web app
+and the worker are first started, and again before each release; it is safe to run twice.
 
 ## What is not confirmed
 

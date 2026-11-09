@@ -57,6 +57,9 @@ importers:
       '@azure/msal-browser':
         specifier: 5.26.0
         version: 5.26.0
+      '@clausewise/azure':
+        specifier: workspace:*
+        version: link:../../packages/azure
       '@clausewise/llm':
         specifier: workspace:*
         version: link:../../packages/llm
@@ -70,6 +73,25 @@ importers:
       '@clausewise/review':
         specifier: workspace:*
         version: link:../../packages/review
+
+  apps/worker:
+    dependencies:
+      '@clausewise/azure':
+        specifier: workspace:*
+        version: link:../../packages/azure
+      '@clausewise/llm':
+        specifier: workspace:*
+        version: link:../../packages/llm
+      '@clausewise/service':
+        specifier: workspace:*
+        version: link:../../packages/service
+    devDependencies:
+      '@clausewise/review':
+        specifier: workspace:*
+        version: link:../../packages/review
+      '@clausewise/web':
+        specifier: workspace:*
+        version: link:../web
 
   evals:
     dependencies:

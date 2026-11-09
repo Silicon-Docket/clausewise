@@ -78,8 +78,7 @@ Exit codes:
 the reviews run in the same process and everything kept in memory until it stops. It takes
 the same model settings as the command line and prints where contract text goes before it
 starts. Open `http://localhost:8787/` for a plain page that reviews a contract and downloads the
-results, or call the API below directly. Every other mode is refused until the Azure storage
-adapters exist. See
+results, or call the API below directly. See
 [docs/azure-in-tenant.md](docs/azure-in-tenant.md) for where this is going.
 
 Set `CLAUSEWISE_ENTRA_TENANT_ID` and `CLAUSEWISE_ENTRA_CLIENT_ID` (the foundation template's
@@ -98,6 +97,23 @@ registration as a single-page application redirect URI.
 | `POST /api/reviews/{id}/start`         | Checks the file opens in the Word engine, then queues the review         |
 | `GET /api/reviews/{id}`                | The review's status, and its open items once done                        |
 | `GET /api/reviews/{id}/results/{kind}` | `redlined`, `report` or `summary`, as the command line's files           |
+
+### In Azure
+
+Three entry points run the same review in the firm's own Azure tenant, each signed in as its own
+managed identity, with no stored key or password:
+
+| Command                              | Runs                                                                                            |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `CLAUSEWISE_WEB_MODE=azure pnpm web` | The API and page on port 8080, with Entra ID sign-in always on                                  |
+| `pnpm worker`                        | Takes review jobs off the queue and runs them with `azure-openai`                               |
+| `pnpm migrate`                       | Brings the database up to date and creates the web and worker roles. Run it before each release |
+
+Contracts and results are kept in Blob Storage, jobs in a Storage queue and review records in
+PostgreSQL. Every setting is checked before anything connects, and a missing one is named. The
+settings come from the foundation template's outputs; [deploy/azure/README.md](deploy/azure/README.md#application-settings)
+maps each one. These need the token service that Azure Container Apps runs beside each app, so
+they work only there; a container image and the template that deploys them are not written yet.
 
 ## Principles
 

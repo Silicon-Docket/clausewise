@@ -1,5 +1,15 @@
 export { azureBlobStore } from "./blob.js";
 export {
+  SettingsError,
+  azureServiceDeps,
+  readIdentity,
+  readPostgres,
+  readStorage,
+  type AzureServiceDeps,
+  type PostgresSettings,
+  type StorageSettings,
+} from "./config.js";
+export {
   POSTGRES_RESOURCE,
   azurePostgresPool,
   migrate,
