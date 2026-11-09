@@ -84,13 +84,11 @@ describe("processReviewJob", () => {
     expect(again.calls).toHaveLength(0);
   });
 
-  it("skips a review another worker is running, until that worker's lease runs out", async () => {
+  it("reports a review another worker is running as busy, until that worker's lease runs out", async () => {
     const { deps, job } = await queuedReview();
     await deps.records.claim(job.reviewId, now().toISOString(), now().toISOString());
     const generator = createOracleGenerator(oracleScripts(fixture));
-    expect(await processReviewJob(job, { ...deps, generator, now, leaseMs: 60_000 })).toBe(
-      "skipped",
-    );
+    expect(await processReviewJob(job, { ...deps, generator, now, leaseMs: 60_000 })).toBe("busy");
     clock += 61_000;
     expect(await processReviewJob(job, { ...deps, generator, now, leaseMs: 60_000 })).toBe("done");
   });
@@ -131,7 +129,7 @@ describe("processReviewJob", () => {
     expect(failed.error).not.toContain("The identity was refused.");
   });
 
-  it("never shows the text of an unexpected error, which could quote the contract", async () => {
+  it("puts the review back for another try when storage fails, and keeps the error from it", async () => {
     const { deps, service, review, job } = await queuedReview();
     const exploding = {
       ...deps,
@@ -141,15 +139,17 @@ describe("processReviewJob", () => {
       },
     };
     const generator = createOracleGenerator(oracleScripts(fixture));
-    expect(await processReviewJob(job, { ...exploding, generator, now })).toBe("failed");
-    const failed = await service.getReview(alice, review.id);
-    expect(failed.error).toBe(
-      "The review failed unexpectedly. Try again, and report it if it happens again.",
+    await expect(processReviewJob(job, { ...exploding, generator, now })).rejects.toThrow(
+      "disk full",
     );
-    expect(JSON.stringify(failed)).not.toContain(CONTRACT_SECRET);
+    const queued = await service.getReview(alice, review.id);
+    expect(queued.status).toBe("queued");
+    expect(JSON.stringify(queued)).not.toContain(CONTRACT_SECRET);
+    // The next delivery can take it at once, without waiting for a lease to run out.
+    expect(await processReviewJob(job, { ...deps, generator, now })).toBe("done");
   });
 
-  it("leaves the review running when the worker is stopped, for another worker to take over", async () => {
+  it("puts the review back when the worker is stopped, for another worker to take at once", async () => {
     const { deps, service, review, job } = await queuedReview();
     const controller = new AbortController();
     const generator = failingGenerator(() => {
@@ -159,7 +159,7 @@ describe("processReviewJob", () => {
     await expect(
       processReviewJob(job, { ...deps, generator, now, signal: controller.signal }),
     ).rejects.toThrow("shutting down");
-    expect((await service.getReview(alice, review.id)).status).toBe("running");
+    expect((await service.getReview(alice, review.id)).status).toBe("queued");
   });
 
   it("fails a review whose contract has gone missing", async () => {
@@ -189,12 +189,18 @@ describe("processReviewJob", () => {
 });
 
 describe("the job queue", () => {
-  it("delivers a released job again", async () => {
-    const queue = memoryQueue();
+  it("delivers a released job again after its delay, counting the attempts", async () => {
+    const queue = memoryQueue({ releaseDelayMs: 30 });
     await queue.send({ reviewId: "r1" });
     const first = await queue.receive();
+    expect(first?.attempt).toBe(1);
     await first?.release();
-    expect((await queue.receive())?.job).toEqual({ reviewId: "r1" });
+    expect(await queue.receive()).toBeUndefined();
+    expect(queue.size()).toBe(1);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const second = await queue.receive();
+    expect(second?.job).toEqual({ reviewId: "r1" });
+    expect(second?.attempt).toBe(2);
     expect(await queue.receive()).toBeUndefined();
   });
 });

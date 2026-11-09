@@ -28,7 +28,11 @@ export interface ReviewWorkerDeps {
   signal?: AbortSignal;
 }
 
-export type JobOutcome = "done" | "failed" | "skipped";
+/**
+ * "skipped": the review needs nothing more (it is finished, or gone). "busy": another worker is
+ * running it, so the job must come back later in case that worker stops before it finishes.
+ */
+export type JobOutcome = "done" | "failed" | "skipped" | "busy";
 
 const DEFAULT_LEASE_MS = 30 * 60 * 1000;
 const encoder = new TextEncoder();
@@ -50,17 +54,16 @@ function nothingChecked(report: ReviewReport): string {
   return `No rule could be checked, so nothing was reviewed. ${listed.join(" ")}`;
 }
 
-// Only errors written to be shown are passed on. Anything else could carry a path, an address or
-// a fragment of the contract, so the user gets a fixed sentence and the operator the log.
-function shownReason(error: unknown): string {
-  if (error instanceof ReviewError || error instanceof DocxError) return error.message;
-  return "The review failed unexpectedly. Try again, and report it if it happens again.";
-}
-
 /**
- * Runs one review job. Safe to call twice for the same job: a review that another worker holds,
- * or that has already finished, is skipped. The results are written exactly as the CLI writes its
- * three output files.
+ * Runs one review job. Safe to call twice for the same job: a review that another worker holds is
+ * reported busy, and one that has already finished is skipped. The results are written exactly as
+ * the CLI writes its three output files.
+ *
+ * Only a failure of the review itself, in words written to be shown, fails it here. Anything else,
+ * such as storage that cannot be reached or a worker that is stopping, puts the review back as
+ * queued and is thrown, so the job is delivered again and the loop can count the attempts. Those
+ * errors are never shown to the user: they could carry a path, an address or a piece of the
+ * contract.
  */
 export async function processReviewJob(
   job: ReviewJob,
@@ -70,7 +73,10 @@ export async function processReviewJob(
   const at = now();
   const staleBefore = new Date(at.getTime() - (deps.leaseMs ?? DEFAULT_LEASE_MS)).toISOString();
   const record = await deps.records.claim(job.reviewId, at.toISOString(), staleBefore);
-  if (record === undefined) return "skipped";
+  if (record === undefined) {
+    const current = await deps.records.get(job.reviewId);
+    return current?.status === "running" ? "busy" : "skipped";
+  }
 
   const fail = async (message: string): Promise<JobOutcome> => {
     await deps.records.transition(record.id, ["running"], {
@@ -122,9 +128,15 @@ export async function processReviewJob(
     });
     return "done";
   } catch (error) {
-    // A worker that is shutting down leaves the review running, so another worker takes it over
-    // once the lease runs out, rather than marking it failed for a reason the user did not cause.
-    if (deps.signal?.aborted) throw deps.signal.reason;
-    return fail(shownReason(error));
+    const stopping = deps.signal?.aborted === true;
+    if (!stopping && (error instanceof ReviewError || error instanceof DocxError)) {
+      return fail(error.message);
+    }
+    // Back to queued at once, so the next delivery need not wait for the lease to run out. If
+    // even that fails, the lease still lets another worker take the review over later.
+    await deps.records
+      .transition(record.id, ["running"], { status: "queued", updatedAt: now().toISOString() })
+      .catch(() => undefined);
+    throw stopping ? deps.signal?.reason : error;
   }
 }

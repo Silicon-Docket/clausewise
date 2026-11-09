@@ -57,24 +57,41 @@ export function memoryRecords(): ReviewRecords {
   };
 }
 
-/** A queue that delivers each job once, and again after `release`, like a storage queue. */
-export function memoryQueue(): JobQueue & { size(): number } {
-  const waiting: ReviewJob[] = [];
+/**
+ * A queue that delivers each job once, and again some time after `release`, like a storage queue.
+ * The delay matters even at 0: a released job comes back on a later turn of the event loop, so a
+ * worker that keeps releasing it cannot starve everything else.
+ */
+export function memoryQueue(
+  options: { releaseDelayMs?: number } = {},
+): JobQueue & { size(): number } {
+  const releaseDelayMs = options.releaseDelayMs ?? 1000;
+  const waiting: { job: ReviewJob; attempts: number }[] = [];
+  let away = 0;
   return {
     async send(job) {
-      waiting.push({ ...job });
+      waiting.push({ job: { ...job }, attempts: 0 });
     },
     async receive(): Promise<Delivery | undefined> {
-      const job = waiting.shift();
-      if (job === undefined) return undefined;
+      const entry = waiting.shift();
+      if (entry === undefined) return undefined;
+      entry.attempts += 1;
       return {
-        job,
+        job: entry.job,
+        attempt: entry.attempts,
         complete: async () => {},
         release: async () => {
-          waiting.push(job);
+          away += 1;
+          const timer = setTimeout(() => {
+            away -= 1;
+            waiting.push(entry);
+          }, releaseDelayMs);
+          // A released job alone does not keep a process alive.
+          timer.unref();
         },
       };
     },
-    size: () => waiting.length,
+    /** Jobs waiting or released and due back. */
+    size: () => waiting.length + away,
   };
 }

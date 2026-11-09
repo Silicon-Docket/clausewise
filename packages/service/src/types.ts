@@ -69,6 +69,8 @@ export interface ReviewJob {
 /** One delivery of a job. Delivery is at least once, so a job can arrive twice. */
 export interface Delivery {
   job: ReviewJob;
+  /** How many times this job has been delivered, this time included. */
+  attempt: number;
   /** The job is finished, successfully or not, and must not be delivered again. */
   complete(): Promise<void>;
   /** The worker could not handle the job now; it comes back after a delay. */
