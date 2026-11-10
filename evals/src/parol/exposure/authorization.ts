@@ -832,10 +832,17 @@ async function runMode(mode: Mode): Promise<void> {
     clients.set(actor, user === null ? site.anonymous() : await site.signIn(user));
   }
 
+  const tokenOf = new Map<Actor, string>();
+
   /** One request as a caller sends it, with that caller's own token, and the one log line it made. */
   async function send(actor: Actor, wire: Wire) {
     const client = clients.get(actor)!;
-    const token = actor === "anonymous" ? null : await client.apiToken();
+    // The token is the caller's own, asked for once: it belongs to the session and does not change.
+    let token: string | null = null;
+    if (actor !== "anonymous") {
+      token = tokenOf.get(actor) ?? (await client.apiToken());
+      tokenOf.set(actor, token);
+    }
     const mark = site.accessLog.length;
     const init = initFor(wire, token);
     const response = await client.send(wire.method, wire.path, init);

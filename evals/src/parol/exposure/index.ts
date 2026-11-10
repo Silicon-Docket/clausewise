@@ -9,9 +9,12 @@
  *  1. Authorization probes (authorization.ts): every route that names a matter, as seven callers, in
  *     two modes. Counts `probesRun` and `probesAnsweredWithData`.
  *  2. Canary scan (canary.ts): a canary matter in the same store as a case, the case reviewed,
- *     decided, exported and read as every role, and every prompt, model answer, response body, memo
- *     and stored row searched for the canary strings and the ids of the other matter. Counts
- *     `artefactsScanned`, `canaryHits` and `foreignSpanIdHits`.
+ *     decided, exported and every GET route of the application read as the case's associate,
+ *     reviewer and viewer, the canary matter's associate and reviewer, the global administrator,
+ *     the legal engineer and an anonymous client, and every prompt, model answer, response body,
+ *     memo and stored row searched for the canary strings and the ids of the other matter. Counts
+ *     `artefactsScanned`, `canaryHits`, `foreignSpanIdHits` and `factSightings` (the last is
+ *     reported and is not a count of G1).
  *  3. Upload replay (uploads.ts): the upload steps of the cases that have them, played through the
  *     application's upload service. It counts nothing for G1; a step that does not do what the key
  *     says stops the run with `UploadReplayMismatch`.

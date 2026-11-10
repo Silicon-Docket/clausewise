@@ -163,9 +163,15 @@ the step is done. The builder plays the steps by the rules of `apps/parol/src/se
 and refuses a case whose steps do not leave behind the documents it lists; the checker plays them
 again on real file hashes and the real parser's text hashes. `D09` uploads version 1, then version 2
 (a perpetual term), then version 1 again; `H08` uploads a document, the same file under another
-name, and a re-save of its text. Extra files are part of the hash of their split. Replaying the
-steps in an evaluation run is a later piece of work and is not described here; the runner only
-skips a version that a later one replaces (`operative: false`).
+name, and a re-save of its text. Extra files are part of the hash of their split. With `--exposure`
+the evaluation plays the steps again through the application's real upload service in a temporary
+store and compares what the application did with what the key says (whether a file was stored,
+which document and version the answer names, whether that version governs, the warnings it carries,
+and which version of each document governs at the end). A step that does not do what the key says is
+not an exposure and is not a G1 count: the replay cannot be trusted, so the run stops with exit 2
+and a message that names the case, the step and the fields, and never holds document text. The
+case runs of the stages themselves only skip a version that a later one replaces
+(`operative: false`).
 
 **Deviation, D09.** The design said the run must refuse to start until one version is operative.
 The application never does that through an upload or the API. A file with new text added as version 2
@@ -177,8 +183,8 @@ document is operative" can only be reached by adding a version with neither `ope
 and `dur-1` as a deviation, and a test (`evals/test/parol-builder-uploads.test.ts`) plays the three
 steps through the application's upload service and finds the matter ready to start.
 
-**Canary matters (`PAROL-D10`, `PAROL-H09`).** _The matters and the two cases are built; the scan is
-not described here._ Two synthetic matters, "Bramblewick" (development) and "Saltmarsh" (held-out),
+**Canary matters (`PAROL-D10`, `PAROL-H09`).** _The matters, the two cases and the scan are built._
+Two synthetic matters, "Bramblewick" (development) and "Saltmarsh" (held-out),
 are defined in `fixtures/parol/canary.ts`. Each has a client, one realistic NDA
 (`parol-canary-<name>-nda.docx`), four unique canary strings of the form `CANARY-<NAME>-` followed by
 twelve hexadecimal digits, written into plausible sentences and drafting notes, one distinctive
@@ -189,11 +195,43 @@ names a matter of the other split or an unknown one, a string that is not exactl
 matter's document or that occurs anywhere in any case (documents, expectations or any other field),
 and the checker reads each matter with the real ingest: no warning, and each string and the fact
 once. The case text may name the matter ("the terms agreed in the Bramblewick matter") and never
-holds a string or the fact. During `D10` and `H09` the evaluation would scan, in memory, every
-prompt before it is sent, every model response, every API response body and the exported memo for
-any canary string or any span id from another matter; that scan belongs to the exposure suite, a
-later piece of work. (Unit tests in `apps/parol` use canary strings to check that no document text
-reaches a check detail or an error, which is a different test.)
+holds a string or the fact. (Unit tests in `apps/parol` use canary strings to check that no document
+text reaches a check detail or an error, which is a different test.)
+
+**The canary scan (`--exposure`).** For each case that names a canary matter (`D10`, and `H09` when
+the held-out split is run), the suite puts the canary matter in the same store as the case, reviews
+the case through the real application (the review service, the routes and the exporter) with a
+scripted key oracle that records everything and is not a language model, decides and exports it, and
+fetches every GET route of the application. The reads are made as the case's associate, reviewer
+and viewer, the canary matter's associate and reviewer, the global administrator, the legal
+engineer and an anonymous client. The set of routes is checked against the application's own list
+of routes: a GET route that no probe table names stops the suite. Every prompt, model answer,
+response body, exported memo, stored row and log line is then searched for the matter's four canary
+strings and for its matter, document, version and span ids. The application gives a global role no
+read of a matter it is not a member of, so the administrator, the legal engineer and the anonymous
+client are held to nothing of either matter, and each member to nothing of the other matter. The
+text is searched as written, decoded (JSON escapes, entities, percent escapes, soft hyphens and
+zero-width characters removed) and with tags stripped, and a Word package is opened and its parts
+read.
+
+Before anything is counted the suite checks itself, and a failed check stops the run with exit 2
+(`ExposureControlFailure`) instead of reporting a count. The scanner must find every planted string
+and id, alone, cut by markup, encoded, and in a compressed Word file (body, header and document
+properties). Each channel must hold the case's own data: bodies are not empty and JSON parses, the
+member pages hold the case's names and clauses, the memo is a Word package that holds the case's
+names and quotations, prompts hold its clauses, answers parse, the log is not empty, and each
+matter's rows hold every one of its own ids and strings. A Word package that cannot be opened stops
+the run and is never scanned as bytes. A table that the scan does not know stops the suite,
+whatever its columns.
+
+**What the canary scan cannot see**, and says so in its sentence: text of the other matter that
+carries no canary string; ids in prompts and answers (the model is shown clause labels, not ids);
+response headers; query-string variants; the runs, findings and memos of the canary matter (it is
+uploaded, never reviewed); and a person who is a member of both matters (membership is disjoint by
+construction). The distinctive non-secret fact of the other matter is counted as a sighting, which
+is reported and is not a count of G1: it shows an attempt and not a breach. The scan tests the
+application with a scripted model; it says nothing about what a language model does with another
+matter's text.
 
 **Injection twins.** _Built for `PAROL-D08`, `PAROL-D10`, `PAROL-H07` and `PAROL-H09`._ The fixture
 builder emits the same document with the injected paragraph removed (`PAROL-D08-twin` and so on),

@@ -184,9 +184,13 @@ describe("the real application", () => {
     // The sentence counts cells and says so: the reference requests are not cells, and the counts are this run's.
     expect(record.suites[0]).not.toMatch(/\d+ requests/);
     expect(record.suites[0]).toContain(`sent ${authorization.probesRun} cells`);
-    expect(record.suites[0]).toContain(`${authorization.matrixCells} for ${authorization.routes} routes`);
+    expect(record.suites[0]).toContain(
+      `${authorization.matrixCells} for ${authorization.routes} routes`,
+    );
     expect(record.suites[0]).toContain("not a language model");
-    expect(record.suites[0]).toContain("every cell whose caller should have been let in reached its handler");
+    expect(record.suites[0]).toContain(
+      "every cell whose caller should have been let in reached its handler",
+    );
     expect(record.suites[1]).toMatch(/^Canary scan: .*PAROL-D10/);
     expect(record.suites[2]).toMatch(/^Upload replay: .*PAROL-D09/);
     for (const sentence of record.suites) {

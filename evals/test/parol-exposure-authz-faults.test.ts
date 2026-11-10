@@ -503,7 +503,9 @@ describe("a member of another matter", () => {
 describe("a list that shows a person matters they have no part in", () => {
   /** Adds the title and id of every matter to the answer of GET /api/matters, for whoever `who` picks. */
   const leakTo =
-    (who: (userId: string, globalRole: string) => boolean): SiteHooks["beforeRoutes"] =>
+    (
+      who: (userId: string, globalRole: string) => boolean,
+    ): NonNullable<SiteHooks["beforeRoutes"]> =>
     (app, deps) => {
       app.use("/api/matters", async (c, next) => {
         await next();
