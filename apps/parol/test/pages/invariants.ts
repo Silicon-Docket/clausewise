@@ -26,6 +26,7 @@ export function allowedActions(): Set<string> {
     urls.matters(),
     urls.matterSettings(m),
     urls.matterDelete(m),
+    urls.matterRetention(m),
     urls.members(m),
     urls.documents(m),
     urls.runs(m),

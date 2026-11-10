@@ -24,6 +24,8 @@ vi.mock("../../src/services/index.js", () => ({
     return {
       matters: unused,
       reviews: unused,
+      evaluations: unused,
+      audit: unused,
       runs: {
         idle: () => {
           control.idleCalls += 1;

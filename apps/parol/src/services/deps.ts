@@ -6,6 +6,7 @@ import {
   type GlobalAction,
   type MatterAction,
 } from "../auth/actions.js";
+import type { ComparisonSource } from "../evaluations/source.js";
 import type { BuildMemo, SupportChecker } from "../module-contracts.js";
 import type { FileStore, Repository } from "../store/index.js";
 import { ForbiddenError } from "./errors.js";
@@ -36,6 +37,8 @@ export interface ServiceDeps {
   supportChecker?: SupportChecker;
   /** Replaces the memo builder. For tests that need a builder refusing at a gate. */
   buildMemo?: BuildMemo;
+  /** Where the published evaluation comparisons are read from. Default: a source with none. */
+  evaluations?: ComparisonSource;
 }
 
 export const DEFAULT_MAX_CONCURRENT_RUNS = 2;

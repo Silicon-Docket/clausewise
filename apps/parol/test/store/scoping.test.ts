@@ -237,6 +237,9 @@ const NOT_MATTER_DATA = [
   "appendAudit",
   "listAuditEvents",
   "verifyAuditChain",
+  // The spend ledger holds a day, counts and a cost: no matter, run, user or text.
+  "addSpend",
+  "spendToday",
   "transaction",
   "compact",
   "db",

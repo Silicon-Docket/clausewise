@@ -120,6 +120,14 @@ export function posted(pairs: [string, string][], name: string): string {
 const NOT_A_FIELD = new Set(["then", "toJSON", "constructor", "$$typeof", "nodeType", "valueOf"]);
 
 /**
+ * Optional view fields that a page already reads and whose service is a later package's (the
+ * contract commit before phase 1 put the page's read in; the package fills the field). Listed by
+ * path. An entry is inert once the service sets the field, because a field that is there is never
+ * recorded as missing, so the package that fills it does not have to edit this list.
+ */
+const AWAITING_SERVICE = new Set(["$.retention"]);
+
+/**
  * Wraps a view model so that every read of a property it does not have is recorded in `missing`
  * with its path. A page that reads a field the service never fills shows up here as `undefined`,
  * which the types would call impossible.
@@ -131,7 +139,8 @@ export function watchReads<T extends object>(value: T, missing: Set<string>, pat
       const found = Reflect.get(target, key, receiver);
       const where = Array.isArray(target) ? `${path}[]` : `${path}.${key}`;
       if (found === undefined) {
-        if (!NOT_A_FIELD.has(key) && !(key in target)) missing.add(where);
+        if (!NOT_A_FIELD.has(key) && !(key in target) && !AWAITING_SERVICE.has(where))
+          missing.add(where);
         return found;
       }
       if (typeof found === "object" && found !== null) return watchReads(found, missing, where);

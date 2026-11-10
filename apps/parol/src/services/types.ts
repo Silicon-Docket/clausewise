@@ -10,6 +10,8 @@
  */
 import type { AuthorizedMatter, Principal } from "../auth/types.js";
 import type { MatterRole } from "../contracts.js";
+import type { AuditService } from "./audit.js";
+import type { EvaluationService } from "./evaluations.js";
 import type {
   DecisionRequest,
   FindingView,
@@ -32,6 +34,8 @@ export interface MatterService {
       playbookVersionId: string | null;
       /** Added as a member with the reviewer role. */
       reviewerUserId: string | null;
+      /** Days to keep the matter, from creation. Absent: the default. Package W2.7 reads it. */
+      retainDays?: number;
     },
   ): MatterSummary;
   /** Only matters the principal is a member of. */
@@ -41,6 +45,11 @@ export interface MatterService {
     am: AuthorizedMatter,
     patch: { clientLegalName?: string; playbookVersionId?: string },
   ): MatterView;
+  /**
+   * Sets the retention date to the given number of days from today. Associate only
+   * (`matter.update`). Does not touch the inputs, the findings or any run.
+   */
+  setRetention(am: AuthorizedMatter, days: number): MatterView;
   addMember(am: AuthorizedMatter, input: { userId: string; role: MatterRole }): void;
   /** Parses, hashes, stores and registers a document, then rebuilds the matter's spans. */
   addDocument(
@@ -101,4 +110,7 @@ export interface Services {
   matters: MatterService;
   runs: RunService;
   reviews: ReviewService;
+  /** Pages that name no matter. Each function checks the global role of the principal first. */
+  evaluations: EvaluationService;
+  audit: AuditService;
 }

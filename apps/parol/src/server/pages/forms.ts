@@ -19,6 +19,8 @@ export const FIELDS = {
   clientLegalName: "clientLegalName",
   reviewerUserId: "reviewerUserId",
   playbookVersionId: "playbookVersionId",
+  /** Days to keep a matter: on the new-matter form and on the retention form of a matter. */
+  retainDays: "retainDays",
 
   // Documents. A stated date is `YYYY-MM-DD`; an empty value clears it.
   title: "title",

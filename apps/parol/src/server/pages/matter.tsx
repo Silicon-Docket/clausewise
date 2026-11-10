@@ -36,6 +36,7 @@ import {
 import { CONFIRM_VALUE, FIELDS } from "./forms.js";
 import { Layout, csrfField, type Chrome } from "./layout.js";
 import { ExportMemoForm, MemoList } from "./memos.js";
+import { RetentionSection } from "./retention.js";
 
 export interface MatterPageProps {
   chrome: Chrome;
@@ -963,6 +964,13 @@ export function MatterPage(props: MatterPageProps) {
       </Section>
 
       <PeopleSection chrome={chrome} view={view} users={props.users} canAdd={canAddMember} />
+
+      <RetentionSection
+        chrome={chrome}
+        matterId={matter.id}
+        retention={view.retention}
+        canUpdate={canUpdate}
+      />
 
       {props.canDelete ? (
         <Section id="delete" title="Delete this matter">

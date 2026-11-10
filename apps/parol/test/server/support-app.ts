@@ -54,6 +54,8 @@ export function stubServices(): Services {
     matters: group<Services["matters"]>(),
     runs: group<Services["runs"]>(),
     reviews: group<Services["reviews"]>(),
+    evaluations: group<Services["evaluations"]>(),
+    audit: group<Services["audit"]>(),
   };
 }
 
