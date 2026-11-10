@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { createRepository, openDatabase } from "../../apps/parol/src/store/index.js";
 import {
+  ACTORS,
   AUTHORIZATION_SENTENCE_BUDGET,
   SENTENCE_CUT,
   UNROUTED_ACTORS,
   classifyForged,
   classifyListing,
   classifyUnrouted,
+  expectedFor,
   expectedList,
   fingerprint,
   sentenceLadder,
@@ -369,31 +371,65 @@ const resume = [
   "POST /api/matters/:matterId/runs/:runId/cancel",
 ];
 
-/** The counts of the run on the real application, for the sentence of a clean run. */
+/** The two modes of every cell: with the segregation of duties on, and relaxed. */
+const MODES = [false, true] as const;
+
+/**
+ * The counts of the run on the real application, for the sentence of a clean run, taken from the
+ * tables and from the documented roles and not typed in: a route added to a table moves them by
+ * itself. The expected answers are those of `expectedFor`, cell by cell.
+ */
+const matrix = MODES.flatMap((relaxed) =>
+  MATTER_PROBES.flatMap((probe) => ACTORS.map((actor) => expectedFor(probe, actor, relaxed))),
+);
+const unroutedPlan = unroutedRequests(noRecordIds());
+const forgedCells = FORGED_PROBES.length * MODES.length;
+const listCells = LIST_PROBES.length * ACTORS.length * MODES.length;
+const unroutedCells = unroutedPlan.length * UNROUTED_ACTORS.length * MODES.length;
+const writeRoutes = MATTER_PROBES.filter((probe) => probe.method !== "GET").length;
+const CLEAN = {
+  matrixCells: matrix.length,
+  shouldBeLetIn: matrix.filter((cell) => cell.kind === "let_in").length,
+  mustBeRefused: matrix.filter((cell) => cell.kind === "refused").length,
+  comparedWithMissing: matrix.filter((cell) => cell.kind === "refused" && cell.caller !== "role")
+    .length,
+  forgedCells,
+  listCells,
+  unroutedCells,
+  routes: MATTER_PROBES.length,
+  forgedRequests: FORGED_PROBES.length,
+  forgedPlaces: FORGED_PROBES.filter((probe) => !probe.consistent).length,
+  listRoutes: LIST_PROBES.length,
+  unroutedRequests: unroutedPlan.length,
+  writeRoutes,
+  // Every write route but the four whose body is a conflict whoever sends it (`resume`).
+  writesWithEffect: writeRoutes - resume.length,
+} as const;
+
 const cleanResult = (
   over: Partial<AuthorizationResult> = {},
 ): Omit<AuthorizationResult, "sentence"> => ({
-  probesRun: 1580,
+  probesRun: CLEAN.matrixCells + CLEAN.forgedCells + CLEAN.listCells + CLEAN.unroutedCells,
   probesAnsweredWithData: 0,
   byReason: { handler_answered: 0, carried_data: 0, refusal_differs: 0, changed_state: 0 },
   mismatches: 0,
   letInNotReached: 0,
-  shouldBeLetIn: 128,
-  mustBeRefused: 376,
-  comparedWithMissing: 284,
-  matrixCells: 504,
-  forgedCells: 54,
-  listCells: 98,
-  unroutedCells: 924,
-  routes: 36,
-  forgedRequests: 27,
-  forgedPlaces: 25,
-  listRoutes: 7,
-  unroutedRequests: 154,
-  callers: 7,
-  modes: 2,
-  writeRoutes: 24,
-  writesWithEffect: 20,
+  shouldBeLetIn: CLEAN.shouldBeLetIn,
+  mustBeRefused: CLEAN.mustBeRefused,
+  comparedWithMissing: CLEAN.comparedWithMissing,
+  matrixCells: CLEAN.matrixCells,
+  forgedCells: CLEAN.forgedCells,
+  listCells: CLEAN.listCells,
+  unroutedCells: CLEAN.unroutedCells,
+  routes: CLEAN.routes,
+  forgedRequests: CLEAN.forgedRequests,
+  forgedPlaces: CLEAN.forgedPlaces,
+  listRoutes: CLEAN.listRoutes,
+  unroutedRequests: CLEAN.unroutedRequests,
+  callers: ACTORS.length,
+  modes: MODES.length,
+  writeRoutes: CLEAN.writeRoutes,
+  writesWithEffect: CLEAN.writesWithEffect,
   writesWithoutBody: resume,
   writesUnproven: 0,
   tableDrift: 0,
@@ -408,7 +444,7 @@ describe("the sentence", () => {
   it("counts cells, not requests, and states the counts it is given", () => {
     const sentence = sentenceOf(result({ probesRun: 1234, matrixCells: 999 }));
     expect(sentence).toMatch(/^Authorization probes: sent 1234 cells /);
-    expect(sentence).toContain("999 for 36 routes");
+    expect(sentence).toContain(`999 for ${CLEAN.routes} routes`);
     expect(sentence).not.toMatch(/^Authorization probes: sent \d+ requests/);
     expect(sentence).not.toMatch(DASHES);
     expect(sentence).not.toMatch(ID_SHAPE);
@@ -435,63 +471,76 @@ describe("the sentence", () => {
 
   it("counts the requests of the forged ids against the places they go, and the cells that are the same request again", () => {
     const sentence = sentenceOf(result());
+    const pairs = CLEAN.forgedRequests - CLEAN.forgedPlaces;
     expect(sentence).toContain(
-      "54 in which a member of the matter named a record of another matter",
+      `${CLEAN.forgedCells} in which a member of the matter named a record of another matter`,
     );
-    expect(sentence).toContain("27 requests in 25 places (a path, a body or a query string)");
-    expect(sentence).toContain("2 of them with every id from one record of that matter");
+    expect(sentence).toContain(
+      `${CLEAN.forgedRequests} requests in ${CLEAN.forgedPlaces} places (a path, a body or a query string)`,
+    );
+    expect(sentence).toContain(`${pairs} of them with every id from one record of that matter`);
     expect(sentence).not.toMatch(/in each of \d+ places/);
     // Without a route that names several ids there is no such form to speak of.
-    const none = sentenceOf(result({ forgedRequests: 25 }));
-    expect(none).toContain("25 requests in 25 places");
+    const none = sentenceOf(result({ forgedRequests: CLEAN.forgedPlaces }));
+    expect(none).toContain(`${CLEAN.forgedPlaces} requests in ${CLEAN.forgedPlaces} places`);
     expect(none).not.toContain("with every id from one record");
   });
 
   it("counts the cells for URLs that no route owns, says what was sent, and what must come back", () => {
     const sentence = sentenceOf(result());
     expect(sentence).toContain(
-      "924 in which a visitor, an outsider and a member sent 154 requests to URLs no route owns",
+      `${CLEAN.unroutedCells} in which a visitor, an outsider and a member sent ${CLEAN.unroutedRequests} requests to URLs no route owns`,
     );
     expect(sentence).toContain("which must get the 404 any such URL gets");
-    const without = sentenceOf(result({ unroutedCells: 0, probesRun: 656 }));
+    const without = sentenceOf(
+      result({ unroutedCells: 0, probesRun: result().probesRun - CLEAN.unroutedCells }),
+    );
     expect(without).not.toContain("URLs no route owns");
   });
 
   it("says what was compared for changes, and does not claim a body for the write routes that were not proven", () => {
     expect(sentenceOf(result())).toContain("a hash of every row of every table");
-    expect(sentenceOf(result())).toContain("on 20 of 24 write routes");
+    expect(sentenceOf(result())).toContain(
+      `on ${CLEAN.writesWithEffect} of ${CLEAN.writeRoutes} write routes`,
+    );
     const none = sentenceOf(result({ writesWithEffect: 0, writesWithoutBody: [] }));
     expect(none).not.toContain("write routes (");
     expect(none).toContain(
-      "none of the 24 write routes was shown to have a body that changes the store for a caller who is let in.",
+      `none of the ${CLEAN.writeRoutes} write routes was shown to have a body that changes the store for a caller who is let in.`,
     );
   });
 
   it("says no more of the write routes when none was shown to change the store than the counts say, in every wording", () => {
     // Every body was stopped before the guard (a rule before the routes that answers each write with a refusal):
     // the routes that have one are not routes whose bodies change nothing, and none was sent to a handler.
-    const stopped = result({ writesWithEffect: 0, writesUnproven: 20 });
+    const stopped = result({ writesWithEffect: 0, writesUnproven: CLEAN.writesWithEffect });
     const rungs = sentenceLadder(stopped);
     for (const [at, rung] of rungs.entries()) {
       expect(rung, `rung ${at}`).not.toContain("was sent one");
       expect(rung, `rung ${at}`).not.toContain("was sent a body");
       expect(rung, `rung ${at}`).not.toContain("change nothing");
-      expect(rung, `rung ${at}`).toContain("none of the 24 write routes was shown to");
+      expect(rung, `rung ${at}`).toContain(
+        `none of the ${CLEAN.writeRoutes} write routes was shown to`,
+      );
     }
     // The fullest says it in the words of the other branch; the short ones in its short words.
+    const without = resume.length;
+    const stoppedCount = CLEAN.writesWithEffect;
     expect(rungs[0]).toContain(
-      "none of the 24 write routes was shown to have a body that changes the store for a caller who is let in " +
-        "(4, ending in resume and cancel, have none, and 20 had one that was stopped before the guard).",
+      `none of the ${CLEAN.writeRoutes} write routes was shown to have a body that changes the store for a caller who is let in ` +
+        `(${without}, ending in resume and cancel, have none, and ${stoppedCount} had one that was stopped before the guard).`,
     );
     expect(rungs[2]).toContain(
-      "none of the 24 write routes was shown to change the store, 4 have none, 20 stopped before the guard.",
+      `none of the ${CLEAN.writeRoutes} write routes was shown to change the store, ${without} have none, ${stoppedCount} stopped before the guard.`,
     );
     expect(rungs[3]).toContain(
-      "none of the 24 write routes was shown to change the store, 4 have none, 20 stopped before the guard.",
+      `none of the ${CLEAN.writeRoutes} write routes was shown to change the store, ${without} have none, ${stoppedCount} stopped before the guard.`,
     );
     // Without a route that has no body, and with none stopped, the clause has nothing to add.
     const bare = sentenceLadder(result({ writesWithEffect: 0, writesWithoutBody: [] }));
-    expect(bare[2]).toContain("none of the 24 write routes was shown to change the store.");
+    expect(bare[2]).toContain(
+      `none of the ${CLEAN.writeRoutes} write routes was shown to change the store.`,
+    );
     // The routes that have no body are said from the data too, not as a fixed claim.
     const lone = sentenceOf(
       result({
@@ -505,18 +554,24 @@ describe("the sentence", () => {
   it("derives what it says of the other write routes from the routes, and does not call them unable to change anything", () => {
     // Four routes have no body that changes the store: the sentence names what they end in.
     const some = sentenceOf(result());
-    expect(some).toContain("on 20 of 24 write routes (4, ending in resume and cancel, have none)");
+    expect(some).toContain(
+      `on ${CLEAN.writesWithEffect} of ${CLEAN.writeRoutes} write routes (${resume.length}, ending in resume and cancel, have none)`,
+    );
     expect(some).not.toContain("cannot change");
     expect(some).not.toContain("answered the same whoever sends them");
     expect(some).not.toContain("finished run");
     // Routes that have one and were not proven in every mode are said apart.
-    const unproven = sentenceLadder(result({ writesWithEffect: 18, writesUnproven: 2 }))[1]!;
+    const unproven = sentenceLadder(
+      result({ writesWithEffect: CLEAN.writesWithEffect - 2, writesUnproven: 2 }),
+    )[1]!;
     expect(unproven).toContain(
-      "on 18 of 24 write routes (4, ending in resume and cancel, have none, and 2 had one that was stopped before the guard)",
+      `on ${CLEAN.writesWithEffect - 2} of ${CLEAN.writeRoutes} write routes (${resume.length}, ending in resume and cancel, have none, and 2 had one that was stopped before the guard)`,
     );
     // None without a body, none unproven: nothing in brackets.
-    const all = sentenceOf(result({ writeRoutes: 20, writesWithoutBody: [] }));
-    expect(all).toContain("on 20 of 20 write routes.");
+    const all = sentenceOf(result({ writeRoutes: CLEAN.writesWithEffect, writesWithoutBody: [] }));
+    expect(all).toContain(
+      `on ${CLEAN.writesWithEffect} of ${CLEAN.writesWithEffect} write routes.`,
+    );
     // Another set of routes is named by its own ends.
     const other = sentenceOf(
       result({ writesWithoutBody: ["DELETE /matters/:matterId/x/:id/archive"] }),
@@ -547,12 +602,14 @@ describe("the sentence", () => {
         matrixCells: 0,
         listCells: 0,
         unroutedCells: 0,
-        probesRun: 54,
+        probesRun: CLEAN.forgedCells,
         shouldBeLetIn: 0,
         mustBeRefused: 0,
       }),
     );
-    expect(only).toContain("54 in which a member of the matter named a record of another matter");
+    expect(only).toContain(
+      `${CLEAN.forgedCells} in which a member of the matter named a record of another matter`,
+    );
     expect(only).not.toContain("routes that name no matter and only read");
     expect(only).not.toContain("URLs no route owns");
     expect(only).not.toContain("hash of every row");

@@ -16,14 +16,17 @@ import {
   type UploadReplayResult,
 } from "../src/parol/exposure/index.js";
 import {
+  ACTORS,
   AUTHORIZATION_SENTENCE_BUDGET,
   UNROUTED_ACTORS,
 } from "../src/parol/exposure/authorization.js";
+import { STORE_SCOPES } from "../src/parol/exposure/canary.js";
 import {
   FORGED_PROBES,
   LIST_PROBES,
   MATTER_PROBES,
   noRecordIds,
+  subResourcesOf,
   unroutedRequests,
 } from "../src/parol/exposure/probes.js";
 import { exposureChecked, exposureCount } from "../src/parol/suites.js";
@@ -99,12 +102,12 @@ beforeAll(async () => {
 
 describe("the real application", () => {
   it("answers every cell of the matrix, the forged ids and the lists, and none with data or with a revealing refusal", () => {
-    // 36 routes, 7 callers, 2 modes; every forged request in 2 modes; every list route as 7 callers in 2 modes;
-    // every request to a URL that no route owns as 3 callers in 2 modes.
+    // Every route that names a matter as every caller in 2 modes; every forged request in 2 modes; every
+    // list route as every caller in 2 modes; every request to a URL that no route owns as 3 callers in 2 modes.
     const unrouted = unroutedRequests(noRecordIds());
-    expect(authorization.matrixCells).toBe(MATTER_PROBES.length * 7 * 2);
+    expect(authorization.matrixCells).toBe(MATTER_PROBES.length * ACTORS.length * 2);
     expect(authorization.forgedCells).toBe(FORGED_PROBES.length * 2);
-    expect(authorization.listCells).toBe(LIST_PROBES.length * 7 * 2);
+    expect(authorization.listCells).toBe(LIST_PROBES.length * ACTORS.length * 2);
     expect(authorization.unroutedCells).toBe(unrouted.length * UNROUTED_ACTORS.length * 2);
     expect(authorization.unroutedRequests).toBe(unrouted.length);
     expect(authorization.probesRun).toBe(
@@ -113,8 +116,8 @@ describe("the real application", () => {
         authorization.listCells +
         authorization.unroutedCells,
     );
-    expect(authorization.routes).toBe(36);
-    expect(authorization.callers).toBe(7);
+    expect(authorization.routes).toBe(MATTER_PROBES.length);
+    expect(authorization.callers).toBe(ACTORS.length);
     expect(authorization.probesAnsweredWithData).toBe(0);
     expect(authorization.byReason).toEqual({
       handler_answered: 0,
@@ -134,9 +137,12 @@ describe("the real application", () => {
   });
 
   it("puts an id of another matter into every route that takes an id, and the places outside a path", () => {
-    // 20 ids in a path, 6 in a body (three in the PATCH body, one in a form, and the two routes that
-    // name a document and a version again with both from one record), 1 in a query string.
-    expect(FORGED_PROBES.filter((probe) => probe.via === "path")).toHaveLength(20);
+    // One for each id in a path (read from the templates), 6 in a body (three in the PATCH body, one in
+    // a form, and the two routes that name a document and a version again with both from one record),
+    // 1 in a query string.
+    expect(FORGED_PROBES.filter((probe) => probe.via === "path")).toHaveLength(
+      MATTER_PROBES.reduce((sum, probe) => sum + subResourcesOf(probe.template).length, 0),
+    );
     expect(FORGED_PROBES.filter((probe) => probe.via === "body")).toHaveLength(6);
     expect(FORGED_PROBES.filter((probe) => probe.via === "query")).toHaveLength(1);
     expect(FORGED_PROBES.filter((probe) => probe.consistent)).toHaveLength(2);
@@ -175,7 +181,8 @@ describe("the real application", () => {
     expect(canary.byKind.model_response).toBe(9);
     expect(canary.byKind.memo).toBe(1);
     expect(canary.byKind.log).toBe(1);
-    expect(canary.byKind.store_rows).toBeGreaterThanOrEqual(2 * 17);
+    // The rows of the case matter and of its one canary matter: one artefact for each table that holds matter data.
+    expect(canary.byKind.store_rows).toBe(2 * STORE_SCOPES.length);
     expect(canary.byKind.http_body).toBeGreaterThan(100);
     expect(canary.artefactsScanned).toBe(Object.values(canary.byKind).reduce((a, b) => a + b, 0));
   });

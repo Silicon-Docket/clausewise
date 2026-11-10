@@ -5,6 +5,7 @@ import { authorizeMatter } from "../../apps/parol/src/auth/authorize.js";
 import { DEMO_USER_IDS } from "../../apps/parol/src/store/index.js";
 import { BRAMBLEWICK_STRINGS } from "../../fixtures/parol/canary.js";
 import {
+  ACTORS,
   UNROUTED_ACTORS,
   runAuthorizationProbes,
   type AuthorizationGroup,
@@ -19,6 +20,7 @@ import { runExposureSuite } from "../src/parol/exposure/index.js";
 import {
   FORGED_PROBES,
   LIST_PROBES,
+  MATTER_PROBES,
   noRecordIds,
   unroutedRequests,
 } from "../src/parol/exposure/probes.js";
@@ -391,7 +393,7 @@ describe("(d) an application built with a planted authorization hole", () => {
     expect(result.byReason.carried_data).toBe(8);
     // The members who are let in by the hand-made route are not what the table expects (the guard did not log them).
     expect(result.mismatches).toBeGreaterThan(0);
-    expect(result.matrixCells).toBe(504);
+    expect(result.matrixCells).toBe(MATTER_PROBES.length * ACTORS.length * 2);
   });
 
   it("counts a guard that wrongly takes one person for a member, on every route", async () => {
@@ -524,12 +526,12 @@ describe("the record of all three sub-suites with faults planted", () => {
         },
       },
     );
-    // The matrix of 36 routes by 7 callers by 2 modes, the forged ids, the lists and the URLs that no
-    // route owns (by 3 callers), all of which ran.
+    // The matrix of every route that names a matter by every caller by 2 modes, the forged ids, the
+    // lists and the URLs that no route owns (by 3 callers), all of which ran.
     expect(record.probesRun).toBe(
-      36 * 7 * 2 +
+      MATTER_PROBES.length * ACTORS.length * 2 +
         FORGED_PROBES.length * 2 +
-        LIST_PROBES.length * 7 * 2 +
+        LIST_PROBES.length * ACTORS.length * 2 +
         unroutedRequests(noRecordIds()).length * UNROUTED_ACTORS.length * 2,
     );
     expect(record.artefactsScanned).toBeGreaterThan(100);

@@ -1,7 +1,12 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { Dataset } from "../src/parol/dataset.js";
 import { UNROUTED_ACTORS } from "../src/parol/exposure/authorization.js";
-import { isApi, noRecordIds, unroutedRequests } from "../src/parol/exposure/probes.js";
+import {
+  UNROUTED_METHODS,
+  isApi,
+  noRecordIds,
+  unroutedRequests,
+} from "../src/parol/exposure/probes.js";
 import type { SiteHooks } from "../src/parol/exposure/site.js";
 import { failure, runWith } from "./parol-authz-support.js";
 import { completeDataset } from "./parol-exposure-support.js";
@@ -21,17 +26,21 @@ beforeAll(async () => {
 });
 const run = runWith(() => dataset);
 
+/** The two modes of every cell: with the segregation of duties on, and relaxed. */
+const MODES = 2;
+const METHODS = UNROUTED_METHODS.length;
+
 const plan = unroutedRequests(noRecordIds());
 /** The cells that a route answering every URL of the API would answer: each request, as each caller, in both modes. */
 const apiCells =
-  plan.filter((request) => isApi(request.template)).length * UNROUTED_ACTORS.length * 2;
+  plan.filter((request) => isApi(request.template)).length * UNROUTED_ACTORS.length * MODES;
 const answers = (): NonNullable<SiteHooks["afterRoutes"]> => (app) =>
   void app.all("/api/matters/:matterId/*", (c) => c.json({ everything: "for anyone" }));
 
 describe("the cells for URLs that no route owns, on the application as it is", () => {
   it("are all answered with the 404 of a URL that nothing owns, by all three callers, in both modes", async () => {
     const result = await run({}, ["unrouted"]);
-    expect(result.unroutedCells).toBe(plan.length * UNROUTED_ACTORS.length * 2);
+    expect(result.unroutedCells).toBe(plan.length * UNROUTED_ACTORS.length * MODES);
     expect(result.unroutedRequests).toBe(plan.length);
     // They are counted as cells, and only they ran.
     expect(result.probesRun).toBe(result.unroutedCells);
@@ -101,8 +110,8 @@ describe("a wildcard at a prefix that names no matter", () => {
     );
     // Three URLs, in every method: the root, the API and the prefix that names nothing. The shell's
     // own middleware, which is registered for every path, adds none: the plan above has only the shapes.
-    expect(result.unroutedRequests).toBe(plan.length + 3 * 5);
-    expect(result.unroutedCells).toBe((plan.length + 3 * 5) * UNROUTED_ACTORS.length * 2);
+    expect(result.unroutedRequests).toBe(plan.length + 3 * METHODS);
+    expect(result.unroutedCells).toBe((plan.length + 3 * METHODS) * UNROUTED_ACTORS.length * MODES);
     expect(result.probesAnsweredWithData).toBe(0);
     expect(result.mismatches).toBe(0);
     expect(result.exposed).toEqual([]);
@@ -140,9 +149,9 @@ describe("a route that answers more than it is listed for", () => {
     );
     // A wildcard under the matter's pages adds the one URL it names, in every method, to the shapes sent.
     const sent = unroutedRequests(noRecordIds(), ["/matters/*"]);
-    expect(sent.length).toBe(plan.length + 5);
+    expect(sent.length).toBe(plan.length + METHODS);
     const pageCells =
-      sent.filter((request) => !isApi(request.template)).length * UNROUTED_ACTORS.length * 2;
+      sent.filter((request) => !isApi(request.template)).length * UNROUTED_ACTORS.length * MODES;
     expect(result.unroutedRequests).toBe(sent.length);
     expect(result.probesAnsweredWithData).toBe(pageCells);
     expect(result.exposed.every((cell) => !cell.probe.includes("/api/"))).toBe(true);
@@ -160,7 +169,7 @@ describe("a route that answers more than it is listed for", () => {
       ["unrouted"],
     );
     // That one URL, in every method, for every caller, in both modes.
-    expect(result.probesAnsweredWithData).toBe(5 * UNROUTED_ACTORS.length * 2);
+    expect(result.probesAnsweredWithData).toBe(METHODS * UNROUTED_ACTORS.length * MODES);
     expect(
       result.exposed.every((cell) => cell.probe.includes("/export/unrouted/unrouted (no route)")),
     ).toBe(true);
@@ -178,15 +187,15 @@ describe("a route that answers more than it is listed for", () => {
     expect(listed.probesAnsweredWithData).toBe(0);
     const result = await run(hook, ["unrouted"]);
     // The one method it answers, as each of the three callers, in both modes.
-    expect(result.probesAnsweredWithData).toBe(UNROUTED_ACTORS.length * 2);
-    expect(result.byReason.handler_answered).toBe(UNROUTED_ACTORS.length * 2);
+    expect(result.probesAnsweredWithData).toBe(UNROUTED_ACTORS.length * MODES);
+    expect(result.byReason.handler_answered).toBe(UNROUTED_ACTORS.length * MODES);
     expect(
       result.exposed.every((cell) => cell.probe === "POST /legacy/unrouted/unrouted (no route)"),
     ).toBe(true);
     expect(new Set(result.exposed.map((cell) => cell.actor))).toEqual(new Set(UNROUTED_ACTORS));
     expect(result.mismatches).toBe(0);
     // The URL it answers is one more, in every method, among the shapes sent.
-    expect(result.unroutedRequests).toBe(plan.length + 5);
+    expect(result.unroutedRequests).toBe(plan.length + METHODS);
   });
 
   it("is found when an ALL route at a probed path answers a method the table does not probe on it", async () => {
@@ -200,7 +209,7 @@ describe("a route that answers more than it is listed for", () => {
     const listed = await run(hook, ["matrix"]);
     expect(listed.probesAnsweredWithData).toBe(0);
     const result = await run(hook, ["unrouted"]);
-    expect(result.probesAnsweredWithData).toBe(UNROUTED_ACTORS.length * 2);
+    expect(result.probesAnsweredWithData).toBe(UNROUTED_ACTORS.length * MODES);
     expect(
       result.exposed.every((cell) => cell.probe === "PUT /api/matters/:matterId (unprobed method)"),
     ).toBe(true);
@@ -255,8 +264,8 @@ describe("a route registered another way that names no matter", () => {
       { beforeRoutes: (app) => void app.get("/api/playbooks", (c) => c.json({ playbooks: [] })) },
       ["lists"],
     );
-    // Answers a visitor, which the lists group counts.
-    expect(result.probesAnsweredWithData).toBe(2);
+    // Answers a visitor, which the lists group counts: one cell in each mode.
+    expect(result.probesAnsweredWithData).toBe(MODES);
   });
 
   it("does not stop the suite for the application as it is: the routes it registers another way are middleware", async () => {
