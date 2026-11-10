@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { readPrincipal } from "../../apps/parol/src/auth/identity.js";
+import { defineRoute } from "../../apps/parol/src/server/matter-route.js";
 import type { Dataset } from "../src/parol/dataset.js";
 import {
   runAuthorizationProbes,
@@ -554,6 +555,25 @@ describe("a list that shows a person matters they have no part in", () => {
     expect(result.probesAnsweredWithData).toBe(2);
     expect(result.exposed.every((cell) => cell.actor === "anonymous")).toBe(true);
     expect(result.byReason.handler_answered).toBe(2);
+  });
+
+  it("stops the suite when the application has a route that only reads and is not in the list", async () => {
+    const error = await failure(
+      run(
+        {
+          beforeRoutes: (app) =>
+            defineRoute(app, {
+              method: "GET",
+              path: "/api/overview",
+              access: "principal",
+              handler: (c) => c.json({ matters: [] }),
+            }),
+        },
+        ["lists"],
+      ),
+    );
+    expect(error.name).toBe("ExposureSuiteUnavailable");
+    expect(error.message).toContain("GET /api/overview");
   });
 
   it("is told apart from a list that hides nothing: the real application gives none", async () => {

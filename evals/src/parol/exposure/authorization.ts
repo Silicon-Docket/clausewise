@@ -700,7 +700,7 @@ export function sentenceOf(result: Omit<AuthorizationResult, "sentence">): strin
             `(none of the ${result.writeRoutes} write routes was sent one).`);
   return (
     `Authorization probes: sent ${result.probesRun} cells to the application running in process ` +
-    `on synthetic matters that a scripted key oracle, which is not a language model, had reviewed. ` +
+    `on synthetic matters, reviewed where a review was needed by a scripted key oracle, which is not a language model. ` +
     `${result.probesAnsweredWithData} were answered with data or with an answer that reveals that a matter or a ` +
     `record exists (${result.byReason.handler_answered} got through the guard or succeeded, ` +
     `${result.byReason.carried_data} carried data of a matter, ${result.byReason.refusal_differs} ` +
@@ -1252,6 +1252,21 @@ function checkCoverage(site: ExposureSite): void {
   if (staleLists.length > 0)
     throw new ExposureSuiteUnavailable(
       `The list of routes that name no matter has routes the application does not have: ${staleLists.join(", ")}.`,
+    );
+
+  // A route that names no matter and only reads can still list matters, so it is read as every caller.
+  const listed = new Set(LIST_PROBES.map((probe) => key(probe.method, probe.template)));
+  const unlisted = described
+    .filter(
+      (route) =>
+        (route.kind === "public" || route.kind === "principal") &&
+        route.method === "GET" &&
+        !listed.has(key(route.method, route.path)),
+    )
+    .map((route) => key(route.method, route.path));
+  if (unlisted.length > 0)
+    throw new ExposureSuiteUnavailable(
+      `The application has routes that name no matter, only read, and are not in the list the suite reads as every caller: ${unlisted.join(", ")}.`,
     );
 
   const templates = new Set(MATTER_PROBES.map((probe) => probe.template));

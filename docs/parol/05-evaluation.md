@@ -133,25 +133,72 @@ differ, for two reasons, and in neither is a case bent to a number:
 
 ### Supplementary suites
 
-**Authorization probes.** _Built as an application test; not part of the evaluation._ The design was
-a table of (route, actor, matter) triples run against the API in every evaluation: a non-member
-reading, writing, running, exporting and downloading; a viewer attempting writes; an associate
-attempting a review decision; a reviewer attempting to upload. The table exists in
-`apps/parol/test/routes/probes.ts`, and `apps/parol/test/routes/authorization.test.ts` sends each
-probe as each caller. It covers 36 routes that name a matter (method and path pairs, pages and JSON)
-and seven callers (associate, reviewer, viewer, two people who are not members of the matter, an
-administrator who is not a member, and a visitor with no session), twice, once with the segregation
-of duties on and once relaxed for a single-person demonstration: 504 cells, 512 tests with the
-coverage checks, all passing when this was written. The expected answer of each cell is derived from
-the action table (`MATTER_ACTIONS`): the handler for a member whose role allows it, 403 for a member
-whose role does not, 404 for a person with no part in the matter (the same status, headers and body
-as for a matter that does not exist), and a redirect or 401 for a visitor with no session.
+**Authorization probes.** _Built, as an application test and as a step of the evaluation
+(`--exposure`)._ The design was a table of (route, actor, matter) triples run against the API in
+every evaluation: a non-member reading, writing, running, exporting and downloading; a viewer
+attempting writes; an associate attempting a review decision; a reviewer attempting to upload. The
+table exists in `apps/parol/test/routes/probes.ts`, and
+`apps/parol/test/routes/authorization.test.ts` sends each probe as each caller. It covers 36 routes
+that name a matter (method and path pairs, pages and JSON) and seven callers, twice, once with the
+segregation of duties on and once relaxed for a single-person demonstration: 504 cells, 512 tests
+with the coverage checks. The expected answer of each cell is derived from the action table
+(`MATTER_ACTIONS`): the handler for a member whose role allows it, 403 for a member whose role does
+not, 404 for a person with no part in the matter (the same status, headers and body as for a matter
+that does not exist), and a redirect or 401 for a visitor with no session.
+
+**The authorization probes in the evaluation (`--exposure`).** The same table is run by
+`evals/src/parol/exposure/authorization.ts` against the real application in process, on synthetic
+matters, with a scripted key oracle where a review is needed (it is not a language model, and
+nothing is sent anywhere). It sends three kinds of cell, and `probesRun` is their sum:
+
+- **The matrix** (504 cells): the 36 routes as seven callers in two modes. The callers are an
+  associate, a reviewer and a viewer of the matter; a "stranger", who is the associate of a second
+  matter and the reviewer of a third (so a membership lookup that is not scoped to the matter is
+  found); an "outsider" with no membership; an administrator who is not a member; and a visitor
+  with no session. A refusal is compared with the answer for a matter and for sub-resource ids that
+  exist nowhere (well formed ids of no record), so an answer that gives away that a run, finding,
+  document or memo exists is a difference.
+- **Forged ids** (50 cells: 25 places in two modes): a member who holds the right role on matter A
+  names a record of matter B in each place the application takes an id (20 in a path, 4 in a body,
+  one in a query string). The answer must be the one for an id of no record, with nothing of B's
+  title or ids, and no row of the store may change. The places in a path are derived from the
+  table, so a new route that takes an id is forged automatically. Evidence ids inside a decision
+  body are not forged here (the application's `forged-ids.test.ts` covers them).
+- **The lists** (98 cells): the seven routes that name no matter and only read (`/`, `/healthz`,
+  `/assets/:name`, `/api/session`, `/matters`, `/api/matters`, `/api/playbooks`) as every caller in
+  both modes, with the title and ids of a matter forbidden to everyone who is not a member of it.
+
+A cell counts toward G1 when it was answered with data, got through the guard, answered differently
+from a matter or record that does not exist, or changed a row. Changes are found by a hash of every
+row of every table (25) before and after each cell, and callers who must be refused are sent a body
+that would change the store if it got through, which is shown to do so for a caller who is let in
+on 20 of the 24 write routes (the other four, resuming or cancelling a finished run, are answered
+the same whoever sends them and cannot change anything).
+
+**Coverage and controls.** The suite throws (`ExposureSuiteUnavailable`) for a route that names a
+matter and is registered outside `defineMatterRoute` without being in the table, for a generic route
+that would answer a matter URL, and for a route that names no matter and is not in the list. A cell
+whose caller should have been let in and was not stopped before the handler it was written to test
+(a rule on the request that the probe does not meet, a route that moved): it is not an exposure, it
+is counted as "not reached", and G1 is "not evaluated" while any such cell exists and nothing was
+exposed. Answers that differ from the expected one without exposing anything are counted apart
+(`mismatches`) and are not a count of G1. A positive control stops the run (`ExposureControlFailure`,
+exit 2) if the second matter's ids cannot be found, no matter title appears in a list, or a write
+body does not change the store for a caller who is let in.
 
 **Deviation.** The design counted 16 routes and four actor types (64 combinations). The application
-has more routes than the design listed, an administrator is deliberately not a member, and the
-matrix is a test of the application and not a step of `pnpm eval:parol`, which drives the stages
-directly and has no server to probe. The runner therefore records no exposure result and gate G1 is
-"not evaluated". The code to score one exists (`ExposureResult`, with G1 reading it).
+has more routes than the design listed and an administrator is deliberately not a member. The
+matrix was first an application test only, because `pnpm eval:parol` drives the stages directly and
+has no server to probe; `--exposure` now runs it, with the forged ids and the lists, as a step of the
+evaluation. It tests the application and not a model, so it is evaluated for a selftest too, and a
+run without `--exposure` reports G1 as "not evaluated". On the committed dataset it reports 652
+cells, 402 artefacts scanned for the case with a canary matter, and nothing found.
+
+**What the authorization probes cannot see**, stated in the sentence the suite writes: evidence ids
+inside a decision body; the POST routes that name no matter (sign-in, sign-out, create a matter),
+which are not sent; resuming or cancelling a finished run, which has no body that changes anything;
+and, because matter B is built from the same case as matter A, only B's title and ids tell the two
+apart.
 
 **Duplicate uploads (`PAROL-D09`, `PAROL-H08`).** _The cases are built; the key records the
 steps._ A case that tests how the application treats the same file twice, a re-saved file or a

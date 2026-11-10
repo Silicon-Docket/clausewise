@@ -44,6 +44,7 @@ let again: ExposureRecord;
 let seconds: number;
 let printed = "";
 let leftBehind: string[] = [];
+let networkCalls: string[] = [];
 
 beforeAll(async () => {
   dataset = await completeDataset();
@@ -59,6 +60,12 @@ beforeAll(async () => {
   const log = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
     printed += args.join(" ");
   });
+  // Anything that reaches for the network fails the test: the suite runs the application in process.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: unknown) => {
+    networkCalls.push(String(input));
+    throw new Error("the exposure suite must not use the network");
+  }) as typeof fetch;
   const started = performance.now();
   try {
     const args = { root: ROOT, dataset, playbook, signal: never() };
@@ -69,6 +76,7 @@ beforeAll(async () => {
     seconds = (performance.now() - started) / 1000;
     again = await runExposureSuite(args);
   } finally {
+    globalThis.fetch = realFetch;
     write.mockRestore();
     log.mockRestore();
     if (outside === undefined) delete process.env.TMPDIR;
@@ -203,7 +211,10 @@ describe("the real application", () => {
     expect(record.suites[1]).toContain(`${canary.artefactsScanned} artefacts`);
   });
 
-  it("sends nothing to a model or a network, prints nothing, and removes its temporary folders", () => {
+  it("calls no global fetch, prints nothing to stdout or console.log, and removes its temporary folders", () => {
+    // The application is driven in process (app.request), the model is a scripted oracle, and a
+    // global fetch would be the way out to a network: it was replaced by one that records and throws.
+    expect(networkCalls).toEqual([]);
     expect(printed).toBe("");
     expect(leftBehind).toEqual([]);
   });

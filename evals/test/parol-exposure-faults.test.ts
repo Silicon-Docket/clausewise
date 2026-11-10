@@ -15,6 +15,7 @@ import {
   type CanaryResult,
 } from "../src/parol/exposure/canary.js";
 import { runExposureSuite } from "../src/parol/exposure/index.js";
+import { FORGED_PROBES, LIST_PROBES } from "../src/parol/exposure/probes.js";
 import type { Scanner } from "../src/parol/exposure/scan.js";
 import type { SiteHooks } from "../src/parol/exposure/site.js";
 import { exposureChecked, exposureCount } from "../src/parol/suites.js";
@@ -196,7 +197,8 @@ describe("(c) an exported memo or a response body that carries a canary string",
           `<w:p><w:r><w:t>${planted.slice(0, half)}</w:t></w:r>` +
           `<w:r><w:t>${planted.slice(half)}</w:t></w:r></w:p>`;
         zip.file("word/document.xml", xml.replace("</w:body>", `${paragraph}</w:body>`));
-        return zip.generateAsync({ type: "uint8array" });
+        // Compressed, as the real memo is: a scanner that reads the stored bytes would not see it.
+        return zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
       },
     });
     expect(hitsOf(result, "memo", "canary")).toHaveLength(1);
@@ -512,7 +514,10 @@ describe("the record of all three sub-suites with faults planted", () => {
         },
       },
     );
-    expect(record.probesRun).toBeGreaterThan(504);
+    // The matrix of 36 routes by 7 callers by 2 modes, the forged ids and the lists, all of which ran.
+    expect(record.probesRun).toBe(
+      36 * 7 * 2 + FORGED_PROBES.length * 2 + LIST_PROBES.length * 7 * 2,
+    );
     expect(record.artefactsScanned).toBeGreaterThan(100);
     expect(record.probesAnsweredWithData).toBeGreaterThan(0);
     expect(record.canaryHits).toBeGreaterThan(0);

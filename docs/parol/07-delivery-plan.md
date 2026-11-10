@@ -15,14 +15,11 @@ and the design claims that the code does not satisfy, with a severity each, unde
 `pnpm eval:parol --selftest` (under workflows v1, v2 and v3, on the development split and on the
 held-out split) each exited 0. The dataset has 26 cases (14 development with 112 rule slots, 12
 held-out with 96) and a calibration set of 40 pairs, the demonstration playbook has 8 rules, and the
-gates are 14. The whole suite was last run on 9 November 2026, before the week-two dataset and
-evaluation machinery were committed: `pnpm lint`, `pnpm typecheck`, `pnpm fixtures:parol --check`,
-`pnpm eval --selftest` and `pnpm eval:parol --selftest` each exited 0, and `pnpm exec vitest run`
-reported 285 test files and 8,765 tests (8,764 passed and 1 skipped, in the CLI package): 72 files
-and 2,741 tests under `packages`, 162 files and 4,961 tests under `apps/parol`, 35 files and 647
-tests under `evals`, and 16 files and 416 tests under `apps/cli`. Those test counts are older than
-the code now in the repository and were not re-counted for this update. They move with every test
-added, so run the commands instead of trusting this line.
+gates are 14. On the same day, on the code of the week-two parts 1 and 2 as committed, `pnpm lint`,
+`pnpm typecheck` and `pnpm fixtures:parol --check` each exited 0 and `pnpm test` reported 299 test
+files and 9,232 tests (9,231 passed and 1 skipped, in the CLI package). `pnpm eval:parol --selftest
+--exposure` also exited 0 under workflow v3 on the development split, on the held-out split and on
+both. The counts move with every test added, so run the commands instead of trusting this line.
 
 Two weeks for one engineer. Estimates are focused hours: about 35 planned hours in each 40-hour
 week, leaving 5 to 6 hours of buffer. Every item ends with the repository's own checks passing (`pnpm lint && pnpm typecheck &&

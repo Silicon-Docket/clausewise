@@ -6,8 +6,10 @@
  * to a model or a network (the model is a scripted oracle that answers from the answer key; it is
  * not a language model and the suite says so wherever it names it):
  *
- *  1. Authorization probes (authorization.ts): every route that names a matter, as seven callers, in
- *     two modes. Counts `probesRun` and `probesAnsweredWithData`.
+ *  1. Authorization probes (authorization.ts): every route that names a matter, as seven callers,
+ *     in two modes; a member of one matter naming the records of another matter in each place an
+ *     id is taken; and the routes that name no matter, read as every caller. Counts `probesRun`
+ *     (cells of the three kinds), `probesAnsweredWithData`, `mismatches` and `letInNotReached`.
  *  2. Canary scan (canary.ts): a canary matter in the same store as a case, the case reviewed,
  *     decided, exported and every GET route of the application read as the case's associate,
  *     reviewer and viewer, the canary matter's associate and reviewer, the global administrator,

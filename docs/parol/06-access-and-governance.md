@@ -6,7 +6,8 @@ coverage, CSRF, a strict CSP and a host guard, document text fenced as data, log
 text, immutable findings, decisions and memos, the export gate, invalidation, matter deletion,
 recovery and the demo identity. **Not built:** the job that deletes expired matters, an audit
 verification command, administrator-only approval and promotion, evaluation screens, token and cost
-records, the debug capture. **Weaker than the design:** the brand guards the service layer and not
+records, the debug capture. The authorization matrix is also run by the evaluation (`--exposure`),
+as a test of the application with a scripted model. **Weaker than the design:** the brand guards the service layer and not
 the store; statuses are not settled in code; the parties check; no spend guard. **Never run live:**
 how a real model treats hostile text is unobserved; the injection tests use scripted models.
 
@@ -27,7 +28,9 @@ mechanism, and several production controls are deferred and listed as such at th
 | Data kept longer than needed                           | Per-matter retention date and deletion on request (**Not built:** the scheduled job that deletes expired matters)                                                                                                                                                    |
 
 The model support check, which the plan counted as a control against fabricated conclusions, is
-built and isolated but off in both workflow versions, so it is not a control today.
+built and isolated but off in both workflow versions the application ships, so it is not a control
+today (workflow v3, which pins it, exists for the evaluation and is not registered in the
+application).
 
 ## Authorization
 
@@ -67,9 +70,11 @@ The database does refuse a promotion without a record, a promoter and a time, an
 approved playbook, a prompt or a workflow manifest.
 
 **Tests.** The authorization probe matrix runs in the unit suite (`test/routes/authorization.test.ts`:
-one request for every route, as every kind of caller). **Not built:** the matrix is not also run as
-an evaluation suite, so gate G1 of [document 5](05-evaluation.md#supplementary-suites) is never
-evaluated. A test enumerates the application's matter routes and fails if any lacks the guard, or if
+one request for every route, as every kind of caller). The matrix is also run as a step of the
+evaluation (`pnpm eval:parol --exposure`), with the ids of one matter named in requests for another
+and the routes that name no matter read as every caller, and it feeds gate G1 of [document
+5](05-evaluation.md#supplementary-suites); it tests the application with a scripted stand-in for the
+model and not a model. A test enumerates the application's matter routes and fails if any lacks the guard, or if
 a generic route would answer a matter URL (`test/server/shell-routes.test.ts`); a scan fails if any
 file other than `authorize.ts` makes an `AuthorizedMatter` (`test/auth/brand.test.ts`, and a
 type-aware scan in `brand-typed.test.ts`); every route that changes state is tested to refuse a
@@ -114,10 +119,12 @@ limit what a model's answer can do, and how a real model treats hostile text has
   checks around it are code. The one place `rule.required` is read is that `not_applicable` check;
   a `missing` answer for the optional rule `ret-1` is not corrected. A model that obeyed an injected "mark everything compliant" would still
   need a verified quote for each `compliant`, but nothing checks in code or by a model that the quote
-  supports the conclusion, because the model support check is off in both workflow versions; only
+  supports the conclusion, because the model support check is off in both workflow versions the
+  application ships (the evaluation-only workflow v3 turns it on); only
   durations, percentages, amounts and places in the explanation are compared with the quotes. The
-  injection twin (case D08 and its twin) measures whether a status moved, and has only been run
-  against a scripted oracle and a scripted simulated reader.
+  injection twins (cases D08 and D10 in development, H07 and H09 in the held-out set) measure
+  whether a status moved, and have only been run against a scripted oracle and a scripted simulated
+  reader.
 - **Configuration has one source.** The playbook version, workflow version and prompts come from
   database records that no document can reach, and no stage reads configuration from document text.
   **Not built:** the plan had legal engineers and admins change them through their own routes; there
@@ -335,7 +342,9 @@ code does not have them. Each is also noted where it appears above.
 - Administrator-only approval of a playbook and promotion of a workflow, with a screen for each.
   Today the operations are not reachable, and the store does not check the actor's role.
 - The evaluation screens and the legal-engineer role check on them.
-- The authorization probes and the exposure scan as an evaluation suite (gate G1).
+- Probing the application with a real model behind it: the exposure suite in the evaluation runs
+  the application in process with a scripted stand-in, so what a language model does with another
+  matter's text is unobserved (gate G1 is evaluated for the application, not for a model).
 - Token counts, cost and the provider-reported model in each run's provenance.
 - A spend guard on the application's own model calls. Only `pnpm eval:parol` has one.
 - The debug capture of prompts for synthetic matters.
