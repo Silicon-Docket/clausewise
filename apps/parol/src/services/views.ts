@@ -117,6 +117,11 @@ export interface MatterSummary {
   retainUntil: string;
   playbook: { slug: string; version: string } | null;
   synthetic: boolean;
+  /**
+   * True when the retention date has passed. Optional so that a summary built before it existed
+   * still fits; absent, a page shows no "past" mark. Package W2.7 fills it.
+   */
+  pastRetention?: boolean;
 }
 
 export interface StartReadiness {
@@ -159,6 +164,16 @@ export interface MatterView {
    * more.
    */
   workflows?: WorkflowOption[];
+  /** The retention date and what the page needs to explain it. Package W2.7 fills it; absent, the page shows no section. */
+  retention?: RetentionView;
+}
+
+export interface RetentionView {
+  retainUntil: string;
+  daysLeft: number; // whole days to the date, rounded up; 0 once it has passed
+  pastDate: boolean;
+  defaultDays: number; // DEFAULT_RETAIN_DAYS
+  maxDays: number; // MAX_RETAIN_DAYS
 }
 
 export interface ReviewSummary {
@@ -259,3 +274,8 @@ export interface UserOption {
   displayName: string;
   globalRole: string;
 }
+
+// The views of the pages that name no matter. They are declared next to their services; a page may
+// import types only through this file (the static test lists what a page may import).
+export type { EvaluationListView, ComparisonView } from "./evaluations.js";
+export type { AuditPageView } from "./audit.js";

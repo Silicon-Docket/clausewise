@@ -117,6 +117,10 @@ export function createMatterService(
       return view(am);
     },
 
+    setRetention() {
+      throw new Error("stub: W2.7"); // STUB(W2.7)
+    },
+
     addMember(am, input) {
       requireRole(am, "member.add", config);
       repo.addMember(am.matterId, input.userId, input.role, { actorId: am.principal.userId });

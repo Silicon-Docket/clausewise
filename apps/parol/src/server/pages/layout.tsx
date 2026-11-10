@@ -125,7 +125,11 @@ export interface NavItem {
 }
 
 /** The links of the primary navigation, in the order they are shown. */
-export const NAV_ITEMS: readonly NavItem[] = [{ label: "Matters", href: urls.matters() }];
+export const NAV_ITEMS: readonly NavItem[] = [
+  { label: "Matters", href: urls.matters() },
+  { label: "Evaluations", href: urls.evaluations(), global: "evaluation.read" },
+  { label: "Audit log", href: urls.audit(), global: "audit.read" },
+];
 
 /**
  * The links a person with this global role is shown: those with no global action, and those whose

@@ -24,6 +24,8 @@ import {
   wireErrorHandler,
 } from "./server/middleware/rejected.js";
 import { acquireInstanceLock } from "./boot/instance-lock.js";
+import { createComparisonSource } from "./evaluations/index.js";
+import { reportRetentionNotices } from "./retention/notices.js";
 import {
   FileStore,
   createRepository,
@@ -318,6 +320,7 @@ export async function start(
     sweepOrphanFiles(repo, files, log);
 
     const now = (): Date => new Date();
+    reportRetentionNotices({ repo, now, notice });
     const services = createServices({
       repo,
       files,
@@ -325,6 +328,7 @@ export async function start(
       config: { relaxedSegregation: settings.relaxedSegregation },
       now,
       log,
+      evaluations: createComparisonSource(join(settings.dataDir, "evaluations")),
     });
     const config: AppConfig = {
       demoIdentity: settings.demoIdentity,
