@@ -4,10 +4,12 @@
  *
  * A pair is a claim a finding makes and the one passage it cites. The checker is the one a review
  * uses (createSupportChecker, apps/parol/src/services/support-checker.ts) and is given the rule, the
- * claimed status, the discrepancy and the cited paragraph a pair holds. A test compares the
- * requests made here with the ones that function builds for the same rule, draft and passage; what
- * verify.ts itself hands that function is pinned by its own tests and not by this file. The
- * author's label says whether the passage backs the claim. The checker catches an unsupported pair
+ * claimed status, the discrepancy and the cited paragraph a pair holds. Two tests compare the
+ * requests made here: with the ones that function builds for the same rule, draft and passage, and
+ * with the ones that come out when each pair is driven through the review's own verify stage
+ * (verifyFinding). The escalation ids that stage keeps in a draft do not reach the checker's
+ * request, so apps/parol/test/stages/verify-support.test.ts pins those. The author's label says
+ * whether the passage backs the claim. The checker catches an unsupported pair
  * when it answers `not_supported` or `insufficient`, and raises a false alarm on a supported pair
  * when it answers anything but `supported`.
  *

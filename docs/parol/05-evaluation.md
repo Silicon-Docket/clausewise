@@ -440,9 +440,13 @@ its hash), and the case must be in the development split. A pair that does not r
 with exit 2 before anything is sent; it is never scored as a miss. Each pair is then sent through
 the support checker that a review is built with (`createSupportChecker`), which puts into the
 request the rule, the claimed status, the discrepancy and the cited paragraph of the pair and
-nothing else. A test compares the requests the calibration step makes with the ones
-`createSupportChecker` builds for the same rule, draft and cited paragraph. It does not run the
-verify stage, so what that stage itself hands to `createSupportChecker` is outside the comparison.
+nothing else. Two tests compare the requests the calibration step makes: one with the ones
+`createSupportChecker` builds for the same rule, draft and cited paragraph, and one with the ones
+that come out when each pair is driven through the review's own verify stage (`verifyFinding`) with
+that checker. The second fails when the verify stage changes the status, the discrepancy, the rule
+or the cited paragraph it hands the checker, or drops a cited paragraph. It cannot see the
+escalation ids that the verify stage keeps in the draft, because the checker's request does not
+carry them; the application's own `verify-support.test.ts` pins that.
 The set runs once per evaluation run and not once per repeat, because the pairs are fixed and
 repeating them would measure the noise of the model on 40 requests. Its 40 calls are in the plan and
 in the cost bound and are in no case run's cost or latency. They are in the usage total when the

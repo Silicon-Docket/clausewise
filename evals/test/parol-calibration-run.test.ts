@@ -4,9 +4,11 @@ import { ModelOutputError, ModelRequestError } from "@clausewise/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { canonicalJson, sha256Hex } from "../../apps/parol/src/canonical.js";
 import { loadPlaybook } from "../../apps/parol/src/playbooks/load.js";
+import type { ContextBundle } from "../../apps/parol/src/contracts.js";
 import { createSupportChecker } from "../../apps/parol/src/services/support-checker.js";
 import { getPrompt } from "../../apps/parol/src/prompts/registry.js";
 import { workflowFor } from "../../apps/parol/src/prompts/workflows.js";
+import { verifyFinding } from "../../apps/parol/src/stages/verify.js";
 import type { CalibrationFile, CalibrationKeyPair } from "../../fixtures/parol/types.js";
 import {
   CALIBRATION_FILE,
@@ -396,7 +398,7 @@ describe("preparing and running the pairs", () => {
     expect(second.result.falseAlarmRate).toMatchObject({ numerator: 1, denominator: 4 });
   });
 
-  it("asks the checker exactly what a review asks it for the same claim and passage", async () => {
+  it("asks the checker what createSupportChecker builds for the same claim and passage", async () => {
     const { data, set, playbook, workflow } = await setup();
     const prepared = await prepareCalibration({ set, dataset: data, playbook, workflow });
     const support = getPrompt("support.p1");
@@ -418,7 +420,9 @@ describe("preparing and running the pairs", () => {
       generator: spy(viaRun),
       signal: new AbortController().signal,
     });
-    // The same pair through the checker of the review, as verifyFinding builds the call.
+    // The same prepared pair through createSupportChecker called directly, with the rule, the
+    // draft and the one span the pair holds. This pins how the calibration loop calls the checker.
+    // It does not run verifyFinding; the next test pins what the review path hands the checker.
     const check = createSupportChecker(support);
     for (const item of prepared) {
       await check({
@@ -430,6 +434,80 @@ describe("preparing and running the pairs", () => {
       });
     }
     expect([...viaRun].sort()).toEqual([...viaReview].sort());
+  });
+
+  it("sends the checker the same requests when each pair goes through verifyFinding as a review does", async () => {
+    const { data, set, playbook, workflow } = await setup();
+    const prepared = await prepareCalibration({ set, dataset: data, playbook, workflow });
+    const support = getPrompt("support.p1");
+    const viaRun: string[] = [];
+    const viaVerify: string[] = [];
+    const spy = (into: string[]): ObjectGenerator => ({
+      provider: "anthropic",
+      model: "a-model",
+      disclosure: "a scripted stand-in",
+      async generate(request) {
+        into.push(requestKey(request));
+        return request.schema.parse({ verdict: "supported", missingPremise: null });
+      },
+    });
+    await runCalibration({
+      set,
+      prepared,
+      prompt: support,
+      generator: spy(viaRun),
+      signal: new AbortController().signal,
+    });
+
+    // The review path: verifyFinding builds the copy of the draft the checker is shown (only the
+    // usable verified quotes, the escalation ids the rule knows) and the deduplicated cited spans,
+    // and hands them to the support checker of the workflow. The support check reads from the bundle
+    // only whether each cited span is in it, so a bundle that holds the pair's span is all it needs;
+    // the retrieval of the rule is not part of what the checker is sent. The ingest and the manifest
+    // are those of the pair's own case, and the checks are those the workflow enables.
+    const check = createSupportChecker(support);
+    const reviewer = spy(viaVerify);
+    for (const item of prepared) {
+      const bundle: ContextBundle = {
+        ruleKey: item.rule.key,
+        category: item.rule.category,
+        rule: item.rule,
+        spans: [{ spanId: item.span.id, why: "located" }],
+        fullDocument: false,
+        estimatedTokens: 1000,
+        budgetTokens: 12_000,
+        overBudget: false,
+      };
+      const { finding, calls } = await verifyFinding({
+        draft: item.draft,
+        bundle,
+        rule: item.rule,
+        ingest: item.prepared.ingest,
+        manifest: {
+          ...item.prepared.manifest,
+          model: { provider: reviewer.provider, model: reviewer.model },
+        },
+        enabledChecks: [...workflow.manifest.checks],
+        supportChecker: check,
+        generator: reviewer,
+        signal: new AbortController().signal,
+      });
+      // Every pair reaches the checker through the review path: its quote verifies in its span and
+      // its status is one that is checked, so no pair is skipped and none is handled differently.
+      expect(
+        finding.checks.find((c) => c.id === "support"),
+        item.pair.id,
+      ).toMatchObject({ kind: "model", outcome: "pass" });
+      expect(
+        finding.evidence.map((e) => e.quoteCheck),
+        item.pair.id,
+      ).not.toContain("not_found");
+      expect(calls, item.pair.id).toHaveLength(1);
+    }
+
+    expect(viaVerify).toHaveLength(prepared.length);
+    expect(viaRun).toHaveLength(prepared.length);
+    expect([...viaVerify].sort()).toEqual([...viaRun].sort());
   });
 
   it("stops at an abort, with no record and no further calls", async () => {
