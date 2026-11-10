@@ -48,14 +48,15 @@ function noticeBinding(c: Context, principal: Principal): NoticeBinding {
 }
 
 /**
- * What every page takes: the name of the signed-in person, the token for the forms of this
- * session, and the notice the last action asked for. The notice is shown only when the query
+ * What every page takes: the name and global role of the signed-in person, the token for the forms
+ * of this session, and the notice the last action asked for. The notice is shown only when the query
  * string carries a signature that this server made for this person and this page (notices.ts), so
  * a link cannot make a page claim that something was done.
  */
 export function pageChrome(c: Context, principal: Principal): Chrome {
   return {
     userName: principal.displayName,
+    globalRole: principal.globalRole,
     csrfToken: csrfToken(c),
     notice: verifiedNotice(
       {

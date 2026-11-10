@@ -1,4 +1,4 @@
-import type { MatterRole } from "../contracts.js";
+import type { GlobalRole, MatterRole } from "../contracts.js";
 
 /**
  * What each matter role may do, from the API table in docs/parol/03 and the authorization table in
@@ -43,3 +43,28 @@ export function roleAllows(
     (action === "review.decide" || action === "memo.export")
   );
 }
+
+/**
+ * What each global role may do on a page or a route that names no matter (the evaluation
+ * comparison, the pilot measures, the audit log, the trainer's key). One table, used by the route
+ * guard (`defineRoute`), by the services behind the routes (`requireGlobalRole`) and by the
+ * navigation, so a link is shown to the people who will be let through and to no one else. A
+ * matter role says nothing here: a global role belongs to the person and not to a matter.
+ */
+export const GLOBAL_ACTIONS = {
+  "evaluation.read": ["legal_engineer", "admin"],
+  "pilot.read": ["legal_engineer", "admin"],
+  "pilot.manage": ["legal_engineer", "admin"],
+  "audit.read": ["admin"],
+  "training.key": ["legal_engineer", "admin"],
+} as const satisfies Record<string, readonly GlobalRole[]>;
+
+export type GlobalAction = keyof typeof GLOBAL_ACTIONS;
+
+/**
+ * Whether a global role may perform an action. An action that is not in the table, or a role that
+ * is not listed for it, is refused: nothing is allowed by default.
+ */
+export const globalRoleAllows = (role: GlobalRole, action: GlobalAction): boolean =>
+  Object.hasOwn(GLOBAL_ACTIONS, action) &&
+  (GLOBAL_ACTIONS[action] as readonly GlobalRole[]).includes(role);

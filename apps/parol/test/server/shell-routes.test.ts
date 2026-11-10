@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import {
+  READ_ONLY_GLOBAL_ACTIONS,
   defineMatterRoute,
   defineMiddleware,
   defineRoute,
@@ -13,10 +14,17 @@ import {
   type RouteMethod,
 } from "../../src/server/matter-route.js";
 import type { AppDeps } from "../../src/server/deps.js";
-import { MATTER_ACTIONS, type MatterAction } from "../../src/auth/actions.js";
+import {
+  GLOBAL_ACTIONS,
+  MATTER_ACTIONS,
+  type GlobalAction,
+  type MatterAction,
+} from "../../src/auth/actions.js";
+import { pageChrome } from "../../src/server/routes/shared.js";
+import { Layout, NAV_ITEMS, render, type NavItem } from "../../src/server/pages/layout.js";
 import { SRC_ROOT, createParolProgram } from "../auth/brand-types.js";
 import { findDirectRouteRegistrations } from "./shell-registration-scan.js";
-import { ALL_ACTIONS, makeShell } from "./support-app.js";
+import { ALL_ACTIONS, USERS, makeShell } from "./support-app.js";
 
 /**
  * The rule: every route that can reach a matter goes through `defineMatterRoute`. The check reads
@@ -643,4 +651,359 @@ describe("what counts as a matter path", () => {
   for (const path of otherPaths)
     it(`does not treat ${path} as reaching a matter`, () =>
       expect(isMatterScopedPath(path)).toBe(false));
+});
+
+// ---------------------------------------------------------------------------------------------
+// Routes that name no matter and are gated by a global role
+// ---------------------------------------------------------------------------------------------
+
+describe("a route with a global action", () => {
+  // Written out by hand from the plan (PLAN 1.4 P0.A item 1), not computed from the table the code
+  // uses. A read is a GET that carries no token; every other action changes state.
+  const EXPECTED_ROLES: Record<GlobalAction, readonly string[]> = {
+    "evaluation.read": ["legal_engineer", "admin"],
+    "pilot.read": ["legal_engineer", "admin"],
+    "pilot.manage": ["legal_engineer", "admin"],
+    "audit.read": ["admin"],
+    "training.key": ["legal_engineer", "admin"],
+  };
+  const READS: GlobalAction[] = ["evaluation.read", "pilot.read", "audit.read", "training.key"];
+  const CHANGES: GlobalAction[] = ["pilot.manage"];
+  const ACTIONS = Object.keys(EXPECTED_ROLES) as GlobalAction[];
+  // The demo users: the associate and the reviewer are members, the engineer and the admin are not.
+  const PEOPLE = [
+    { name: "associate", user: USERS.associate, role: "member" },
+    { name: "reviewer", user: USERS.reviewer, role: "member" },
+    { name: "legal engineer", user: USERS.engineer, role: "legal_engineer" },
+    { name: "admin", user: USERS.admin, role: "admin" },
+  ] as const;
+
+  /** A throwaway shell with, for every action, a page GET (reads), a page POST and a JSON POST. */
+  function gatedShell() {
+    const shell = makeShell();
+    const calls: string[] = [];
+    for (const action of ACTIONS) {
+      const handler = (c: { json: (x: unknown) => Response }): Response => {
+        calls.push(action);
+        return c.json({ ok: true, action });
+      };
+      if (READS.includes(action))
+        defineRoute(shell.app, {
+          method: "GET",
+          path: `/__test/global/${action}`,
+          access: "principal",
+          globalAction: action,
+          handler,
+        });
+      defineRoute(shell.app, {
+        method: "POST",
+        path: `/api/__test/global/${action}`,
+        access: "principal",
+        globalAction: action,
+        handler,
+      });
+      defineRoute(shell.app, {
+        method: "POST",
+        path: `/__test/global/${action}`,
+        access: "principal",
+        globalAction: action,
+        handler,
+      });
+    }
+    return { shell, calls };
+  }
+
+  it("classifies every action as a read or as a change, and READ_ONLY_GLOBAL_ACTIONS is the reads", () => {
+    expect([...READS, ...CHANGES].sort()).toEqual([...ACTIONS].sort());
+    expect(Object.keys(GLOBAL_ACTIONS).sort()).toEqual([...ACTIONS].sort());
+    expect([...READ_ONLY_GLOBAL_ACTIONS].sort()).toEqual([...READS].sort());
+  });
+
+  it("is recorded with its global action, and every other kind of route records none", () => {
+    const { shell } = gatedShell();
+    defineRoute(shell.app, { method: "GET", path: "/open", access: "principal", handler: ok });
+    defineRoute(shell.app, { method: "GET", path: "/public", access: "public", handler: ok });
+    defineMatterRoute(shell.app, {
+      method: "GET",
+      path: "/matters/:matterId/seen",
+      action: "matter.read",
+      handler: ok,
+    });
+    const routes = describeRoutes(shell.app);
+    for (const action of ACTIONS) {
+      const found = routes.filter((r) => r.path.endsWith(`/__test/global/${action}`));
+      expect(found.length, action).toBe(READS.includes(action) ? 3 : 2);
+      for (const route of found) {
+        expect(route.kind).toBe("principal");
+        expect(route.globalAction).toBe(action);
+        expect(route.action).toBeNull();
+      }
+    }
+    const others = routes.filter((r) => !r.path.includes("/__test/global/"));
+    expect(others.length).toBeGreaterThan(4);
+    for (const route of others)
+      expect(route.globalAction, `${route.method} ${route.path}`).toBeNull();
+    expect(others.some((r) => r.kind === "middleware")).toBe(true);
+    expect(others.some((r) => r.kind === "matter")).toBe(true);
+    // Nothing about a matter changes.
+    expect(findUnguardedMatterRoutes(shell.app)).toEqual([]);
+    expect(findMatterUrlsWithoutGuard(shell.app)).toEqual([]);
+    expect(undeclaredRoutes(shell.app)).toEqual([]);
+  });
+
+  it("lets in the roles the table lists and answers 403 to the others, on GET and on POST", async () => {
+    const { shell, calls } = gatedShell();
+    let expectedCalls = 0;
+    for (const person of PEOPLE) {
+      const client = await shell.signIn(person.user);
+      for (const action of ACTIONS) {
+        const allowed = EXPECTED_ROLES[action].includes(person.role);
+        const attempts: { label: string; send: () => Promise<Response> }[] = [
+          {
+            label: `POST /api ${action}`,
+            send: () => client.post(`/api/__test/global/${action}`),
+          },
+          { label: `POST ${action}`, send: () => client.post(`/__test/global/${action}`) },
+          ...(READS.includes(action)
+            ? [{ label: `GET ${action}`, send: () => client.get(`/__test/global/${action}`) }]
+            : []),
+        ];
+        for (const attempt of attempts) {
+          const response = await attempt.send();
+          expect(response.status, `${person.name} ${attempt.label}`).toBe(allowed ? 200 : 403);
+          if (allowed) expectedCalls += 1;
+        }
+      }
+    }
+    // A handler ran only where the guard let the request in.
+    expect(calls).toHaveLength(expectedCalls);
+    expect(expectedCalls).toBeGreaterThan(20);
+  });
+
+  it("answers a person who may not with the fixed 403 of the shell, which says nothing of the action", async () => {
+    const { shell } = gatedShell();
+    const member = await shell.signIn(USERS.associate);
+    const bodies = new Set<string>();
+    for (const action of ACTIONS) {
+      const response = await member.post(`/api/__test/global/${action}`);
+      expect(response.status).toBe(403);
+      const body = await response.text();
+      expect(body).not.toContain(action);
+      expect(body).not.toContain("legal_engineer");
+      bodies.add(body);
+    }
+    expect([...bodies]).toEqual([
+      '{"error":{"kind":"forbidden","message":"You may not do that."}}',
+    ]);
+  });
+
+  it("sends a visitor to sign in before it says anything about roles, and runs nothing", async () => {
+    const { shell, calls } = gatedShell();
+    const visitor = shell.anonymous();
+    for (const action of ACTIONS) {
+      const page = await visitor.post(`/__test/global/${action}`, {}, false);
+      expect(page.status, action).toBe(303);
+      expect(page.headers.get("location")).toBe("/");
+      const api = await visitor.post(`/api/__test/global/${action}`, {}, false);
+      expect(api.status, action).toBe(401);
+      if (READS.includes(action)) {
+        const read = await visitor.get(`/__test/global/${action}`);
+        expect(read.status, action).toBe(303);
+        expect(read.headers.get("location")).toBe("/");
+      }
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it("checks the CSRF token of a write before the global role", async () => {
+    const { shell, calls } = gatedShell();
+    const kind = async (response: Response): Promise<string> =>
+      ((await response.json()) as { error: { kind: string } }).error.kind;
+    const member = await shell.signIn(USERS.associate);
+    const admin = await shell.signIn(USERS.admin);
+    const path = "/api/__test/global/pilot.manage";
+    // No token, and a wrong token: the form is refused as a form, for the person who may and the
+    // person who may not alike, so a missing token tells no one what their role is.
+    for (const client of [member, admin])
+      for (const csrf of [false, "not-the-token"] as const) {
+        const response = await client.post(path, {}, csrf);
+        expect(response.status).toBe(403);
+        expect(await kind(response)).toBe("csrf");
+      }
+    expect(calls).toEqual([]);
+    // With the token, the role decides.
+    const refused = await member.post(path);
+    expect(refused.status).toBe(403);
+    expect(await kind(refused)).toBe("forbidden");
+    expect((await admin.post(path)).status).toBe(200);
+    expect(calls).toEqual(["pilot.manage"]);
+  });
+
+  it("decides from the database on every request, so a role changed since sign-in counts at once", async () => {
+    const { shell } = gatedShell();
+    const person = await shell.signIn(USERS.admin);
+    const path = "/__test/global/audit.read";
+    expect((await person.get(path)).status).toBe(200);
+    const setRole = (role: string): void => {
+      shell.repo.db.prepare("UPDATE users SET global_role = ? WHERE id = ?").run(role, USERS.admin);
+    };
+    setRole("member");
+    expect((await person.get(path)).status).toBe(403);
+    setRole("legal_engineer");
+    expect((await person.get(path)).status).toBe(403);
+    expect((await person.get("/__test/global/evaluation.read")).status).toBe(200);
+    setRole("admin");
+    expect((await person.get(path)).status).toBe(200);
+  });
+
+  it("leaves a route with no global action open to every signed-in person", async () => {
+    const shell = makeShell();
+    defineRoute(shell.app, {
+      method: "GET",
+      path: "/__test/open",
+      access: "principal",
+      handler: (c) => c.text("open"),
+    });
+    for (const person of PEOPLE)
+      expect((await (await shell.signIn(person.user)).get("/__test/open")).status).toBe(200);
+  });
+
+  it("cannot be bound to GET or HEAD unless the action only reads, because those carry no token", () => {
+    const { shell } = gatedShell();
+    const before = describeRoutes(shell.app).length;
+    for (const action of CHANGES)
+      for (const method of ["GET", "HEAD", "get", "head"])
+        expect(
+          () =>
+            defineRoute(shell.app, {
+              method: method as RouteMethod,
+              path: "/__test/changes",
+              access: "principal",
+              globalAction: action,
+              handler: ok,
+            }),
+          `${method} ${action}`,
+        ).toThrow(TypeError);
+    // Nothing was left registered by the refusals.
+    expect(describeRoutes(shell.app)).toHaveLength(before);
+  });
+
+  it("can be bound to a write method whatever the action, and to GET when the action only reads", () => {
+    const { shell } = gatedShell();
+    for (const action of ACTIONS)
+      for (const method of ["POST", "PUT", "PATCH", "DELETE"] as const)
+        expect(() =>
+          defineRoute(shell.app, {
+            method,
+            path: `/__test/more/${action}/${method}`,
+            access: "principal",
+            globalAction: action,
+            handler: ok,
+          }),
+        ).not.toThrow();
+    for (const action of READS)
+      expect(() =>
+        defineRoute(shell.app, {
+          method: "GET",
+          path: `/__test/more/${action}`,
+          access: "principal",
+          globalAction: action,
+          handler: ok,
+        }),
+      ).not.toThrow();
+  });
+
+  it("is refused at registration for a public route, an unknown action or a path that reaches a matter", () => {
+    const { shell } = gatedShell();
+    const before = describeRoutes(shell.app).length;
+    const spec = (extra: Record<string, unknown>) =>
+      ({
+        method: "POST",
+        path: "/__test/refused",
+        access: "principal",
+        handler: ok,
+        ...extra,
+      }) as unknown as Parameters<typeof defineRoute>[1];
+    // A public route that names an action would look gated and be open to everyone.
+    expect(() =>
+      defineRoute(shell.app, spec({ access: "public", globalAction: "pilot.read" })),
+    ).toThrow(TypeError);
+    for (const globalAction of ["nothing.read", "", "constructor", "__proto__", 7, null])
+      expect(() => defineRoute(shell.app, spec({ globalAction })), String(globalAction)).toThrow(
+        TypeError,
+      );
+    expect(() =>
+      defineRoute(shell.app, spec({ path: "/matters/:matterId/x", globalAction: "pilot.read" })),
+    ).toThrow(TypeError);
+    expect(describeRoutes(shell.app)).toHaveLength(before);
+  });
+});
+
+describe("pageChrome and the navigation", () => {
+  const PEOPLE = [
+    { user: USERS.associate, role: "member" },
+    { user: USERS.reviewer, role: "member" },
+    { user: USERS.engineer, role: "legal_engineer" },
+    { user: USERS.admin, role: "admin" },
+  ] as const;
+
+  it("carries the global role of the person, read from the database for this request", async () => {
+    const shell = makeShell();
+    defineRoute(shell.app, {
+      method: "GET",
+      path: "/__test/chrome",
+      access: "principal",
+      handler: (c, principal) => c.json(pageChrome(c, principal)),
+    });
+    for (const person of PEOPLE) {
+      const client = await shell.signIn(person.user);
+      const chrome = (await (await client.get("/__test/chrome")).json()) as { globalRole: string };
+      expect(chrome.globalRole, person.user).toBe(person.role);
+    }
+    const admin = await shell.signIn(USERS.admin);
+    shell.repo.db.prepare("UPDATE users SET global_role = 'member' WHERE id = ?").run(USERS.admin);
+    const demoted = (await (await admin.get("/__test/chrome")).json()) as { globalRole: string };
+    expect(demoted.globalRole).toBe("member");
+  });
+
+  it("shows a link gated by a global action to the roles the action lists and to no one else", async () => {
+    const shell = makeShell();
+    defineRoute(shell.app, {
+      method: "GET",
+      path: "/__test/page",
+      access: "principal",
+      handler: (c, principal) =>
+        c.html(render(Layout({ title: "Page", chrome: pageChrome(c, principal) }))),
+    });
+    const items = NAV_ITEMS as NavItem[];
+    const original = [...items];
+    const links = (html: string): string[] =>
+      [...html.matchAll(/<li><a href="([^"]+)">([^<]+)<\/a><\/li>/g)].map((m) => m[2] as string);
+    const expectedFor = (role: string, action: GlobalAction): boolean =>
+      (GLOBAL_ACTIONS[action] as readonly string[]).includes(role);
+    try {
+      // One item per action, then one that is shown to everyone.
+      for (const action of Object.keys(GLOBAL_ACTIONS) as GlobalAction[])
+        items.push({ label: `Gate ${action}`, href: `/__test/gate/${action}`, global: action });
+      for (const person of PEOPLE) {
+        const client = await shell.signIn(person.user);
+        const shown = links(await (await client.get("/__test/page")).text());
+        const wanted = [
+          ...original.map((item) => item.label),
+          ...(Object.keys(GLOBAL_ACTIONS) as GlobalAction[])
+            .filter((action) => expectedFor(person.role, action))
+            .map((action) => `Gate ${action}`),
+        ];
+        expect(shown, person.user).toEqual(wanted);
+      }
+      // A visitor sees none of the gated links; the page itself is the sign-in page there, so the
+      // frame is checked with no role.
+      const visitorFrame = render(
+        Layout({ title: "Page", chrome: { userName: null, csrfToken: "t" } }),
+      );
+      expect(links(visitorFrame)).toEqual(original.map((item) => item.label));
+    } finally {
+      items.splice(0, items.length, ...original);
+    }
+  });
 });

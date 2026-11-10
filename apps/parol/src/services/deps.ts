@@ -1,6 +1,11 @@
 import type { ObjectGenerator } from "@clausewise/llm";
-import type { AuthorizedMatter } from "../auth/types.js";
-import { roleAllows, type MatterAction } from "../auth/actions.js";
+import type { AuthorizedMatter, Principal } from "../auth/types.js";
+import {
+  globalRoleAllows,
+  roleAllows,
+  type GlobalAction,
+  type MatterAction,
+} from "../auth/actions.js";
 import type { BuildMemo, SupportChecker } from "../module-contracts.js";
 import type { FileStore, Repository } from "../store/index.js";
 import { ForbiddenError } from "./errors.js";
@@ -47,4 +52,14 @@ export function requireRole(
 ): void {
   if (!roleAllows(am.role, action, { relaxedSegregation: config.relaxedSegregation }))
     throw new ForbiddenError(action);
+}
+
+/**
+ * Every service function behind a page that names no matter calls this first, as the matter
+ * services call `requireRole`. The table is the one the route guard uses (`GLOBAL_ACTIONS`), so the
+ * service is never more permissive than the route. It reads the role of the principal and nothing
+ * else: the identity layer read that role from the database for this request.
+ */
+export function requireGlobalRole(principal: Principal, action: GlobalAction): void {
+  if (!globalRoleAllows(principal.globalRole, action)) throw new ForbiddenError(action);
 }
