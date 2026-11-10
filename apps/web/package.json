@@ -1,0 +1,23 @@
+{
+  "name": "@clausewise/web",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@azure/msal-browser": "5.26.0",
+    "@clausewise/azure": "workspace:*",
+    "@clausewise/llm": "workspace:*",
+    "@clausewise/service": "workspace:*",
+    "jose": "6.2.13"
+  },
+  "devDependencies": {
+    "@clausewise/review": "workspace:*"
+  }
+}

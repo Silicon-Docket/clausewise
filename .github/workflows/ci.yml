@@ -10,6 +10,21 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # A throwaway PostgreSQL for packages/azure's database tests, which are skipped without one.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CLAUSEWISE_TEST_POSTGRES_URL: postgresql://127.0.0.1:5432/clausewise_test
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -20,4 +35,45 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
+      - name: Prepare the test database
+        run: |
+          psql -h 127.0.0.1 -U postgres \
+            -c "CREATE ROLE clausewise_migrate LOGIN" \
+            -c "CREATE ROLE clausewise_web LOGIN" \
+            -c "CREATE ROLE clausewise_worker LOGIN" \
+            -c "CREATE DATABASE clausewise_test OWNER clausewise_migrate"
       - run: pnpm test
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the server image
+        run: docker build --platform linux/amd64 --tag clausewise-server:ci .
+      - name: It runs as a non-root user and refuses to start without its settings
+        run: |
+          test "$(docker inspect --format '{{.Config.User}}' clausewise-server:ci)" = "65532:65532"
+          for command in web worker migrate; do
+            set +e
+            docker run --rm --read-only clausewise-server:ci "$command" 2> stderr.txt
+            code=$?
+            set -e
+            cat stderr.txt
+            test "$code" -eq 1
+            grep -q "^Missing settings" stderr.txt
+          done
+          set +e
+          docker run --rm --read-only clausewise-server:ci unknown
+          code=$?
+          set -e
+          test "$code" -eq 64
+
+  templates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the Azure templates
+        run: |
+          az bicep install
+          az bicep build --file deploy/azure/foundation/main.bicep --stdout > /dev/null
+          az bicep build --file deploy/azure/application/main.bicep --stdout > /dev/null

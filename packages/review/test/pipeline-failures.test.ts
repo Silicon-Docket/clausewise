@@ -247,6 +247,39 @@ describe("a fatal failure", () => {
     },
   ];
 
+  it.each([
+    [
+      401,
+      "auth",
+      /role on the Azure OpenAI resource, and that AZURE_CLIENT_ID names that identity/,
+    ],
+    [403, "permission", /Cognitive Services OpenAI User role/],
+    [404, "not_found", /CLAUSEWISE_MODEL names a deployment on the resource \(review-gpt\)/],
+    [429, "billing", /deployment's quota/],
+    [418, "other", /Cognitive Services OpenAI User role/],
+  ] as const)(
+    "words a fatal HTTP %i (%s) for azure-openai in terms of its identity, never a key",
+    async (status, kind, expected) => {
+      const base = intercept(createOracleGenerator(aggressiveScript()), () => {
+        throw new ModelRequestError(`rejected: ${CONTRACT_TEXT}`, status, true, kind);
+      });
+      const generator: ObjectGenerator = {
+        provider: "azure-openai",
+        model: "review-gpt",
+        disclosure: base.disclosure,
+        generate: (request) => base.generate(request),
+      };
+      const failure = await reviewContract({ docx: input, playbook }, generator, {
+        concurrency: 1,
+      }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(ReviewError);
+      const message = (failure as Error).message;
+      expect(message).toMatch(expected);
+      expect(message).not.toMatch(/API key/);
+      expect(message).not.toContain(CONTRACT_TEXT);
+    },
+  );
+
   it.each(fatalCases)("$name stops the review with a ReviewError", async (item) => {
     const generator = intercept(createOracleGenerator(aggressiveScript()), () => {
       throw item.error();

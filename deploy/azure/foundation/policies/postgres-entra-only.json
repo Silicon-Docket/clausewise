@@ -1,0 +1,46 @@
+{
+  "displayName": "Clausewise: PostgreSQL flexible servers must accept only Entra ID sign-in",
+  "policyType": "Custom",
+  "mode": "Indexed",
+  "description": "Denies a PostgreSQL flexible server unless Microsoft Entra authentication is enabled and password authentication is disabled. The built-in policy with the same rule is preview and allows Audit only.",
+  "metadata": {
+    "category": "Clausewise",
+    "version": "1.0.0"
+  },
+  "parameters": {
+    "effect": {
+      "type": "String",
+      "metadata": {
+        "displayName": "Effect",
+        "description": "Deny refuses the request. Audit only reports it."
+      },
+      "allowedValues": ["Deny", "Audit", "Disabled"],
+      "defaultValue": "Deny"
+    }
+  },
+  "policyRule": {
+    "if": {
+      "allOf": [
+        {
+          "field": "type",
+          "equals": "Microsoft.DBforPostgreSQL/flexibleServers"
+        },
+        {
+          "anyOf": [
+            {
+              "field": "Microsoft.DBforPostgreSQL/flexibleServers/authConfig.activeDirectoryAuth",
+              "notEquals": "Enabled"
+            },
+            {
+              "field": "Microsoft.DBforPostgreSQL/flexibleServers/authConfig.passwordAuth",
+              "notEquals": "Disabled"
+            }
+          ]
+        }
+      ]
+    },
+    "then": {
+      "effect": "[parameters('effect')]"
+    }
+  }
+}

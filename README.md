@@ -10,8 +10,14 @@ independent and not affiliated with any of them.
 > **Status: pre-alpha.** The command line works end to end against scripted models and
 > recorded requests, but it has **not yet been run against a live model**, and Word itself was
 > never available to check the output. Expect rough edges, and read [Known limits](#known-limits)
-> before you point it at a real contract. The web app, Docker image and Word add-in do not
-> exist yet.
+> before you point it at a real contract. The web app runs on your own machine as one plain
+> page, or in Azure from a container image that has never been deployed to a real subscription.
+> The Word add-in does not exist yet.
+
+The plan for a web app and Word add-in that run inside a firm's own Azure tenant, with no
+stored secrets and no general internet access, is in
+[docs/azure-in-tenant.md](docs/azure-in-tenant.md). Its Azure templates are in
+[deploy/azure/](deploy/azure/README.md).
 
 ## What it does
 
@@ -66,6 +72,50 @@ Exit codes:
 | 1    | Something went wrong, including a review in which no rule could be checked. Nothing is written.                                         |
 | 2    | `--fail-on` was set and an item at that severity or above is open. A rule that could not be checked counts as open at its own severity. |
 | 130  | Interrupted with Ctrl-C. Nothing is written.                                                                                            |
+
+### The web API, locally
+
+`pnpm web` starts the review API on `127.0.0.1:8787`, reachable from this machine only, with
+the reviews run in the same process and everything kept in memory until it stops. It takes
+the same model settings as the command line and prints where contract text goes before it
+starts. Open `http://localhost:8787/` for a plain page that reviews a contract and downloads the
+results, or call the API below directly. See
+[docs/azure-in-tenant.md](docs/azure-in-tenant.md) for where this is going.
+
+Set `CLAUSEWISE_ENTRA_TENANT_ID` and `CLAUSEWISE_ENTRA_CLIENT_ID` (the foundation template's
+`tenantId` and `signInClientId` outputs) to require Entra ID sign-in as well: every request then
+needs an access token that Entra ID issued for that app registration, for the `access_as_user`
+scope, to a user of that tenant. Tokens obtained by any other app, ID tokens and app-only tokens
+are refused. The page then signs in with Microsoft (MSAL, authorization code flow with PKCE, no
+client secret) and sends that token. To try it, add `http://localhost:8787/` to the app
+registration as a single-page application redirect URI.
+
+| Request                                | Does                                                                     |
+| -------------------------------------- | ------------------------------------------------------------------------ |
+| `GET /api/playbooks`                   | The playbooks in `playbooks/`                                            |
+| `POST /api/reviews`                    | Creates a review from `{"playbookId", "fileName", "client"?, "author"?}` |
+| `PUT /api/reviews/{id}/contract`       | Takes the `.docx` as the request body                                    |
+| `POST /api/reviews/{id}/start`         | Checks the file opens in the Word engine, then queues the review         |
+| `GET /api/reviews/{id}`                | The review's status, and its open items once done                        |
+| `GET /api/reviews/{id}/results/{kind}` | `redlined`, `report` or `summary`, as the command line's files           |
+
+### In Azure
+
+Three entry points run the same review in the firm's own Azure tenant, each signed in as its own
+managed identity, with no stored key or password:
+
+| Command                              | Runs                                                                                            |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `CLAUSEWISE_WEB_MODE=azure pnpm web` | The API and page on port 8080, with Entra ID sign-in always on                                  |
+| `pnpm worker`                        | Takes review jobs off the queue and runs them with `azure-openai`                               |
+| `pnpm migrate`                       | Brings the database up to date and creates the web and worker roles. Run it before each release |
+
+Contracts and results are kept in Blob Storage, jobs in a Storage queue and review records in
+PostgreSQL. Every setting is checked before anything connects, and a missing one is named. These
+need the token service that Azure Container Apps runs beside each app, so they work only there.
+All three run from one container image, `docker build --tag clausewise-server .`, chosen by its
+command (`web`, `worker` or `migrate`). [deploy/azure/README.md](deploy/azure/README.md) has the
+templates that deploy them and maps each setting to the foundation's outputs.
 
 ## Principles
 
@@ -132,16 +182,21 @@ It lists the rules and marks the absence rules.
 
 Everything is set through environment variables. `pnpm clausewise --help` lists them all.
 
-| Variable                        | Meaning                                                                            |
-| ------------------------------- | ---------------------------------------------------------------------------------- |
-| `CLAUSEWISE_PROVIDER`           | `anthropic` (default), `openai` or `openai-compatible`                             |
-| `CLAUSEWISE_MODEL`              | Model name. Defaults to `claude-sonnet-5-5` for anthropic only                     |
-| `ANTHROPIC_API_KEY`             | Required for anthropic                                                             |
-| `OPENAI_API_KEY`                | Required for openai                                                                |
-| `CLAUSEWISE_BASE_URL`           | Required for openai-compatible, for example `http://localhost:11434/v1` for Ollama |
-| `CLAUSEWISE_MAX_CONTEXT_TOKENS` | Review in parts when the contract is longer than this                              |
-| `CLAUSEWISE_CONCURRENCY`        | Rule checks in flight at once. Default 4                                           |
-| `CLAUSEWISE_FALLBACK`           | `default` lets the Anthropic API rerun a declined request on a second model        |
+| Variable                        | Meaning                                                                                                                                                   |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CLAUSEWISE_PROVIDER`           | `anthropic` (default), `openai`, `openai-compatible` or `azure-openai`                                                                                    |
+| `CLAUSEWISE_MODEL`              | Model name. Defaults to `claude-sonnet-5-5` for anthropic only                                                                                            |
+| `ANTHROPIC_API_KEY`             | Required for anthropic                                                                                                                                    |
+| `OPENAI_API_KEY`                | Required for openai                                                                                                                                       |
+| `CLAUSEWISE_BASE_URL`           | Required for openai-compatible, for example `http://localhost:11434/v1` for Ollama, and for azure-openai, `https://<resource>.openai.azure.com/openai/v1` |
+| `AZURE_CLIENT_ID`               | azure-openai only: the user-assigned managed identity to sign in as                                                                                       |
+| `CLAUSEWISE_MAX_CONTEXT_TOKENS` | Review in parts when the contract is longer than this                                                                                                     |
+| `CLAUSEWISE_CONCURRENCY`        | Rule checks in flight at once. Default 4                                                                                                                  |
+| `CLAUSEWISE_FALLBACK`           | `default` lets the Anthropic API rerun a declined request on a second model                                                                               |
+
+`azure-openai` takes no key. It signs in with the managed identity of the Azure Container Apps or
+App Service app it runs in, so it works only there; `CLAUSEWISE_MODEL` is the name of the
+deployment. See [docs/azure-in-tenant.md](docs/azure-in-tenant.md).
 
 Use a model with reliable structured output. Small local models may need a short context and
 will give weaker findings. The context limit has to leave room for a clause or two on top of the
