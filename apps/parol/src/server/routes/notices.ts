@@ -4,7 +4,11 @@ import { UploadError } from "../../module-contracts.js";
 import type { UploadWarningView } from "../../services/views.js";
 import { ConflictError, ValidationError } from "../../store/errors.js";
 import { toSafeError } from "../middleware/errors.js";
-import type { Notice } from "../pages/layout.js";
+import { isFragmentHref, type FragmentHref, type Notice } from "../pages/layout.js";
+import { REFUSALS_FEEDBACK } from "./refusals-feedback.js";
+import { REFUSALS_PILOT } from "./refusals-pilot.js";
+import { REFUSALS_RETENTION } from "./refusals-retention.js";
+import { REFUSALS_TRAINING } from "./refusals-training.js";
 
 /**
  * The one-time messages of the pages ("the document was added"). A page shows a `Notice` that the
@@ -19,11 +23,126 @@ import type { Notice } from "../pages/layout.js";
  *
  * A form that is refused is not redirected: it is answered with its own page, the status of the
  * refusal and a notice of kind "error" that says why (see `refusalOf` at the end).
+ *
+ * The notices, the phrases of the refusals and what a refusal tells the person to do are written
+ * in fragments: one for the core of the application (below), and one for each package that adds
+ * codes of its own (`refusals-feedback.ts`, `refusals-pilot.ts`, `refusals-retention.ts` and
+ * `refusals-training.ts`). The tables the rest of the code reads are the merge of all of them,
+ * made once when this file is loaded, and a code that two fragments define is an error then.
  */
 
 export const NOTICE_PARAM = "notice";
 
-const NOTICES = {
+// ---------------------------------------------------------------------------------------------
+// Fragments
+// ---------------------------------------------------------------------------------------------
+
+/** A one-time notice a fragment writes: a plain string is a success notice. */
+export type FragmentNotice = string | { kind: "success" | "info"; text: string };
+
+/** A place on the page where a refusal is fixed, and the words of the link that leads there. */
+export interface RefusalJump {
+  href: FragmentHref;
+  label: string;
+}
+
+/**
+ * What one owner contributes to the tables. A code is defined once, in one fragment, with its
+ * phrase, the sentence inside the phrase that says what to do (`todo`) and, if the person fixes it
+ * at a place on the page, a `jump` to that place. `todo` and `jump` are keyed by the refusal code
+ * of a phrase and live in the same fragment as the phrase.
+ */
+export interface RefusalFragment {
+  /** Refusal code (the store's short code) to the phrase a person is shown. */
+  phrases: Record<string, string>;
+  /** Refusal code to the sentence of its phrase that says what to do. */
+  todo: Record<string, string>;
+  /** Refusal code to the place on the page where it is fixed. */
+  jump?: Record<string, RefusalJump>;
+  /** Notice code (carried across a redirect) to its text, or to its kind and text. */
+  notices?: Record<string, FragmentNotice>;
+}
+
+export interface NamedRefusalFragment {
+  name: string;
+  fragment: RefusalFragment;
+}
+
+export interface RefusalTables {
+  phrases: Readonly<Record<string, string>>;
+  todo: Readonly<Record<string, string>>;
+  jump: Readonly<Record<string, RefusalJump>>;
+  notices: Readonly<Record<string, Notice>>;
+}
+
+/** The shape a refusal code has: what `toSafeError` lets through, so any other is never seen. */
+const REFUSAL_CODE = /^[a-z][a-z0-9_]{0,63}$/;
+/** The shape a notice code has: it travels in a query string. */
+const NOTICE_CODE = /^[a-z][a-z0-9-]{0,63}$/;
+
+/**
+ * The tables of all the fragments, in one. It throws when a code is defined by two fragments (a
+ * phrase, a todo, a jump or a notice), when a code has a shape that could never be produced, when
+ * a todo is empty, and when a jump does not lead to a place on the page, so that the mistake is
+ * found when the fragment is written and not when a person meets the form. The messages name codes
+ * and fragments, which are written in the source, and nothing else.
+ */
+export function mergeRefusalFragments(fragments: readonly NamedRefusalFragment[]): RefusalTables {
+  const phrases: Record<string, string> = {};
+  const todo: Record<string, string> = {};
+  const jump: Record<string, RefusalJump> = {};
+  const notices: Record<string, Notice> = {};
+  const owners = {
+    phrases: new Map<string, string>(),
+    todo: new Map<string, string>(),
+    jump: new Map<string, string>(),
+    notices: new Map<string, string>(),
+  };
+  const claim = (table: keyof typeof owners, code: string, name: string): void => {
+    const pattern = table === "notices" ? NOTICE_CODE : REFUSAL_CODE;
+    if (!pattern.test(code))
+      throw new Error(`the ${table} code "${code}" of the ${name} fragment is not a valid code`);
+    const other = owners[table].get(code);
+    if (other !== undefined)
+      throw new Error(
+        `the ${table} code "${code}" is defined by both the ${other} fragment and the ${name} fragment`,
+      );
+    owners[table].set(code, name);
+  };
+  for (const { name, fragment } of fragments) {
+    for (const [code, text] of Object.entries(fragment.phrases)) {
+      claim("phrases", code, name);
+      phrases[code] = text;
+    }
+    for (const [code, sentence] of Object.entries(fragment.todo)) {
+      claim("todo", code, name);
+      if (sentence.trim() === "")
+        throw new Error(`the todo of "${code}" in the ${name} fragment is empty`);
+      todo[code] = sentence;
+    }
+    for (const [code, place] of Object.entries(fragment.jump ?? {})) {
+      claim("jump", code, name);
+      if (!isFragmentHref(place.href) || place.label.trim() === "")
+        throw new Error(`the jump of "${code}" in the ${name} fragment is not a link to a place`);
+      jump[code] = { href: place.href, label: place.label };
+    }
+    for (const [code, found] of Object.entries(fragment.notices ?? {})) {
+      claim("notices", code, name);
+      notices[code] =
+        typeof found === "string"
+          ? { kind: "success", text: found }
+          : { kind: found.kind, text: found.text };
+    }
+  }
+  return {
+    phrases: Object.freeze(phrases),
+    todo: Object.freeze(todo),
+    jump: Object.freeze(jump),
+    notices: Object.freeze(notices),
+  };
+}
+
+const CORE_NOTICES = {
   "matter-created": { kind: "success", text: "The matter was created. Add the documents next." },
   "matter-deleted": { kind: "success", text: "The matter and everything in it was deleted." },
   "settings-saved": { kind: "success", text: "The settings were saved." },
@@ -58,14 +177,100 @@ const NOTICES = {
   "review-cancelled": { kind: "info", text: "The review was cancelled." },
   "decision-saved": { kind: "success", text: "The decision was saved." },
   "memo-exported": { kind: "success", text: "The memo was exported." },
-} as const satisfies Record<string, Notice>;
+} as const satisfies Record<string, { kind: "success" | "info"; text: string }>;
 
-export type NoticeCode = keyof typeof NOTICES;
+/**
+ * The reasons a person can act on, by the short code the store gives them. Every phrase is fixed
+ * and written here, so a refusal never repeats what the request said. A code that is not in the
+ * table is answered with the general phrase for its status.
+ */
+const EDIT_CHANGES_NOTHING =
+  "Nothing was changed. Change the status, a text or a label to edit this finding, or choose another decision.";
+
+const CORE_PHRASES = {
+  reason_required: "Give a reason. A decision to edit, reject or escalate needs one.",
+  // The form sends no edits at all when nothing differs from the finding, so the two codes mean
+  // the same thing to the person at the form.
+  edits_required: EDIT_CHANGES_NOTHING,
+  edit_changes_nothing: EDIT_CHANGES_NOTHING,
+  edits_not_allowed: "Only an edit decision carries edits.",
+  bad_decision: "Choose a decision.",
+  bad_hash:
+    "The form does not say which version of the finding it was made on. Reload the page and try again.",
+  bad_status: "Choose one of the listed statuses.",
+  bad_role: "Choose one of the listed labels.",
+  too_many_roles: "The form names more passages than the finding has.",
+  content_mismatch:
+    "The finding changed after this page was opened. It is shown again as it is now. Read it and decide again.",
+  stale_finding:
+    "This finding is out of date because the documents or the playbook changed. Run the review again to decide it.",
+  decision_conflict:
+    "Another reviewer has already decided this finding, so your decision was not recorded. Their decision stands until they change it or the review is run again.",
+  matter_exported:
+    "The memo has been exported, so decisions can change only after the review is run again.",
+  matter_not_in_review: "The matter is not open for review.",
+  run_not_succeeded: "The review has not finished, so its findings cannot be decided yet.",
+  no_file: "Choose a file to upload.",
+  nda_first: "Upload the NDA before an amendment.",
+  nda_exists: "The matter already has an NDA.",
+  amendment_limit: "The matter already has two amendments.",
+  document_limit: "The matter already has three documents.",
+  document_layout: "The documents of a matter must be an NDA followed by its amendments.",
+  matter_changed:
+    "The documents of the matter changed while the file was being read. Upload it again.",
+  bad_date: "The stated date must be a real date.",
+  duplicate_stated_date:
+    "That file is already in the matter, so it was not stored again and the stated date you entered was not applied. Change the date on the existing version.",
+  run_model_changed:
+    "This review was started on a different provider or model than the one now in use, so it cannot be resumed. Start a new review instead.",
+} as const satisfies Record<string, string>;
+
+/** The core fragment: the codes the application had before packages added their own. */
+const CORE = {
+  phrases: CORE_PHRASES,
+  todo: {},
+  notices: CORE_NOTICES,
+} as const satisfies RefusalFragment;
+
+/**
+ * Every fragment, in the order they are merged. The four after the core are empty until their
+ * package fills them.
+ */
+export const REFUSAL_FRAGMENTS: readonly NamedRefusalFragment[] = [
+  { name: "core", fragment: CORE },
+  { name: "feedback", fragment: REFUSALS_FEEDBACK },
+  { name: "pilot", fragment: REFUSALS_PILOT },
+  { name: "retention", fragment: REFUSALS_RETENTION },
+  { name: "training", fragment: REFUSALS_TRAINING },
+];
+
+/** The merge of the fragments, for the page routes. */
+const MERGED = mergeRefusalFragments(REFUSAL_FRAGMENTS);
+
+/** Refusal code to phrase. */
+export const REFUSAL_PHRASES: Readonly<Record<string, string>> = MERGED.phrases;
+/** Refusal code to the sentence of its phrase that says what to do. */
+export const REFUSAL_TODO: Readonly<Record<string, string>> = MERGED.todo;
+/** Refusal code to the place on the page where it is fixed. */
+export const REFUSAL_JUMP: Readonly<Record<string, RefusalJump>> = MERGED.jump;
+/** Notice code to notice. */
+export const NOTICES: Readonly<Record<string, Notice>> = MERGED.notices;
+
+/**
+ * The codes of the notices, as the fragments' own types know them: a package that adds a notice to
+ * its fragment can pass its code to `withNotice` and `redirectWithNotice` with no edit here.
+ */
+export type NoticeCode =
+  | keyof (typeof CORE)["notices"]
+  | keyof (typeof REFUSALS_FEEDBACK)["notices"]
+  | keyof (typeof REFUSALS_PILOT)["notices"]
+  | keyof (typeof REFUSALS_RETENTION)["notices"]
+  | keyof (typeof REFUSALS_TRAINING)["notices"];
 
 /** The notice for a code from a query string, or null for anything that is not one of ours. */
 export function noticeFor(code: unknown): Notice | null {
   if (typeof code !== "string" || !Object.hasOwn(NOTICES, code)) return null;
-  const found = NOTICES[code as NoticeCode];
+  const found = NOTICES[code] as Notice;
   return { kind: found.kind, text: found.text };
 }
 
@@ -171,52 +376,6 @@ export interface Refusal {
   code: string | null;
 }
 
-/**
- * The reasons a person can act on, by the short code the store gives them. Every phrase is fixed
- * and written here, so a refusal never repeats what the request said. A code that is not in the
- * table is answered with the general phrase for its status.
- */
-const EDIT_CHANGES_NOTHING =
-  "Nothing was changed. Change the status, a text or a label to edit this finding, or choose another decision.";
-
-const REFUSAL_PHRASES: Readonly<Record<string, string>> = {
-  reason_required: "Give a reason. A decision to edit, reject or escalate needs one.",
-  // The form sends no edits at all when nothing differs from the finding, so the two codes mean
-  // the same thing to the person at the form.
-  edits_required: EDIT_CHANGES_NOTHING,
-  edit_changes_nothing: EDIT_CHANGES_NOTHING,
-  edits_not_allowed: "Only an edit decision carries edits.",
-  bad_decision: "Choose a decision.",
-  bad_hash:
-    "The form does not say which version of the finding it was made on. Reload the page and try again.",
-  bad_status: "Choose one of the listed statuses.",
-  bad_role: "Choose one of the listed labels.",
-  too_many_roles: "The form names more passages than the finding has.",
-  content_mismatch:
-    "The finding changed after this page was opened. It is shown again as it is now. Read it and decide again.",
-  stale_finding:
-    "This finding is out of date because the documents or the playbook changed. Run the review again to decide it.",
-  decision_conflict:
-    "Another reviewer has already decided this finding, so your decision was not recorded. Their decision stands until they change it or the review is run again.",
-  matter_exported:
-    "The memo has been exported, so decisions can change only after the review is run again.",
-  matter_not_in_review: "The matter is not open for review.",
-  run_not_succeeded: "The review has not finished, so its findings cannot be decided yet.",
-  no_file: "Choose a file to upload.",
-  nda_first: "Upload the NDA before an amendment.",
-  nda_exists: "The matter already has an NDA.",
-  amendment_limit: "The matter already has two amendments.",
-  document_limit: "The matter already has three documents.",
-  document_layout: "The documents of a matter must be an NDA followed by its amendments.",
-  matter_changed:
-    "The documents of the matter changed while the file was being read. Upload it again.",
-  bad_date: "The stated date must be a real date.",
-  duplicate_stated_date:
-    "That file is already in the matter, so it was not stored again and the stated date you entered was not applied. Change the date on the existing version.",
-  run_model_changed:
-    "This review was started on a different provider or model than the one now in use, so it cannot be resumed. Start a new review instead.",
-};
-
 const REFUSAL_BY_STATUS: Readonly<Record<400 | 409 | 422, string>> = {
   400: "That request was not valid. Check the form and try again.",
   409: "That conflicts with the current state of the matter. Reload the page and try again.",
@@ -233,8 +392,18 @@ const REFUSAL_BY_STATUS: Readonly<Record<400 | 409 | 422, string>> = {
  * is that of an `UploadError`, which is written for the person who uploaded the file ("save it as
  * a regular .docx") and which the shell already sends in the JSON body, cleaned of control
  * characters and cut to a length.
+ *
+ * When the code has a phrase of its own and its fragment says what to do (`todo`) or where to fix
+ * it (`jump`), the notice carries both, copied, so a page cannot change the tables. A phrase that
+ * came from the status and not from a code carries neither.
+ *
+ * `tables` are the merged tables of the fragments; a test passes its own to prove the merge reaches
+ * the notice.
  */
-export function refusalOf(error: unknown): Refusal | null {
+export function refusalOf(
+  error: unknown,
+  tables: Pick<RefusalTables, "phrases" | "todo" | "jump"> = MERGED,
+): Refusal | null {
   const theirs =
     error instanceof ValidationError ||
     error instanceof ConflictError ||
@@ -244,11 +413,18 @@ export function refusalOf(error: unknown): Refusal | null {
   const safe = toSafeError(error);
   if (safe.status !== 400 && safe.status !== 409 && safe.status !== 422) return null;
   const code = typeof safe.extra.code === "string" ? safe.extra.code : null;
-  const text =
-    error instanceof UploadError
-      ? safe.message
-      : code !== null && Object.hasOwn(REFUSAL_PHRASES, code)
-        ? (REFUSAL_PHRASES[code] as string)
-        : REFUSAL_BY_STATUS[safe.status];
-  return { status: safe.status, notice: { kind: "error", text }, code };
+  if (error instanceof UploadError)
+    return { status: safe.status, notice: { kind: "error", text: safe.message }, code };
+  if (code === null || !Object.hasOwn(tables.phrases, code))
+    return {
+      status: safe.status,
+      notice: { kind: "error", text: REFUSAL_BY_STATUS[safe.status] },
+      code,
+    };
+  const todo = Object.hasOwn(tables.todo, code) ? tables.todo[code] : undefined;
+  const jump = Object.hasOwn(tables.jump, code) ? tables.jump[code] : undefined;
+  const notice: Notice = { kind: "error", text: tables.phrases[code] as string };
+  if (todo !== undefined) notice.todo = todo;
+  if (jump !== undefined) notice.jump = { href: jump.href, label: jump.label };
+  return { status: safe.status, notice, code };
 }

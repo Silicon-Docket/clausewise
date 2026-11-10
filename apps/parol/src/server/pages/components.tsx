@@ -373,6 +373,30 @@ export function HighlightedText(props: { text: string; offsets: Offsets | null }
  */
 export const textareaValue = (value: string): string => `\n${value}`;
 
+/**
+ * A sentence with the part that says what to do set in bold (`.todo`). `todo` is a sentence that
+ * occurs inside `text`, and its first occurrence is wrapped; the visible words are `text` itself.
+ * If it does not occur it is added after the text, so that the advice is never lost; the tables
+ * that feed this are tested so that no entry relies on that. An empty `todo` marks nothing.
+ */
+export function TodoText({ text, todo }: { text: string; todo: string }) {
+  if (todo === "") return <>{text}</>;
+  const at = text.indexOf(todo);
+  if (at === -1)
+    return (
+      <>
+        {text} <span class="todo">{todo}</span>
+      </>
+    );
+  return (
+    <>
+      {text.slice(0, at)}
+      <span class="todo">{todo}</span>
+      {text.slice(at + todo.length)}
+    </>
+  );
+}
+
 export function Time({ value }: { value: string }) {
   const text = formatDateTime(value);
   return text === UNKNOWN_DATE ? <span>{text}</span> : <time datetime={value}>{text}</time>;

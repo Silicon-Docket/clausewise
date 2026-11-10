@@ -1,8 +1,10 @@
 import { raw } from "hono/html";
 import type { Child } from "hono/jsx";
+import { globalRoleAllows, type GlobalAction } from "../../auth/actions.js";
+import type { GlobalRole } from "../../contracts.js";
 import { urls } from "../urls.js";
 import { revealToString } from "../views/reveal.js";
-import { Chip, RevealedText, type ShapeName, type Tone } from "./components.js";
+import { Chip, RevealedText, TodoText, type ShapeName, type Tone } from "./components.js";
 import { CSRF_FIELD, FIELDS, SIGN_OUT_INTENT } from "./forms.js";
 
 /**
@@ -14,10 +16,30 @@ import { CSRF_FIELD, FIELDS, SIGN_OUT_INTENT } from "./forms.js";
 /** The banner is permanent and is part of the product. A test pins its exact words. */
 export const DEMO_BANNER = "DEMO: synthetic documents, demo identity, not for client work";
 
+/**
+ * A place on the same page, written as `#id`. The id is lower case letters, digits and hyphens, the
+ * same shape the static test allows in a page's own links, so a notice can lead to a place and
+ * never to another address.
+ */
+export type FragmentHref = `#${string}`;
+
+const FRAGMENT_HREF = /^#[a-z][a-z0-9-]*$/;
+
+/** Whether a value is a place on the page, `#id`, and nothing a notice must not lead to. */
+export const isFragmentHref = (value: unknown): value is FragmentHref =>
+  typeof value === "string" && FRAGMENT_HREF.test(value);
+
 export interface Notice {
   kind: "success" | "error" | "info";
   /** A fixed phrase written by the application. Never document text. */
   text: string;
+  /**
+   * The sentence of `text` that says what to do, which the notice sets in bold. It is a sentence
+   * written by the application, normally one that occurs inside `text`.
+   */
+  todo?: string;
+  /** A link to the place on the page where the person fixes it (`#id`). */
+  jump?: { href: FragmentHref; label: string };
 }
 
 /** What every page needs to know about the request, from the session and not from a form. */
@@ -28,6 +50,11 @@ export interface Chrome {
   csrfToken: string;
   /** A message to show once, such as the result of the last action. */
   notice?: Notice | null;
+  /**
+   * The signed-in person's global role, from the database for this request. The navigation shows a
+   * link that is gated by a global action only to a role the action lists; the route checks again.
+   */
+  globalRole?: GlobalRole;
 }
 
 export interface LayoutProps {
@@ -54,15 +81,84 @@ export function NoticeBox({ notice }: { notice: Notice }) {
   // A route could pass a kind this list lacks; it is then a plain note, never a class from data.
   const kind: Notice["kind"] = Object.hasOwn(NOTICE_LOOK, notice.kind) ? notice.kind : "info";
   const look = NOTICE_LOOK[kind];
+  // A jump leads to a place on this page. A value that is not one is left out and never made a link.
+  const jump = notice.jump !== undefined && isFragmentHref(notice.jump.href) ? notice.jump : null;
   return (
     <div class={`notice notice-${kind}`} role={kind === "error" ? "alert" : "status"}>
       <p>
         <Chip tone={look.tone} shape={look.shape}>
           {look.label}
         </Chip>{" "}
-        {notice.text}
+        {notice.todo === undefined ? (
+          notice.text
+        ) : (
+          <TodoText text={notice.text} todo={notice.todo} />
+        )}
+        {jump === null ? null : <NoticeJump jump={jump} />}
       </p>
     </div>
+  );
+}
+
+/** The link of a notice to the place on the page where it is fixed, a space after the text. */
+function NoticeJump({ jump }: { jump: { href: FragmentHref; label: string } }) {
+  const { href, label } = jump;
+  return (
+    <>
+      {" "}
+      <a class="notice-jump" href={href}>
+        {label}
+      </a>
+    </>
+  );
+}
+
+/**
+ * One link of the primary navigation. `global`, when given, is the global action that decides who
+ * is shown the link (see `GLOBAL_ACTIONS`); the page it leads to checks the same action itself, so
+ * the link is a courtesy and the route is the control.
+ */
+export interface NavItem {
+  label: string;
+  href: string;
+  global?: GlobalAction;
+}
+
+/** The links of the primary navigation, in the order they are shown. */
+export const NAV_ITEMS: readonly NavItem[] = [{ label: "Matters", href: urls.matters() }];
+
+/**
+ * The links a person with this global role is shown: those with no global action, and those whose
+ * action lists the role. A page given no role (a visitor) is shown only the first kind.
+ */
+export function navItemsFor(
+  globalRole: GlobalRole | undefined,
+  items: readonly NavItem[] = NAV_ITEMS,
+): NavItem[] {
+  return items.filter(
+    (item) =>
+      item.global === undefined ||
+      (globalRole !== undefined && globalRoleAllows(globalRole, item.global)),
+  );
+}
+
+export function PrimaryNav({
+  globalRole,
+  items = NAV_ITEMS,
+}: {
+  globalRole?: GlobalRole | undefined;
+  items?: readonly NavItem[];
+}) {
+  return (
+    <nav aria-label="Primary">
+      <ul class="nav-list">
+        {navItemsFor(globalRole, items).map((item) => (
+          <li>
+            <a href={item.href}>{item.label}</a>
+          </li>
+        ))}
+      </ul>
+    </nav>
   );
 }
 
@@ -93,13 +189,7 @@ export function Layout({ title, chrome, children, wide }: LayoutProps) {
               <a class="brand" href={urls.matters()}>
                 Parol
               </a>
-              <nav aria-label="Primary">
-                <ul class="nav-list">
-                  <li>
-                    <a href={urls.matters()}>Matters</a>
-                  </li>
-                </ul>
-              </nav>
+              <PrimaryNav globalRole={chrome.globalRole} />
               {chrome.userName === null ? null : (
                 <div class="whoami">
                   <span>

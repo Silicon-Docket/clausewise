@@ -24,6 +24,14 @@ const pageSources = [
   ...files(join(APP, "src/server/views")),
 ];
 
+/**
+ * A link a page may write as a string literal: `"#id"`, a place on the same page, with an id of
+ * lower case letters, digits and hyphens that starts with a letter. Every other literal is refused,
+ * so an external address or a script address cannot be written into a page; the rest of a page's
+ * links come from the url table.
+ */
+const isPageFragmentLink = (literal: string): boolean => /^"#[a-z][a-z0-9-]*"$/.test(literal);
+
 describe("the files this module owns", () => {
   it("are found", () => {
     expect(all.length).toBeGreaterThan(25);
@@ -132,10 +140,7 @@ describe("the page and view sources", () => {
         const value = m[1] as string;
         const ok =
           /urls\./.test(value) ||
-          value === '"#main"' ||
-          value === '"#decision"' ||
-          value === '"#inspector"' ||
-          value === '"#issue-table"' ||
+          isPageFragmentLink(value) ||
           /runHref\(/.test(value) ||
           /^\{(item\.href|props\.backHref \?\? urls|runStatusUrl)/.test(value) ||
           /^\{href\}$/.test(value);
@@ -144,5 +149,47 @@ describe("the page and view sources", () => {
       }
     }
     expect(seen).toBeGreaterThan(25);
+  });
+});
+
+describe("the rule for a link written as a string literal", () => {
+  it("allows a place on the same page, whatever its id, and nothing else", () => {
+    for (const ok of [
+      '"#main"',
+      '"#decision"',
+      '"#inspector"',
+      '"#issue-table"',
+      '"#trail"',
+      '"#notes"',
+      '"#missed-issue"',
+      '"#rating"',
+      '"#retention"',
+      '"#decision-reason"',
+      '"#a1"',
+    ])
+      expect(isPageFragmentLink(ok), ok).toBe(true);
+    for (const refused of [
+      '"#"',
+      '"#1a"',
+      '"#-a"',
+      '"#Main"',
+      '"#a_b"',
+      '"#a b"',
+      '"#a.b"',
+      '"# a"',
+      '"##a"',
+      '"a#b"',
+      '""',
+      '"/matters"',
+      '"https://example.org/#a"',
+      '"//example.org"',
+      '"javascript:void(0)"',
+      '"data:text/html,x"',
+      '"#a" + x',
+      "'#main'",
+      "#main",
+      '"#main"x',
+    ])
+      expect(isPageFragmentLink(refused), refused).toBe(false);
   });
 });

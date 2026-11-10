@@ -517,6 +517,15 @@ bdi {
   color: var(--bad-ink);
 }
 
+/* The sentence of a notice that says what to do, and the link to the place where it is done. */
+.todo {
+  font-weight: 600;
+}
+
+.notice-jump {
+  margin-left: 0.5rem;
+}
+
 .error-page {
   max-width: 40rem;
   margin: 3rem auto;
