@@ -4,8 +4,9 @@
 intake to memo up to step 9, the screens S1 to S3, the stage graph, the three state machines and the
 stack. Deferred and marked Not yet built below: notes for the reviewer and one-click re-confirmation
 after a re-run (steps 5 and 8), feedback (step 10), the evaluation comparison page S4 and the
-correction review (step 11), and the model support check in a registered workflow (wired, off in v1
-and v2). Never run live: no real model has been called, so no accuracy, latency or cost figure
+correction review (step 11), and the model support check in a workflow version the application
+ships (built; v1 and v2, which the application registers, leave it off, and the evaluation-only v3
+turns it on). Never run live: no real model has been called, so no accuracy, latency or cost figure
 exists. The demonstration runs a scripted simulated reader, which answers one worked example from a
 table and is not a measurement. A **Deviation** note marks where the code departs from the design.
 
@@ -219,13 +220,16 @@ can be changed in the same form (the `evidenceRoles` edit of the API).
 
 ### S4. Evaluation comparison
 
-**Not yet built.** There is no comparison page, and the held-out split has no cases yet. On the
-command line, `pnpm eval:parol --simulate --workflow v1 --out a.json` and then the same with
+**Not yet built.** There is no comparison page. The held-out split has its 12 cases and nothing has
+used it. On the command line, `pnpm eval:parol --simulate --workflow v1 --out a.json` and then the same with
 `--workflow v2 --compare a.json --out b.json` compare two workflow versions over the development
 cases against the scripted simulated reader, as a Markdown report on standard output; every report
-and results file says in capitals that it is not a measurement of any model. A run against a real
-model needs a key and `--yes`, and has never been made. The sketch below is the design, with
-the values left blank.
+and results file says in capitals that it is not a measurement of any model. The comparison also
+reads each file's exposure record (`--exposure`) and calibration record (`--calibration`), which
+fill the "Unauthorized exposure" row and a support checker row, and it skips the decision rule for
+a selftest, a simulated run or a replay. A run against a real model needs a key and `--yes`, and has
+never been made. The sketch below is the design, with the values left blank (it has no row for the
+support checker, which the report has).
 
 ```text
 +-----------------------------------------------------------------------------------------+
@@ -304,6 +308,7 @@ flowchart LR
   SVC --> AUD --> DB
   FB -. planned .-> DB
   EVAL --> STAGES
+  EVAL -. "--exposure: in process, scripted oracle for the model" .-> SHELL
 ```
 
 Every request passes the shell and then, for a matter, the authorization layer before it can reach a
@@ -348,6 +353,13 @@ pins the rule concurrency of the two, and a layers test compares the application
 reference pipeline on the development cases. Nothing makes a later change to
 `src/services/runner.ts` reach the evaluation automatically.
 
+The exposure suite is the exception to that composition. `pnpm eval:parol --exposure`
+(`evals/src/parol/exposure/`) builds the real application in process (the real shell, routes and
+services over an in-memory store, with no socket) and sends the authorization probes, the canary
+scan and the replay of upload steps through it. The model in that application is a scripted
+key-oracle that is not a language model, so the suite tests the application and not a model; it
+feeds gate G1, and [document 5](05-evaluation.md#supplementary-suites) has the detail.
+
 ## Stage graph
 
 ```mermaid
@@ -358,15 +370,15 @@ flowchart LR
   H -. "input change: results stale, re-run" .-> I
 ```
 
-| Stage    | Kind                              | Input                                                                 | Output                                                                                 | Model?                                      |
-| -------- | --------------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------- |
-| ingest   | deterministic                     | Document versions in the run manifest (stored when each was uploaded) | Source spans with stable ids; warnings; defined terms; cross-references; keyword hints | No                                          |
-| extract  | model plus rules                  | Source spans of all operative documents                               | For each category, located spans with verified quotes, or "not found"                  | Yes                                         |
-| retrieve | deterministic                     | Located spans, playbook version, category                             | One context bundle per rule: rule text, approved fallback, bounded spans               | No                                          |
-| analyze  | model                             | One context bundle                                                    | Draft finding: status, evidence quotes with roles, discrepancy, fallback               | Yes                                         |
-| verify   | deterministic, then a model check | Draft finding and the spans it cites                                  | Verified finding, or a finding with escalation reasons                                 | Partly: the model check is off in v1 and v2 |
-| review   | human                             | Verified findings                                                     | Decisions bound to finding content hashes                                              | No                                          |
-| export   | deterministic                     | Current findings with current decisions                               | DOCX memo with provenance appendix                                                     | No                                          |
+| Stage    | Kind                              | Input                                                                 | Output                                                                                 | Model?                                                                  |
+| -------- | --------------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| ingest   | deterministic                     | Document versions in the run manifest (stored when each was uploaded) | Source spans with stable ids; warnings; defined terms; cross-references; keyword hints | No                                                                      |
+| extract  | model plus rules                  | Source spans of all operative documents                               | For each category, located spans with verified quotes, or "not found"                  | Yes                                                                     |
+| retrieve | deterministic                     | Located spans, playbook version, category                             | One context bundle per rule: rule text, approved fallback, bounded spans               | No                                                                      |
+| analyze  | model                             | One context bundle                                                    | Draft finding: status, evidence quotes with roles, discrepancy, fallback               | Yes                                                                     |
+| verify   | deterministic, then a model check | Draft finding and the spans it cites                                  | Verified finding, or a finding with escalation reasons                                 | Partly: the model check is off in v1 and v2 (on in v3, evaluation only) |
+| review   | human                             | Verified findings                                                     | Decisions bound to finding content hashes                                              | No                                                                      |
+| export   | deterministic                     | Current findings with current decisions                               | DOCX memo with provenance appendix                                                     | No                                                                      |
 
 Each stage's output is stored in `run_stages` with the hash of its input (extract once per run,
 analyze and verify once per rule), which is what lets a resumed run skip what is done. Retrieve
@@ -579,11 +591,14 @@ apps/parol/
   public/          parol.js, parol.css
   test/            vitest, scripted generators only, never a real model
 fixtures/parol/
-  cases.ts, build.ts            synthetic documents and answer keys, one entry per case
-  (generated .docx and .txt files in files/, answer-keys.json, splits.json)
+  cases.ts, cases/, build.ts    synthetic documents and answer keys, one file per case
+  canary.ts, calibration/       the two canary matters; the 40 calibration pairs
+  (generated .docx and .txt files in files/, answer-keys.json, calibration.json, splits.json)
 evals/src/parol/
   cli.ts, runner.ts, score.ts, compare.ts, gates.ts, ...   run by pnpm eval:parol; reuses the
                                 prices, budget guard and usage of evals/src
+  replay.ts, calibration-run.ts, exposure/                 record and replay of a live run's answers;
+                                the support checker's calibration step; the exposure suites
 docs/parol/               these documents
 ```
 

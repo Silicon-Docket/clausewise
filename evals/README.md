@@ -260,6 +260,10 @@ another product.
 The Parol NDA review workflow has its own dataset (`fixtures/parol`) and its own command,
 `pnpm eval:parol`, which scores the Parol stages against answer keys and checks the release gates.
 `pnpm eval:parol --selftest` and `--simulate` need no key, send nothing and are labelled as not a
-measurement of any model; a live run needs `--yes` and a key, and none has been made. Results go to
+measurement of any model; a live run needs `--yes` and a key, and none has been made. A live run
+also writes its answers to `<results>.responses.jsonl` (git-ignored), which `--replay <file>`
+re-scores with no model and no key. `--calibration` adds the support checker's 40 calibration pairs
+(workflow v3, live or replay) and `--exposure` the suites that test the application's handling of
+matters with a scripted stand-in for the model; they feed gates G11 and G1. Results go to
 `evals/results/parol-<UTC time>.json`. What is built, the metrics and the gates are in
 [docs/parol/05-evaluation.md](../docs/parol/05-evaluation.md).

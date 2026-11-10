@@ -9,8 +9,10 @@ memo). It runs end to end on case `PAROL-D05` in `apps/parol`, and the stage out
 from such a run. The reader in that run was the scripted simulated reader, which is not a language
 model: its answers were written from the earlier draft of this document, so they show the machinery
 and say nothing about any model, and H1 (a real model fails this way) is untested. Never run live.
-Not pinned by any workflow version: the model support check and the `superseded_evidence` check
-(set C2). Departures from the earlier draft are marked **Deviation**.
+Not pinned by v1 or v2, which this example uses: the model support check and the
+`superseded_evidence` check (set C2). Workflow v3 pins both, for the evaluation only: the application
+does not register it, so none of the output below is v3's. Departures from the earlier draft are
+marked **Deviation**.
 
 The analysis outputs below are **what the scripted simulated reader returned** when the application
 ran the documents through the stages (source: `apps/parol/src/demo`, workflow versions v1 and v2).
@@ -220,15 +222,20 @@ seven more exist than the earlier draft's table had (`evidence_set`, `parties`,
 [document 3](03-data-model-and-contracts.md#deterministic-checks-and-model-judgment)); and neither v1 nor v2 pins the support prompt, so no
 `support` row appears and every cited passage reads "Support not checked".
 The support check is wired (`createSupportChecker`, prompt `support.p1`), and a test with a scripted
-checker shows what the earlier draft said: given only `D1-p19`, it agrees. Its error rates are to be
-measured on a calibration set before it is relied on
-([document 5](05-evaluation.md#support-calibration-set)), and that set is not built.
+checker shows what the earlier draft said: given only `D1-p19`, it agrees. That is also why the
+calibration set ([document 5](05-evaluation.md#support-calibration-set)) holds this finding as one of
+its 40 pairs (`CAL-02`, kind "superseded"): the checker is shown that one paragraph and nothing in it
+shows the deletion, so a perfect checker misses at most that pair. The set is built, and the runner
+step that measures the checker on it is built (`--calibration`, with workflow v3); the checker's error
+rates have not been measured, because nothing has been sent to a model.
 
-The deterministic defence the design calls candidate v3 is built as check set C2
-(`superseded_evidence`) and no workflow version enables it. A test (`verify-worked-example.test.ts`)
-runs the v1 finding through C1 and C2: C1 leaves it verified, and C2 escalates it with
-`superseded_evidence`, detail "evidence 1 (D1-p19), clause 6.1, is changed by D2-p3 (deletes), which
-the finding does not cite".
+The design called the deterministic defence "candidate v3". It is now a workflow version: v3 is v2
+with check set C2 (`superseded_evidence`) and the support prompt switched on together, defined for
+the evaluation and not registered by the application. A test
+(`verify-worked-example.test.ts`) runs the v1 finding through C1 and C2: C1 leaves it verified, and C2
+escalates it with `superseded_evidence`, detail "evidence 1 (D1-p19), clause 6.1, is changed by D2-p3
+(deletes), which the finding does not cite". That test shows the check on this one finding; whether
+v3 does it for a real model has not been measured.
 
 ### Revision (workflow v2: prompts P1, retrieval R2)
 

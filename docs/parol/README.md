@@ -4,22 +4,28 @@
 steps in its [README](../../apps/parol/README.md)), the dataset in `fixtures/parol` and the evaluation
 code in `evals/src/parol`. Built and tested: matters and permissions, Word and plain text upload,
 the review workflow with its checks, attorney decisions, invalidation, the Word memorandum, and the
-evaluation scoring and runner. Not built, and marked **Not built** or **Planned** where each document
-describes it: the evaluation comparison page, feedback on findings, the pilot measures, the training
-matter, 20 of the 26 planned evaluation cases, and the held-out set. **Never run live:** no real model
-has been called. The demonstration uses a scripted simulated reader, which is not a language model, so
-no score, latency or cost of any model exists. No number in these documents is a measurement of a
-model. Each is a proposed gate or target, an estimate, a count (of code, tests, cases or findings),
-an observation from a test or an attack review, or output from the selftest oracle (a program that
-answers from the answer key, so it scores perfectly by design) or the simulated reader, and the text
-says which.
+evaluation: all 26 planned cases (14 development and 12 held-out, with the held-out hash committed),
+a 40-pair calibration set for the support checker, scoring, the runner with record and replay of a
+live run's answers, a candidate workflow version (v3) that turns the support check on for the
+evaluation only, the calibration step, and an exposure suite that tests the application and not a
+model. Not built, and marked **Not built** or **Planned** where each document describes it: the
+evaluation comparison page, feedback on findings, the pilot measures, the training matter, the
+retention job and an audit verification command, and the application's own recording of usage and
+spend guard. **Never run live:** no real model has been called, so there is no baseline, no failure
+record, no promotion record and no qualified review. The demonstration uses a scripted simulated
+reader, which is not a language model, so no score, latency or cost of any model exists. No number in
+these documents is a measurement of a model. Each is a proposed gate or target, an estimate, a count
+(of code, tests, cases or findings), an observation from a test or an attack review, or output from
+the selftest oracle (a program that answers from the answer key, so it scores perfectly by design),
+the simulated reader or the exposure suite (a test of the application with a scripted stand-in for
+the model), and the text says which.
 
 Parol is a portfolio project that sets out the work of an internal AI / Legal Workflow Engineer:
 discovering a legal workflow, encoding a practice group's playbook, building one bounded
 AI-assisted workflow with attorney review, and measuring it with a held-out evaluation suite so
 that a revision can be judged on evidence before a pilot. The playbook and the workflow are built.
-Discovery has not been held, the held-out suite is not written and no revision has been judged. The
-legal task is NDA review against a fictional practice-group playbook.
+Discovery has not been held, the held-out suite is written and sealed but has not been run, and no
+revision has been judged. The legal task is NDA review against a fictional practice-group playbook.
 
 **The name.** In general terms, the parol evidence rule keeps outside evidence from contradicting
 the terms of a fully integrated written agreement, subject to exceptions. Parol borrows the idea
@@ -45,7 +51,7 @@ application's own model calls have none (see
 | 2   | [Experience and architecture](02-experience-and-architecture.md) | User journey, screen sketches, architecture, stage graph, state machines, stack              | Built, except journey steps 5, 8, 10 and 11 and the screen S4                                                                         |
 | 3   | [Data model and contracts](03-data-model-and-contracts.md)       | Entities, invalidation, stage and API schemas, retrieval, verification, escalation           | Built as migrations 001 to 003 and the shared contracts; feedback and the evaluation endpoints are not built                          |
 | 4   | [Worked example](04-worked-example.md)                           | One finding end to end: passage, rule, finding, evidence, review, memo excerpt               | Run end to end with the simulated reader; its outputs are labelled as such                                                            |
-| 5   | [Evaluation](05-evaluation.md)                                   | Dataset, answer keys, metrics and denominators, rubric, gates, the improvement cycle         | Scoring and runner built; 6 of 26 cases written; never run live                                                                       |
+| 5   | [Evaluation](05-evaluation.md)                                   | Dataset, answer keys, metrics and denominators, rubric, gates, the improvement cycle         | Scoring, runner, record and replay, calibration step and exposure suite built; all 26 cases written; never run live                   |
 | 6   | [Access, review and governance](06-access-and-governance.md)     | Authorization, documents as data, logging, retention, provenance, recovery, demo limits      | Controls built and tested; the gaps are listed in the document                                                                        |
 | 7   | [Delivery plan](07-delivery-plan.md)                             | Week one MVP, week two polish, dependencies, estimates, acceptance criteria, scope cuts      | Status of every work item, and the deviations                                                                                         |
 | 8   | [Pilot and enablement](08-pilot-and-enablement.md)               | Hypothetical pilot, acceptance criteria, training, feedback, measures, go/no-go, rollback    | Plan only; the training matter, feedback and measures are not built                                                                   |
@@ -53,7 +59,9 @@ application's own model calls have none (see
 
 The improvement cycle is specified in [experiments/EXP-001.md](experiments/EXP-001.md), a
 pre-registration draft to freeze before the first baseline run. It has not been frozen and has not
-been run: it holds no measured table, and it cannot be frozen until the held-out set exists.
+been run: it holds no measured table, and it cannot be frozen until a model, its generation settings
+and the price table are chosen, which needs a provider key and an explicit decision to spend. The
+held-out set it names now exists.
 
 ## Assumptions
 
