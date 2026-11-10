@@ -21,7 +21,13 @@ import {
   type MatterAction,
 } from "../../src/auth/actions.js";
 import { pageChrome } from "../../src/server/routes/shared.js";
-import { Layout, NAV_ITEMS, render, type NavItem } from "../../src/server/pages/layout.js";
+import {
+  Layout,
+  NAV_ITEMS,
+  navItemsFor,
+  render,
+  type NavItem,
+} from "../../src/server/pages/layout.js";
 import { SRC_ROOT, createParolProgram } from "../auth/brand-types.js";
 import { findDirectRouteRegistrations } from "./shell-registration-scan.js";
 import { ALL_ACTIONS, USERS, makeShell } from "./support-app.js";
@@ -988,8 +994,10 @@ describe("pageChrome and the navigation", () => {
       for (const person of PEOPLE) {
         const client = await shell.signIn(person.user);
         const shown = links(await (await client.get("/__test/page")).text());
+        // The links the table gives this role among the real ones (some are for everyone, some are
+        // gated), then one link for each action this role holds among the test ones.
         const wanted = [
-          ...original.map((item) => item.label),
+          ...navItemsFor(person.role, original).map((item) => item.label),
           ...(Object.keys(GLOBAL_ACTIONS) as GlobalAction[])
             .filter((action) => expectedFor(person.role, action))
             .map((action) => `Gate ${action}`),
@@ -1001,7 +1009,9 @@ describe("pageChrome and the navigation", () => {
       const visitorFrame = render(
         Layout({ title: "Page", chrome: { userName: null, csrfToken: "t" } }),
       );
-      expect(links(visitorFrame)).toEqual(original.map((item) => item.label));
+      expect(links(visitorFrame)).toEqual(
+        navItemsFor(undefined, original).map((item) => item.label),
+      );
     } finally {
       items.splice(0, items.length, ...original);
     }

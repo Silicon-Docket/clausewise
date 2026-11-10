@@ -5,6 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  * that adds pages. The fragments are empty until their package arrives, so this test puts an entry
  * in each, in turn, and looks for it in the composed list: a fragment that is not spread, or is
  * spread out of order, is found here and not on the day a package adds its first page.
+ *
+ * All six fragment modules are replaced in every composition (an empty list for a fragment that is
+ * not being tried), so the result does not depend on what the real fragments hold: it stays true
+ * once a package puts its own entries in its own file.
  */
 
 const FRAGMENTS = [
@@ -21,20 +25,22 @@ afterEach(() => {
   vi.resetModules();
 });
 
-/** The composed list, with the given fragments replaced by lists holding one entry each. */
+/**
+ * The composed list, with the given fragments replaced by lists holding one entry each and every
+ * other fragment replaced by an empty list, whatever the real files hold.
+ */
 async function composed(filled: readonly string[]): Promise<string[]> {
   vi.resetModules();
   for (const { file, name } of FRAGMENTS)
-    if (filled.includes(file))
-      vi.doMock(`./variants-${file}.js`, () => ({
-        [name]: [[`fixture of ${file}`, () => "<p>a page</p>"]],
-      }));
+    vi.doMock(`./variants-${file}.js`, () => ({
+      [name]: filled.includes(file) ? [[`fixture of ${file}`, () => "<p>a page</p>"]] : [],
+    }));
   const { variants } = await import("./variants.js");
   return variants.map(([title]) => title);
 }
 
 describe("the page fixtures", () => {
-  it("are the base list alone while the fragments are empty", async () => {
+  it("are the base list alone when every fragment is empty", async () => {
     const titles = await composed([]);
     expect(titles.length).toBeGreaterThan(30);
     expect(titles.some((title) => title.startsWith("fixture of "))).toBe(false);
