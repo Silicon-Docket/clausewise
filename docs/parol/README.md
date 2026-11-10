@@ -24,7 +24,7 @@ Parol is a portfolio project that sets out the work of an internal AI / Legal Wo
 discovering a legal workflow, encoding a practice group's playbook, building one bounded
 AI-assisted workflow with attorney review, and measuring it with a held-out evaluation suite so
 that a revision can be judged on evidence before a pilot. The playbook and the workflow are built.
-Discovery has not been held, the held-out suite is written and sealed but has not been run, and no
+Discovery has not been held, the held-out suite is written and sealed but no live run has used it, and no
 revision has been judged. The legal task is NDA review against a fictional practice-group playbook.
 
 **The name.** In general terms, the parol evidence rule keeps outside evidence from contradicting

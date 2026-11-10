@@ -12,9 +12,9 @@ the `superseded_evidence` check); and the exposure suite that feeds G1 (`--expos
 probes, a canary scan and the replay of upload steps, against the real application with a scripted
 stand-in for the model). Not covered: the qualified review. Never run live: no model has read a
 case, no baseline has been run on either split, and no score, latency or cost of any model exists.
-The only numbers here come from a selftest oracle and a scripted simulated reader, and are labelled
-so. The exposure suite tests the application and not a model, so it has results of its own, which
-this document gives and labels.
+The only numbers here come from a selftest oracle, a scripted simulated reader and the exposure
+suite, and are labelled so. The exposure suite tests the application and not a model, so it has
+results of its own, which this document gives and labels.
 
 ## What the evaluation can and cannot establish
 
@@ -26,9 +26,10 @@ memo. That needs qualified review, described at the [end of this document](#qual
 Every portfolio claim must say which of the two it rests on.
 
 No score of any model appears in this document. Gates are proposals; the result tables are empty on
-purpose. The one set of numbers that does appear, in
-[the dry run](#a-dry-run-with-the-simulated-reader), comes from a scripted program and is marked as
-a demonstration of the machinery.
+purpose. The numbers that do appear come from the selftest oracle (112 of 112 and 96 of 96, by
+construction), the scripted simulated reader
+([the dry run](#a-dry-run-with-the-simulated-reader)) and the exposure suite (a test of the
+application, not of a model), and each is labelled as such.
 
 ## Dataset
 
@@ -43,8 +44,9 @@ pass them.
 and the Bramblewick canary matter, in 20 files in `fixtures/parol/files`. The held-out split holds
 `PAROL-H01` to `H12`, the twins of `H07` and `H09`, and the Saltmarsh canary matter, in 20 files.
 `pnpm fixtures:parol` prints the hash of each split and records it in `splits.json`; the held-out
-hash exists, and is to be committed to the repository's history before the first baseline. No
-baseline has been run on either split and no model has read any case. The selftest oracle, which
+hash is in `splits.json` and was committed in `66a23f4` (10 November 2026); the held-out files and
+`splits.json` must stay unchanged until the first baseline. No baseline has been run on either
+split and no model has read any case. The selftest oracle, which
 answers from the keys, scores perfectly on both splits under workflows v1, v2 and v3, which shows that
 every anchor of every key resolves in the real ingest and that the keys and the plumbing agree; it
 says nothing about any model.
@@ -137,7 +139,8 @@ differ, for two reasons, and in neither is a case bent to a number:
 (`--exposure`)._ The design was a table of (route, actor, matter) triples run against the API in
 every evaluation: a non-member reading, writing, running, exporting and downloading; a viewer
 attempting writes; an associate attempting a review decision; a reviewer attempting to upload. The
-table exists in `apps/parol/test/routes/probes.ts`, and
+table and the request builder are defined in `evals/src/parol/exposure/probes.ts`, which is the
+single source of truth; `apps/parol/test/routes/probes.ts` re-exports it, and
 `apps/parol/test/routes/authorization.test.ts` sends each probe as each caller. It covers 36 routes
 that name a matter (method and path pairs, pages and JSON) and seven callers, twice, once with the
 segregation of duties on and once relaxed for a single-person demonstration: 504 cells, 512 tests
@@ -324,8 +327,8 @@ exactly one paragraph of its clause, that paragraph must be the one the pair rec
 its hash), and the case must be in the development split. A pair that does not resolve stops the
 run with exit 2 before anything is sent; it is never scored as a miss. Each pair is then sent to the
 support checker with exactly what a review sends it (the rule, the claimed status, the discrepancy
-and the cited paragraph, and nothing else; a test asserts the request is byte for byte the one
-`verifyFinding` builds). The set runs once per evaluation run and not once per repeat, because the
+and the cited paragraph, and nothing else; a test asserts that the calibration requests are identical to the ones the shared support checker,
+`createSupportChecker`, builds for the same rule, draft and cited paragraph). The set runs once per evaluation run and not once per repeat, because the
 pairs are fixed and repeating them would measure the noise of the model on 40 requests. Its 40
 calls are in the plan and in the cost bound, are in the usage total, and are in no case run's cost
 or latency. The checker catches an unsupported pair when it answers `not_supported` or
@@ -782,8 +785,8 @@ playbook whose hash is not the one the keys were built for exits 1 ("a playbook 
 dataset version"). Tests (`evals/test/parol-run-dataset.test.ts`, `parol-cli-exit.test.ts`) change
 one key entry, one byte of one document, the hash in `splits.json`, and an anchor with the hashes
 rewritten to match, and each exits 2. It cannot catch someone who changes the keys, the files and
-`splits.json` together, which is why the held-out hash is committed to the repository's history
-before the first baseline.
+`splits.json` together, which is why the held-out hash was committed to the repository's history
+(in `66a23f4`) before the first baseline.
 
 **The selftest.** `--selftest` runs the whole runner against an oracle (`evals/src/parol/oracle.ts`)
 that answers every request as the answer key says, citing only the clauses its prompt shows, so that
@@ -899,17 +902,17 @@ which is to be frozen before the baseline runs.
 
 Where the tooling stands for each step:
 
-| Step               | Tooling today                                                                                                                                                                                                                                                   |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. Freeze          | The pins are recorded in every results file. Workflows v1, v2 and v3 are registered (the application ships v1 and v2; v3 is an evaluation candidate). The held-out hash exists in `splits.json` and is to be committed to the history before the first baseline |
-| 2. Seal            | `--allow-heldout`, the ledger and the contamination note, for live runs of the runner. Nothing guards the files themselves                                                                                                                                      |
-| 3. Baseline on dev | `pnpm eval:parol --workflow v1 --runs 3 --yes`, with `--max-cost` raised (the cost bound of the whole dev set is above the default limit). Not run. The dev set is complete: 14 cases and 2 twins                                                               |
-| 4. Choose          | The report's slot table lists failing slots by weighted failure, largest first                                                                                                                                                                                  |
-| 5. Inspect         | Not built for evaluation runs: the results file holds no trail. The same documents can be uploaded to a matter in the application, whose inspector shows the checks and evidence of its own run                                                                 |
-| 6. Revise          | R2 is built and registered as workflow v2. The `superseded_evidence` check is built as check set C2 and, with the support prompt, is workflow v3 (retrieval R2, checks C1 and C2), registered for evaluation and not shipped                                    |
-| 7 and 8. Re-runs   | The same command with `--workflow v2` or `v3`; a change of scoring or of an answer key is re-applied to a recording with `--replay`. The held-out set exists; no held-out run has been made                                                                     |
-| 9. Compare         | `--compare`, with the paired list of changed slots                                                                                                                                                                                                              |
-| 10. Recommend      | The decision rule is computed and worded as a gate result. The promotion record is a document, not tooling                                                                                                                                                      |
+| Step               | Tooling today                                                                                                                                                                                                                                                                                                  |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Freeze          | The pins are recorded in every results file. Workflows v1, v2 and v3 are defined for the evaluation (the application registers and ships v1 and v2 only; v3 is an evaluation candidate). The held-out hash is in `splits.json` and was committed in `66a23f4`; it must stay unchanged until the first baseline |
+| 2. Seal            | `--allow-heldout`, the ledger and the contamination note, for live runs of the runner. Nothing guards the files themselves                                                                                                                                                                                     |
+| 3. Baseline on dev | `pnpm eval:parol --workflow v1 --runs 3 --yes`, with `--max-cost` raised (the cost bound of the whole dev set is above the default limit). Not run. The dev set is complete: 14 cases and 2 twins                                                                                                              |
+| 4. Choose          | The report's slot table lists failing slots by weighted failure, largest first                                                                                                                                                                                                                                 |
+| 5. Inspect         | Not built for evaluation runs: the results file holds no trail. The same documents can be uploaded to a matter in the application, whose inspector shows the checks and evidence of its own run                                                                                                                |
+| 6. Revise          | R2 is built and registered as workflow v2. The `superseded_evidence` check is built as check set C2 and, with the support prompt, is workflow v3 (retrieval R2, checks C1 and C2), registered for evaluation and not shipped                                                                                   |
+| 7 and 8. Re-runs   | The same command with `--workflow v2` or `v3`; a change of scoring or of an answer key is re-applied to a recording with `--replay`. The held-out set exists; no held-out run has been made                                                                                                                    |
+| 9. Compare         | `--compare`, with the paired list of changed slots                                                                                                                                                                                                                                                             |
+| 10. Recommend      | The decision rule is computed and worded as a gate result. The promotion record is a document, not tooling                                                                                                                                                                                                     |
 
 **Decision rule.**
 

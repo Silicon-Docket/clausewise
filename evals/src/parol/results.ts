@@ -946,7 +946,12 @@ const usageTotals = z.object({
   cacheWriteTokens: num,
 });
 
-const text = z.string().max(2000);
+/**
+ * The most characters one suite sentence of the exposure record holds. The sub-suites build their
+ * sentences to fit under it (with room to spare) and the report prints a sentence up to it.
+ */
+export const SUITE_SENTENCE_MAX = 2000;
+const text = z.string().max(SUITE_SENTENCE_MAX);
 const sha = z.string().regex(/^[0-9a-f]{64}$/);
 const promptPin = z.object({ id: text, sha256: sha });
 const price = z.object({

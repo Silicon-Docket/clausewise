@@ -33,8 +33,9 @@ held-out row for allowed alternatives).
 
 **The held-out split is sealed.** Its files are in the repository, and nothing stops anyone opening
 them, but a case that was read to fix something is no longer a measure of the fix. Do not use a
-held-out case to debug, and do not tune wording against it. The held-out hash is to be committed
-before the first baseline run; no baseline has been run.
+held-out case to debug, and do not tune wording against it. The held-out hash is in `splits.json` and
+was committed in `66a23f4` (10 November 2026); it must stay unchanged until the first baseline run.
+No baseline has been run.
 
 **What the selftest proves.** `pnpm eval:parol --selftest --split all --allow-heldout` runs every
 case and twin of both splits through the real parser, ingest and stages against an oracle that
