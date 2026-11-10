@@ -1,9 +1,11 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { createScriptedGenerator } from "@clausewise/llm/testing";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readPrincipal } from "../../apps/parol/src/auth/identity.js";
-import { defineMiddleware } from "../../apps/parol/src/server/matter-route.js";
+import { defineMiddleware, describeRoutes } from "../../apps/parol/src/server/matter-route.js";
+import type { AppDeps } from "../../apps/parol/src/server/deps.js";
 import { checkRoutes, runCanaryScan, type CanaryHooks } from "../src/parol/exposure/canary.js";
 import type { Dataset } from "../src/parol/dataset.js";
-import { SiteClient, type App } from "../src/parol/exposure/site.js";
+import { createExposureSite, SiteClient, type App } from "../src/parol/exposure/site.js";
 import { newApp } from "./parol-canary-support.js";
 import {
   CANARY_SHAPE,
@@ -24,6 +26,30 @@ import {
  */
 
 vi.setConfig({ testTimeout: 180_000, hookTimeout: 180_000 });
+
+/**
+ * What the application's own source adds after its real routes, to show a wildcard that is part of
+ * the application and not planted by a hook. Empty for every test but those that set it: the
+ * wrapper then registers exactly what `registerRoutes` registers.
+ */
+const own = vi.hoisted(() => ({
+  plant: undefined as undefined | ((app: App, deps: AppDeps) => void),
+}));
+
+vi.mock("../../apps/parol/src/server/routes/index.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../apps/parol/src/server/routes/index.js")>();
+  return {
+    ...real,
+    registerRoutes: (app: App, deps: AppDeps) => {
+      real.registerRoutes(app, deps);
+      own.plant?.(app, deps);
+    },
+  };
+});
+
+afterEach(() => {
+  own.plant = undefined;
+});
 
 let dataset: Dataset;
 beforeAll(async () => {
@@ -50,6 +76,14 @@ const unavailable = (error: Error) =>
 
 /** A handler that answers a GET with something of its own, as a static file server or a proxy would. */
 const answer = (c: { text: (s: string) => Response }): Response => c.text("ANSWERED");
+
+/** A model that is never asked: the sites these tests build only route requests. */
+const inert = createScriptedGenerator(
+  () => {
+    throw new Error("not called");
+  },
+  { disclosure: "a scripted generator that is never called" },
+);
 
 describe("a wildcard route that is not the shell's own middleware", () => {
   const answering: Record<string, [path: string, plant: NonNullable<CanaryHooks["beforeRoutes"]>]> =
@@ -122,6 +156,64 @@ describe("a wildcard route that is not the shell's own middleware", () => {
     expect(error.message).not.toContain("ALL /api/*");
   });
 
+  it("stops the suite when it answers a 404 of its own, with another body or another content type", async () => {
+    for (const plant of [
+      (app: App) => void app.all("/files/*", (c) => c.text("custom not found", 404)),
+      (app: App) => void app.all("/files/*", (c) => c.json({ error: "x" }, 404)),
+    ]) {
+      const error = await failureOf({ beforeRoutes: plant });
+      unavailable(error);
+      expect(error.message).toContain("ALL /files/*");
+    }
+  });
+
+  describe("compares the answer of the application it hands on to in three respects", () => {
+    /** Hands on, then changes the application's own answer to the URL in exactly one respect. */
+    const changing =
+      (
+        change: (answer: { status: number; headers: Headers; body: string }) => void,
+      ): NonNullable<CanaryHooks["beforeRoutes"]> =>
+      (app) =>
+        void app.use("/files/*", async (c, next) => {
+          await next();
+          const answer = {
+            status: c.res.status,
+            headers: new Headers(c.res.headers),
+            body: await c.res.text(),
+          };
+          answer.headers.delete("content-length");
+          change(answer);
+          c.res = new Response(answer.body, { status: answer.status, headers: answer.headers });
+        });
+
+    it("passes when it changes nothing, so that the three below differ in one respect each", async () => {
+      const result = await scan({ beforeRoutes: changing(() => {}) });
+      expect(result.hits).toEqual([]);
+    });
+
+    const respects: Record<
+      string,
+      (answer: { status: number; headers: Headers; body: string }) => void
+    > = {
+      "the status": (answer) => {
+        answer.status = 410;
+      },
+      "the content type": (answer) => {
+        answer.headers.set("content-type", "text/plain");
+      },
+      "the body": (answer) => {
+        answer.body = `${answer.body} `;
+      },
+    };
+    for (const [respect, change] of Object.entries(respects))
+      it(`stops the suite when only ${respect} differs`, async () => {
+        const error = await failureOf({ beforeRoutes: changing(change) });
+        unavailable(error);
+        expect(error.message).toContain("ALL /files/*");
+        expect(error.message).toMatch(/not its own middleware/);
+      });
+  });
+
   it("does not stop the suite when it hands on, whatever it does to the answers it gets", async () => {
     const result = await scan({
       beforeRoutes: (app) => {
@@ -135,6 +227,115 @@ describe("a wildcard route that is not the shell's own middleware", () => {
         });
       },
     });
+    expect(result.hits).toEqual([]);
+  });
+});
+
+describe("a wildcard route in the application's own source", () => {
+  /** What the real routes are followed by in the application's source: a responder, and a mounted one. */
+  const plantAnswering = (app: App): void => {
+    app.use("/files/*", async (c) => answer(c));
+    app.mount("/docs", () => new Response("ANSWERED"));
+  };
+
+  it("is answered by the application, which is what makes the tests below mean something", async () => {
+    own.plant = plantAnswering;
+    const site = createExposureSite({ playbook, generator: inert });
+    try {
+      const client = site.anonymous();
+      expect(await (await client.get("/files/anything")).text()).toBe("ANSWERED");
+      expect(await (await client.get("/docs/anything")).text()).toBe("ANSWERED");
+    } finally {
+      site.close();
+    }
+  });
+
+  it("stops the suite, though the copy it is compared with answers alike", async () => {
+    own.plant = plantAnswering;
+    const error = await failureOf({});
+    unavailable(error);
+    expect(error.message).toContain("ALL /files/*");
+    expect(error.message).toContain("ALL /docs/*");
+    expect(error.message).toMatch(/own source/);
+    // Names the routes and nothing they answer.
+    expect(error.message).not.toContain("ANSWERED");
+  });
+
+  it("stops the suite when it only hands on, because it is not declared as middleware", async () => {
+    own.plant = (app) => void app.use("/api/*", async (_c, next) => next());
+    const error = await failureOf({});
+    unavailable(error);
+    expect(error.message).toContain("ALL /api/*");
+    expect(error.message).toMatch(/own source/);
+  });
+
+  it("is named alone when a test plants another beside it", async () => {
+    own.plant = (app) => void app.all("/files/*", answer);
+    const error = await failureOf({ beforeRoutes: (app) => void app.all("/docs/*", answer) });
+    unavailable(error);
+    expect(error.message).toContain("ALL /files/*");
+    expect(error.message).not.toContain("ALL /docs/*");
+  });
+
+  it("does not stop the suite when it is declared as the shell's own middleware", async () => {
+    own.plant = (app) => defineMiddleware(app, async (_c, next) => next());
+    const result = await scan({});
+    expect(result.hits).toEqual([]);
+  });
+
+  it("is not there in the application as it is: four middleware of the shell and no other wildcard", async () => {
+    const site = createExposureSite({ playbook, generator: inert });
+    try {
+      const routes = describeRoutes(site.app);
+      expect(routes.filter((route) => route.kind === "middleware")).toHaveLength(4);
+      expect(
+        routes.filter((route) => route.kind !== "middleware" && route.path.endsWith("*")),
+      ).toEqual([]);
+    } finally {
+      site.close();
+    }
+    const result = await scan({});
+    expect(result.hits).toEqual([]);
+    expect(result.artefactsScanned).toBeGreaterThan(0);
+  });
+});
+
+describe("a wildcard route planted after the real routes", () => {
+  it("stops the suite, and shadows no real route", async () => {
+    const seen: { app: App; before: string[] }[] = [];
+    const error = await failureOf({
+      afterRoutes: (app) => {
+        seen.push({ app, before: app.routes.map((route) => `${route.method} ${route.path}`) });
+        app.all("/files/*", answer);
+      },
+    });
+    unavailable(error);
+    expect(error.message).toContain("ALL /files/*");
+    // Compared with the copy that has no hooks, which is why it is not taken for the application's own.
+    expect(error.message).toMatch(/not its own middleware/);
+    expect(error.message).not.toMatch(/own source/);
+    // The hook ran for the site, once, and after the real routes were in it.
+    expect(seen).toHaveLength(1);
+    const { app, before } = seen[0]!;
+    expect(before).toContain("GET /healthz");
+    expect(before).not.toContain("ALL /files/*");
+    // The real routes answer as they do, and the planted one answers only what no route owns.
+    const client = new SiteClient(app);
+    const health = await client.get("/healthz");
+    expect(health.status).toBe(200);
+    expect(await health.text()).not.toBe("ANSWERED");
+    expect(await (await client.get("/files/zz-unrouted")).text()).toBe("ANSWERED");
+  });
+
+  it("does not stop the suite when it hands on", async () => {
+    const seen: string[] = [];
+    const result = await scan({
+      afterRoutes: (app) => {
+        seen.push("hook");
+        app.use("/files/*", async (_c, next) => next());
+      },
+    });
+    expect(seen).toEqual(["hook"]);
     expect(result.hits).toEqual([]);
   });
 });
@@ -170,6 +371,7 @@ describe("the check on its own, with applications the suite never builds", () =>
     signIn: async () => new SiteClient(app),
   });
   const referenceOf = (app: App) => () => ({
+    app,
     anonymous: () => new SiteClient(app),
     signIn: async () => new SiteClient(app),
     close: () => {},
@@ -208,6 +410,25 @@ describe("the check on its own, with applications the suite never builds", () =>
   it("stops for a responder that is registered the way the shell registers middleware, but not through it", async () => {
     const app = shell((a: App) => void a.all("/files/*", answer));
     await expect(checkRoutes(siteOf(app), referenceOf(shell()))).rejects.toThrow(/ALL \/files\/\*/);
+  });
+
+  it("stops for a wildcard that the copy holds too, which is the application's own, and asks nothing", async () => {
+    const withWildcard = () => shell((a: App) => void a.all("/files/*", answer));
+    const close = vi.fn();
+    const asked = vi.fn();
+    const reference = () => ({
+      ...referenceOf(withWildcard())(),
+      anonymous: () => {
+        asked();
+        return new SiteClient(withWildcard());
+      },
+      close,
+    });
+    await expect(checkRoutes(siteOf(withWildcard()), reference)).rejects.toThrow(
+      /own source.*ALL \/files\/\*/,
+    );
+    expect(asked).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it("closes the copy of the application it asked, whatever the answer", async () => {

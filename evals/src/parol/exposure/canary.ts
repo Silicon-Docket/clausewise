@@ -51,16 +51,22 @@
  * What the scan cannot see, and says so in its sentence: text of the other matter that carries no
  * canary string, id or name; an id in a prompt or a model answer (the model is shown clause labels);
  * the other matter's members on the HTML pages; the headers of a response and variants of a query;
- * a wildcard handler beyond the one request each gets (below); and the canary matter's runs,
- * findings and memos, because the canary matter is never reviewed (it has none).
+ * a wildcard handler that answers only some of the URLs under its prefix, or only other methods than
+ * a GET (below); and the canary matter's runs, findings and memos, because the canary matter is
+ * never reviewed (it has none).
  *
  * Wildcard routes. A route for every method on a wildcard (`app.use`, `app.all`, `app.mount`, the
  * `all('/*')` of a mounted application) cannot be told by its path from one that answers a GET, and
  * the scan never fetches it as a route. The shell's own middleware is recognised by the function it
- * registered (`defineMiddleware` in the application) and is let through. Any other is asked, once:
- * one GET to a URL under its prefix, as an anonymous client and as a member, has to be answered as
- * a copy of the application without hooks answers it, or the suite stops. A handler that answers
- * other URLs under its prefix, or other methods, is not seen.
+ * registered (`defineMiddleware` in the application) and is let through. Any other that the
+ * application's own source registers stops the suite, to be declared (`defineMiddleware`, or routes
+ * that a probe table names) or removed: the copy of the application without hooks, which a wildcard
+ * is compared with, is built from the same code and holds it too, so it would answer alike there.
+ * One that a test planted through a hook is asked, once: one GET to a URL under its prefix, as an
+ * anonymous client and as a member, has to be answered as that copy answers it (status, content
+ * type and body), or the suite stops. A handler that answers only some of the URLs under its
+ * prefix, or only other methods than a GET, is not seen by this half of the scan. The authorization
+ * scan (authorization.ts) sends each unmanaged wildcard a request of each of the five methods.
  *
  * Nothing printed, thrown or returned holds a canary string, a prompt, a model answer or document
  * text. A hit is a kind of artefact, a label (route template or table name), and a token's position.
@@ -161,6 +167,7 @@ export interface CaseScan {
   scanned: number;
   byKind: Record<ArtefactKind, number>;
   canaryHits: number;
+  /** Ids and names of the other matter found: see `CanaryResult.foreignSpanIdHits`. */
   foreignIdHits: number;
   factSightings: number;
   hits: ScanHit[];
@@ -173,9 +180,9 @@ export interface CanaryResult {
   artefactsScanned: number;
   canaryHits: number;
   /**
-   * Ids of the other matter (span, document, version, matter) found, and its name, its client's name
-   * and, in the JSON routes, its members' user ids and names. The field keeps the name it has in
-   * the results file.
+   * Ids and names of the other matter found: its span, document, version and matter ids, its name,
+   * its client's name and, in the JSON routes, its members' user ids and display names. The field
+   * keeps the name it has in the results file.
    */
   foreignSpanIdHits: number;
   /**
@@ -282,7 +289,7 @@ export async function runCanaryScan(args: CanaryArgs): Promise<CanaryResult> {
           .slice(0, count)
           .map(
             (hit) =>
-              `${hit.token === "canary" ? "a canary string" : "an id"} in ${hit.kind} (${hit.label})`,
+              `${hit.token === "canary" ? "a canary string" : "an id or name"} in ${hit.kind} (${hit.label})`,
           )
           .join(", ")}`;
   const sentenceWith = (count: number): string =>
@@ -311,7 +318,7 @@ export async function runCanaryScan(args: CanaryArgs): Promise<CanaryResult> {
     `memo a Word package with the case's names and quotations, prompts with its clauses, answers parsed, ` +
     `rows with every id and name). Not seen: text of the other matter without a canary string, id or name, ` +
     `its members on the HTML pages, ids in prompts and answers (the model is shown ` +
-    `clause labels), response headers, query variants, wildcard handlers beyond one request each, and runs, ` +
+    `clause labels), response headers, query variants, wildcard handlers beyond one GET to one URL each, and runs, ` +
     `findings or memos of the canary matter (it is never reviewed).`;
   // The record keeps a sentence to 2000 characters at most: list fewer hits (down to none, which the
   // result still holds) before it gets that long.
@@ -377,6 +384,10 @@ const UNROUTED_SEGMENT = "zz-unrouted";
 const isWildcard = (route: { method: string; path: string }): boolean =>
   route.method === "ALL" && route.path.endsWith("*");
 
+/** The routes of an application that the shell did not register as its own middleware. */
+const routesBesidesMiddleware = (app: ExposureSite["app"]) =>
+  describeRoutes(app).filter((route) => route.kind !== "middleware");
+
 /** What a GET was answered, to compare two answers: status, content type and body. Never shown. */
 async function answerOf(client: SiteClient, path: string): Promise<string> {
   const response = await client.get(path);
@@ -394,18 +405,23 @@ async function answerOf(client: SiteClient, path: string): Promise<string> {
  *    and is left alone.
  *  - A route for every method on a wildcard that is not that (`app.use('/x/*', handler)`,
  *    `app.all`, `app.mount`, the `all('/*')` of a mounted application) looks, in the list, like
- *    middleware that hands on and like a handler that answers. It is asked, once per prefix: a GET
- *    to a URL under it, as an anonymous client and as a member, has to be answered as a copy of the
- *    application without hooks answers the same URL, or the suite stops. A handler that answers
- *    only some of the URLs under its prefix is not seen.
+ *    middleware that hands on and like a handler that answers. The copy of the application without
+ *    hooks is built from the same code, so a wildcard in the application's own source is in the
+ *    copy too and answers as it does: every such wildcard that the copy holds stops the suite, to be
+ *    declared (`defineMiddleware`, or a route a probe table names) or removed. One that only a
+ *    test planted (through a hook) is asked, once per prefix: a GET to a URL under it, as an
+ *    anonymous client and as a member, has to be answered as the copy answers the same URL (status,
+ *    content type and body), or the suite stops. A handler that answers only some of the URLs under
+ *    its prefix, or only other methods, is not seen here; the authorization scan sends each
+ *    unmanaged wildcard a request of every method.
  *
  * Exported for its tests, which hand it applications that the suite never builds.
  */
 export async function checkRoutes(
   site: Pick<ExposureSite, "app" | "anonymous" | "signIn">,
-  makeReference: () => Pick<ExposureSite, "anonymous" | "signIn" | "close">,
+  makeReference: () => Pick<ExposureSite, "app" | "anonymous" | "signIn" | "close">,
 ): Promise<void> {
-  const routes = describeRoutes(site.app).filter((route) => route.kind !== "middleware");
+  const routes = routesBesidesMiddleware(site.app);
   const unlisted = routes
     .filter(
       (route) =>
@@ -422,6 +438,20 @@ export async function checkRoutes(
   if (wildcards.length === 0) return;
   const reference = makeReference();
   try {
+    // The copy has no hooks, so a wildcard that it holds is in the application's own source. It is
+    // in the site too and answers the same there, which the comparison below cannot tell from a
+    // handler that hands on.
+    const owned = [
+      ...new Set(
+        routesBesidesMiddleware(reference.app)
+          .filter(isWildcard)
+          .map((route) => `ALL ${route.path}`),
+      ),
+    ];
+    if (owned.length > 0)
+      throw new ExposureSuiteUnavailable(
+        `The application's own source registers wildcard routes for every method that are not its own middleware, and the canary scan cannot tell what they answer, because the copy it compares them with holds them too: ${owned.join(", ")}. Declare each one that only hands on with defineMiddleware, make each one that answers a route that a probe table names, or remove it.`,
+      );
     // An anonymous client first, then a member. A wildcard that answers every request would answer
     // the sign-in too, so a member is only made when the first leg found nothing.
     const legs = [
@@ -481,8 +511,10 @@ async function scanCase(
   const front: ObjectGenerator =
     hooks.beforeCapture === undefined ? capture : hooks.beforeCapture(capture, context);
 
+  // The site gets the hooks and the copy it is compared with (checkRoutes) gets none.
   const siteHooks: SiteHooks = {
     ...(hooks.beforeRoutes === undefined ? {} : { beforeRoutes: hooks.beforeRoutes }),
+    ...(hooks.afterRoutes === undefined ? {} : { afterRoutes: hooks.afterRoutes }),
     ...(hooks.wrapMemoBuilder === undefined ? {} : { wrapMemoBuilder: hooks.wrapMemoBuilder }),
   };
   const workflowOption = args.workflow === undefined ? {} : { workflow: args.workflow };

@@ -546,15 +546,22 @@ export function replayRefusal(args: {
   }
   if (pins.workflow.sha256 !== args.workflowSha256) {
     // The label is the recording's and not this code's, so it is repeated only when it reads as a
-    // plain name, and offered as an option only when it is a workflow this code knows.
+    // plain name, and offered as an option only when it is a workflow this code knows under that
+    // hash. A registered label whose definition has changed since is not the recorded workflow, and
+    // naming it would send the reader back to the run that was just refused.
     const label = shown(pins.workflow.label, "workflow label");
     const plain = label === pins.workflow.label;
+    const known = plain && Object.hasOwn(WORKFLOWS, label);
+    const offered =
+      known && label !== args.workflowLabel && WORKFLOWS[label]!.sha256 === pins.workflow.sha256;
     return (
       `The recording was made with ${plain ? `workflow ${label}` : "a workflow whose label is not repeated here"}, and this run is of ` +
       `${args.workflowLabel}. Their prompts or checks differ, so no request would be found. ` +
-      (plain && Object.hasOwn(WORKFLOWS, label)
+      (offered
         ? `Replay with --workflow ${label}.`
-        : "No workflow this code knows matches the recording.")
+        : known
+          ? `This code's workflow ${label} is not the recorded definition. Replay with the code the recording was made with.`
+          : "No workflow this code knows matches the recording.")
     );
   }
   if (pins.playbook.sha256 !== args.playbookSha256) {

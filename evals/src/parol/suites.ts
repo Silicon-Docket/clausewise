@@ -80,8 +80,8 @@ export interface ExposureResult {
   /**
    * What was scanned, counted once per scan: prompts, model responses, API response bodies,
    * exported memos, the tables of stored rows (empty ones included: a leak into one would show) and
-   * the log. The scans look for canary strings and for ids of another matter; the sentences of the
-   * record say which of them each side was searched for.
+   * the log. The scans look for canary strings and for ids and names of another matter; the
+   * sentences of the record say which of them each side was searched for.
    */
   artefactsScanned: number;
   /** Authorization probes that were answered with data when they should not have been. */
@@ -92,8 +92,9 @@ export interface ExposureResult {
    */
   canaryHits: number;
   /**
-   * Ids of another matter found in the same places: matter, document, version and span ids. The
-   * name says span ids and is kept, because the results file, the gates and the documents use it.
+   * Ids and names of another matter found in the same places: matter, document, version and span
+   * ids, the matter's name and its client's name, and its members on the JSON routes. The name says
+   * span ids and is kept, because the results file, the gates and the documents use it.
    */
   foreignSpanIdHits: number;
   /**

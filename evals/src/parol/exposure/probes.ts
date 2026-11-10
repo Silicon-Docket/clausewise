@@ -514,7 +514,9 @@ const viaName = (via: ForgedProbe["via"], position: SubResource): string =>
 
 /**
  * The ids a body carries besides the one in the path, for the routes where the application checks
- * the two against each other.
+ * the two against each other. The other ids that the path itself names are paired with it as well,
+ * and are read from the template, so that a route added to the table with several ids in its path
+ * has the consistent form without anyone listing it here.
  */
 const PAIRED_IN_BODY: Record<string, readonly SubResource[]> = {
   [`POST ${M}/documents/:documentId/operative`]: ["version"],
@@ -528,7 +530,12 @@ function forgedInPath(probe: Probe): ForgedProbe[] {
     action: probe.action,
     position: entry.position,
     via: "path" as const,
-    pairedWith: PAIRED_IN_BODY[probeKey(probe)] ?? [],
+    pairedWith: [
+      ...new Set([
+        ...subResourcesOf(probe.template).filter((kind) => kind !== entry.position),
+        ...(PAIRED_IN_BODY[probeKey(probe)] ?? []),
+      ]),
+    ],
     consistent: false,
     reaches: 404,
     request: (own, borrowed) => ({
@@ -635,7 +642,8 @@ const wholeRecord = (own: ProbeIds, borrowed: BorrowedIds): ProbeIds => ({
  * The consistent form of the requests that name several ids: one for each route and set of ids,
  * made from the first of the mixed requests that names them, with the ids the caller would have
  * kept as their own taken from the record of the other matter as well. A route that names several
- * ids is therefore never forged only in the form that its own check of the pair turns away.
+ * ids is therefore never forged only in the form that its own check of the pair turns away. The
+ * form is a path form when every id it names is in the path, and a body form when one is not.
  */
 function consistentForms(mixed: readonly ForgedProbe[]): ForgedProbe[] {
   const seen = new Set<string>();
@@ -646,10 +654,11 @@ function consistentForms(mixed: readonly ForgedProbe[]): ForgedProbe[] {
     const identity = `${base.method} ${base.template} ${kinds.join(" ")}`;
     if (seen.has(identity)) continue;
     seen.add(identity);
+    const inPath = subResourcesOf(base.template);
     out.push({
       ...base,
       name: `${base.method} ${base.template} (${kinds.join(" and ")} of one record of the other matter)`,
-      via: "body",
+      via: base.via === "path" && kinds.every((kind) => inPath.includes(kind)) ? "path" : "body",
       consistent: true,
       request: (own, borrowed) => base.request(wholeRecord(own, borrowed), borrowed),
     });
@@ -657,21 +666,19 @@ function consistentForms(mixed: readonly ForgedProbe[]): ForgedProbe[] {
   return out;
 }
 
-const MIXED_FORGED: readonly ForgedProbe[] = [
-  ...MATTER_PROBES.flatMap(forgedInPath),
-  ...FORGED_ELSEWHERE,
-];
-
 /**
- * Every forged request: one for each id a route of `MATTER_PROBES` takes in its path (so a route
+ * The forged requests for a table of routes: one for each id a route takes in its path (so a route
  * added to the table with an id is forged without anyone remembering to), the places outside the
  * path, and, for each route that names several ids, the request with all of them from one record
- * of the other matter.
+ * of the other matter. Exported so that a test can ask what a route added to the table would get.
  */
-export const FORGED_PROBES: readonly ForgedProbe[] = [
-  ...MIXED_FORGED,
-  ...consistentForms(MIXED_FORGED),
-];
+export function forgedProbesFor(table: readonly Probe[]): ForgedProbe[] {
+  const mixed = [...table.flatMap(forgedInPath), ...FORGED_ELSEWHERE];
+  return [...mixed, ...consistentForms(mixed)];
+}
+
+/** Every forged request of the application's routes: `forgedProbesFor(MATTER_PROBES)`. */
+export const FORGED_PROBES: readonly ForgedProbe[] = forgedProbesFor(MATTER_PROBES);
 
 // ---------------------------------------------------------------------------------------------
 // URLs that no route owns
@@ -707,9 +714,9 @@ const UNROUTED_TAILS: readonly string[] = [
  *  - a matter's pages and its API with segments after them that no route has, in every method;
  *  - each route of `MATTER_PROBES` under every method that the table does not probe on it, which
  *    is where an `ALL` route registered at a probed path would answer a method nobody sent;
- *  - the path of each wildcard route that names a matter (`wildcards`, as registered), with the
- *    wildcard filled in with two segments that no route has, which is the URL that a wildcard
- *    under a longer prefix answers and the shapes above do not reach.
+ *  - the path of each wildcard route (`wildcards`, as registered, at any prefix and whether or not
+ *    it names a matter), with the wildcard filled in with two segments that no route has, which is
+ *    the URL that a wildcard under a longer prefix answers and the shapes above do not reach.
  * A route that hands on (middleware) leaves every one of them to the 404 of the application. One
  * that answers, whatever the route list says about it, does not.
  */

@@ -80,6 +80,35 @@ describe("a route that hands on", () => {
   });
 });
 
+describe("a wildcard at a prefix that names no matter", () => {
+  it("is asked every method as well, and found clean when it hands on: middleware at /api, /legacy and every path", async () => {
+    const result = await run(
+      {
+        beforeRoutes: (app) => {
+          app.use("*", async (_c, next) => {
+            await next();
+          });
+          app.use("/api/*", async (_c, next) => {
+            await next();
+          });
+        },
+        afterRoutes: (app) =>
+          void app.all("/legacy/*", async (_c, next) => {
+            await next();
+          }),
+      },
+      ["unrouted"],
+    );
+    // Three URLs, in every method: the root, the API and the prefix that names nothing. The shell's
+    // own middleware, which is registered for every path, adds none: the plan above has only the shapes.
+    expect(result.unroutedRequests).toBe(plan.length + 3 * 5);
+    expect(result.unroutedCells).toBe((plan.length + 3 * 5) * UNROUTED_ACTORS.length * 2);
+    expect(result.probesAnsweredWithData).toBe(0);
+    expect(result.mismatches).toBe(0);
+    expect(result.exposed).toEqual([]);
+  });
+});
+
 describe("a route that answers more than it is listed for", () => {
   it("is found when app.all with a wildcard answers every URL under a matter's API, and the route list lets it through", async () => {
     const hook: SiteHooks = { afterRoutes: answers() };
@@ -135,6 +164,29 @@ describe("a route that answers more than it is listed for", () => {
     expect(
       result.exposed.every((cell) => cell.probe.includes("/export/unrouted/unrouted (no route)")),
     ).toBe(true);
+  });
+
+  it("is found when app.all with a wildcard at a prefix that names no matter answers a POST with data, as an app.post there is", async () => {
+    const hook: SiteHooks = {
+      afterRoutes: (app) =>
+        void app.all("/legacy/*", (c) =>
+          c.req.method === "POST" ? c.json({ everything: "for anyone" }) : c.notFound(),
+        ),
+    };
+    // The matrix has nothing to send it, and the canary scan reads it with a GET, which it does not answer.
+    const listed = await run(hook, ["matrix"]);
+    expect(listed.probesAnsweredWithData).toBe(0);
+    const result = await run(hook, ["unrouted"]);
+    // The one method it answers, as each of the three callers, in both modes.
+    expect(result.probesAnsweredWithData).toBe(UNROUTED_ACTORS.length * 2);
+    expect(result.byReason.handler_answered).toBe(UNROUTED_ACTORS.length * 2);
+    expect(
+      result.exposed.every((cell) => cell.probe === "POST /legacy/unrouted/unrouted (no route)"),
+    ).toBe(true);
+    expect(new Set(result.exposed.map((cell) => cell.actor))).toEqual(new Set(UNROUTED_ACTORS));
+    expect(result.mismatches).toBe(0);
+    // The URL it answers is one more, in every method, among the shapes sent.
+    expect(result.unroutedRequests).toBe(plan.length + 5);
   });
 
   it("is found when an ALL route at a probed path answers a method the table does not probe on it", async () => {

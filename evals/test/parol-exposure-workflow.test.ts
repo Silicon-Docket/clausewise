@@ -159,6 +159,29 @@ describe("the record says which workflow its reviews ran under", () => {
     expect(plain.probesRun).toBe(v3.probesRun);
   });
 
+  it("hands the workflow to both halves: the reviews of the authorization probes and of the canary scan start under it, and under the newest shipped one by default", async () => {
+    // Nothing in the record depends on the version in the authorization half (the same cells either
+    // way), so the label and the hash in the record would read the same if that half were left to
+    // review under the default. What the sites started is what shows it.
+    const authorization = new Set<string>();
+    const canary = new Set<string>();
+    await runExposureSuite(
+      { ...common(), workflow: "v3" },
+      { authorization: recordWorkflows(authorization), canary: recordWorkflows(canary) },
+    );
+    expect([...authorization]).toEqual(["v3"]);
+    expect([...canary]).toEqual(["v3"]);
+
+    const byDefaultAuthorization = new Set<string>();
+    const byDefaultCanary = new Set<string>();
+    await runExposureSuite(common(), {
+      authorization: recordWorkflows(byDefaultAuthorization),
+      canary: recordWorkflows(byDefaultCanary),
+    });
+    expect([...byDefaultAuthorization]).toEqual([DEFAULT_EXPOSURE_WORKFLOW]);
+    expect([...byDefaultCanary]).toEqual([DEFAULT_EXPOSURE_WORKFLOW]);
+  });
+
   it("refuses a version that is not registered, plainly and without echoing a long label", async () => {
     const error = await runExposureSuite({ ...common(), workflow: "z".repeat(200) }).then(
       () => undefined,

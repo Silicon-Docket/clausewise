@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { ObjectGenerator } from "@clausewise/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
+import { WORKFLOWS } from "../../apps/parol/src/prompts/workflows.js";
 import { isAbortError } from "../../apps/parol/src/stages/analyze-call.js";
 import { EvalError } from "../src/errors.js";
 import {
@@ -529,28 +530,46 @@ describe("a recording header or a results file with a hostile workflow label", (
     expect(refusal).not.toContain("--workflow");
   });
 
-  it("offers a registered workflow by name, and another label only as a label", async () => {
-    const make = async (label: string) => {
+  it("offers a registered workflow by name only under the hash it has, and another label only as a label", async () => {
+    // `sha` is the hash the recording says its workflow had; `label` is the run that is refused.
+    const make = async (label: string, sha: string, runOf = "v2") => {
       const path = join(await freshDir(), "r.responses.jsonl");
       await RecordingWriter.create(path, header());
       const recording = await loadRecording(path);
       recording.header.pins.workflow.label = label;
-      recording.header.pins.workflow.sha256 = hex("f");
+      recording.header.pins.workflow.sha256 = sha;
       return replayRefusal({
         recording,
         workflowSha256: hex("a"),
-        workflowLabel: "v2",
+        workflowLabel: runOf,
         playbookSha256: hex("b"),
         prompts: pins().workflow.prompts,
       })!;
     };
-    expect(await make("v1")).toMatch(/made with workflow v1.*Replay with --workflow v1\./);
-    const unknown = await make("v9");
+    // The recorded hash is the one this code has for v1: the option is a command that would work.
+    expect(await make("v1", WORKFLOWS.v1!.sha256)).toMatch(
+      /made with workflow v1.*Replay with --workflow v1\./,
+    );
+    // A registered label with another hash is not the recorded workflow, and naming it as the
+    // option would be the advice to run what was just refused. Neither is it for the run's own label.
+    for (const [label, runOf] of [
+      ["v1", "v2"],
+      ["v2", "v2"],
+    ] as const) {
+      const changed = await make(label, hex("f"), runOf);
+      expect(changed).toContain(`made with workflow ${label}`);
+      expect(changed).not.toContain("--workflow");
+      expect(changed).toContain(`This code's workflow ${label} is not the recorded definition.`);
+      expect(changed).toContain("Replay with the code the recording was made with.");
+    }
+    // The run's own label is never offered back to it, whatever the hash.
+    expect(await make("v1", WORKFLOWS.v1!.sha256, "v1")).not.toContain("Replay with --workflow");
+    const unknown = await make("v9", hex("f"));
     expect(unknown).toContain("made with workflow v9");
     expect(unknown).not.toContain("Replay with --workflow");
     expect(unknown).toContain("No workflow this code knows matches the recording.");
     // A label that reads like a secret is withheld, as every name from a file is.
-    const secretLike = await make("keyed-1");
+    const secretLike = await make("keyed-1", hex("f"));
     expect(secretLike).not.toContain("keyed-1");
     expect(secretLike).not.toContain("--workflow");
   });

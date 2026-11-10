@@ -116,7 +116,8 @@ describe("the real application", () => {
     expect(sentence).toMatch(/ids in prompts and answers \(the model is shown clause labels\)/);
     expect(sentence).toMatch(/response headers/);
     expect(sentence).toMatch(/query variants/);
-    expect(sentence).toMatch(/wildcard handlers beyond one request each/);
+    expect(sentence).toMatch(/wildcard handlers beyond one GET to one URL each, and runs/);
+    expect(sentence).not.toMatch(/beyond one request each/);
     expect(sentence).toMatch(/of the canary matter \(it is never reviewed\)/);
   });
 

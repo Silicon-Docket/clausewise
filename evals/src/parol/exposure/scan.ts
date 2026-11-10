@@ -1,8 +1,8 @@
 /**
- * The scanner of the exposure suite: looks, in memory, for strings and ids that must not be where
- * they are found. It is given an artefact (a prompt before it is sent, a model answer, an HTTP
- * response body, an exported memo, the rows of a table) and the tokens that are forbidden in that
- * artefact, and answers which tokens it holds.
+ * The scanner of the exposure suite: looks, in memory, for canary strings, ids and names that must
+ * not be where they are found. It is given an artefact (a prompt before it is sent, a model answer,
+ * an HTTP response body, an exported memo, the rows of a table) and the tokens that are forbidden in
+ * that artefact, and answers which tokens it holds.
  *
  * Five rules keep it honest.
  *
@@ -46,7 +46,11 @@ export const ARTEFACT_KINDS: readonly ArtefactKind[] = [
 export interface TokenSet {
   /** Canary strings. Matched without regard to case. */
   canary: readonly string[];
-  /** Ids of another matter: its span, document and document version ids, and its own id. */
+  /**
+   * Ids and names of another matter: its span, document and document version ids, its own id, its
+   * name and its client's name, and, on the JSON routes, its members' user ids and display names.
+   * Matched without regard to case, like the canary strings, and reported as `id` hits.
+   */
   ids: readonly string[];
 }
 
@@ -61,6 +65,7 @@ export interface ScanTarget {
 export interface ScanHit {
   kind: ArtefactKind;
   label: string;
+  /** `id` stands for any token of `forbid.ids`: an id, a name or a member. */
   token: "canary" | "id";
   /** The position of the token in `forbid.canary` or `forbid.ids`. */
   index: number;

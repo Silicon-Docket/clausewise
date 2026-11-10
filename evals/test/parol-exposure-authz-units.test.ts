@@ -26,12 +26,15 @@ import {
   NO_RECORD,
   UNROUTED_METHODS,
   effectOf,
+  forgedProbesFor,
   initFor,
+  isApi,
   noRecordIds,
   pathFor,
   probeKeyOf,
   subResourcesOf,
   unroutedRequests,
+  type Probe,
   type ProbeIds,
   type Scratch,
 } from "../src/parol/exposure/probes.js";
@@ -285,6 +288,34 @@ describe("a request to a URL that no route owns", () => {
       paths.filter((path) => path === "/api/matters/mat_3333333333333333/unrouted/unrouted"),
     ).toHaveLength(1);
   });
+
+  it("fills in a wildcard at a prefix that names no matter as well, as the API or a page by its prefix, in every method", () => {
+    const wildcards = ["/legacy/*", "/*", "/api/*", "/api/v2/:thing/*"];
+    const requests = unroutedRequests(noRecordIds(), wildcards);
+    for (const [template, path] of [
+      ["/legacy/unrouted/unrouted", "/legacy/unrouted/unrouted"],
+      ["/unrouted/unrouted", "/unrouted/unrouted"],
+      ["/api/unrouted/unrouted", "/api/unrouted/unrouted"],
+      ["/api/v2/:thing/unrouted/unrouted", "/api/v2/unrouted/unrouted/unrouted"],
+    ] as const) {
+      const asked = requests.filter((request) => request.template === template);
+      expect(
+        asked.map((request) => request.method),
+        template,
+      ).toEqual([...UNROUTED_METHODS]);
+      for (const request of asked) {
+        expect(request.path, request.name).toBe(path);
+        expect(request.name).toBe(`${request.method} ${template} (no route)`);
+        expect(request.name).not.toMatch(ID_SHAPE);
+        if (request.method === "GET") expect(request.body.kind).toBe("none");
+        else expect(request.body.kind, request.name).toBe(isApi(template) ? "json" : "form");
+      }
+    }
+    // Nothing else is added: the shapes of a matter's URL are the same, and each wildcard adds one URL in five methods.
+    expect(requests.length).toBe(
+      unroutedRequests(noRecordIds()).length + wildcards.length * UNROUTED_METHODS.length,
+    );
+  });
 });
 
 describe("the hash of the store", () => {
@@ -431,7 +462,44 @@ describe("the sentence", () => {
     expect(sentenceOf(result())).toContain("on 20 of 24 write routes");
     const none = sentenceOf(result({ writesWithEffect: 0, writesWithoutBody: [] }));
     expect(none).not.toContain("write routes (");
-    expect(none).toContain("none of the 24 write routes was sent one");
+    expect(none).toContain(
+      "none of the 24 write routes was shown to have a body that changes the store for a caller who is let in.",
+    );
+  });
+
+  it("says no more of the write routes when none was shown to change the store than the counts say, in every wording", () => {
+    // Every body was stopped before the guard (a rule before the routes that answers each write with a refusal):
+    // the routes that have one are not routes whose bodies change nothing, and none was sent to a handler.
+    const stopped = result({ writesWithEffect: 0, writesUnproven: 20 });
+    const rungs = sentenceLadder(stopped);
+    for (const [at, rung] of rungs.entries()) {
+      expect(rung, `rung ${at}`).not.toContain("was sent one");
+      expect(rung, `rung ${at}`).not.toContain("was sent a body");
+      expect(rung, `rung ${at}`).not.toContain("change nothing");
+      expect(rung, `rung ${at}`).toContain("none of the 24 write routes was shown to");
+    }
+    // The fullest says it in the words of the other branch; the short ones in its short words.
+    expect(rungs[0]).toContain(
+      "none of the 24 write routes was shown to have a body that changes the store for a caller who is let in " +
+        "(4, ending in resume and cancel, have none, and 20 had one that was stopped before the guard).",
+    );
+    expect(rungs[2]).toContain(
+      "none of the 24 write routes was shown to change the store, 4 have none, 20 stopped before the guard.",
+    );
+    expect(rungs[3]).toContain(
+      "none of the 24 write routes was shown to change the store, 4 have none, 20 stopped before the guard.",
+    );
+    // Without a route that has no body, and with none stopped, the clause has nothing to add.
+    const bare = sentenceLadder(result({ writesWithEffect: 0, writesWithoutBody: [] }));
+    expect(bare[2]).toContain("none of the 24 write routes was shown to change the store.");
+    // The routes that have no body are said from the data too, not as a fixed claim.
+    const lone = sentenceOf(
+      result({
+        writesWithEffect: 0,
+        writesWithoutBody: ["DELETE /matters/:matterId/x/:id/archive"],
+      }),
+    );
+    expect(lone).toContain("(1, ending in archive, have none)");
   });
 
   it("derives what it says of the other write routes from the routes, and does not call them unable to change anything", () => {
@@ -531,6 +599,28 @@ describe("the sentence of a run that found something", () => {
     expect(sentence).not.toMatch(DASHES);
     expect(sentence).not.toMatch(ID_SHAPE);
     expect(sentence).toMatch(/\.$/);
+  });
+
+  it("fits the budget as well when no write route was shown to change the store: the wording of that case is not the longer", () => {
+    // Every write route either has no body or had one stopped before the guard, at the widest counts.
+    const stopped = { ...worst(), writesWithEffect: 0, writesUnproven: 99 };
+    const rungs = sentenceLadder(stopped);
+    for (let at = 1; at < rungs.length; at += 1)
+      expect(rungs[at]!.length, `rung ${at}`).toBeLessThanOrEqual(rungs[at - 1]!.length);
+    // Not longer than the wording for routes that were shown to change it, rung for rung.
+    const shown = sentenceLadder(worst());
+    for (const [at, rung] of rungs.entries())
+      expect(rung.length, `rung ${at}`).toBeLessThanOrEqual(shown[at]!.length);
+    const sentence = sentenceOf(stopped);
+    expect(sentence.length).toBeLessThanOrEqual(AUTHORIZATION_SENTENCE_BUDGET);
+    expect(sentence).not.toContain(SENTENCE_CUT);
+    expect(sentence).toContain("sent 9999 cells");
+    expect(sentence).toContain("write routes was shown to");
+    expect(sentence).toContain("99 stopped before the guard");
+    expect(sentence).toContain("First exposed: ");
+    expect(sentence).toContain("Not seen: ");
+    expect(sentence).not.toContain("was sent one");
+    expect(sentence).not.toMatch(DASHES);
   });
 
   it("gives way in the order the explanations matter: the callers, then the paragraph about changes, then the names", () => {
@@ -686,6 +776,106 @@ describe("the tables of probes", () => {
     expect(
       FORGED_PROBES.filter((probe) => probe.pairedWith.length === 0 && probe.consistent),
     ).toHaveLength(0);
+  });
+
+  describe("a route that names several ids in its path", () => {
+    const own: ProbeIds = {
+      matterId: "mat_1111111111111111",
+      firstDocumentId: "doc_1111111111111111",
+      versionId: "ver_1111111111111111",
+      runId: "run_1111111111111111",
+      findingId: "fnd_1111111111111111",
+      memoId: "memo_1111111111111111",
+    };
+    const borrowed = {
+      documentId: "doc_2222222222222222",
+      versionId: "ver_2222222222222222",
+      runId: "run_2222222222222222",
+      findingId: "fnd_2222222222222222",
+      memoId: "memo_2222222222222222",
+      findingContentSha256: "2".repeat(64),
+    };
+    const theirs = (path: string): number => path.match(/_2222222222222222/g)?.length ?? 0;
+    /** A route the application does not have yet, with two ids, and one with three, as a developer might add them. */
+    const added: Probe[] = [
+      {
+        method: "GET",
+        template: "/matters/:matterId/runs/:runId/findings/:findingId",
+        action: "finding.read",
+        body: { kind: "none" },
+        reaches: 200,
+      },
+      {
+        method: "POST",
+        template: "/api/matters/:matterId/documents/:documentId/versions/:versionId/runs/:runId",
+        action: "run.start",
+        body: { kind: "json", json: {} },
+        reaches: 400,
+      },
+    ];
+
+    /** Each route of the table with several ids has its mixed forms and one form with every id from one record. */
+    function check(table: readonly Probe[]): number {
+      const forged = forgedProbesFor(table);
+      let checked = 0;
+      for (const probe of table.filter((entry) => subResourcesOf(entry.template).length >= 2)) {
+        const several = subResourcesOf(probe.template).length;
+        const ofRoute = forged.filter(
+          (entry) => entry.method === probe.method && entry.template === probe.template,
+        );
+        const mixed = ofRoute.filter((entry) => !entry.consistent);
+        const whole = ofRoute.filter((entry) => entry.consistent);
+        const name = probeKeyOf(probe);
+        expect(mixed, name).toHaveLength(several);
+        expect(whole, name).toHaveLength(1);
+        // Mixed: one id is the other matter's and the rest are the caller's own.
+        for (const entry of mixed) {
+          const { path } = entry.request(own, borrowed);
+          expect(theirs(path), entry.name).toBe(1);
+          expect(path, entry.name).toContain("mat_1111111111111111");
+        }
+        // Consistent: every id the path names is from the one record of the other matter, the matter is the caller's.
+        const { path } = whole[0]!.request(own, borrowed);
+        expect(theirs(path), whole[0]!.name).toBe(several);
+        expect(path.replace("mat_1111111111111111", ""), whole[0]!.name).not.toContain(
+          "_1111111111111111",
+        );
+        expect(path.endsWith("_2222222222222222"), whole[0]!.name).toBe(true);
+        expect(path).toContain("mat_1111111111111111");
+        expect(path).not.toMatch(/:[a-zA-Z]+Id/);
+        expect(whole[0]!.name).not.toMatch(ID_SHAPE);
+        expect(whole[0]!.name).not.toMatch(DASHES);
+        // Every id it names is in the path, so it is a form of the path and not of a body.
+        expect(whole[0]!.via).toBe("path");
+        expect(whole[0]!.consistent).toBe(true);
+        checked += 1;
+      }
+      return checked;
+    }
+
+    it("has a form with every id from one record of the other matter, for each route of the table that has several", () => {
+      // The application has none today, so this holds the table to it when one is added.
+      check(MATTER_PROBES);
+      expect(FORGED_PROBES.filter((entry) => entry.consistent)).toHaveLength(2);
+    });
+
+    it("has that form for a route added to the table, without anyone listing it: with two ids and with three", () => {
+      expect(check([...MATTER_PROBES, ...added])).toBe(added.length);
+      const forged = forgedProbesFor([...MATTER_PROBES, ...added]);
+      const twins = forged.filter(
+        (entry) => entry.consistent && added.some((probe) => probe.template === entry.template),
+      );
+      expect(twins.map((entry) => entry.name).sort()).toEqual([
+        "GET /matters/:matterId/runs/:runId/findings/:findingId (finding and run of one record of the other matter)",
+        "POST /api/matters/:matterId/documents/:documentId/versions/:versionId/runs/:runId (document and run and version of one record of the other matter)",
+      ]);
+      // The routes of the application keep the two forms they had.
+      expect(
+        forged.filter(
+          (entry) => entry.consistent && !added.some((probe) => probe.template === entry.template),
+        ),
+      ).toHaveLength(2);
+    });
   });
 
   it("give well formed ids of no record in every segment, and only those", () => {

@@ -18,8 +18,8 @@
  *     as every caller, because a list can show a person the title of a matter they have no part in.
  *  4. The URLs that no route owns: a matter's pages and API with segments after them that no route
  *     has, each probed route under every method the table does not probe on it, and the path of
- *     every wildcard route that names a matter, sent by a visitor, a signed-in person with no part
- *     in the matter and a member. The answer must be the 404 of any URL that nothing owns. This is
+ *     every wildcard route (at any prefix) that is not the shell's own middleware, sent by a
+ *     visitor, a signed-in person with no part in the matter and a member. The answer must be the 404 of any URL that nothing owns. This is
  *     the check for a route that answers more than it is listed for: the list of routes cannot
  *     tell a wildcard that hands on from one that answers, and this can.
  *
@@ -545,7 +545,10 @@ export interface AuthorizationFinding {
 }
 
 export interface AuthorizationResult {
-  /** Cells sent: the matrix, the forged ids and the reads of the routes that name no matter. */
+  /**
+   * Cells sent: the matrix, the forged ids, the reads of the routes that name no matter and the
+   * requests to URLs that no route owns.
+   */
   probesRun: number;
   /** Cells where a caller who must be refused was not, or learned something from the answer. */
   probesAnsweredWithData: number;
@@ -834,6 +837,13 @@ function sentenceWith(result: Omit<AuthorizationResult, "sentence">, wording: Wo
       ? `${result.writesUnproven} had one that was stopped before the guard`
       : "",
   ].filter((part) => part !== "");
+  /** The same in the short wordings. */
+  const othersShort =
+    `${without > 0 ? `, ${without} have none` : ""}` +
+    `${result.writesUnproven > 0 ? `, ${result.writesUnproven} stopped before the guard` : ""}`;
+  const othersLong = others.length > 0 ? ` (${others.join(", and ")})` : "";
+  // When no route was shown to change the store the sentence says that and no more: a route whose
+  // body was stopped before the guard, or that has none, is not one whose body changes nothing.
   const effects =
     result.matrixCells === 0
       ? ""
@@ -841,17 +851,15 @@ function sentenceWith(result: Omit<AuthorizationResult, "sentence">, wording: Wo
         ? compress === 0
           ? " Changes were found by comparing a hash of every row of every table before and after each cell, " +
             "and callers who must be refused were sent a body that changes the store for a caller who is let in on " +
-            `${result.writesWithEffect} of ${result.writeRoutes} write routes${others.length > 0 ? ` (${others.join(", and ")})` : ""}.`
+            `${result.writesWithEffect} of ${result.writeRoutes} write routes${othersLong}.`
           : " Changes: a hash of every row of every table before and after each cell; a body that changes the store " +
-            `was sent to refused callers on ${result.writesWithEffect} of ${result.writeRoutes} write routes` +
-            `${without > 0 ? `, ${without} have none` : ""}` +
-            `${result.writesUnproven > 0 ? `, ${result.writesUnproven} stopped before the guard` : ""}.`
+            `was sent to refused callers on ${result.writesWithEffect} of ${result.writeRoutes} write routes${othersShort}.`
         : compress === 0
           ? " Changes were found by comparing a hash of every row of every table before and after each cell, " +
-            "but the bodies sent to callers who must be refused change nothing even if they get through " +
-            `(none of the ${result.writeRoutes} write routes was sent one).`
+            `but none of the ${result.writeRoutes} write routes was shown to have a body that changes the store ` +
+            `for a caller who is let in${othersLong}.`
           : " Changes: a hash of every row of every table before and after each cell; " +
-            `none of the ${result.writeRoutes} write routes was sent a body that changes the store.`;
+            `none of the ${result.writeRoutes} write routes was shown to change the store${othersShort}.`;
   return (
     `Authorization probes: sent ${result.probesRun} cells to the application running in process ` +
     `on synthetic matters, reviewed where a review was needed by a scripted key oracle, which is not a language model. ` +
@@ -1466,12 +1474,14 @@ function freshMatter(site: ExposureSite, name = "A matter made for one request")
  *  - A route that names no matter and was registered another way (`app.post("/api/search")`) is
  *    let through only if the table sends a request to it under its method and path. Reads were
  *    all that was checked before; a write is the same case.
- *  - A wildcard (`app.use("/api/matters/*")`, `app.all("/api/matters/:matterId/*")`) is let
- *    through, and so is an `ALL` route at a path the table probes. The route list cannot tell
- *    one that hands on from one that answers, and does not try to: the cells for URLs that no
- *    route owns (group `unrouted`) send every method to URLs the routes do not own, as three kinds
- *    of caller, and an answer other than the 404 of such a URL is counted as an exposure. The paths
- *    of the wildcards are returned so that those cells reach the URL each one answers.
+ *  - A wildcard (`app.use("/api/matters/*")`, `app.all("/api/matters/:matterId/*")`,
+ *    `app.all("/legacy/*")`) is let through, and so is an `ALL` route at a path the table probes.
+ *    The route list cannot tell one that hands on from one that answers, and does not try to: the
+ *    cells for URLs that no route owns (group `unrouted`) send every method to URLs the routes do
+ *    not own, as three kinds of caller, and an answer other than the 404 of such a URL is counted
+ *    as an exposure. The paths of the wildcards, whether or not they name a matter, are returned so
+ *    that those cells reach the URL each one answers. The shell's own middleware (kind
+ *    `middleware`) is not among them.
  *  - A generic route that would answer a matter's URL (`/:area/:id`) is found by asking the router,
  *    as `findMatterUrlsWithoutGuard` does.
  */
@@ -1550,7 +1560,10 @@ function checkCoverage(site: ExposureSite): string[] {
       `A route other than a matter route would answer a URL that names a matter: ${answeredElsewhere.join(", ")}.`,
     );
   // A route registered another way that names no matter, whatever its method, has to be one the
-  // suite sends a request to. The `ALL` routes are left to the cells for URLs that no route owns.
+  // suite sends a request to. The `ALL` wildcards, at any prefix, are left to the cells for URLs
+  // that no route owns, which send each of them every method to one URL under its prefix. An `ALL`
+  // route at a fixed path is not a wildcard and is sent nothing here: the canary scan stops the
+  // suite for it unless a probe table lists it.
   const sent = new Set([...listed, ...probes.keys()]);
   const unsent = described
     .filter(
@@ -1566,13 +1579,12 @@ function checkCoverage(site: ExposureSite): string[] {
       `The application has routes that were not made with defineRoute, name no matter, and are not among the requests the suite sends: ${unsent.join(", ")}.`,
     );
 
+  // Every wildcard that the shell did not register as middleware, at any prefix: one that names no
+  // matter (`/legacy/*`) can answer a POST with data as well as one that does.
   return [
     ...new Set(
       described
-        .filter(
-          (route) =>
-            route.kind === "unmanaged" && isWildcard(route) && isMatterScopedPath(route.path),
-        )
+        .filter((route) => route.kind === "unmanaged" && isWildcard(route))
         .map((route) => route.path),
     ),
   ];

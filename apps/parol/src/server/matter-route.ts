@@ -252,8 +252,9 @@ export function concreteUrl(path: string): string {
  * own (`defineMiddleware`), or one registered for every method on a wildcard with a fixed prefix
  * another way. It runs and hands on, so the route that answers is the next one that matches. The
  * second kind is taken for middleware by its path alone, which cannot tell it from a responder:
- * `findMatterUrlsWithoutGuard` is for matter URLs, and the canary scan asks what such a route
- * answers. A wildcard that names a matter path is not exempt: the path check reports it.
+ * `findMatterUrlsWithoutGuard` is for matter URLs, and the evaluation's exposure suite stops for
+ * any such route that the application's own source registers, and sends every method to it. A
+ * wildcard that names a matter path is not exempt: the path check reports it.
  */
 function isPrefixMiddleware(route: RouteReport): boolean {
   if (route.kind === "middleware") return true;

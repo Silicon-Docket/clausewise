@@ -265,6 +265,18 @@ describe("G1 unauthorized-data exposure: 0", () => {
     expect(g1Result.evidence[0]).toMatchObject({ numerator: 2, denominator: 264, passed: false });
     expect(g1Result.detail).toContain("2 of 264");
   });
+
+  it("says that it counts the names of another matter as well as its ids", () => {
+    // The count of ids also holds the matter's name, its client's name and its members on the JSON
+    // routes, so a reader looking at the measure is not led to look for ids alone.
+    const g1Result = evaluateGates(
+      subject({ exposure: { ...clean, foreignSpanIdHits: 1 } }),
+    ).results.find((r) => r.id === "G1")!;
+    expect(g1Result.evidence[0]!.measure).toBe(
+      "probes answered with data plus canary strings and ids or names of another matter found",
+    );
+    expect(g1Result.detail).toContain("ids or names of another matter");
+  });
 });
 
 describe("G2 displayed citation validity: 1.0 in every repeat", () => {

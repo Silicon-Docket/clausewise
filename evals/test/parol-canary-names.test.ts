@@ -1,6 +1,8 @@
 import JSZip from "jszip";
 import type { GenerateObjectRequest, ObjectGenerator } from "@clausewise/llm";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { DEMO_USER_IDS } from "../../apps/parol/src/store/index.js";
+import type { AppDeps } from "../../apps/parol/src/server/deps.js";
 import {
   runCanaryScan,
   type CanaryHooks,
@@ -266,6 +268,203 @@ describe("the members of a matter", () => {
   });
 });
 
+/** The routes under one matter's id (`/api/matters/<id>`, and below it). The list of matters is not one. */
+const UNDER_A_MATTER = /^\/api\/matters\/[^/]+/;
+
+/**
+ * Adds a text to the JSON answer of a GET (whatever the status, so a refusal carries it too) to
+ * the paths `where` picks. The answer stays JSON, so that a reader who may hold the text is not
+ * stopped by a damaged body. Restricting the paths is what lets a test tell one reader set from
+ * another: `/api/matters/*` in Hono also matches the list, which other readers' sets cover.
+ */
+function leaking(
+  text: (deps: AppDeps) => string,
+  where: (deps: AppDeps, path: string) => boolean,
+): NonNullable<CanaryHooks["beforeRoutes"]> {
+  return (app, deps) => {
+    app.use("/api/*", async (c, next) => {
+      await next();
+      if (c.req.method !== "GET" || !where(deps, c.req.path)) return;
+      // A file (the memo) is not JSON, and a damaged package would stop the scan for another reason.
+      if (!(c.res.headers.get("content-type") ?? "").includes("json")) return;
+      const parsed: unknown = JSON.parse(await c.res.text());
+      const changed = JSON.stringify(
+        Array.isArray(parsed)
+          ? [...parsed, text(deps)]
+          : { ...(parsed as Record<string, unknown>), leak: text(deps) },
+      );
+      const headers = new Headers(c.res.headers);
+      headers.delete("content-length");
+      c.res = new Response(changed, { status: c.res.status, headers });
+    });
+  };
+}
+
+/** The readers of one route whose read was a hit, as their labels name them without the route. */
+function readersAt(result: CanaryResult, route: string): string[] {
+  return labelsOf(result, "http_body")
+    .filter((label) => label.endsWith(` ${route}`))
+    .map((label) => label.slice(0, -(route.length + 1)))
+    .sort();
+}
+
+const ONE_MATTER = "GET /api/matters/:matterId";
+const THE_LIST = "GET /api/matters";
+const CASE_PEOPLE = ["associate", "reviewer", "viewer"];
+const STRANGERS = ["administrator", "legal engineer", "anonymous"];
+const CANARY_PEOPLE = ["bramblewick associate", "bramblewick reviewer"];
+
+describe("each name, in each direction, for each kind of reader", () => {
+  // One leak of one name on every route under a matter's id, the case's and the canary matter's.
+  // Who is held to what is the point: a reader set that lacks the name lets it through unseen.
+  const names: Record<string, { text: () => string; readers: () => string[] }> = {
+    "the case's matter name": {
+      text: () => CASE_NAME,
+      readers: () => [
+        // On the case's routes: the canary matter's people and the strangers.
+        ...CANARY_PEOPLE.map((who) => `${who} on case`),
+        ...STRANGERS.map((who) => `${who} on case`),
+        // On the canary matter's routes: its own people, and the strangers.
+        ...CANARY_PEOPLE,
+        ...STRANGERS.map((who) => `${who} on canary bramblewick`),
+      ],
+    },
+    "the case's client name": {
+      text: () => caseClient(),
+      readers: () => [
+        ...CANARY_PEOPLE.map((who) => `${who} on case`),
+        ...STRANGERS.map((who) => `${who} on case`),
+        ...CANARY_PEOPLE,
+        ...STRANGERS.map((who) => `${who} on canary bramblewick`),
+      ],
+    },
+    "the canary matter's name": {
+      text: () => CANARY_NAME,
+      readers: () => [
+        // On the case's routes: its own people, the canary matter's people, the strangers.
+        ...CASE_PEOPLE,
+        ...CANARY_PEOPLE.map((who) => `${who} on case`),
+        ...STRANGERS.map((who) => `${who} on case`),
+        // On the canary matter's routes: the case's people and the strangers, not its own people.
+        ...CASE_PEOPLE.map((who) => `${who} on canary bramblewick`),
+        ...STRANGERS.map((who) => `${who} on canary bramblewick`),
+      ],
+    },
+    "the canary matter's client name": {
+      text: () => canaryMatter().clientLegalName,
+      readers: () => [
+        ...CASE_PEOPLE,
+        ...CANARY_PEOPLE.map((who) => `${who} on case`),
+        ...STRANGERS.map((who) => `${who} on case`),
+        ...CASE_PEOPLE.map((who) => `${who} on canary bramblewick`),
+        ...STRANGERS.map((who) => `${who} on canary bramblewick`),
+      ],
+    },
+  };
+
+  for (const [what, { text, readers }] of Object.entries(names))
+    it(`counts ${what} for exactly the readers who may not see it`, async () => {
+      const result = await scan({
+        beforeRoutes: leaking(
+          () => text(),
+          (_deps, path) => UNDER_A_MATTER.test(path),
+        ),
+      });
+      expect(readersAt(result, ONE_MATTER)).toEqual(readers().sort());
+      expect(result.canaryHits).toBe(0);
+      expect(result.hits.every((hit) => hit.token === "id")).toBe(true);
+    });
+});
+
+describe("each member, in each direction, for each kind of reader", () => {
+  const canaryUser = () => ({
+    id: "usr_exposure_bramblewick_associate",
+    name: () => `Synthetic ${canaryMatter().name} associate`,
+  });
+  const caseUser = () => ({
+    id: DEMO_USER_IDS.associate,
+    name: (deps: AppDeps) => deps.repo.getUser(DEMO_USER_IDS.associate)!.displayName,
+  });
+  const onCaseRoutes = (deps: AppDeps, path: string): boolean =>
+    UNDER_A_MATTER.test(path) && !namesCanaryMatter(deps, path);
+  const onCanaryRoutes = (deps: AppDeps, path: string): boolean =>
+    UNDER_A_MATTER.test(path) && namesCanaryMatter(deps, path);
+  const onTheList = (_deps: AppDeps, path: string): boolean => path === "/api/matters";
+
+  // The member of the other matter, on each kind of route. A member is not forbidden to the
+  // readers of its own matter, and is forbidden to everyone else, strangers included.
+  const scenarios: Record<
+    string,
+    {
+      user: typeof canaryUser | typeof caseUser;
+      where: (deps: AppDeps, path: string) => boolean;
+      route: string;
+      readers: string[];
+    }
+  > = {
+    "a canary matter's person on the case's routes": {
+      user: canaryUser,
+      where: onCaseRoutes,
+      route: ONE_MATTER,
+      readers: [
+        ...CASE_PEOPLE,
+        ...CANARY_PEOPLE.map((who) => `${who} on case`),
+        ...STRANGERS.map((who) => `${who} on case`),
+      ],
+    },
+    "a person of the case on the case's routes": {
+      user: caseUser,
+      where: onCaseRoutes,
+      route: ONE_MATTER,
+      readers: [
+        ...CANARY_PEOPLE.map((who) => `${who} on case`),
+        ...STRANGERS.map((who) => `${who} on case`),
+      ],
+    },
+    "a canary matter's person on the canary matter's routes": {
+      user: canaryUser,
+      where: onCanaryRoutes,
+      route: ONE_MATTER,
+      readers: [
+        ...CASE_PEOPLE.map((who) => `${who} on canary bramblewick`),
+        ...STRANGERS.map((who) => `${who} on canary bramblewick`),
+      ],
+    },
+    "a person of the case on the canary matter's routes": {
+      user: caseUser,
+      where: onCanaryRoutes,
+      route: ONE_MATTER,
+      readers: [...CANARY_PEOPLE, ...STRANGERS.map((who) => `${who} on canary bramblewick`)],
+    },
+    "a canary matter's person on the list of matters, which names no matter": {
+      user: canaryUser,
+      where: onTheList,
+      route: THE_LIST,
+      readers: [...CASE_PEOPLE, ...STRANGERS],
+    },
+    "a person of the case on the list of matters, which names no matter": {
+      user: caseUser,
+      where: onTheList,
+      route: THE_LIST,
+      readers: [...CANARY_PEOPLE, ...STRANGERS],
+    },
+  };
+
+  for (const [what, scenario] of Object.entries(scenarios))
+    for (const kind of ["id", "display name"] as const)
+      it(`counts ${what}, by ${kind} alone, for exactly the readers who may not see it`, async () => {
+        const result = await scan({
+          beforeRoutes: leaking((deps) => {
+            const user = scenario.user();
+            return kind === "id" ? user.id : user.name(deps);
+          }, scenario.where),
+        });
+        expect(readersAt(result, scenario.route)).toEqual([...scenario.readers].sort());
+        expect(result.canaryHits).toBe(0);
+        expect(result.hits.every((hit) => hit.token === "id")).toBe(true);
+      });
+});
+
 describe("what is printed", () => {
   it("holds no name, no id and no canary string of a hit", async () => {
     const result = await scan({
@@ -276,6 +475,8 @@ describe("what is printed", () => {
         })),
     });
     expect(result.foreignSpanIdHits).toBeGreaterThan(0);
+    // A hit on a name is not called an id.
+    expect(result.sentence).toMatch(/first found: an id or name in prompt \(/);
     const printed = JSON.stringify([result.hits, result.sentence]);
     expect(printed).not.toContain(canaryMatter().clientLegalName);
     expect(printed).not.toContain(CANARY_NAME);

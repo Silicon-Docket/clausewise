@@ -8,6 +8,7 @@ import {
 } from "@clausewise/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
+import { WORKFLOWS } from "../../apps/parol/src/prompts/workflows.js";
 import {
   RECORDING_FORMAT,
   RECORDING_KIND,
@@ -342,7 +343,20 @@ describe("what a replay may be asked to do", () => {
     expect(replayRefusal({ recording: await recording(), ...ok })).toBeNull();
   });
 
-  it("refuses another workflow, and names the one to use", async () => {
+  it("refuses another workflow, and names the one to use when this code has it under the recorded hash", async () => {
+    const registered = { ...pins().workflow, sha256: WORKFLOWS.v1!.sha256 };
+    const refusal = replayRefusal({
+      recording: await recording({ workflow: registered }),
+      ...ok,
+      workflowSha256: "f".repeat(64),
+      workflowLabel: "v2",
+    });
+    expect(refusal).toMatch(/made with workflow v1/);
+    expect(refusal).toMatch(/Replay with --workflow v1\./);
+  });
+
+  it("does not name a workflow of that label whose definition is not the recorded one", async () => {
+    // The hash of the recording is not the one this code has for v1, so --workflow v1 would be refused too.
     const refusal = replayRefusal({
       recording: await recording(),
       ...ok,
@@ -350,7 +364,8 @@ describe("what a replay may be asked to do", () => {
       workflowLabel: "v2",
     });
     expect(refusal).toMatch(/made with workflow v1/);
-    expect(refusal).toMatch(/--workflow v1/);
+    expect(refusal).not.toContain("--workflow");
+    expect(refusal).toContain("This code's workflow v1 is not the recorded definition.");
   });
 
   it("refuses another version of the playbook", async () => {

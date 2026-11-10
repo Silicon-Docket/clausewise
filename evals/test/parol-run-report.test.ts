@@ -657,19 +657,21 @@ describe("the labels of the exposure counts", () => {
     suites: ["a sentence"],
   };
 
-  it("say what the counts count: every kind of artefact scanned, and every kind of id of another matter", () => {
+  it("say what the counts count: every kind of artefact scanned, and every kind of id and name of another matter", () => {
     const file = clone();
     file.suites = { exposure, calibration: null };
     const text = renderReport(file);
     expect(text).toMatch(
       /\| Artefacts scanned \(prompts, answers, response bodies, memos, tables of stored rows, log\) \| 804 \|/,
     );
-    expect(text).toMatch(
-      /\| Ids of another matter found \(matter, document, version, span\) \| 2 \|/,
+    expect(text).toContain(
+      "| Ids and names of another matter found (matter, document, version and span ids; matter and client names; members on JSON routes) | 2 |",
     );
-    expect(text).toContain("the scans for canary strings and for ids of another matter");
+    expect(text).toContain("the scans for canary strings and for ids and names of another matter");
     // The old labels named fewer kinds than the scans cover.
     expect(text).not.toContain("Span ids of another matter found");
+    expect(text).not.toContain("Ids of another matter found");
+    expect(text).not.toContain("and for ids of another matter");
     expect(text).not.toContain("Prompts, answers, response bodies and memos scanned");
   });
 

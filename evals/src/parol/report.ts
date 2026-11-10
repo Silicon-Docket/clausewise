@@ -7,7 +7,7 @@
  * and again over every table of scores, and never presents what a scripted stand-in did as the
  * score of a model.
  */
-import { GATES, GATE_IDS } from "./gates.js";
+import { GATES, GATE_IDS, type GateReport } from "./gates.js";
 import {
   NA,
   countsText,
@@ -221,7 +221,7 @@ export function suiteLines(file: ResultsFile): string[] {
       exposure.probesAnsweredWithData + exposure.canaryHits + exposure.foreignSpanIdHits;
     const mismatch = exposureMismatch(exposure, file.pins.workflow);
     lines.push(
-      "**Exposure (gate G1).** These suites test the application's handling of matters: the authorization probes and the scans for canary strings and for ids of another matter. They do not test any model.",
+      "**Exposure (gate G1).** These suites test the application's handling of matters: the authorization probes and the scans for canary strings and for ids and names of another matter. They do not test any model.",
       "",
       `The reviews they ran and scanned were of workflow ${md(exposure.workflow.label)}.` +
         (mismatch === null ? "" : ` Gate G1 is not evaluated for this run: ${md(mismatch, 600)}.`),
@@ -240,7 +240,7 @@ export function suiteLines(file: ResultsFile): string[] {
           ],
           ["Canary strings found", whole(exposure.canaryHits)],
           [
-            "Ids of another matter found (matter, document, version, span)",
+            "Ids and names of another matter found (matter, document, version and span ids; matter and client names; members on JSON routes)",
             whole(exposure.foreignSpanIdHits),
           ],
           ["Total found (G1 requires 0)", whole(found)],
@@ -309,6 +309,27 @@ export function suiteLines(file: ResultsFile): string[] {
   return lines;
 }
 
+/**
+ * The gates of a section as the table shows them. They were worked out when the file was made, and
+ * a file whose exposure record is of another workflow than its run (edited, or put together from
+ * two) would show G1 as read from that record while the suites section says G1 is not evaluated.
+ * The record is read for G1 only for a run of its own workflow, so here G1 is not evaluated either,
+ * for the reason the suites section gives.
+ */
+function shownGates(gates: GateReport, file: ResultsFile): GateReport {
+  const mismatch = exposureMismatch(file.suites.exposure, file.pins.workflow);
+  if (mismatch === null) return gates;
+  const results = gates.results.map((r) =>
+    r.id === "G1" ? { ...r, outcome: "not_evaluated" as const, evidence: [], detail: mismatch } : r,
+  );
+  return {
+    results,
+    passed: false,
+    failed: gates.failed.filter((id) => id !== "G1"),
+    notEvaluated: GATE_IDS.filter((id) => id === "G1" || gates.notEvaluated.includes(id)),
+  };
+}
+
 function gatesTable(section: SplitSection, file: ResultsFile): string[] {
   const lines: string[] = [];
   if (section.gates === null) {
@@ -319,9 +340,10 @@ function gatesTable(section: SplitSection, file: ResultsFile): string[] {
     );
     return lines;
   }
+  const gates = shownGates(section.gates, file);
   const outcome = { pass: "pass", fail: "FAIL", not_evaluated: "not evaluated" } as const;
   const rows = GATE_IDS.map((id) => {
-    const result = section.gates!.results.find((r) => r.id === id)!;
+    const result = gates.results.find((r) => r.id === id)!;
     const definition = GATES.find((g) => g.id === id)!;
     return [
       id,
@@ -338,8 +360,8 @@ function gatesTable(section: SplitSection, file: ResultsFile): string[] {
     );
   }
   lines.push(table(["Gate", "Title", "Threshold", "Outcome", "Measured"], rows));
-  const failed = section.gates.failed;
-  const open = section.gates.notEvaluated;
+  const failed = gates.failed;
+  const open = gates.notEvaluated;
   lines.push(
     "",
     `Gates failed: ${failed.length === 0 ? "none" : failed.join(", ")}. Gates not evaluated: ${open.length === 0 ? "none" : open.join(", ")}.`,

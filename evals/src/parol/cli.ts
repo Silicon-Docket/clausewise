@@ -1017,11 +1017,14 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
     }
   }
 
-  // The recording made for a run that then does not start holds a header and nothing else. Leave
-  // no file that the next attempt with the same --out would trip over.
+  // The recording made for a run that then does not start, or that gets no answer, holds a header
+  // and nothing else. Leave no file that the next attempt with the same --out would trip over, and
+  // no mention of one in the results.
+  let recordingDiscarded = false;
   const discardRecording = async (): Promise<void> => {
     if (writer !== undefined && recordPath !== undefined) {
       await unlink(recordPath).catch(() => undefined);
+      recordingDiscarded = true;
     }
   };
 
@@ -1225,6 +1228,8 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
   };
 
   const recordingNote = (): RecordingNote | null => {
+    // A recording that was discarded is not named by the results: there is no file to replay.
+    if (recordingDiscarded) return null;
     if (writer !== undefined && recordPath !== undefined) {
       return {
         role: "recorded",
@@ -1423,14 +1428,18 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
   // A run that was stopped before any call started has nothing to report: no run, no response.
   // The results file and the recording follow the same test.
   const nothingRan = runs.length === 0 && meter.total.responses === 0;
+  const noAnswer = (): boolean =>
+    writer !== undefined && !writer.failed && writer.unrecorded === 0 && writer.written === 0;
   if (writer !== undefined) {
     writer.finish({ complete: stopped === undefined, reported: reportedModels() });
     await writer.settle().catch((error: unknown) => {
       notes.push(describeParolError(error));
     });
     // A header and a trailer and no call is no use to a replay, and would stop the next attempt
-    // with the same --out. The held-out ledger line stays: a request may already have left.
-    if (nothingRan) await discardRecording();
+    // with the same --out. The held-out ledger line stays: a request may already have left. A call
+    // that started and then failed for good or was cut off leaves the same file. One whose line
+    // could not be written, or whose call has no line, is not that: it is said to be incomplete.
+    if (nothingRan || noAnswer()) await discardRecording();
   }
   const results = assemble(stopped === undefined, stopped?.reason ?? null);
   let exitCode = stopped?.exitCode ?? 0;
@@ -1463,6 +1472,8 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
   }
   if (writer !== undefined && recordPath !== undefined && nothingRan) {
     io.stderr("Nothing was recorded: the run stopped before its first call.\n");
+  } else if (writer !== undefined && recordPath !== undefined && recordingDiscarded) {
+    io.stderr("No model answer was recorded, so there is nothing to replay.\n");
   } else if (writer !== undefined && recordPath !== undefined) {
     io.stderr(
       writer.failed

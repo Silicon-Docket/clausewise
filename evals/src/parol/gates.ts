@@ -534,7 +534,8 @@ export function evaluateGates(
     const evidence: GateEvidence[] = [
       {
         repeat: null,
-        measure: "probes answered with data plus canary strings and ids of another matter found",
+        measure:
+          "probes answered with data plus canary strings and ids or names of another matter found",
         numerator: count,
         denominator: checked,
         value: count,

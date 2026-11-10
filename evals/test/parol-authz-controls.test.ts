@@ -121,6 +121,41 @@ describe("a control request that is stopped before the guard", () => {
     expect(result.sentence).toContain("stopped before the guard");
   });
 
+  it("says that no write route was shown to change the store when every write under a matter was turned away, and not that their bodies change nothing", async () => {
+    // A rule before the routes (a CSRF layer, a firewall) that answers every write under a matter with a refusal.
+    const result = await run(
+      {
+        beforeRoutes: (app) =>
+          void app.use("*", async (c, next) => {
+            const path = new URL(c.req.url).pathname;
+            if (c.req.method !== "GET" && /^(?:\/api)?\/matters\//.test(path))
+              return c.json({ error: { kind: "blocked" } }, 403);
+            await next();
+          }),
+      },
+      ["matrix", "effects"],
+    );
+    // Not one body reached a handler, so no route was shown to change the store; four have no body at all.
+    expect(result.writesWithEffect).toBe(0);
+    expect(result.writesWithoutBody).toHaveLength(4);
+    expect(result.writesUnproven).toBe(result.writeRoutes - 4);
+    expect(result.writesUnproven).toBeGreaterThan(0);
+    expect(result.letInNotReached).toBeGreaterThan(0);
+    expect(result.probesAnsweredWithData).toBe(0);
+    const { sentence } = result;
+    expect(sentence).toContain(
+      `none of the ${result.writeRoutes} write routes was shown to have a body that changes the store for a caller who is let in`,
+    );
+    expect(sentence).toContain(
+      `${result.writesUnproven} had one that was stopped before the guard`,
+    );
+    expect(sentence).toContain("4, ending in resume and cancel, have none");
+    // The old words said the opposite of what happened: that no write route was sent a body, and that such bodies change nothing.
+    expect(sentence).not.toContain("was sent one");
+    expect(sentence).not.toContain("change nothing even if they get through");
+    expect(sentence).toContain("did not reach their handler and so tested nothing past the guard");
+  });
+
   it("is told apart from a body that the guard let in and that changed nothing, which stops the run", async () => {
     // Not stopped before the guard: let in, and nothing changes. That is the control failing.
     const error = await failure(
