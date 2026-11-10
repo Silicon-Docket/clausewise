@@ -861,6 +861,7 @@ async function runMode(mode: Mode): Promise<void> {
   // --- 1. the matrix ---------------------------------------------------------------------------
 
   async function makeScratch(level: ScratchLevel): Promise<Scratch> {
+    if (level === "documents") return textScratch(site);
     const made = await createCaseMatter({
       site,
       key,
@@ -868,24 +869,14 @@ async function runMode(mode: Mode): Promise<void> {
       people,
       matterName: "A matter made to be written to",
     });
-    const author = site.authorize(DEMO_USER_IDS.associate, made.matterId, "document.write");
-    // A second version of the NDA, so that the operative version can be changed back.
-    const version = await site.services.matters.addVersion(author, made.documentIds[0]!, {
-      fileName: "nda-version-2.txt",
-      bytes: new TextEncoder().encode(
-        "MUTUAL NONDISCLOSURE AGREEMENT\n\n1. A paragraph of synthetic text that is long enough to be reviewed.\n",
-      ),
-      statedDate: null,
-    });
     const scratch: Scratch = {
       matterId: made.matterId,
       documentId: made.documentIds[0]!,
-      versionId: version.versionId,
+      versionId: made.versionIds[made.versionIds.length - 1]!,
       earlierVersionId: made.versionIds[0]!,
       amendmentId: made.documentIds[made.documentIds.length - 1]!,
       invitee: INVITEE,
     };
-    if (level === "documents") return scratch;
     // Reviewed: a finished run whose findings are open.
     const starter = site.authorize(DEMO_USER_IDS.associate, made.matterId, "run.start");
     const started = site.services.runs.start(starter, { workflowLabel: "v2" });
@@ -1119,10 +1110,51 @@ const DUMMY_SCRATCH: Scratch = {
   invitee: INVITEE,
 };
 
+/**
+ * A matter of small text files, made to be written to: the NDA with two versions (the earlier one
+ * is not the operative one), an amendment, and the viewer as a member. Plain text is read in no
+ * time, so a matter is made for each write that has to be tried.
+ */
+async function textScratch(site: ExposureSite): Promise<Scratch> {
+  const matterId = freshMatter(site, "A matter made to be written to");
+  const author = site.authorize(DEMO_USER_IDS.associate, matterId, "document.write");
+  const text = (title: string): Uint8Array =>
+    new TextEncoder().encode(
+      `${title}\n\n1. A paragraph of synthetic text that is long enough to be read.\n`,
+    );
+  const nda = await site.services.matters.addDocument(author, {
+    title: "Mutual Nondisclosure Agreement",
+    kind: "nda",
+    fileName: "nda.txt",
+    bytes: text("MUTUAL NONDISCLOSURE AGREEMENT"),
+    statedDate: "2026-01-05",
+  });
+  const amendment = await site.services.matters.addDocument(author, {
+    title: "Amendment No. 1",
+    kind: "amendment",
+    fileName: "amendment-1.txt",
+    bytes: text("AMENDMENT NO. 1"),
+    statedDate: "2026-06-01",
+  });
+  const later = await site.services.matters.addVersion(author, nda.documentId, {
+    fileName: "nda-2.txt",
+    bytes: text("MUTUAL NONDISCLOSURE AGREEMENT (SECOND VERSION)"),
+    statedDate: "2026-02-01",
+  });
+  return {
+    matterId,
+    documentId: nda.documentId,
+    versionId: later.versionId,
+    earlierVersionId: nda.versionId,
+    amendmentId: amendment.documentId,
+    invitee: INVITEE,
+  };
+}
+
 /** A matter made for one request, with the viewer as a member as the application's own test has it. */
-function freshMatter(site: ExposureSite): string {
+function freshMatter(site: ExposureSite, name = "A matter made for one request"): string {
   const summary = site.services.matters.create(site.principal(DEMO_USER_IDS.associate), {
-    name: "A matter made for one request",
+    name,
     clientLegalName: "Lanternfish Software, Inc.",
     playbookVersionId: site.playbookVersionId,
     reviewerUserId: DEMO_USER_IDS.reviewer,

@@ -827,16 +827,16 @@ async function fetchAndAdd(args: {
     { kind: "http_body", label: args.label, content: bytes, forbid: args.forbid },
     args.facts,
   );
+  if (!args.mustLoad) return;
+  args.own?.note(routeOf(args.label), Buffer.from(bytes).toString("utf8"));
   // A body that holds something forbidden is a count, whatever else is wrong with it. One that holds
   // nothing forbidden must not be an empty or a damaged body, or its zero would mean nothing.
-  if (args.mustLoad && args.ledger.canaryHits + args.ledger.idHits === found) {
+  if (args.ledger.canaryHits + args.ledger.idHits === found)
     checkBody({
       label: args.label,
       contentType: response.headers.get("content-type") ?? "",
       bytes,
     });
-    args.own?.note(routeOf(args.label), Buffer.from(bytes).toString("utf8"));
-  }
 }
 
 /** The route template at the end of a label such as `associate GET /matters/:matterId`. */
