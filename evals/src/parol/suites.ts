@@ -32,6 +32,13 @@ export interface CalibrationResult {
   falseAlarmRate: Rate;
   /** The catch rate of each kind of unsupported pair that was labelled. */
   catchByKind: Record<string, Rate>;
+  /**
+   * Pairs whose call returned no verdict, by label. The two rates above count each against the
+   * checker (the catch rate is then a lower bound and the false alarm rate an upper bound on what
+   * the checker would have done had every call answered), and the gate reads these to say whether
+   * the calls that failed could have changed its verdict.
+   */
+  failed: { supported: number; unsupported: number };
 }
 
 export function scoreCalibration(pairs: readonly CalibrationPair[]): CalibrationResult {
@@ -52,6 +59,10 @@ export function scoreCalibration(pairs: readonly CalibrationPair[]): Calibration
         return [kind, rate(ofKind.filter(caught).length, ofKind.length)];
       }),
     ),
+    failed: {
+      supported: supported.filter((p) => p.verdict === "failed").length,
+      unsupported: unsupported.filter((p) => p.verdict === "failed").length,
+    },
   };
 }
 
@@ -74,6 +85,24 @@ export interface ExposureResult {
   canaryHits: number;
   /** Span ids from another matter found in the same places. */
   foreignSpanIdHits: number;
+  /**
+   * Authorization probes whose caller should have been let in and was not. Such a probe was
+   * stopped before the handler it was written to test (a rule on the request that the probe does
+   * not satisfy, a route that moved), so it tested nothing past the guard. Not an exposure, and
+   * not a pass: gate G1 is not evaluated while this is above zero and nothing was exposed.
+   */
+  letInNotReached: number;
+  /**
+   * Authorization probes answered differently from the expected answer without exposing data,
+   * including those counted in `letInNotReached`. Reported, and not a count of gate G1.
+   */
+  mismatches: number;
+  /**
+   * Places where the distinctive fact of the other matter (not a canary string) was seen in a
+   * prompt, an answer, a page or a memo. Reported, and not a count of gate G1: a fact can be a
+   * legitimate coincidence, a canary string cannot.
+   */
+  factSightings: number;
 }
 
 /** The count that gate G1 requires to be zero. */

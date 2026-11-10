@@ -24,9 +24,12 @@ import {
 } from "../src/parol/replay.js";
 import type { Pins } from "../src/parol/results.js";
 import {
+  changeKey,
+  copyRoot,
   makeTempDir,
   oracleFactory,
   readResults,
+  rehash,
   removeDir,
   run,
 } from "../src/parol/testing-run.js";
@@ -53,29 +56,47 @@ const freshDir = async (): Promise<string> => {
 
 const Answer = z.object({ word: z.string() });
 
-/** The pins the tests need from a header. The rest of a real header is not read by the replay. */
-const pins = (over: Partial<Pins> = {}): Pins =>
-  ({
-    mode: "live",
-    model: {
-      provider: "anthropic",
-      requested: "a-model",
-      endpoint: "api.example.test",
-      reported: null,
-      reportedNote: "",
+const hex = (c: string): string => c.repeat(64);
+
+/** A complete set of pins, as the header of a recording holds them: the header is validated. */
+const pins = (over: Partial<Pins> = {}): Pins => ({
+  dataset: {
+    label: "x",
+    answerKeysSha256: hex("c"),
+    splitsFileSha256: hex("d"),
+    splits: {},
+  },
+  split: "dev",
+  cases: [],
+  playbook: { slug: "p", version: "1", sha256: hex("b") },
+  workflow: {
+    label: "v1",
+    sha256: hex("a"),
+    retrieval: "R1",
+    checks: [],
+    budgetTokens: 1000,
+    repairAttempts: 1,
+    prompts: {
+      extract: { id: "extract.p1", sha256: hex("1") },
+      analyze: { id: "analyze.p1", sha256: hex("2") },
+      support: null,
     },
-    workflow: { label: "v1", sha256: "a".repeat(64) },
-    playbook: { slug: "p", version: "1", sha256: "b".repeat(64) },
-    generation: null,
-    code: { commit: null, dirty: null },
-    dataset: {
-      label: "x",
-      answerKeysSha256: "c".repeat(64),
-      splitsFileSha256: "d".repeat(64),
-      splits: {},
-    },
-    ...over,
-  }) as unknown as Pins;
+  },
+  model: {
+    provider: "anthropic",
+    requested: "a-model",
+    endpoint: "api.example.test",
+    reported: null,
+    reportedNote: "",
+  },
+  generation: null,
+  prices: null,
+  evaluation: { label: "e", sha256: hex("e") },
+  code: { commit: null, dirty: null },
+  repeats: 1,
+  mode: "live",
+  ...over,
+});
 
 const header = (over: Partial<Pins> = {}): RecordingHeader => ({
   kind: RECORDING_KIND,
@@ -202,10 +223,10 @@ describe("recording and replaying through the generators", () => {
     const replay = replayGenerator(await loadRecording(path));
     expect(await ask(replay, "same")).toEqual({ word: "take 1" });
     expect(await ask(replay, "same")).toEqual({ word: "take 2" });
-    await expect(ask(replay, "same")).rejects.toThrow(/asked 3 times against 2 recorded/);
+    await expect(ask(replay, "same")).rejects.toThrow(/asked 3 times in this run/);
   });
 
-  it("refuses a recorded answer that no longer fits the schema of the request", async () => {
+  it("stops at a request whose schema has changed since the recording", async () => {
     const path = join(fresh(), "r.responses.jsonl");
     const writer = await RecordingWriter.create(path, header());
     await ask(
@@ -218,9 +239,11 @@ describe("recording and replaying through the generators", () => {
     await writer.settle();
     const replay = replayGenerator(await loadRecording(path));
     const Changed = z.object({ word: z.string(), number: z.number() });
+    // The schema is part of the request key, so the changed schema is a request the recording
+    // does not hold: a miss, and never a wrong answer.
     await expect(
       replay.generate({ system: "sys", prompt: "q", schema: Changed, schemaName: "Answer" }),
-    ).rejects.toThrow(/no longer fits the schema/);
+    ).rejects.toThrow(/no answer for a request.*schemas/);
   });
 
   it("does not record a fatal provider error, an abort or a bug", async () => {
@@ -236,6 +259,9 @@ describe("recording and replaying through the generators", () => {
     }
     await writer.settle();
     expect(writer.written).toBe(0);
+    // The bug was scored by the run and is missing from the recording, which therefore cannot be
+    // called complete. A fatal provider error and an abort end the run and leave no such gap.
+    expect(writer.unrecorded).toBe(1);
   });
 
   it("never overwrites a recording", async () => {
@@ -252,8 +278,15 @@ describe("reading a recording", () => {
     await writeFile(path, `${JSON.stringify(header())}\n${lines.join("\n")}\n`);
     return path;
   };
-  const call = (word: string): string =>
-    JSON.stringify({ key: "e".repeat(64), schema: "Answer", outcome: "ok", value: { word } });
+  const call = (word: string, n = 0): string =>
+    JSON.stringify({
+      key: "e".repeat(64),
+      schema: "Answer",
+      run: "",
+      n,
+      outcome: "ok",
+      value: { word },
+    });
 
   it("says a file that is not a recording is not one, without quoting it", async () => {
     const path = join(await freshDir(), "x.jsonl");
@@ -277,7 +310,7 @@ describe("reading a recording", () => {
   });
 
   it("refuses a recording with a damaged line in the middle", async () => {
-    const path = await write([call("a"), "garbage", call("b")]);
+    const path = await write([call("a"), "garbage", call("b", 1)]);
     await expect(loadRecording(path)).rejects.toThrow(/line 3 is not a recorded call/);
   });
 
@@ -302,6 +335,7 @@ describe("what a replay may be asked to do", () => {
     workflowSha256: "a".repeat(64),
     workflowLabel: "v1",
     playbookSha256: "b".repeat(64),
+    prompts: pins().workflow.prompts,
   };
 
   it("allows the recorded workflow and playbook", async () => {
@@ -458,6 +492,103 @@ describe("a live run that records, and a replay of it", () => {
     expect(replayed.stderr).toContain("Nothing was run");
   });
 
+  it("replays one case of a recording of two with that case's own answers", async () => {
+    const resultsDir = fresh();
+    expect((await live(resultsDir, ["--case", "PAROL-D02"]).go()).code).toBe(0);
+    const recordingName = (await readdir(resultsDir)).find((name) =>
+      name.endsWith(RECORDING_SUFFIX),
+    )!;
+    // The same case recorded on its own: the scores a subset replay must agree with.
+    const alone = fresh();
+    const stand = oracleFactory({});
+    const direct = await run(["--yes", "--case", "PAROL-D02"], {
+      resultsDir: alone,
+      generatorFactory: stand.factory,
+    });
+    expect(direct.code, direct.stderr).toBe(0);
+    const directFile = await readResults(
+      join(
+        alone,
+        (await readdir(alone)).find((name) => name.endsWith(".json"))!,
+      ),
+    );
+
+    const replayDir = fresh();
+    const replayed = await run(
+      ["--replay", join(resultsDir, recordingName), "--case", "PAROL-D02"],
+      { resultsDir: replayDir, env: {} },
+    );
+    expect(replayed.code, replayed.stderr).toBe(0);
+    const [replayName] = await readdir(replayDir);
+    const again = await readResults(join(replayDir, replayName!));
+    expect(again.runs.map((r) => r.caseKey)).toEqual(["PAROL-D02"]);
+    expect(again.sections[0]!.metrics!.summary).toEqual(directFile.sections[0]!.metrics!.summary);
+  });
+
+  it("leaves no line in the held-out ledger when the run stops before its first call", async () => {
+    // A recording is already there for the results file this run would write.
+    const resultsDir = fresh();
+    await mkdir(resultsDir, { recursive: true });
+    const out = join(resultsDir, "taken.json");
+    await writeFile(join(resultsDir, `taken${RECORDING_SUFFIX}`), "someone else's file\n");
+    const stand = oracleFactory({});
+    const result = await run(
+      ["--yes", "--split", "heldout", "--allow-heldout", "--case", "PAROL-H01", "--out", out],
+      { resultsDir, generatorFactory: stand.factory },
+    );
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Cannot write the recording");
+    expect(stand.calls()).toBe(0);
+    expect((await readdir(resultsDir)).sort()).toEqual([`taken${RECORDING_SUFFIX}`]);
+    // The file that was there is not ours to delete.
+    expect(await readFile(join(resultsDir, `taken${RECORDING_SUFFIX}`), "utf8")).toContain(
+      "someone else's file",
+    );
+  });
+
+  it("writes the held-out ledger line only once the recording exists", async () => {
+    const resultsDir = fresh();
+    const stand = oracleFactory({});
+    const result = await run(
+      ["--yes", "--split", "heldout", "--allow-heldout", "--case", "PAROL-H01"],
+      { resultsDir, generatorFactory: stand.factory },
+    );
+    expect(result.code, result.stderr).toBe(0);
+    const names = await readdir(resultsDir);
+    expect(names).toContain("parol-heldout-runs.jsonl");
+    expect(names.some((name) => name.endsWith(RECORDING_SUFFIX))).toBe(true);
+  });
+
+  it("says so when it is scored against an answer key that is not the one the answers were recorded against", async () => {
+    const resultsDir = fresh();
+    expect((await live(resultsDir).go()).code).toBe(0);
+    const recordingName = (await readdir(resultsDir)).find((name) =>
+      name.endsWith(RECORDING_SUFFIX),
+    )!;
+    // A corrected key: the expected status of one slot is changed, and the hashes are brought up
+    // to date, as a deliberate correction would do. The documents and so the requests are the same.
+    const copy = await freshDir();
+    const root = await copyRoot(copy);
+    await changeKey(root, (keys) => {
+      const slot = keys.cases.find((c) => c.case === "PAROL-D01")!.expect["pty-1"]!;
+      slot.status = slot.status === "compliant" ? "deviation" : "compliant";
+    });
+    await rehash(root);
+    const replayDir = fresh();
+    const replayed = await run(
+      ["--replay", join(resultsDir, recordingName), "--case", "PAROL-D01"],
+      { resultsDir: replayDir, root, env: {} },
+    );
+    expect(replayed.code, replayed.stderr).toBe(0);
+    const [name] = await readdir(replayDir);
+    const file = await readResults(join(replayDir, name!));
+    expect(file.recording).toMatchObject({ role: "replayed", datasetChanged: true });
+    expect(file.notes.join(" ")).toContain("recorded answers against a changed key");
+    expect(replayed.stdout).toContain(
+      "THE ANSWER KEYS OR CASE FILES DIFFER FROM THOSE THE RECORDING WAS MADE AGAINST",
+    );
+  });
+
   it("will not mix --replay with --selftest, --simulate or --yes", async () => {
     for (const flag of ["--selftest", "--simulate", "--yes"]) {
       const out = await run(["--replay", "x.responses.jsonl", flag], {
@@ -487,5 +618,237 @@ describe("a live run that records, and a replay of it", () => {
     expect(refused.code).toBe(1);
     expect(refused.stderr).toMatch(/mode/);
     expect(refused.stderr).toContain("Nothing was sent");
+  });
+});
+
+describe("answers belong to the run that was given them", () => {
+  const record = async (
+    runs: { run: string; answer: (prompt: string) => string; prompts: string[] }[],
+  ) => {
+    const path = join(fresh(), "r.responses.jsonl");
+    const writer = await RecordingWriter.create(path, header());
+    for (const { run, answer, prompts } of runs) {
+      const generator = recordingGenerator(
+        scripted((prompt) => ({ word: answer(prompt) })),
+        writer,
+        run,
+      );
+      for (const prompt of prompts) await ask(generator, prompt);
+    }
+    writer.finish({ complete: true, reported: null });
+    await writer.settle();
+    return loadRecording(path);
+  };
+
+  it("hands a run its own answer to a request another run also made", async () => {
+    // Two runs ask the same thing and the model answers each differently, as a model may.
+    const recording = await record([
+      { run: "CASE-A|1", answer: () => "given to A", prompts: ["same"] },
+      { run: "CASE-B|1", answer: () => "given to B", prompts: ["same"] },
+    ]);
+    // A replay of case B alone must not be given the answer recorded first, which was A's.
+    const replay = replayGenerator(recording);
+    expect(await ask(replay.forRun("CASE-B|1"), "same")).toEqual({ word: "given to B" });
+    expect(await ask(replay.forRun("CASE-A|1"), "same")).toEqual({ word: "given to A" });
+  });
+
+  it("stops a run the recording never made, even when its requests are in the recording", async () => {
+    const recording = await record([{ run: "CASE-A|1", answer: () => "x", prompts: ["same"] }]);
+    const replay = replayGenerator(recording);
+    await expect(ask(replay.forRun("CASE-A|2"), "same")).rejects.toBeInstanceOf(ReplayMiss);
+    await expect(ask(replay.forRun("calibration"), "same")).rejects.toBeInstanceOf(ReplayMiss);
+  });
+
+  it("keeps two identical requests in flight together with their own answers", async () => {
+    const path = join(fresh(), "r.responses.jsonl");
+    const writer = await RecordingWriter.create(path, header());
+    const release: Array<() => void> = [];
+    let asked = 0;
+    // The first request to start is slow and finishes last.
+    const slow: ObjectGenerator = {
+      provider: "anthropic",
+      model: "a-model",
+      disclosure: "a scripted stand-in",
+      async generate(request) {
+        const mine = asked++;
+        if (mine === 0) await new Promise<void>((resolve) => release.push(resolve));
+        else release[0]?.();
+        return request.schema.parse({ word: mine === 0 ? "first asker" : "second asker" });
+      },
+    };
+    const recorded = recordingGenerator(slow, writer, "CASE-A|1");
+    const both = await Promise.all([ask(recorded, "same"), ask(recorded, "same")]);
+    expect(both.map((a) => a.word)).toEqual(["first asker", "second asker"]);
+    await writer.settle();
+    // The recording holds the second answer first, because it finished first. The replay still
+    // gives the request that started first the answer it was given.
+    const replay = replayGenerator(await loadRecording(path)).forRun("CASE-A|1");
+    const again = await Promise.all([ask(replay, "same"), ask(replay, "same")]);
+    expect(again.map((a) => a.word)).toEqual(["first asker", "second asker"]);
+  });
+
+  it("does not count a miss as an answer replayed", async () => {
+    const recording = await record([{ run: "CASE-A|1", answer: () => "x", prompts: ["same"] }]);
+    const replay = replayGenerator(recording);
+    await ask(replay.forRun("CASE-A|1"), "same");
+    await ask(replay.forRun("CASE-A|1"), "other").catch(() => undefined);
+    expect(replay.counts.replayed).toBe(1);
+  });
+
+  it("says that an unfinished recording may never have got as far as the request", async () => {
+    const path = join(fresh(), "r.responses.jsonl");
+    const writer = await RecordingWriter.create(path, header());
+    await ask(
+      recordingGenerator(
+        scripted(() => ({ word: "x" })),
+        writer,
+        "CASE-A|1",
+      ),
+      "known",
+    );
+    await writer.settle();
+    const replay = replayGenerator(await loadRecording(path)).forRun("CASE-A|1");
+    await expect(ask(replay, "unknown")).rejects.toThrow(
+      /recording is of a run that did not finish/,
+    );
+  });
+});
+
+describe("the schema is part of the request", () => {
+  it("gives another key to a schema that differs only in a description or an enum", () => {
+    const base = { system: "s", prompt: "p", schemaName: "A" };
+    const plain = z.object({ status: z.enum(["a", "b"]) });
+    const described = z.object({ status: z.enum(["a", "b"]).describe("what it means") });
+    const wider = z.object({ status: z.enum(["a", "b", "c"]) });
+    const key = (schema: z.ZodType) => requestKey({ ...base, schema });
+    expect(key(plain)).toBe(key(z.object({ status: z.enum(["a", "b"]) })));
+    expect(key(described)).not.toBe(key(plain));
+    expect(key(wider)).not.toBe(key(plain));
+  });
+
+  it("stops a replay when the schema of the request has been loosened since the recording", async () => {
+    const path = join(fresh(), "r.responses.jsonl");
+    const writer = await RecordingWriter.create(path, header());
+    await ask(
+      recordingGenerator(
+        scripted(() => ({ word: "x" })),
+        writer,
+      ),
+      "q",
+    );
+    await writer.settle();
+    const replay = replayGenerator(await loadRecording(path));
+    // Looser than the schema the model answered under: the answer still parses, but it is not an
+    // answer to this request.
+    const Looser = z.object({ word: z.string(), extra: z.string().default("") });
+    await expect(
+      replay.generate({ system: "sys", prompt: "q", schema: Looser, schemaName: "Answer" }),
+    ).rejects.toBeInstanceOf(ReplayMiss);
+  });
+});
+
+describe("a recording that cannot stand in for the run", () => {
+  const recording = async (over: Partial<Pins> = {}) => {
+    const path = join(fresh(), "r.responses.jsonl");
+    await RecordingWriter.create(path, header(over));
+    return loadRecording(path);
+  };
+  const ok = {
+    workflowSha256: hex("a"),
+    workflowLabel: "v1",
+    playbookSha256: hex("b"),
+    prompts: pins().workflow.prompts,
+  };
+
+  it("is refused when a prompt was edited without a new id, and names the prompt", async () => {
+    const edited = {
+      ...ok.prompts,
+      analyze: { id: "analyze.p1", sha256: hex("9") },
+    };
+    expect(replayRefusal({ recording: await recording(), ...ok, prompts: edited })).toMatch(
+      /analyze prompt/,
+    );
+  });
+
+  it("is refused when the support check was switched on or off", async () => {
+    const withSupport = { ...ok.prompts, support: { id: "support.p1", sha256: hex("3") } };
+    expect(replayRefusal({ recording: await recording(), ...ok, prompts: withSupport })).toMatch(
+      /support prompt/,
+    );
+  });
+
+  it("is not a recording this version can read when a pin is missing or too long", async () => {
+    for (const bad of [
+      { workflow: undefined },
+      { model: { ...pins().model, requested: "m".repeat(2001) } },
+      { code: { commit: 5, dirty: null } },
+    ]) {
+      const path = join(await freshDir(), "r.responses.jsonl");
+      await writeFile(path, `${JSON.stringify({ ...header(), pins: { ...pins(), ...bad } })}\n`);
+      await expect(loadRecording(path)).rejects.toThrow(/not a Parol recording this version/);
+    }
+  });
+
+  it("is not a recording this version can read when a call is recorded twice", async () => {
+    const path = join(await freshDir(), "r.responses.jsonl");
+    const line = JSON.stringify({
+      key: hex("e"),
+      schema: "Answer",
+      run: "",
+      n: 0,
+      outcome: "ok",
+      value: { word: "x" },
+    });
+    await writeFile(path, `${JSON.stringify(header())}\n${line}\n${line}\n`);
+    await expect(loadRecording(path)).rejects.toThrow(/repeats a recorded call/);
+  });
+});
+
+describe("the writer says what it wrote", () => {
+  it("counts a call only once its line is on disk, and marks a gap", async () => {
+    const dir = await freshDir();
+    const path = join(dir, "r.responses.jsonl");
+    const writer = await RecordingWriter.create(path, header());
+    const call = {
+      key: hex("e"),
+      schema: "Answer",
+      run: "",
+      n: 0,
+      outcome: "ok" as const,
+      value: { word: "x" },
+    };
+    writer.add(call);
+    expect(writer.written).toBe(0);
+    await writer.settle();
+    expect(writer.written).toBe(1);
+    expect(writer.failed).toBe(false);
+    // A file that cannot be appended to: the path is now a directory.
+    const broken = join(dir, "broken.responses.jsonl");
+    const second = await RecordingWriter.create(broken, header());
+    await removeDir(broken);
+    await mkdir(broken);
+    second.add({ ...call, n: 1 });
+    second.finish({ complete: true, reported: null });
+    await expect(second.settle()).rejects.toThrow(/could not be written/);
+    expect(second.written).toBe(0);
+    expect(second.failed).toBe(true);
+  });
+
+  it("does not call a recording complete when a call the run scored was not recorded", async () => {
+    const path = join(fresh(), "r.responses.jsonl");
+    const writer = await RecordingWriter.create(path, header());
+    const bug = new TypeError("a bug");
+    await expect(
+      ask(
+        recordingGenerator(
+          scripted(() => bug),
+          writer,
+        ),
+        "q",
+      ),
+    ).rejects.toBe(bug);
+    writer.finish({ complete: true, reported: null });
+    await writer.settle();
+    expect((await loadRecording(path)).trailer).toEqual({ complete: false, reported: null });
   });
 });

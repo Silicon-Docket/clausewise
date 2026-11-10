@@ -74,6 +74,7 @@ import { buildParolPlan, costBounds, decideSpend, describeParolPlan } from "./pl
 import { renderReport } from "./report.js";
 import { reportingFetch } from "./reported-model.js";
 import {
+  CALIBRATION_RUN,
   RecordingWriter,
   loadRecording,
   recordingGenerator,
@@ -81,6 +82,7 @@ import {
   replayGenerator,
   replayRefusal,
   type Recording,
+  type ReplayGenerator,
 } from "./replay.js";
 import {
   HELDOUT_SEAL_WARNING,
@@ -191,7 +193,9 @@ Options:
                                scripted stand-in for the model. It sends nothing and costs nothing, takes a
                                few seconds, and tests the application and not any model.
   --no-record                  Do not write a recording of a live run's answers. By default a live run
-                               writes them to <results>.responses.jsonl (git ignores the folder).
+                               writes them to <results>.responses.jsonl, beside the results file. The
+                               file quotes the (synthetic) documents; git ignores every file with that
+                               ending.
   --split dev|heldout|all      The cases to run. Default: dev. The held-out set is sealed: see
                                --allow-heldout.
   --allow-heldout              Allow a run that touches the held-out split. Read the warning that is
@@ -224,8 +228,9 @@ The plan and progress go to stderr and the Markdown report to stdout.
 Exit codes:
   0    The run finished. (Gates that fail are results, not errors.)
   1    Something went wrong, including a failed selftest and a fatal answer from the provider.
-  2    An integrity failure: the answer keys or a case file differ from the hashes in
-       fixtures/parol/splits.json, or an anchor of a key does not resolve in the documents.
+  2    An integrity failure: the answer keys, a case file or the calibration set differ from the
+       hashes in fixtures/parol/splits.json, an anchor of a key does not resolve in the documents, or
+       an exposure suite found that its own controls or the upload steps disagree with the key.
   3    The spend guard refused to run or stopped the run: no --yes, a cost bound above --max-cost, or
        recorded spend above it.
   130  Interrupted with Ctrl-C, SIGTERM or SIGHUP.
@@ -733,6 +738,7 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
       workflowSha256: workflow.sha256,
       workflowLabel: workflow.manifest.label,
       playbookSha256: playbook.sha256,
+      prompts: workflowPin(workflow).prompts,
     });
     if (refusal !== null) throw new EvalError(`${refusal} Nothing was run.`);
   }
@@ -858,7 +864,7 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
     : null;
   if (touchesHeldout) {
     io.stderr(`HELD-OUT SPLIT. ${HELDOUT_SEAL_WARNING}\n`);
-    if (contamination !== null) io.stderr(`${contamination.note}\n`);
+    if (contamination !== null) io.stderr(`${plain(contamination.note)}\n`);
   }
 
   // ---- The calibration set, when it was asked for. It is read as the run reads the documents.
@@ -951,47 +957,6 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
     }
   }
 
-  // A live run of the held-out split is written down before its first call, wherever its results
-  // go, so that a later run is told the split was used. A run that cannot be recorded is not made.
-  if (mode === "live" && touchesHeldout) {
-    try {
-      await recordHeldoutRun({
-        resultsDir,
-        startedAt,
-        workflowLabel: workflow.manifest.label,
-        workflowSha256: workflow.sha256,
-        model: setup.model,
-        outPath,
-      });
-    } catch (error) {
-      throw new EvalError(
-        `Refusing to run the held-out split: this run cannot be recorded in the results folder (${(error as NodeJS.ErrnoException).code ?? "an error"}), and a later run could then not warn that the split was used. Nothing was sent.`,
-      );
-    }
-  }
-
-  // A live run writes down the model's answers as they arrive, so that a change of scoring or of
-  // an answer key can be applied to what was already paid for. Not being able to is not worth
-  // spending money to find out later.
-  let writer: RecordingWriter | undefined;
-  let recordPath: string | undefined;
-  if (mode === "live" && options.record) {
-    recordPath = recordingPathFor(outPath);
-    try {
-      writer = await RecordingWriter.create(recordPath, {
-        kind: "parol-eval-recording",
-        format: 1,
-        recordedAt: startedAt.toISOString(),
-        results: basename(outPath),
-        pins: buildPins(null),
-      });
-    } catch (error) {
-      throw new EvalError(
-        `Cannot write the recording of the model's answers (${(error as NodeJS.ErrnoException).code ?? "an error"}), so the run would not be replayable. Nothing was sent. Choose another --out, or run without a recording with --no-record.`,
-      );
-    }
-  }
-
   // The exposure suites send nothing to a model and cost nothing, so they run before the run: a
   // suite that cannot run, or finds the application disagreeing with its own key, stops the
   // evaluation before any model is paid for.
@@ -1010,6 +975,55 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
     io.stderr(
       `  ${suites.exposure.probesRun} authorization probes and ${suites.exposure.artefactsScanned} artefacts scanned.\n`,
     );
+  }
+
+  // A live run writes down the model's answers as they arrive, so that a change of scoring or of
+  // an answer key can be applied to what was already paid for. Not being able to is not worth
+  // spending money to find out later.
+  let writer: RecordingWriter | undefined;
+  let recordPath: string | undefined;
+  if (mode === "live" && options.record) {
+    recordPath = recordingPathFor(outPath);
+    try {
+      writer = await RecordingWriter.create(recordPath, {
+        kind: "parol-eval-recording",
+        format: 2,
+        recordedAt: startedAt.toISOString(),
+        results: basename(outPath),
+        pins: buildPins(null),
+      });
+    } catch (error) {
+      throw new EvalError(
+        `Cannot write the recording of the model's answers (${(error as NodeJS.ErrnoException).code ?? "an error"}), so the run would not be replayable. Nothing was sent. Choose another --out, or run without a recording with --no-record.`,
+      );
+    }
+  }
+
+  // A live run of the held-out split is written down before its first call, wherever its results
+  // go, so that a later run is told the split was used. It is the last step before the first call:
+  // a run that stops before then, because the exposure suites failed or the recording could not be
+  // made, has shown the split to no model and leaves nothing in the ledger. A run that cannot be
+  // recorded is not made.
+  if (mode === "live" && touchesHeldout) {
+    try {
+      await recordHeldoutRun({
+        resultsDir,
+        startedAt,
+        workflowLabel: workflow.manifest.label,
+        workflowSha256: workflow.sha256,
+        model: setup.model,
+        outPath,
+      });
+    } catch (error) {
+      // The recording made for this run holds a header and nothing else. Leave no file that the
+      // next attempt with the same --out would trip over.
+      if (writer !== undefined && recordPath !== undefined) {
+        await unlink(recordPath).catch(() => undefined);
+      }
+      throw new EvalError(
+        `Refusing to run the held-out split: this run cannot be recorded in the results folder (${(error as NodeJS.ErrnoException).code ?? "an error"}), and a later run could then not warn that the split was used. Nothing was sent.`,
+      );
+    }
   }
 
   // ---- 5. The run.
@@ -1063,8 +1077,13 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
   );
 
   let shared: ObjectGenerator | undefined;
+  let replaying: ReplayGenerator | undefined;
   let disclosed = false;
-  const generatorFor = async (prepared: PreparedCase): Promise<ObjectGenerator> => {
+  /**
+   * The generator of one run. A run that is recorded or replayed is named, so that the recording
+   * hands it the answers it was given and not those of another run that asked the same thing.
+   */
+  const generatorFor = async (prepared: PreparedCase, run: string): Promise<ObjectGenerator> => {
     const request: ParolGeneratorRequest = {
       mode,
       prepared,
@@ -1086,10 +1105,10 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
       shared ??= setup.simulated!.createSimulatedModel();
       base = shared;
     } else if (mode === "replay") {
-      shared ??= replayGenerator(setup.recording!, {
+      replaying ??= replayGenerator(setup.recording!, {
         onMiss: (miss) => controller.abort(miss),
       });
-      base = shared;
+      base = replaying.forRun(run);
     } else {
       shared ??= createObjectGenerator(
         setup.config!,
@@ -1097,7 +1116,7 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
       );
       base = shared;
     }
-    if (writer !== undefined) base = recordingGenerator(base, writer);
+    if (writer !== undefined) base = recordingGenerator(base, writer, run);
     if (!disclosed) {
       disclosed = true;
       io.stderr(
@@ -1114,7 +1133,7 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
   const rules = dataset.keys.playbook.rules;
   const notes: string[] = [];
   if (options.prices !== undefined && mode !== "live") {
-    notes.push("--prices was given and ignored: a scripted run sends no request and has no cost.");
+    notes.push("--prices was given and ignored: a run that sends no request has no cost to price.");
   }
   const endpoint =
     setup.config === undefined ? null : endpointHost(setup.config.provider, setup.config.baseUrl);
@@ -1137,7 +1156,7 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
   const usageOf = (): ResultsFile["usage"] => ({
     available: setup.usageAvailable,
     note: setup.usageNote,
-    calls: meter.totalCalls,
+    calls: replaying !== undefined ? replaying.counts.replayed : meter.totalCalls,
     total: setup.usageAvailable ? { ...meter.total } : null,
     costUsd: setup.usageAvailable && price !== null ? costOf(meter.total, price) : null,
   });
@@ -1182,7 +1201,12 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
 
   const recordingNote = (): RecordingNote | null => {
     if (writer !== undefined && recordPath !== undefined) {
-      return { role: "recorded", file: basename(recordPath), calls: writer.written };
+      return {
+        role: "recorded",
+        file: basename(recordPath),
+        calls: writer.written,
+        ...(writer.failed ? { failed: true } : {}),
+      };
     }
     if (setup.recording === undefined) return null;
     const recorded = setup.recording.header.pins;
@@ -1194,7 +1218,7 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
     return {
       role: "replayed",
       file: basename(options.replay as string),
-      calls: meter.totalCalls,
+      calls: replaying?.counts.replayed ?? 0,
       recordedAt: setup.recording.header.recordedAt,
       recordedResults: setup.recording.header.results,
       recordedCommit: recorded.code.commit,
@@ -1205,6 +1229,11 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
     if (setup.recording.trailer === null || !setup.recording.trailer.complete) {
       notes.push(
         "The recording is of a run that did not finish, so it holds the answers of the cases that did and nothing for the rest.",
+      );
+    }
+    if (recordingNote()?.datasetChanged === true) {
+      notes.push(
+        "The answer keys or the case files differ from those the answers were recorded against, so these scores are of recorded answers against a changed key. A case whose documents changed has no recorded answer and stops the replay.",
       );
     }
     const recordedCommit = setup.recording.header.pins.code.commit;
@@ -1240,7 +1269,7 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
             workflow,
             parsed,
           });
-          const generator = await generatorFor(prepared);
+          const generator = await generatorFor(prepared, `${runnable.caseKey}|${repeat}`);
           const record = (
             outcome: RunRecord["outcome"],
             extra: Pick<
@@ -1314,16 +1343,28 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
       io.stderr(
         `Running the support checker's calibration set: ${calibrationPairs.length} pairs.\n`,
       );
-      suites.calibration = await runCalibration({
-        set: calibrationSet.set,
-        prepared: calibrationPairs,
-        prompt: getPrompt(workflow.manifest.prompts.support as string),
-        generator: await generatorFor(calibrationPairs[0]!.prepared),
-        signal: controller.signal,
-      });
-      notes.push(
-        `The ${calibrationPairs.length} calls of the calibration set are in the usage total and in no run's cost or latency: they belong to the checker, not to a case.`,
-      );
+      const callsBefore = meter.totalCalls;
+      try {
+        suites.calibration = await runCalibration({
+          set: calibrationSet.set,
+          prepared: calibrationPairs,
+          prompt: getPrompt(workflow.manifest.prompts.support as string),
+          generator: await generatorFor(calibrationPairs[0]!.prepared, CALIBRATION_RUN),
+          signal: controller.signal,
+        });
+      } catch (error) {
+        // Its calls may already be in the usage total and in the recording, with no record of the
+        // set to explain them. Say so before the cause goes on up.
+        notes.push(
+          `The calibration set was started and stopped before it finished (${meter.totalCalls - callsBefore} of ${calibrationPairs.length} calls were started). It was not scored; its calls are in the usage total and in no run's cost or latency.`,
+        );
+        throw error;
+      }
+      if (mode !== "replay") {
+        notes.push(
+          `The ${calibrationPairs.length} calls of the calibration set are in the usage total and in no run's cost or latency: they belong to the checker, not to a case.`,
+        );
+      }
       if (mode === "live") await checkpoint();
     }
   } catch (error) {
@@ -1375,7 +1416,7 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
     );
   } else if (mode === "replay") {
     io.stderr(
-      `Answers replayed from the recording: ${meter.totalCalls}. No model was called and nothing was sent anywhere.\n`,
+      `Answers replayed from the recording: ${replaying?.counts.replayed ?? 0}. No model was called and nothing was sent anywhere.\n`,
     );
   } else {
     io.stderr(
@@ -1384,7 +1425,11 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
   }
   if (writer !== undefined && recordPath !== undefined) {
     io.stderr(
-      `Model answers recorded to ${recordPath} (${writer.written} calls). Replay them with --replay.\n`,
+      writer.failed
+        ? `The recording of the model's answers could not be completed (${writer.written} calls were written to ${recordPath}), so it cannot be replayed. The results are not affected.\n`
+        : writer.unrecorded > 0
+          ? `Model answers recorded to ${recordPath} (${writer.written} calls), but ${writer.unrecorded} call${writer.unrecorded === 1 ? "" : "s"} could not be recorded, so a replay will stop at ${writer.unrecorded === 1 ? "it" : "the first of them"}.\n`
+          : `Model answers recorded to ${recordPath} (${writer.written} calls). Replay them with --replay.\n`,
     );
   }
   const health = runHealth(results);

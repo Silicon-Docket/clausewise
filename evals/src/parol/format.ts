@@ -15,7 +15,9 @@ const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
 export function md(value: unknown, max = 200): string {
   const text = String(value).replace(CONTROL, " ").replace(/\s+/g, " ").trim();
   const cut = text.length > max ? `${text.slice(0, max - 3)}...` : text;
-  return cut.replace(/\|/g, "\\|").replace(/`/g, "'");
+  // A backslash is doubled before a pipe is escaped, so that text ending in a backslash cannot
+  // turn the escape of the pipe after it into an escaped backslash and a live pipe.
+  return cut.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/`/g, "'");
 }
 
 export const NA = "n/a";

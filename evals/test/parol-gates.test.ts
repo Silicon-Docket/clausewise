@@ -102,6 +102,9 @@ const clean: ExposureResult = {
   probesAnsweredWithData: 0,
   canaryHits: 0,
   foreignSpanIdHits: 0,
+  letInNotReached: 0,
+  mismatches: 0,
+  factSightings: 0,
 };
 
 function subject(over: Partial<GateSubject> & { repeats?: RepeatMetrics[] } = {}): GateSubject {
@@ -239,6 +242,18 @@ describe("G1 unauthorized-data exposure: 0", () => {
 
   it("fails on a hit whatever the record says was run", () => {
     expect(g1({ ...clean, probesRun: 0, artefactsScanned: 0, canaryHits: 1 })).toBe("fail");
+  });
+
+  it("is not evaluated while a probe that should have been let in did not reach its handler", () => {
+    // Nothing was exposed, but such a probe tested nothing past the guard, so 0 is not a pass.
+    const unreached = { ...clean, letInNotReached: 3, mismatches: 5 };
+    const g = evaluateGates(subject({ exposure: unreached })).results.find((r) => r.id === "G1")!;
+    expect(g.outcome).toBe("not_evaluated");
+    expect(g.detail).toContain("3 probes that should have been let in did not reach the handler");
+    // A hit still fails the gate, whatever else is unreached.
+    expect(g1({ ...unreached, canaryHits: 1 })).toBe("fail");
+    // Mismatches that are not let-in probes are reported and are not a reason to withhold the pass.
+    expect(g1({ ...clean, mismatches: 5 })).toBe("pass");
   });
 
   it("reports the probes run plus artefacts scanned as the denominator", () => {
@@ -522,6 +537,57 @@ describe("G11 support checker calibration: at least 18 of 20 caught, at most 2 o
   it("is not evaluated without a calibration run", () => {
     const { calibration: _omitted, ...rest } = subject();
     expect(outcomeOf(evaluateGates(rest as GateSubject), "G11")).toBe("not_evaluated");
+  });
+
+  describe("with pairs whose call returned no verdict", () => {
+    /** 20 and 20 pairs: `failedUnsupported` and `failedSupported` of them without a verdict. */
+    const withFailures = (
+      caught: number,
+      failedUnsupported: number,
+      flagged: number,
+      failedSupported: number,
+    ) =>
+      scoreCalibration([
+        ...Array.from({ length: 20 }, (_, i): CalibrationPair => ({
+          label: "unsupported",
+          verdict:
+            i < caught ? "not_supported" : i < caught + failedUnsupported ? "failed" : "supported",
+        })),
+        ...Array.from({ length: 20 }, (_, i): CalibrationPair => ({
+          label: "supported",
+          verdict:
+            i < flagged ? "insufficient" : i < flagged + failedSupported ? "failed" : "supported",
+        })),
+      ]);
+    const gate = (set: ReturnType<typeof withFailures>) =>
+      evaluateGates(subject({ calibration: set })).results.find((r) => r.id === "G11")!;
+
+    it("passes when it passes with every failed call counted against the checker", () => {
+      const g = gate(withFailures(19, 1, 1, 1));
+      expect(g.outcome).toBe("pass");
+      expect(g.detail).toContain("2 calls returned no verdict and counted against the checker");
+    });
+
+    it("fails when it fails even with every failed call counted in the checker's favour", () => {
+      // 15 caught and 1 call lost: at best 16 of 20, still short of 18.
+      const g = gate(withFailures(15, 1, 0, 0));
+      expect(g.outcome).toBe("fail");
+      expect(g.detail).toContain("fails even with the 1 call that returned no verdict");
+    });
+
+    it("is not evaluated when the failed calls could decide it either way", () => {
+      // 17 caught and 3 calls lost: 17 of 20 fails, 20 of 20 would pass.
+      const g = gate(withFailures(17, 3, 0, 0));
+      expect(g.outcome).toBe("not_evaluated");
+      expect(g.evidence.every((e) => e.passed === null)).toBe(true);
+      expect(g.detail).toContain("3 of 40 calls returned no verdict");
+      // The same is true of lost calls among the supported pairs: 4 of 20 flagged at worst, 2 at best.
+      expect(gate(withFailures(20, 0, 2, 2)).outcome).toBe("not_evaluated");
+    });
+
+    it("is a plain failure when the failed calls could not have saved it", () => {
+      expect(gate(withFailures(20, 0, 5, 1)).outcome).toBe("fail");
+    });
   });
 
   it("is not evaluated when a half of the set is empty", () => {

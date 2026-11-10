@@ -9,6 +9,9 @@ out
 evals/results/*
 !evals/results/.gitkeep
 
+# A recording of a live run's model answers holds quotes from the documents, wherever --out puts it
+*.responses.jsonl
+
 # What a review writes next to the contract: a redline of a real contract must not be committed
 *.redlined.docx
 *.report.json

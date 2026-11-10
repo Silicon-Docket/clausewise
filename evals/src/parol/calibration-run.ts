@@ -67,6 +67,18 @@ export type CalibrationLoad =
   /** It has one that does not agree with what splits.json records, or cannot be read. */
   | { ok: false; reason: "integrity"; problems: string[] };
 
+/** The shape the loader reads, checked before anything reads a field of it. */
+function isCalibrationFile(value: unknown): value is CalibrationFile {
+  if (typeof value !== "object" || value === null) return false;
+  const { pairs, playbook } = value as { pairs?: unknown; playbook?: unknown };
+  if (!Array.isArray(pairs)) return false;
+  return (
+    typeof playbook === "object" &&
+    playbook !== null &&
+    typeof (playbook as { sha256?: unknown }).sha256 === "string"
+  );
+}
+
 /**
  * Reads the calibration set and checks it against what splits.json records for it: the hash of the
  * file, the counts, and the playbook it was written for. A set that was edited after it was
@@ -87,6 +99,15 @@ export async function loadCalibrationSet(dataset: Dataset): Promise<CalibrationL
     );
   }
   if (file === undefined) return { ok: false, reason: "integrity", problems };
+  if (!isCalibrationFile(file)) {
+    return {
+      ok: false,
+      reason: "integrity",
+      problems: [
+        "calibration.json is not a calibration set: it has no list of pairs or no playbook",
+      ],
+    };
+  }
   const sha256 = sha256Hex(canonicalJson(file));
   if (sha256 !== entry.sha256) {
     problems.push(
@@ -149,6 +170,14 @@ export async function prepareCalibration(args: {
           `calibration pair ${pair.id}: the case ${pair.case} is not in the answer keys`,
         );
       }
+      // The builder refuses a pair from another split, and the hash check above shows the file is
+      // the one it wrote. This is the guard behind both: held-out text is sent to a model only by
+      // a run that names the held-out split, which is recorded in the ledger.
+      if (entry.split !== "dev") {
+        throw new CalibrationSetError(
+          `calibration pair ${pair.id}: the case ${pair.case} is not in the development split, and a calibration pair may not be built from another split`,
+        );
+      }
       const [runnable] = runnableCases({ cases: [entry], twins: [] });
       ready = await prepareCase({
         dataset,
@@ -168,6 +197,16 @@ export async function prepareCalibration(args: {
     if (!found.ok) {
       throw new CalibrationSetError(
         `calibration pair ${pair.id} (${pair.case}): its quote does not resolve to one paragraph (${found.reason.replace("_", " ")}, ${found.occurrences} occurrences)`,
+      );
+    }
+    // The label was written for one paragraph. If the parser now cuts the document differently, the
+    // quote can still be unique in its clause while the checker is shown another passage.
+    if (
+      found.span.paragraphIndex !== pair.evidence.paragraph ||
+      sha256Hex(found.span.text) !== pair.paragraphSha256
+    ) {
+      throw new CalibrationSetError(
+        `calibration pair ${pair.id} (${pair.case}): the paragraph it cites is not the paragraph its label was written for (the index or the hash differs); rebuild the dataset or review the pair`,
       );
     }
     const rule = playbook.rules.find((r) => r.key === pair.rule);
@@ -218,6 +257,7 @@ export async function runCalibration(args: {
     fatal ??= kind;
   });
   const check = createSupportChecker(args.prompt);
+  const outcomes: Record<string, number> = {};
   const controller = new AbortController();
   const relay = (): void => controller.abort(args.signal.reason);
   if (args.signal.aborted) relay();
@@ -241,6 +281,7 @@ export async function runCalibration(args: {
         });
         if (fatal !== null && call.outcome === "fatal") throw new EvaluationProviderFailure(fatal);
         controller.signal.throwIfAborted();
+        outcomes[call.outcome] = (outcomes[call.outcome] ?? 0) + 1;
         return call.outcome === "ok" ? answer.verdict : "failed";
       },
       { onFail },
@@ -258,10 +299,13 @@ export async function runCalibration(args: {
       supportedPairs: pairs.filter((p) => p.label === "supported").length,
       unsupportedPairs: pairs.filter((p) => p.label === "unsupported").length,
       failedPairs,
+      callOutcomes: Object.fromEntries(
+        Object.entries(outcomes).sort(([a], [b]) => (a < b ? -1 : 1)),
+      ),
       modelCalls: args.prepared.length,
       note:
         failedPairs > 0
-          ? `${failedPairs} of ${pairs.length} calls returned no verdict. Each counts against the checker on both sides, so the rates are lower bounds on what the checker would do if every call had answered.`
+          ? `${failedPairs} of ${pairs.length} calls returned no verdict. Each counts against the checker on both sides, so the catch rate is a lower bound and the false alarm rate an upper bound on what the checker would do if every call had answered.`
           : null,
     };
   } finally {

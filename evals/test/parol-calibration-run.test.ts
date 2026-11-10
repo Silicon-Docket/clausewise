@@ -1,9 +1,10 @@
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ModelOutputError } from "@clausewise/llm";
+import { ModelOutputError, ModelRequestError } from "@clausewise/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { canonicalJson, sha256Hex } from "../../apps/parol/src/canonical.js";
 import { loadPlaybook } from "../../apps/parol/src/playbooks/load.js";
+import { createSupportChecker } from "../../apps/parol/src/services/support-checker.js";
 import { getPrompt } from "../../apps/parol/src/prompts/registry.js";
 import { workflowFor } from "../../apps/parol/src/prompts/workflows.js";
 import type { CalibrationFile, CalibrationKeyPair } from "../../fixtures/parol/types.js";
@@ -16,7 +17,7 @@ import {
 } from "../src/parol/calibration-run.js";
 import { loadDataset, type Dataset } from "../src/parol/dataset.js";
 import { buildParolPlan } from "../src/parol/plan.js";
-import { RECORDING_SUFFIX } from "../src/parol/replay.js";
+import { RECORDING_SUFFIX, requestKey } from "../src/parol/replay.js";
 import { prepareCase, runnableCases } from "../src/parol/runner.js";
 import {
   copyRoot,
@@ -90,7 +91,7 @@ beforeAll(async () => {
         doc: span.docLabel,
         clause: span.clauseNumber,
         quote: span.text.split(/\s+/).slice(0, 8).join(" "),
-        paragraph: 0,
+        paragraph: span.paragraphIndex,
       },
       paragraphSha256: sha256Hex(span.text),
       note: "made up",
@@ -176,6 +177,15 @@ describe("loading the calibration set", () => {
     expect(loaded).toMatchObject({ ok: false, reason: "integrity" });
   });
 
+  it("reports a file that is not a calibration set instead of crashing on it", async () => {
+    for (const body of ["null", "{}", "[]", '"x"', '{"pairs":[]}', '{"pairs":{},"playbook":{}}']) {
+      const r = await withSet();
+      await writeFile(join(r, CALIBRATION_FILE), body);
+      const loaded = await loadCalibrationSet(await loadedOf(r));
+      expect(loaded, body).toMatchObject({ ok: false, reason: "integrity" });
+    }
+  });
+
   it("reports a recorded set whose file is missing", async () => {
     const r = await withSet();
     await removeDir(join(r, CALIBRATION_FILE));
@@ -253,6 +263,39 @@ describe("preparing and running the pairs", () => {
     expect(error).toBeInstanceOf(CalibrationSetError);
     expect((error as Error).message).toContain("CAL-03");
     expect((error as Error).message).not.toContain("words that are in no document");
+  });
+
+  it("refuses a pair whose paragraph is not the paragraph its label was written for", async () => {
+    // The quote is still unique in its clause, but the paragraph the label was written for has
+    // changed (a different index, or text that no longer hashes to what was recorded).
+    for (const edit of [
+      (file: CalibrationFile) => {
+        file.pairs[1]!.evidence.paragraph += 1;
+      },
+      (file: CalibrationFile) => {
+        file.pairs[1]!.paragraphSha256 = "0".repeat(64);
+      },
+    ]) {
+      const { data, set, playbook, workflow } = await setup(edit);
+      const error = await prepareCalibration({ set, dataset: data, playbook, workflow }).catch(
+        (e: unknown) => e,
+      );
+      expect(error).toBeInstanceOf(CalibrationSetError);
+      expect((error as Error).message).toContain("CAL-02");
+      expect((error as Error).message).toContain("not the paragraph its label was written for");
+    }
+  });
+
+  it("refuses a pair built from a held-out case, which would send held-out text outside the ledger", async () => {
+    const { data, set, playbook, workflow } = await setup((file) => {
+      file.pairs[0]!.case = "PAROL-H01";
+    });
+    const error = await prepareCalibration({ set, dataset: data, playbook, workflow }).catch(
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(CalibrationSetError);
+    expect((error as Error).message).toContain("not in the development split");
+    expect((error as Error).message).toContain("CAL-01");
   });
 
   it("refuses a pair from a case the keys do not have", async () => {
@@ -334,7 +377,14 @@ describe("preparing and running the pairs", () => {
     });
     expect(record.failedPairs).toBe(1);
     expect(record.result.catchRate).toMatchObject({ numerator: 3, denominator: 4 });
+    expect(record.result.failed).toEqual({ supported: 0, unsupported: 1 });
+    // The outcome of every call is kept, so that an outage can be told from a refusal.
+    expect(record.callOutcomes).toEqual({ ok: 7, schema_error: 1 });
     expect(record.note).toMatch(/1 of 8 calls returned no verdict/);
+    // The catch rate is a lower bound and the false alarm rate an upper bound, and the note says so.
+    expect(record.note).toMatch(
+      /catch rate is a lower bound and the false alarm rate an upper bound/,
+    );
     const failingSupported = checker({ fail: "CAL-03" });
     const second = await runCalibration({
       set,
@@ -344,6 +394,70 @@ describe("preparing and running the pairs", () => {
       signal: new AbortController().signal,
     });
     expect(second.result.falseAlarmRate).toMatchObject({ numerator: 1, denominator: 4 });
+  });
+
+  it("asks the checker exactly what a review asks it for the same claim and passage", async () => {
+    const { data, set, playbook, workflow } = await setup();
+    const prepared = await prepareCalibration({ set, dataset: data, playbook, workflow });
+    const support = getPrompt("support.p1");
+    const viaRun: string[] = [];
+    const viaReview: string[] = [];
+    const spy = (into: string[]): ObjectGenerator => ({
+      provider: "anthropic",
+      model: "a-model",
+      disclosure: "a scripted stand-in",
+      async generate(request) {
+        into.push(requestKey(request));
+        return request.schema.parse({ verdict: "supported", missingPremise: null });
+      },
+    });
+    await runCalibration({
+      set,
+      prepared,
+      prompt: support,
+      generator: spy(viaRun),
+      signal: new AbortController().signal,
+    });
+    // The same pair through the checker of the review, as verifyFinding builds the call.
+    const check = createSupportChecker(support);
+    for (const item of prepared) {
+      await check({
+        generator: spy(viaReview),
+        signal: new AbortController().signal,
+        rule: item.rule,
+        draft: item.draft,
+        citedSpans: [item.span],
+      });
+    }
+    expect([...viaRun].sort()).toEqual([...viaReview].sort());
+  });
+
+  it("stops at an abort, with no record and no further calls", async () => {
+    const { data, set, playbook, workflow } = await setup();
+    const prepared = await prepareCalibration({ set, dataset: data, playbook, workflow });
+    const controller = new AbortController();
+    let calls = 0;
+    const generator: ObjectGenerator = {
+      provider: "anthropic",
+      model: "a-model",
+      disclosure: "a scripted stand-in",
+      async generate(request) {
+        calls += 1;
+        if (calls === 2) controller.abort(new Error("stop"));
+        return request.schema.parse({ verdict: "supported", missingPremise: null });
+      },
+    };
+    await expect(
+      runCalibration({
+        set,
+        prepared,
+        prompt: getPrompt("support.p1"),
+        generator,
+        signal: controller.signal,
+      }),
+    ).rejects.toBeDefined();
+    // A pair that had not started is not started: at most the calls already in flight finish.
+    expect(calls).toBeLessThan(prepared.length);
   });
 
   it("stops on a provider error that every call would meet", async () => {
@@ -547,6 +661,59 @@ describe("--calibration on the command line", () => {
     const [replayName] = await readdir(replayDir);
     const replayed = await readResults(join(replayDir, replayName!));
     expect(replayed.suites.calibration!.result).toEqual(file.suites.calibration!.result);
+  });
+});
+
+describe("--calibration that stops part way", () => {
+  it("says the set was started and stopped, and does not say it was not run", async () => {
+    const r = await withSet();
+    const resultsDir = join(dir, `res-${++n}`);
+    const stand = oracleFactory({});
+    let pairCalls = 0;
+    const factory: Parameters<typeof run>[1]["generatorFactory"] = (request) => {
+      const inner = stand.factory(request);
+      return {
+        ...inner,
+        async generate(call) {
+          const pair =
+            call.schemaName === "check_support"
+              ? pairs.find(
+                  (p) =>
+                    call.prompt.includes(p.evidence.quote) &&
+                    call.prompt.includes(p.claim.discrepancy),
+                )
+              : undefined;
+          if (pair !== undefined) {
+            pairCalls += 1;
+            // The key is refused after two pairs: every further call would meet the same error.
+            if (pairCalls > 2) throw new ModelRequestError("bad key", 401, true);
+            return call.schema.parse({ verdict: "not_supported", missingPremise: null });
+          }
+          return inner.generate(call);
+        },
+      };
+    };
+    const out = await run(["--yes", "--calibration", "--workflow", "v3", "--case", "PAROL-D01"], {
+      resultsDir,
+      root: r,
+      generatorFactory: factory,
+    });
+    expect(out.code).toBe(1);
+    const names = await readdir(resultsDir);
+    const file = await readResults(
+      join(
+        resultsDir,
+        names.find((name) => name.endsWith(".json"))!,
+      ),
+    );
+    expect(file.complete).toBe(false);
+    expect(file.suites.calibration).toBeNull();
+    expect(file.notes.join(" ")).toMatch(
+      /calibration set was started and stopped before it finished \(\d+ of 8 calls were started\)/,
+    );
+    // The report does not claim the set was simply not run.
+    expect(out.stdout).toContain("or the run stopped before the calibration set finished");
+    expect(out.stdout).not.toContain("calibration set was not run");
   });
 });
 

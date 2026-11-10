@@ -197,7 +197,7 @@ export function suiteLines(file: ResultsFile): string[] {
   const lines: string[] = ["## Supplementary suites", ""];
   if (exposure === null && calibration === null) {
     lines.push(
-      "Neither the exposure suites nor the support checker's calibration set was run, so gates G1 and G11 are not evaluated and not assumed to pass.",
+      "Neither the exposure suites nor the support checker's calibration set has a result in this file (they were not run, or the run stopped before the calibration set finished: see the notes), so gates G1 and G11 are not evaluated and not assumed to pass.",
       "",
     );
     return lines;
@@ -222,19 +222,52 @@ export function suiteLines(file: ResultsFile): string[] {
           ["Canary strings found", whole(exposure.canaryHits)],
           ["Span ids of another matter found", whole(exposure.foreignSpanIdHits)],
           ["Total found (G1 requires 0)", whole(found)],
+          [
+            "Probes whose caller should have been let in and was not (G1 is not evaluated while any)",
+            whole(exposure.letInNotReached),
+          ],
+          [
+            "Probes answered otherwise than expected, without exposing data (not a G1 count)",
+            whole(exposure.mismatches),
+          ],
+          [
+            "Sightings of the other matter's distinctive fact (not a G1 count)",
+            whole(exposure.factSightings),
+          ],
         ].map((row) => row.map((cell) => md(String(cell)))),
       ),
       "",
     );
-    for (const suite of exposure.suites) lines.push(`- ${md(suite, 400)}`);
+    if (exposure.probesRun + exposure.artefactsScanned === 0) {
+      lines.push(
+        "**This record checked nothing** (no probe was run and no artefact was scanned), so gate G1 is not evaluated and the zeros above are not a clean result.",
+        "",
+      );
+    }
+    // The sentences carry what the counts do not: the mismatches, the drift of the action table and
+    // the first probe that was exposed. They are cut at the limit of the results file and no earlier.
+    for (const suite of exposure.suites) lines.push(`- ${md(suite, 2000)}`);
     if (exposure.suites.length > 0) lines.push("");
   }
   if (calibration === null) {
-    lines.push("The calibration set was not run, so gate G11 is not evaluated.", "");
+    lines.push(
+      "The support checker's calibration set has no result in this file: it was not run, or the run stopped before it finished (see the notes). Gate G11 is not evaluated.",
+      "",
+    );
   } else {
     const { result } = calibration;
+    const answered =
+      file.mode === "replay"
+        ? "answered from the recording of an earlier run (no model was called now)"
+        : isScripted(file.mode)
+          ? "answered by the scripted stand-in of this run"
+          : "sent to the model of this run";
+    const failedBy = Object.entries(calibration.callOutcomes)
+      .filter(([outcome]) => outcome !== "ok")
+      .map(([outcome, n]) => `${md(outcome)} ${whole(n)}`)
+      .join(", ");
     lines.push(
-      `**Support checker calibration (gate G11).** ${whole(calibration.unsupportedPairs)} unsupported and ${whole(calibration.supportedPairs)} supported pairs, sent to the model of this run with prompt ${md(calibration.prompt.id)} (${shortSha(calibration.prompt.sha256)}). The set is small: read each rate with its interval. A pair whose call returned no verdict counts against the checker on both sides, as not caught if it is unsupported and as flagged if it is supported (${whole(calibration.failedPairs)} here).`,
+      `**Support checker calibration (gate G11).** ${whole(calibration.unsupportedPairs)} unsupported and ${whole(calibration.supportedPairs)} supported pairs, ${answered}, with prompt ${md(calibration.prompt.id)} (${shortSha(calibration.prompt.sha256)}), set ${shortSha(calibration.setSha256)}. The set is small: read each rate with its interval. A pair whose call returned no verdict counts against the checker on both sides, as not caught if it is unsupported and as flagged if it is supported (${whole(calibration.failedPairs)} here${failedBy === "" ? "" : `: ${failedBy}`}).`,
       "",
       table(
         ["Measure", "Rate"],
@@ -291,7 +324,9 @@ function gatesTable(section: SplitSection, file: ResultsFile): string[] {
   );
   if (open.includes("G1")) {
     lines.push(
-      "G1 needs the authorization probes and the canary scan, which were not run, so it is not evaluated and not assumed to be 0.",
+      file.suites.exposure === null
+        ? "G1 needs the authorization probes and the canary scan, which were not run (give --exposure), so it is not evaluated and not assumed to be 0."
+        : "G1 is not evaluated for the reason in its row above, and is not assumed to be 0.",
     );
   }
   if (open.some((id) => id === "G3" || id === "G4" || id === "G5")) {
@@ -300,7 +335,11 @@ function gatesTable(section: SplitSection, file: ResultsFile): string[] {
     );
   }
   if (open.includes("G11")) {
-    lines.push("G11 needs the support checker's calibration set, which was not run.");
+    lines.push(
+      file.suites.calibration === null
+        ? "G11 needs the support checker's calibration set, which has no result in this file (give --calibration, with a workflow that has the support check)."
+        : "G11 is not evaluated for the reason in its row above, and is not assumed to pass.",
+    );
   }
   if (open.includes("G12") || open.includes("G13")) {
     lines.push(
@@ -561,6 +600,22 @@ function pinsTable(file: ResultsFile): string {
   );
 }
 
+/** Where the answers came from: the recording a live run wrote, or the one a replay read. */
+function recordingLines(file: ResultsFile): string[] {
+  const r = file.recording;
+  if (r === null) return [];
+  if (r.role === "recorded") {
+    return [
+      r.failed === true
+        ? `**Recording.** The model's answers could not be recorded completely (${whole(r.calls)} calls written to ${md(r.file)}), so this run cannot be replayed.`
+        : `**Recording.** The model's answers were written to ${md(r.file)} (${whole(r.calls)} calls), beside the results file. Replay them with --replay.`,
+    ];
+  }
+  return [
+    `**Recording.** The answers were read from ${md(r.file)} (${whole(r.calls)} answered)${r.recordedAt === undefined ? "" : `, recorded at ${md(r.recordedAt)}`}${r.recordedResults === undefined ? "" : ` by the run that wrote ${md(r.recordedResults)}`}${r.recordedCommit === undefined || r.recordedCommit === null ? "" : ` at commit ${md(r.recordedCommit.slice(0, 12))}`}.${r.datasetChanged === true ? " **THE ANSWER KEYS OR CASE FILES DIFFER FROM THOSE THE RECORDING WAS MADE AGAINST**, so these are recorded answers scored against a changed key." : ""}`,
+  ];
+}
+
 export function renderReport(file: ResultsFile): string {
   const scripted = isScripted(file.mode);
   const lines: string[] = [
@@ -590,6 +645,7 @@ export function renderReport(file: ResultsFile): string {
     lines.push(`**Contamination note.** ${md(file.contamination.note, 800)}`, "");
   }
   for (const note of file.notes) lines.push(`Note: ${md(note, 600)}`, "");
+  if (file.recording !== null) lines.push(...recordingLines(file), "");
   for (const section of file.sections) lines.push(...renderSection(file, section));
 
   lines.push(...suiteLines(file));
@@ -598,6 +654,10 @@ export function renderReport(file: ResultsFile): string {
   if (scripted) {
     lines.push(
       `Model calls made to the scripted ${file.mode === "selftest" ? "oracle" : "reader"}: ${whole(file.usage.calls)}. No tokens, no cost: nothing was sent anywhere.`,
+    );
+  } else if (file.mode === "replay") {
+    lines.push(
+      `Answers re-scored from the recording: ${whole(file.usage.calls)}. No model was called and nothing was sent anywhere: there are no tokens, no cost and no latency.`,
     );
   } else if (!file.usage.available) {
     lines.push(

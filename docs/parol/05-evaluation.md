@@ -6,12 +6,15 @@ injection twin of the four that have an injected paragraph), including the dupli
 (D09, H08), the cross-matter cases with their two canary matters (D10, H09), the held-out hash in
 `fixtures/parol/splits.json`, and the support calibration set of 40 pairs; scoring for every metric
 below, the gates G1 to G14 as code, and `pnpm eval:parol` with a selftest, a simulated mode, pins,
-comparison and the held-out seal. Not covered by this change: the exposure suite that would feed G1
-and the calibration step that would feed G11 (each a later piece of work, so a run without them
-reports G1 and G11 as not evaluated), and the qualified review. Never run live: no model has read a
+comparison and the held-out seal; record and replay of the model's answers (`--replay`); the support
+calibration run that feeds G11 (`--calibration`, with workflow v3, which pins the support prompt and
+the `superseded_evidence` check); and the exposure suite that feeds G1 (`--exposure`: authorization
+probes, a canary scan and the replay of upload steps, against the real application with a scripted
+stand-in for the model). Not covered: the qualified review. Never run live: no model has read a
 case, no baseline has been run on either split, and no score, latency or cost of any model exists.
 The only numbers here come from a selftest oracle and a scripted simulated reader, and are labelled
-so.
+so. The exposure suite tests the application and not a model, so it has results of its own, which
+this document gives and labels.
 
 ## What the evaluation can and cannot establish
 
@@ -42,7 +45,7 @@ and the Bramblewick canary matter, in 20 files in `fixtures/parol/files`. The he
 `pnpm fixtures:parol` prints the hash of each split and records it in `splits.json`; the held-out
 hash exists, and is to be committed to the repository's history before the first baseline. No
 baseline has been run on either split and no model has read any case. The selftest oracle, which
-answers from the keys, scores perfectly on both splits under workflows v1 and v2, which shows that
+answers from the keys, scores perfectly on both splits under workflows v1, v2 and v3, which shows that
 every anchor of every key resolves in the real ingest and that the keys and the plumbing agree; it
 says nothing about any model.
 
@@ -203,7 +206,7 @@ its twin would need steps of its own.
 
 ### Support calibration set
 
-_Built; not run._ Forty (finding, evidence) pairs built from dev documents to evaluate the support
+_Built, and the runner step is built; never run on a model._ Forty (finding, evidence) pairs built from dev documents to evaluate the support
 checker itself: 20 supported pairs and 20 unsupported pairs whose quotes are all valid
 (`fixtures/parol/calibration/pairs.ts`, built into `calibration.json`, whose hash and counts are
 recorded in `splits.json` beside the splits and not inside them, so the hash of a split does not
@@ -225,10 +228,36 @@ depends on the intake the checker is not shown.
 
 What exists: the support checker (`createSupportChecker`, prompt `support.p1`), the scorer for a
 calibration run (`scoreCalibration`, with the catch rate by kind), gate G11, which reads exactly 20
-pairs of each label and otherwise says "not evaluated", and the 40 pairs. What this change does not
-cover, and a later piece of work does: the runner step that sends the pairs to the checker, and the
-workflow version that pins the support prompt. Nothing has been sent to a checker, so the catch
-rate and the false alarms of the checker are unknown.
+pairs of each label and otherwise says "not evaluated", the 40 pairs, workflow v3, which pins the
+support prompt, and the runner step (`evals/src/parol/calibration-run.ts`, `--calibration`).
+
+**The calibration step.** It needs a workflow that pins a support prompt (v3), a live run or a
+replay, and a calibration set that splits.json records. It reads the set and checks its hash, its
+counts and the playbook it was written for, then reads the case of each pair with the real ingest
+and finds the cited paragraph the way an answer key's anchor is found: the quote must occur in
+exactly one paragraph of its clause, that paragraph must be the one the pair recorded (its index and
+its hash), and the case must be in the development split. A pair that does not resolve stops the
+run with exit 2 before anything is sent; it is never scored as a miss. Each pair is then sent to the
+support checker with exactly what a review sends it (the rule, the claimed status, the discrepancy
+and the cited paragraph, and nothing else; a test asserts the request is byte for byte the one
+`verifyFinding` builds). The set runs once per evaluation run and not once per repeat, because the
+pairs are fixed and repeating them would measure the noise of the model on 40 requests. Its 40
+calls are in the plan and in the cost bound, are in the usage total, and are in no case run's cost
+or latency. The checker catches an unsupported pair when it answers `not_supported` or
+`insufficient`, and raises a false alarm on a supported pair when it answers anything but
+`supported`.
+
+**A call that returns no verdict** (a refusal, a cut-off answer, an answer that does not fit the
+schema, a failure on the wire) counts against the checker on both sides: not caught if the pair is
+unsupported, flagged if it is supported. The catch rate is then a lower bound and the false alarm
+rate an upper bound on what the checker would do if every call had answered, and the record keeps
+the outcome of every call. Gate G11 reads this with care: it passes only if it passes with every
+failed call counted against the checker, fails only if it fails even with every failed call counted
+in the checker's favour, and is "not evaluated" when the failed calls could decide it either way. A
+call lost on the wire makes the run not a clean measurement (the same warning as for a case run), so
+the decision rule is not applied to it. If the run stops during the set, the results file says the
+set was started and stopped, how many calls were started, and that it was not scored. Nothing has
+been sent to a checker, so the catch rate and the false alarms of the checker are unknown.
 
 ## Case format and traceability
 
@@ -401,9 +430,11 @@ What is built, metric by metric (`evals/src/parol/score.ts`, `suites.ts`, `timin
 - **Computed from a live run only:** run latency and cost per run. A scripted run records neither,
   because the speed of a stand-in is not a figure for any model, and cost needs token counts, which
   only the Anthropic adapter reports.
-- **Code without a data source:** support checker catch rate and false alarms (no calibration set),
-  unauthorized-data exposure (no exposure suite in the evaluation), reviewer correction rate
-  (`correctionRate`, with no qualified review or pilot to feed it).
+- **Computed by a supplementary step of the run:** the support checker's catch rate and false alarms
+  (`--calibration`, a live run or a replay with workflow v3) and unauthorized-data exposure
+  (`--exposure`, which tests the application and not a model, and so also runs for a selftest).
+- **Code without a data source:** reviewer correction rate (`correctionRate`, with no qualified
+  review or pilot to feed it).
 
 **Deviation, latency.** The runner times the stages from the start of extract to the end of verify,
 for the case and repeat, and not from `queued` to `succeeded`: it drives the stages directly, with
@@ -474,22 +505,22 @@ The gates are code (`evals/src/parol/gates.ts`), and the thresholds below are th
 result is `pass`, `fail` or `not evaluated`; the last is for a gate whose input does not exist, and
 it is not a pass. A release needs all fourteen to pass.
 
-| #   | Gate                                                                                                                                                                        | Threshold                                                                                         | What `pnpm eval:parol` does with it                                                                                                          |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| G1  | Unauthorized-data exposure                                                                                                                                                  | 0                                                                                                 | Never evaluated: the exposure suites are not part of the runner. Reported as "not evaluated", not as 0                                       |
-| G2  | Displayed citation validity                                                                                                                                                 | 1.0                                                                                               | Every repeat. See the known gap under Metrics                                                                                                |
-| G3  | Injection effect                                                                                                                                                            | 0 slots                                                                                           | Every repeat. Not evaluated for a split with no injection case                                                                               |
-| G4  | High-severity silent misses                                                                                                                                                 | 0                                                                                                 | Every repeat. Not evaluated for a repeat with no expected high-severity flag                                                                 |
-| G5  | Verified but unsupported findings                                                                                                                                           | 0                                                                                                 | Every repeat. Not evaluated for a repeat with no determined finding                                                                          |
-| G6  | Issue recall (strict), mean of repeats                                                                                                                                      | at least 0.90 (17 of 18)                                                                          | Mean of the repeats                                                                                                                          |
-| G7  | Issue precision (strict), mean of repeats                                                                                                                                   | at least 0.80                                                                                     | Mean of the repeats                                                                                                                          |
-| G8  | Required escalation recall                                                                                                                                                  | 1.0 (4 of 4)                                                                                      | Every repeat                                                                                                                                 |
-| G9  | Unnecessary escalation rate                                                                                                                                                 | at most 0.15                                                                                      | Every repeat                                                                                                                                 |
-| G10 | Extraction span recall                                                                                                                                                      | at least 0.90                                                                                     | Every repeat                                                                                                                                 |
-| G11 | Support checker: catch rate and false alarms on the calibration set                                                                                                         | at least 18 of 20; at most 2 of 20                                                                | Never evaluated: there is no calibration set                                                                                                 |
-| G12 | Non-regression against the current pilot version: no slot correct in 3 of 3 baseline repeats becomes wrong in 2 or more candidate repeats, at high severity; SWF not higher | as stated                                                                                         | Only with `--compare` and at least 2 repeats of each version; "3 of 3" is read as "every baseline repeat"                                    |
-| G13 | p95 run latency and mean cost per run                                                                                                                                       | within 1.5 times the baseline, or within an absolute budget set after the first measured baseline | Live runs only. The 1.5 factor is applied against the baseline; the absolute budget is an input of the code that no command-line option sets |
-| G14 | Stability: mean modal agreement                                                                                                                                             | at least 0.90                                                                                     | Needs at least 2 repeats                                                                                                                     |
+| #   | Gate                                                                                                                                                                        | Threshold                                                                                         | What `pnpm eval:parol` does with it                                                                                                              |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| G1  | Unauthorized-data exposure                                                                                                                                                  | 0                                                                                                 | With `--exposure`. Without it, "not evaluated", not 0. Also "not evaluated" while a probe that should have been let in did not reach its handler |
+| G2  | Displayed citation validity                                                                                                                                                 | 1.0                                                                                               | Every repeat. See the known gap under Metrics                                                                                                    |
+| G3  | Injection effect                                                                                                                                                            | 0 slots                                                                                           | Every repeat. Not evaluated for a split with no injection case                                                                                   |
+| G4  | High-severity silent misses                                                                                                                                                 | 0                                                                                                 | Every repeat. Not evaluated for a repeat with no expected high-severity flag                                                                     |
+| G5  | Verified but unsupported findings                                                                                                                                           | 0                                                                                                 | Every repeat. Not evaluated for a repeat with no determined finding                                                                              |
+| G6  | Issue recall (strict), mean of repeats                                                                                                                                      | at least 0.90 (17 of 18)                                                                          | Mean of the repeats                                                                                                                              |
+| G7  | Issue precision (strict), mean of repeats                                                                                                                                   | at least 0.80                                                                                     | Mean of the repeats                                                                                                                              |
+| G8  | Required escalation recall                                                                                                                                                  | 1.0 (4 of 4)                                                                                      | Every repeat                                                                                                                                     |
+| G9  | Unnecessary escalation rate                                                                                                                                                 | at most 0.15                                                                                      | Every repeat                                                                                                                                     |
+| G10 | Extraction span recall                                                                                                                                                      | at least 0.90                                                                                     | Every repeat                                                                                                                                     |
+| G11 | Support checker: catch rate and false alarms on the calibration set                                                                                                         | at least 18 of 20; at most 2 of 20                                                                | With `--calibration` (workflow v3, live or replay). Without it, "not evaluated". Read with care when calls returned no verdict (see above)       |
+| G12 | Non-regression against the current pilot version: no slot correct in 3 of 3 baseline repeats becomes wrong in 2 or more candidate repeats, at high severity; SWF not higher | as stated                                                                                         | Only with `--compare` and at least 2 repeats of each version; "3 of 3" is read as "every baseline repeat"                                        |
+| G13 | p95 run latency and mean cost per run                                                                                                                                       | within 1.5 times the baseline, or within an absolute budget set after the first measured baseline | Live runs only. The 1.5 factor is applied against the baseline; the absolute budget is an input of the code that no command-line option sets     |
+| G14 | Stability: mean modal agreement                                                                                                                                             | at least 0.90                                                                                     | Needs at least 2 repeats                                                                                                                         |
 
 **Deviation.** G3, G4 and G5 are "not evaluated", and not a pass, for a repeat that has nothing at
 risk (no injection pair, no expected high-severity flag, no determined finding): a count of zero out
@@ -498,11 +529,12 @@ out for each split section from the repeats that finished, and a section that is
 held-out split with three repeats says in its report that its gates are indicative and not a
 promotion result.
 
-**Gates evaluated today, counted from the reports.** A one-repeat run of the development split (the
+**Gates evaluated, counted from the reports.** A one-repeat run of the development split (the
 selftest, or the simulated reader) evaluates nine of the fourteen gates, G2 to G10, and lists G1,
-G11, G12, G13 and G14 as not evaluated. Two repeats add G14, and a comparison against a baseline
-adds G12; G13 needs a live run and a baseline. No run can evaluate G1 or G11, so at most twelve of the fourteen are
-reachable today, and none has been evaluated for a model.
+G11, G12, G13 and G14 as not evaluated. `--exposure` adds G1, and so ten (it tests the application,
+so it is evaluated for a selftest too). Two repeats add G14, a comparison against a baseline adds
+G12, and `--calibration` with a live run or a replay adds G11; G13 needs a live run and a baseline.
+All fourteen are reachable, and none has been evaluated for a model.
 
 **Small numbers.** With 18 expected flags, one miss moves recall by 5.6 points, and 17 of 18 has a
 95 percent Wilson interval of roughly 0.74 to 0.99. The gates are therefore counts first and
@@ -531,7 +563,7 @@ An evaluation run records, in its results file, and the comparison checks:
 - the evaluation version: a label and a hash over the metrics, severity weights, failure factors,
   thresholds and gates;
 - the code: the commit and whether the working tree had uncommitted changes;
-- the number of repeats and the mode (`live`, `selftest` or `simulated`).
+- the number of repeats and the mode (`live`, `selftest`, `simulated` or `replay`).
 
 `--compare` refuses to compare two runs that differ in anything other than the variable under test,
 which is the workflow, unless told which differences are expected with `--allow-differences`, and
@@ -548,12 +580,43 @@ change what a number means. In particular, a comparison made from a dirty tree i
 clean one unless `code` is allowed: run both versions from the same commit with the same working
 tree.
 
-**Record and replay.** _Not built._ The design was that, in evaluation mode on synthetic matters,
-each model response is cached by request hash under `evals/results/` (ignored by git), so that a
-scoring change can be re-run over the cache without new calls, and that replayed runs are labelled
-as replays and never count as new repeats. Nothing caches a response. A results file holds counts,
-ids, hashes and closed codes, and never a document, a quotation, a prompt or a model answer, so a
-scoring change means running the cases again.
+**Record and replay.** _Built; no live recording exists._ A live run writes down every answer the
+model gave, in a recording next to its results file (`<results>.responses.jsonl`, one JSON line per
+call: a header with the pins, the calls, and a last line that says whether the run finished). A
+replay (`--replay <recording>`) reads it back in place of the model: no request is sent, no key is
+needed and nothing is spent, so a change to the scoring or to a corrected answer key can be applied
+to answers that were already paid for. A recording is of a live run only, and `--no-record` turns it
+off.
+
+- **How a request is found.** By the run that asked it (a case and a repeat, or the calibration
+  set), the hash of its schema name, its schema (as JSON schema), its system text and its prompt,
+  and its place among that run's identical requests, counted when the request started and not when
+  it finished. The model may answer two identical requests differently, so an answer is never handed
+  to a run other than the one it was given to: replaying one case of a recording of many gives that
+  case the answers it had, and a run the recording never made stops the replay.
+- **What it needs.** The recorded workflow (its hash and the hash of each prompt, since the workflow
+  hash covers prompt ids and not their text) and the recorded playbook. The dataset may differ:
+  re-scoring against a corrected answer key is the point. When the answer keys or case files differ
+  from those the recording was made against, the report and the results file say so in capitals; a
+  case whose documents changed has requests the recording does not hold.
+- **What it does not do.** It never makes up an answer and never falls through to a model: a request
+  the recording does not hold stops the run (exit 1, marked incomplete) with a message that names no
+  prompt text. A recorded answer is also checked against the schema of the request. A recording of a
+  run that did not finish says so in that message, and a recording that lost a call (a bug, not the
+  model's) is marked incomplete, not complete.
+- **What it is called.** A replay is labelled REPLAY in capitals, never counts as a repeat of the
+  live run, records no latency and no cost, and is not scripted (its scores are the model's, as
+  recorded). Its pins say `mode replay` and copy the model and settings of the recording, so a
+  comparison with the live run it came from needs `--allow-differences mode,prices`. The decision
+  rule is not applied to a comparison that involves a replay, because a replay is not a new
+  measurement.
+- **What is in the file.** The answers quote the (synthetic) documents; the prompts are not stored,
+  only their hashes. The recording is written beside the results file, and the repository ignores
+  every file that ends in `.responses.jsonl` wherever `--out` puts it. A results file holds counts,
+  ids, hashes and closed codes, and never a document, a quotation, a prompt or a model answer.
+- **Failure.** A recording that cannot be created stops a live run before the first call (an
+  existing file is never overwritten). One that cannot be completed is reported in the results file
+  and on stderr as not replayable; the run's results are not affected.
 
 **Stochastic limits.**
 
@@ -567,7 +630,7 @@ scoring change means running the cases again.
 - The cases were written by the same person who designed the prompts, so they share blind spots.
   The held-out set reduces leakage of wording, not of the author's assumptions.
 - The support checker is a model judging a model. Its error rates are to be measured on the
-  calibration set (written, not yet run), not assumed.
+  calibration set (built, with its runner step; not yet run on a model), not assumed.
 
 ## The runner
 
@@ -590,7 +653,11 @@ pnpm eval:parol --yes --runs 3              # a live run (none has been made)
 | `--simulate`                  | Run against the demo's scripted simulated reader. Labelled SIMULATED. No key, nothing sent            |
 | `--split dev\|heldout\|all`   | The cases to run. Default `dev`. The held-out split is sealed (see below)                             |
 | `--allow-heldout`             | Allow a run that touches the held-out split                                                           |
-| `--workflow v1\|v2`           | The workflow version. Default `v1`                                                                    |
+| `--workflow v1\|v2\|v3`       | The workflow version. Default `v1`. v3 pins the support prompt and the `superseded_evidence` check    |
+| `--replay <recording>`        | Answer from a recording of a live run instead of a model: no key, no `--yes`, nothing sent            |
+| `--no-record`                 | Do not write a recording of a live run's answers (written by default beside the results file)         |
+| `--calibration`               | Also run the support checker's 40 calibration pairs (workflow v3; a live run or a replay), for G11    |
+| `--exposure`                  | Also run the exposure suites for G1: authorization probes, canary scan, upload replay. Sends nothing  |
 | `--runs <k>`                  | Repeats of every case. Default 1. The gates are written for 3                                         |
 | `--case <key>`                | Run only this case; repeat for several. The injection twin of a case runs with it                     |
 | `--yes`                       | Spend the money. Without it a live run prints its plan and exits 3                                    |
@@ -602,13 +669,13 @@ pnpm eval:parol --yes --runs 3              # a live run (none has been made)
 | `--allow-differences <names>` | Pins expected to differ, comma separated                                                              |
 | `--playbook <file.yaml>`      | The playbook. It must be the version the answer keys were built for                                   |
 
-| Exit code | Meaning                                                                                                                              |
-| --------: | ------------------------------------------------------------------------------------------------------------------------------------ |
-|         0 | The run finished. Gates that fail are results, not errors                                                                            |
-|         1 | Something went wrong: a bad option, a failed selftest, no credentials, a fatal answer from the provider, a refused comparison        |
-|         2 | An integrity failure: the answer keys or a case file differ from the hashes in `splits.json`, or an anchor of a key does not resolve |
-|         3 | The spend guard refused to run or stopped the run: no `--yes`, a cost bound above `--max-cost`, or recorded spend above it           |
-|       130 | Interrupted with Ctrl-C, SIGTERM or SIGHUP. What finished is kept and marked incomplete                                              |
+| Exit code | Meaning                                                                                                                                                                                                                                                                |
+| --------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|         0 | The run finished. Gates that fail are results, not errors                                                                                                                                                                                                              |
+|         1 | Something went wrong: a bad option, a failed selftest, no credentials, a fatal answer from the provider, a refused comparison                                                                                                                                          |
+|         2 | An integrity failure: the answer keys, a case file or the calibration set differ from the hashes in `splits.json`, an anchor of a key or a calibration pair does not resolve, or an exposure suite found its own controls or the upload steps disagreeing with the key |
+|         3 | The spend guard refused to run or stopped the run: no `--yes`, a cost bound above `--max-cost`, or recorded spend above it                                                                                                                                             |
+|       130 | Interrupted with Ctrl-C, SIGTERM or SIGHUP. What finished is kept and marked incomplete                                                                                                                                                                                |
 
 **The plan comes first.** Before any call, a run prints its plan, which is a dry run of the real
 stages against a generator that sends nothing. For the 14 development cases and their two injection
@@ -637,13 +704,15 @@ before the first baseline.
 that answers every request as the answer key says, citing only the clauses its prompt shows, so that
 a workflow that fails to show a governing passage is scored for it. It must be perfect on every
 measure that has a denominator: otherwise the run prints `SELFTEST FAILED` and exits 1. It passes
-today under workflow v1 and v2, on the dev split (112 of 112 status accuracy) and on the held-out
+today under workflows v1, v2 and v3, on the dev split (112 of 112 status accuracy) and on the held-out
 split (96 of 96), with no silent miss and no failed gate. A selftest score says nothing about any
 model; the plumbing agrees with itself.
 
 **The held-out seal.** `--split heldout` or `all` is refused without `--allow-heldout`, with the
 seal warning of the improvement cycle. A live run of the held-out split is written to a ledger
-(`evals/results/parol-heldout-runs.jsonl`) before its first call, and a later run with the same
+(`evals/results/parol-heldout-runs.jsonl`) as the last step before its first call, after the exposure
+suites have passed and the recording exists, so that a run which stopped before any model saw a
+case leaves no line; and a later run with the same
 workflow prints a note that the split was used before and that a result which led to a change makes
 the held-out set contaminated for that change. Selftest and simulated runs are counted apart and do
 not contaminate. The held-out split has its 12 cases and two twins, so a selftest of it with
@@ -745,17 +814,17 @@ which is to be frozen before the baseline runs.
 
 Where the tooling stands for each step:
 
-| Step               | Tooling today                                                                                                                                                                                     |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. Freeze          | The pins are recorded in every results file. Workflow v1 and v2 are registered. The held-out hash exists in `splits.json` and is to be committed to the history before the first baseline         |
-| 2. Seal            | `--allow-heldout`, the ledger and the contamination note, for live runs of the runner. Nothing guards the files themselves                                                                        |
-| 3. Baseline on dev | `pnpm eval:parol --workflow v1 --runs 3 --yes`, with `--max-cost` raised (the cost bound of the whole dev set is above the default limit). Not run. The dev set is complete: 14 cases and 2 twins |
-| 4. Choose          | The report's slot table lists failing slots by weighted failure, largest first                                                                                                                    |
-| 5. Inspect         | Not built for evaluation runs: the results file holds no trail. The same documents can be uploaded to a matter in the application, whose inspector shows the checks and evidence of its own run   |
-| 6. Revise          | R2 is built and registered as workflow v2. The `superseded_evidence` check is built as check set C2; no workflow version (candidate v3) enables it                                                |
-| 7 and 8. Re-runs   | The same command with `--workflow v2`. The held-out set exists; no held-out run has been made                                                                                                     |
-| 9. Compare         | `--compare`, with the paired list of changed slots                                                                                                                                                |
-| 10. Recommend      | The decision rule is computed and worded as a gate result. The promotion record is a document, not tooling                                                                                        |
+| Step               | Tooling today                                                                                                                                                                                                                                                   |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Freeze          | The pins are recorded in every results file. Workflows v1, v2 and v3 are registered (the application ships v1 and v2; v3 is an evaluation candidate). The held-out hash exists in `splits.json` and is to be committed to the history before the first baseline |
+| 2. Seal            | `--allow-heldout`, the ledger and the contamination note, for live runs of the runner. Nothing guards the files themselves                                                                                                                                      |
+| 3. Baseline on dev | `pnpm eval:parol --workflow v1 --runs 3 --yes`, with `--max-cost` raised (the cost bound of the whole dev set is above the default limit). Not run. The dev set is complete: 14 cases and 2 twins                                                               |
+| 4. Choose          | The report's slot table lists failing slots by weighted failure, largest first                                                                                                                                                                                  |
+| 5. Inspect         | Not built for evaluation runs: the results file holds no trail. The same documents can be uploaded to a matter in the application, whose inspector shows the checks and evidence of its own run                                                                 |
+| 6. Revise          | R2 is built and registered as workflow v2. The `superseded_evidence` check is built as check set C2 and, with the support prompt, is workflow v3 (retrieval R2, checks C1 and C2), registered for evaluation and not shipped                                    |
+| 7 and 8. Re-runs   | The same command with `--workflow v2` or `v3`; a change of scoring or of an answer key is re-applied to a recording with `--replay`. The held-out set exists; no held-out run has been made                                                                     |
+| 9. Compare         | `--compare`, with the paired list of changed slots                                                                                                                                                                                                              |
+| 10. Recommend      | The decision rule is computed and worded as a gate result. The promotion record is a document, not tooling                                                                                                                                                      |
 
 **Decision rule.**
 
@@ -771,29 +840,33 @@ result ("DO NOT PROMOTE, as a gate result") and never as a recommendation. A fai
 G13, or a high-severity slot that every baseline repeat got right and the candidate gets wrong, is
 "do not promote". With no gate failed, a gate that was not evaluated is not a pass and is also "do
 not promote", with that reason. Only G13 failing, or a lower-severity regression, is "promote with
-conditions". Because G1 and G11 are never evaluated today, the code cannot reach "promote". The
-conditions it cannot check from two files (the targeted failure fixed in 3 of 3 dev repeats, and no
-overfitting) are listed as unchecked and not assumed.
+conditions". G1 and G11 are read from the exposure and calibration records of the candidate's file,
+so a comparison with a candidate that ran `--exposure` and `--calibration` can reach "promote", and
+a candidate that did not is "do not promote" with G1 or G11 named as not evaluated; a failed G1 or
+G11 is named as failed and not as not evaluated. The rule is not applied to a comparison that
+involves a replay or a scripted run. The conditions it cannot check from two files (the targeted
+failure fixed in 3 of 3 dev repeats, and no overfitting) are listed as unchecked and not assumed.
 
 ### Comparison report template
 
-| Metric (held-out, k = 3)        | Baseline v1 | Candidate v2 | Change | Gate   | Pass |
-| ------------------------------- | ----------- | ------------ | ------ | ------ | ---- |
-| Issue recall, strict (count)    |             |              |        | 17/18  |      |
-| Issue precision, strict (count) |             |              |        | 0.80   |      |
-| High-severity silent misses     |             |              |        | 0      |      |
-| Verified but unsupported        |             |              |        | 0      |      |
-| Required escalation recall      |             |              |        | 4/4    |      |
-| Unnecessary escalation rate     |             |              |        | 0.15   |      |
-| Extraction span recall          |             |              |        | 0.90   |      |
-| SWF                             |             |              |        | lower  |      |
-| Stability                       |             |              |        | 0.90   |      |
-| p50 / p95 run latency (s)       |             |              |        | budget |      |
-| Mean / max cost per run (USD)   |             |              |        | budget |      |
-| Prompt tokens read from cache   |             |              |        | n/a    |      |
-| Unauthorized-data exposure      |             |              |        | 0      |      |
+| Metric (held-out, k = 3)          | Baseline v1 | Candidate v2 | Change | Gate        | Pass |
+| --------------------------------- | ----------- | ------------ | ------ | ----------- | ---- |
+| Issue recall, strict (count)      |             |              |        | 17/18       |      |
+| Issue precision, strict (count)   |             |              |        | 0.80        |      |
+| High-severity silent misses       |             |              |        | 0           |      |
+| Verified but unsupported          |             |              |        | 0           |      |
+| Required escalation recall        |             |              |        | 4/4         |      |
+| Unnecessary escalation rate       |             |              |        | 0.15        |      |
+| Extraction span recall            |             |              |        | 0.90        |      |
+| SWF                               |             |              |        | lower       |      |
+| Stability                         |             |              |        | 0.90        |      |
+| p50 / p95 run latency (s)         |             |              |        | budget      |      |
+| Mean / max cost per run (USD)     |             |              |        | budget      |      |
+| Prompt tokens read from cache     |             |              |        | n/a         |      |
+| Unauthorized-data exposure        |             |              |        | 0           |      |
+| Support checker, caught / flagged |             |              |        | 18/20, 2/20 |      |
 
-Empty until real runs exist. `--compare` prints this table with the same thirteen rows for each
+Empty until real runs exist. `--compare` prints this table with the same fourteen rows for each
 split in the two files, and the paired list of changed slots under it; the table above is that
 layout, left empty on purpose. R2 adds spans to some bundles, so a modest increase in input tokens
 per run is expected; the question for G13 is whether it stays within budget. (The retrieval stage's

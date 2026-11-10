@@ -94,8 +94,10 @@ export interface RecordingNote {
   role: "recorded" | "replayed";
   /** The base name of the recording file. */
   file: string;
-  /** Calls written (role recorded) or answered from the recording (role replayed). */
+  /** Calls written (role recorded, counted after the append succeeded) or answered from the recording (role replayed). */
   calls: number;
+  /** Recorded only: true when the recording could not be completed, so it cannot be replayed. */
+  failed?: boolean;
   /** Replay only: when the recording was made. */
   recordedAt?: string;
   /** Replay only: the results file of the run that made it. */
@@ -133,6 +135,8 @@ export interface CalibrationRecord {
   unsupportedPairs: number;
   /** Pairs whose call returned no verdict. Each counts against the checker on both sides, and none is left out. */
   failedPairs: number;
+  /** The calls by outcome (ok, refusal, cut_off, schema_error, semantic_error, transport), sorted by outcome. */
+  callOutcomes: Record<string, number>;
   /** Calls made, retries of the provider's client not included. */
   modelCalls: number;
   /** Why the numbers may not mean what they appear to, or null. */
@@ -253,7 +257,7 @@ export interface SplitSection {
     stability: Stability | null;
     summary: ReturnType<typeof summarizeRun>;
   } | null;
-  /** Gates for this section alone: no baseline, no exposure suites, no calibration set. */
+  /** Gates for this section alone: no baseline, and the exposure and calibration records of the file, when it has them. */
   gates: GateReport | null;
   /** Null for a scripted run, an incomplete one, or one with nothing to measure. */
   latency: LatencySummary | null;
@@ -446,7 +450,8 @@ export function gateSubjectOf(
   run: RunMetrics,
   latency: LatencySummary | null,
   cost: CostSummary | null,
-  suites: SuiteRecords = NO_SUITES,
+  /** Required, so that a caller cannot leave the suites out and have G1 and G11 read as not run. */
+  suites: SuiteRecords,
 ): GateSubject {
   return {
     run,
@@ -529,7 +534,7 @@ export function buildSection(args: {
     gates:
       scored.run === null || !args.complete
         ? null
-        : evaluateGates(gateSubjectOf(scored.run, latency, cost, args.suites)),
+        : evaluateGates(gateSubjectOf(scored.run, latency, cost, args.suites ?? NO_SUITES)),
     latency,
     cost,
   };
@@ -563,6 +568,7 @@ export interface RunHealth {
   failedRuns: number;
   /** Calls by outcome over those runs, sorted by outcome. */
   calls: Record<string, number>;
+  /** Calls lost on the wire: those of the runs, and those of the calibration set. */
   transportCalls: number;
   /** Runs whose extract call failed, so that every rule read the whole document. */
   extractDegradedRuns: number;
@@ -604,6 +610,14 @@ export function runHealth(file: ResultsFile, split?: Split): RunHealth {
       `${plural(transportCalls, "model call failed", "model calls failed")} on the wire or at the provider (outcome transport). A slot whose call failed is scored as undetermined, which reads as the model abstaining.`,
     );
   }
+  // The calibration calls are in no run. One that was lost on the wire is counted against the
+  // checker on both sides, so an outage reads as a checker that misses and raises false alarms.
+  const calibrationTransport = file.suites.calibration?.callOutcomes["transport"] ?? 0;
+  if (calibrationTransport > 0) {
+    problems.push(
+      `${plural(calibrationTransport, "calibration call failed", "calibration calls failed")} on the wire or at the provider (outcome transport). Each counts against the checker on both sides, so the calibration rates (gate G11) describe the outage as well as the checker.`,
+    );
+  }
   if (extractDegradedRuns > 0) {
     problems.push(
       `Extraction degraded in ${extractDegradedRuns} of ${runs.length} runs: the extract call failed, so every rule read the whole document, and the extraction scores are those of that fallback.`,
@@ -618,7 +632,7 @@ export function runHealth(file: ResultsFile, split?: Split): RunHealth {
     runs: runs.length,
     failedRuns: runs.filter((run) => run.outcome === "failed").length,
     calls: sorted,
-    transportCalls,
+    transportCalls: transportCalls + calibrationTransport,
     extractDegradedRuns,
     rulesOverBudget,
     clean: problems.length === 0,
@@ -944,7 +958,8 @@ const price = z.object({
 const split = z.enum(["dev", "heldout"]);
 const mode = z.enum(["selftest", "simulated", "live", "replay"]);
 
-const pins = z.object({
+/** The pins of a run, as a file records them. A recording header holds the same object. */
+export const pinsSchema = z.object({
   dataset: z.object({
     label: text,
     answerKeysSha256: sha,
@@ -1035,12 +1050,18 @@ const rateSchema = z.object({
   ci: z.object({ low: num, high: num }).nullable(),
 });
 
+/** A count: a whole number that is not negative. A file with a negative or fractional one is damaged. */
+const count = z.number().int().nonnegative();
+
 const exposureRecord = z.object({
-  probesRun: num,
-  artefactsScanned: num,
-  probesAnsweredWithData: num,
-  canaryHits: num,
-  foreignSpanIdHits: num,
+  probesRun: count,
+  artefactsScanned: count,
+  probesAnsweredWithData: count,
+  canaryHits: count,
+  foreignSpanIdHits: count,
+  letInNotReached: count.default(0),
+  mismatches: count.default(0),
+  factSightings: count.default(0),
   suites: z.array(text),
 });
 
@@ -1049,13 +1070,18 @@ const calibrationRecord = z.object({
     catchRate: rateSchema,
     falseAlarmRate: rateSchema,
     catchByKind: z.record(z.string(), rateSchema),
+    failed: z.object({ supported: count, unsupported: count }).default({
+      supported: 0,
+      unsupported: 0,
+    }),
   }),
   setSha256: sha,
   prompt: z.object({ id: text, sha256: sha }),
-  supportedPairs: num,
-  unsupportedPairs: num,
-  failedPairs: num,
-  modelCalls: num,
+  supportedPairs: count,
+  unsupportedPairs: count,
+  failedPairs: count,
+  callOutcomes: z.record(z.string(), count).default({}),
+  modelCalls: count,
   note: text.nullable(),
 });
 
@@ -1063,6 +1089,7 @@ const recordingNote = z.object({
   role: z.enum(["recorded", "replayed"]),
   file: text,
   calls: num,
+  failed: z.boolean().optional(),
   recordedAt: text.optional(),
   recordedResults: text.optional(),
   recordedCommit: text.nullable().optional(),
@@ -1085,7 +1112,7 @@ const resultsSchema = z.object({
   finishedAt: text,
   complete: z.boolean(),
   stoppedBecause: text.nullable(),
-  pins,
+  pins: pinsSchema,
   options: z.object({
     split: text,
     workflow: text,

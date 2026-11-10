@@ -406,9 +406,42 @@ describe("a live run with a scripted model that reports usage", () => {
       expect(containsDocumentText(out.stderr, windows)).toBe(false);
     }
     for (const name of await readdir(resultsDir)) {
-      // A recording of the model's answers holds the prompts by design, so that a replay can find
-      // them again. It is not a results file, and git ignores the folder it is written to.
-      if (name.endsWith(".responses.jsonl")) continue;
+      // A recording of the model's answers is not a results file: it holds the answers, which
+      // quote the documents, and not the prompts (it keys them by hash). Its lines have a fixed
+      // shape, which is checked here instead of scanning for text, and git ignores the file.
+      if (name.endsWith(".responses.jsonl")) {
+        const [header, ...lines] = (await readFile(`${resultsDir}/${name}`, "utf8"))
+          .trim()
+          .split("\n");
+        expect(Object.keys(JSON.parse(header!)).sort()).toEqual(
+          ["format", "kind", "pins", "recordedAt", "results"].sort(),
+        );
+        const allowed = new Set([
+          "key",
+          "schema",
+          "run",
+          "n",
+          "outcome",
+          "value",
+          "message",
+          "category",
+          "truncated",
+          "status",
+          "kind",
+          "end",
+          "complete",
+          "reported",
+        ]);
+        for (const line of lines) {
+          for (const field of Object.keys(JSON.parse(line) as object)) {
+            expect(allowed.has(field), field).toBe(true);
+          }
+          // No field is a prompt: a recorded call has the hash of its request and not its text.
+          expect(line).not.toContain('"prompt"');
+          expect(line).not.toContain('"system"');
+        }
+        continue;
+      }
       expect(containsDocumentText(await readFile(`${resultsDir}/${name}`, "utf8"), windows)).toBe(
         false,
       );

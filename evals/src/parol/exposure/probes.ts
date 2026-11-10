@@ -10,14 +10,28 @@
  * exposure suite of the evaluation (authorization.ts next to this file). It must therefore import
  * nothing that imports vitest.
  *
- * Nothing here sends a request. It is data and two small pure functions.
+ * Besides the table of the routes that name a matter, it holds three more things the authorization
+ * suite sends:
+ *  - the forged-id requests: for every route that takes the id of a document, a version, a run, a
+ *    finding or a memo, the same request with the id of another matter's record in its place, and
+ *    the places outside the path where an id goes (a body, a query string);
+ *  - the bodies that would change the store if a caller who must be refused got through, for the
+ *    write routes whose probe body is built to change nothing;
+ *  - the routes that name no matter, read as every caller.
+ *
+ * Nothing here sends a request. It is data and small pure functions.
  */
 import type { MatterAction } from "../../../../apps/parol/src/auth/actions.js";
 
 export type ProbeBody =
   | { kind: "none" }
   | { kind: "form"; fields: Record<string, string> }
-  | { kind: "multipart"; fields: Record<string, string> }
+  | {
+      kind: "multipart";
+      fields: Record<string, string>;
+      /** A text file in the form, for a request that has to get past the check that a file is there. */
+      file?: { name: string; text: string };
+    }
   | { kind: "json"; json: unknown };
 
 export interface Probe {
@@ -333,11 +347,436 @@ export function initFor(
         headers,
         body: new URLSearchParams(withToken(probe.body.fields)).toString(),
       };
-    case "multipart":
-      return { method: probe.method, headers, body: multipart(withToken(probe.body.fields)) };
+    case "multipart": {
+      const file = probe.body.file;
+      return {
+        method: probe.method,
+        headers,
+        body: multipart(
+          withToken(probe.body.fields),
+          file === undefined
+            ? undefined
+            : { name: file.name, bytes: new TextEncoder().encode(file.text) },
+        ),
+      };
+    }
   }
 }
 
 /** `GET /api/matters/:matterId`, for a name in a message. Route templates hold no matter data. */
 export const probeName = (probe: Pick<Probe, "method" | "template">): string =>
   `${probe.method} ${probe.template}`;
+
+// ---------------------------------------------------------------------------------------------
+// The routes that name no matter
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The routes that name no matter and only read, which are the ones that can show a person data of
+ * a matter (the lists). The posts of `OTHER_PROBES` are left out: they sign a client in or out or
+ * make a matter, which a client shared by all the probes of a caller cannot take.
+ */
+export const LIST_PROBES: readonly OtherProbe[] = OTHER_PROBES.filter(
+  (probe) => probe.method === "GET",
+);
+
+// ---------------------------------------------------------------------------------------------
+// Ids that belong to another matter, or to nothing
+// ---------------------------------------------------------------------------------------------
+
+export type SubResource = "document" | "version" | "run" | "finding" | "memo";
+
+/** The ids a forged request borrows: those of another matter, or well formed ids of no record. */
+export interface BorrowedIds {
+  documentId: string;
+  versionId: string;
+  runId: string;
+  findingId: string;
+  memoId: string;
+  /** What a decision on the borrowed finding carries as the content it was made on. */
+  findingContentSha256: string;
+}
+
+/** Well formed ids (a prefix and 16 hex digits) of records that exist nowhere. */
+export const NO_RECORD: BorrowedIds = {
+  documentId: "doc_0000000000000000",
+  versionId: "ver_0000000000000000",
+  runId: "run_0000000000000000",
+  findingId: "fnd_0000000000000000",
+  memoId: "memo_0000000000000000",
+  findingContentSha256: "0".repeat(64),
+};
+
+/** The id of a matter that does not exist, well formed. */
+export const NO_MATTER = "mat_0000000000000000";
+
+/** Ids of no record in every segment of the path, for the answer a request for nothing gets. */
+export function noRecordIds(matterId = NO_MATTER): ProbeIds {
+  return {
+    matterId,
+    firstDocumentId: NO_RECORD.documentId,
+    versionId: NO_RECORD.versionId,
+    runId: NO_RECORD.runId,
+    findingId: NO_RECORD.findingId,
+    memoId: NO_RECORD.memoId,
+  };
+}
+
+const PLACEHOLDERS: readonly {
+  token: string;
+  position: SubResource;
+  field: "firstDocumentId" | "versionId" | "runId" | "findingId" | "memoId";
+  borrowed: "documentId" | "versionId" | "runId" | "findingId" | "memoId";
+}[] = [
+  { token: ":documentId", position: "document", field: "firstDocumentId", borrowed: "documentId" },
+  { token: ":versionId", position: "version", field: "versionId", borrowed: "versionId" },
+  { token: ":runId", position: "run", field: "runId", borrowed: "runId" },
+  { token: ":findingId", position: "finding", field: "findingId", borrowed: "findingId" },
+  { token: ":memoId", position: "memo", field: "memoId", borrowed: "memoId" },
+];
+
+/** The sub-resource ids a template names, as the kinds of record they are. */
+export function subResourcesOf(template: string): SubResource[] {
+  return PLACEHOLDERS.filter((entry) => template.includes(entry.token)).map(
+    (entry) => entry.position,
+  );
+}
+
+const probeKey = (probe: Pick<Probe, "method" | "template">): string =>
+  `${probe.method} ${probe.template}`;
+
+const AMENDMENT_TEXT =
+  "AMENDMENT NO. 2 TO MUTUAL NONDISCLOSURE AGREEMENT\n\n" +
+  "1. A paragraph of synthetic text that is long enough to be reviewed.\n";
+const TEXT_FILE = { name: "amendment-2.txt", text: AMENDMENT_TEXT } as const;
+
+/**
+ * The bodies a forged request carries so that it gets past the checks on the body and reaches the
+ * lookup of the id it borrows. Without one, the probe's own body stands (a read has none).
+ */
+const FORGED_BODIES: Record<string, (own: ProbeIds, borrowed: BorrowedIds) => ProbeBody> = {
+  [`POST ${M}/documents/:documentId/versions`]: () => ({
+    kind: "multipart",
+    fields: { statedDate: "2026-09-16" },
+    file: TEXT_FILE,
+  }),
+  [`POST ${A}/documents/:documentId/versions`]: () => ({
+    kind: "multipart",
+    fields: { statedDate: "2026-09-16" },
+    file: TEXT_FILE,
+  }),
+  [`POST ${M}/documents/:documentId/operative`]: (own) => form({ versionId: own.versionId }),
+  [`POST ${M}/versions/:versionId/stated-date`]: () => form({ statedDate: "2026-01-01" }),
+  [`POST ${M}/documents/:documentId/remove`]: () => form({ confirm: "yes" }),
+  [`POST ${M}/findings/:findingId/reviews`]: (_own, borrowed) =>
+    form({ decision: "accept", findingContentSha256: borrowed.findingContentSha256 }),
+  [`POST ${A}/findings/:findingId/reviews`]: (_own, borrowed) =>
+    json({ decision: "accept", findingContentSha256: borrowed.findingContentSha256 }),
+};
+
+/**
+ * One request of a member of a matter that names a record of another matter: the matter is the
+ * caller's own, and one id in the path, the body or the query string is borrowed. The application
+ * must answer it as it answers an id that exists nowhere.
+ */
+export interface ForgedProbe {
+  /** For a message: the route and where the borrowed id goes. No id. */
+  name: string;
+  method: Probe["method"];
+  /** The route, for the table of probes. */
+  template: string;
+  /** The action the route checks, which says which role of the caller's own matter is used. */
+  action: MatterAction;
+  position: SubResource;
+  via: "path" | "body" | "query";
+  /** What a member gets for an id the matter does not hold: 404, or 200 for a page that shows no inspector. */
+  reaches: number;
+  request(own: ProbeIds, borrowed: BorrowedIds): { path: string; body: ProbeBody };
+}
+
+const viaName = (via: ForgedProbe["via"], position: SubResource): string =>
+  via === "path" ? `${position} in the path` : `${position} in the ${via}`;
+
+function forgedInPath(probe: Probe): ForgedProbe[] {
+  return PLACEHOLDERS.filter((entry) => probe.template.includes(entry.token)).map((entry) => ({
+    name: `${probeKey(probe)} (${viaName("path", entry.position)})`,
+    method: probe.method,
+    template: probe.template,
+    action: probe.action,
+    position: entry.position,
+    via: "path" as const,
+    reaches: 404,
+    request: (own, borrowed) => ({
+      path: pathFor(probe.template, { ...own, [entry.field]: borrowed[entry.borrowed] }),
+      body: FORGED_BODIES[probeKey(probe)]?.(own, borrowed) ?? probe.body,
+    }),
+  }));
+}
+
+/** The places an id goes outside the path of the route that takes it. */
+const FORGED_ELSEWHERE: readonly ForgedProbe[] = [
+  {
+    name: `POST ${M}/documents/:documentId/operative (version in the body)`,
+    method: "POST",
+    template: `${M}/documents/:documentId/operative`,
+    action: "document.write",
+    position: "version",
+    via: "body",
+    reaches: 404,
+    request: (own, borrowed) => ({
+      path: pathFor(`${M}/documents/:documentId/operative`, own),
+      body: form({ versionId: borrowed.versionId }),
+    }),
+  },
+  {
+    name: `PATCH ${A} (document of the operative version in the body)`,
+    method: "PATCH",
+    template: A,
+    action: "matter.update",
+    position: "document",
+    via: "body",
+    reaches: 404,
+    request: (own, borrowed) => ({
+      path: pathFor(A, own),
+      body: json({ operative: { documentId: borrowed.documentId, versionId: own.versionId } }),
+    }),
+  },
+  {
+    name: `PATCH ${A} (version of the operative version in the body)`,
+    method: "PATCH",
+    template: A,
+    action: "matter.update",
+    position: "version",
+    via: "body",
+    reaches: 404,
+    request: (own, borrowed) => ({
+      path: pathFor(A, own),
+      body: json({ operative: { documentId: own.firstDocumentId, versionId: borrowed.versionId } }),
+    }),
+  },
+  {
+    name: `PATCH ${A} (version of the stated date in the body)`,
+    method: "PATCH",
+    template: A,
+    action: "matter.update",
+    position: "version",
+    via: "body",
+    reaches: 404,
+    request: (own, borrowed) => ({
+      path: pathFor(A, own),
+      body: json({ statedDate: { versionId: borrowed.versionId, statedDate: "2026-01-01" } }),
+    }),
+  },
+  {
+    name: `GET ${M}/runs/:runId (finding in the query)`,
+    method: "GET",
+    template: `${M}/runs/:runId`,
+    action: "run.read",
+    position: "finding",
+    via: "query",
+    reaches: 200,
+    request: (own, borrowed) => ({
+      path: `${pathFor(`${M}/runs/:runId`, own)}?finding=${borrowed.findingId}`,
+      body: NONE,
+    }),
+  },
+];
+
+/**
+ * Every forged request: one for each id a route of `MATTER_PROBES` takes in its path (so a route
+ * added to the table with an id is forged without anyone remembering to), and the places outside
+ * the path.
+ */
+export const FORGED_PROBES: readonly ForgedProbe[] = [
+  ...MATTER_PROBES.flatMap(forgedInPath),
+  ...FORGED_ELSEWHERE,
+];
+
+// ---------------------------------------------------------------------------------------------
+// Bodies that would change the store
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * A matter made to be written to: the NDA with two versions (the earlier is not the operative one)
+ * and an amendment, which is the one document that may be removed, and a person to add. When the
+ * probe needs more, it has also been reviewed (`run`: a finished run whose findings are open) or
+ * reviewed and decided but not exported (`decided`).
+ */
+export interface Scratch {
+  matterId: string;
+  documentId: string;
+  versionId: string;
+  earlierVersionId: string;
+  amendmentId: string;
+  invitee: string;
+  runId?: string;
+  findingId?: string;
+  /** The decision a reviewer would make on `findingId`, as the suite's own reviewer makes it. */
+  decision?: { decision: string; findingContentSha256: string; reason: string | null };
+}
+
+/** How far a scratch matter has been taken. */
+export type ScratchLevel = "documents" | "run" | "decided";
+
+/** Where a request that must change something if it gets through is aimed. */
+export interface Effect {
+  /** `scratch`: a matter made for the probe. `fresh`: a new matter for each request. */
+  target: "scratch" | "fresh";
+  /** What the scratch matter must have been taken through first. */
+  needs: ScratchLevel;
+  ids: (scratch: Scratch, own: ProbeIds) => ProbeIds;
+  body: ProbeBody;
+}
+
+const sameIds = (_scratch: Scratch, own: ProbeIds): ProbeIds => own;
+const onScratch = (scratch: Scratch, own: ProbeIds): ProbeIds => ({
+  ...own,
+  matterId: scratch.matterId,
+  firstDocumentId: scratch.documentId,
+  versionId: scratch.versionId,
+  runId: scratch.runId ?? own.runId,
+  findingId: scratch.findingId ?? own.findingId,
+});
+const NEW_DOCUMENT = {
+  kind: "multipart",
+  fields: { title: "A further amendment", kind: "amendment" },
+  file: TEXT_FILE,
+} as const satisfies ProbeBody;
+
+const decisionFields = (scratch: Scratch): Record<string, string> => ({
+  decision: scratch.decision?.decision ?? "accept",
+  findingContentSha256: scratch.decision?.findingContentSha256 ?? "0".repeat(64),
+  ...(scratch.decision?.reason == null ? {} : { reason: scratch.decision.reason }),
+});
+
+const EFFECTS: Record<string, (scratch: Scratch) => Effect> = {
+  [`POST ${M}/settings`]: () => ({
+    target: "scratch",
+    needs: "documents",
+    ids: onScratch,
+    body: form({ clientLegalName: "A Changed Client, Inc." }),
+  }),
+  [`POST ${M}/members`]: (scratch) => ({
+    target: "scratch",
+    needs: "documents",
+    ids: onScratch,
+    body: form({ userId: scratch.invitee, role: "viewer" }),
+  }),
+  [`POST ${M}/delete`]: () => ({
+    target: "scratch",
+    needs: "documents",
+    ids: onScratch,
+    body: form({ confirm: "yes" }),
+  }),
+  [`POST ${M}/documents`]: () => ({
+    target: "scratch",
+    needs: "documents",
+    ids: onScratch,
+    body: NEW_DOCUMENT,
+  }),
+  [`POST ${M}/documents/:documentId/versions`]: () => ({
+    target: "scratch",
+    needs: "documents",
+    ids: onScratch,
+    body: { kind: "multipart", fields: { statedDate: "2026-09-16" }, file: TEXT_FILE },
+  }),
+  [`POST ${M}/documents/:documentId/operative`]: (scratch) => ({
+    target: "scratch",
+    needs: "documents",
+    ids: onScratch,
+    body: form({ versionId: scratch.earlierVersionId }),
+  }),
+  [`POST ${M}/versions/:versionId/stated-date`]: () => ({
+    target: "scratch",
+    needs: "documents",
+    ids: onScratch,
+    body: form({ statedDate: "2031-07-04" }),
+  }),
+  [`POST ${M}/documents/:documentId/remove`]: (scratch) => ({
+    target: "scratch",
+    needs: "documents",
+    ids: (s, own) => ({ ...onScratch(s, own), firstDocumentId: scratch.amendmentId }),
+    body: form({ confirm: "yes" }),
+  }),
+  [`POST ${M}/runs`]: () => ({
+    target: "scratch",
+    needs: "documents",
+    ids: onScratch,
+    body: form({ workflow: "v2" }),
+  }),
+  [`POST ${M}/findings/:findingId/reviews`]: (scratch) => ({
+    target: "scratch",
+    needs: "run",
+    ids: onScratch,
+    body: form(decisionFields(scratch)),
+  }),
+  [`POST ${M}/memos`]: () => ({
+    target: "scratch",
+    needs: "decided",
+    ids: onScratch,
+    body: form(),
+  }),
+  [`PATCH ${A}`]: () => ({
+    target: "scratch",
+    needs: "documents",
+    ids: onScratch,
+    body: json({ clientLegalName: "A Changed Client, Inc." }),
+  }),
+  [`DELETE ${A}`]: () => ({ target: "fresh", needs: "documents", ids: sameIds, body: NONE }),
+  [`POST ${A}/members`]: (scratch) => ({
+    target: "scratch",
+    needs: "documents",
+    ids: onScratch,
+    body: json({ userId: scratch.invitee, role: "viewer" }),
+  }),
+  [`POST ${A}/documents`]: () => ({
+    target: "scratch",
+    needs: "documents",
+    ids: onScratch,
+    body: NEW_DOCUMENT,
+  }),
+  [`POST ${A}/documents/:documentId/versions`]: () => ({
+    target: "scratch",
+    needs: "documents",
+    ids: onScratch,
+    body: { kind: "multipart", fields: { statedDate: "2026-09-16" }, file: TEXT_FILE },
+  }),
+  [`DELETE ${A}/documents/:documentId`]: (scratch) => ({
+    target: "scratch",
+    needs: "documents",
+    ids: (s, own) => ({ ...onScratch(s, own), firstDocumentId: scratch.amendmentId }),
+    body: NONE,
+  }),
+  [`POST ${A}/runs`]: () => ({
+    target: "scratch",
+    needs: "documents",
+    ids: onScratch,
+    body: json({ workflow: "v2" }),
+  }),
+  [`POST ${A}/findings/:findingId/reviews`]: (scratch) => ({
+    target: "scratch",
+    needs: "run",
+    ids: onScratch,
+    body: json(decisionFields(scratch)),
+  }),
+  [`POST ${A}/memos`]: () => ({
+    target: "scratch",
+    needs: "decided",
+    ids: onScratch,
+    body: NONE,
+  }),
+};
+
+/**
+ * What to send, instead of the probe's own body, to a caller who must be refused, so that the
+ * request changes the store if the guard lets it through. Null for the writes that cannot: the
+ * resume and cancel of a run that has finished are answered 409 whoever sends them.
+ */
+export function effectOf(probe: Probe, scratch: Scratch): Effect | null {
+  return EFFECTS[probeKey(probe)]?.(scratch) ?? null;
+}
+
+/** The routes of the table that have such a body: the keys, for a test that no key is stale. */
+export const EFFECT_KEYS: readonly string[] = Object.keys(EFFECTS);
+export const FORGED_BODY_KEYS: readonly string[] = Object.keys(FORGED_BODIES);
+export const probeKeyOf = probeKey;

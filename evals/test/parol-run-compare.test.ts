@@ -433,9 +433,9 @@ describe("the comparison table", () => {
       pass: "not evaluated",
     });
     // A rate with no denominator in either run is n/a and not a perfect score.
-    expect(rows["Unauthorized-data exposure"]).toMatchObject({
-      baseline: "n/a",
-      candidate: "n/a",
+    expect(rows["Unauthorized-data exposure (found of checked)"]).toMatchObject({
+      baseline: "not run",
+      candidate: "not run",
       pass: "not evaluated",
     });
     expect(c.sections[0]!.changes.map((s) => `${s.caseKey} ${s.ruleKey} ${s.kind}`)).toEqual([
@@ -613,6 +613,98 @@ describe("the decision rule", () => {
     expect(s.decisionNote).toContain(
       "involves a selftest or a simulated run says nothing about any model",
     );
+  });
+
+  describe("reads the exposure suites and the calibration set of the files", () => {
+    const exposure = (over: Partial<NonNullable<ResultsFile["suites"]["exposure"]>> = {}) => ({
+      probesRun: 504,
+      artefactsScanned: 200,
+      probesAnsweredWithData: 0,
+      canaryHits: 0,
+      foreignSpanIdHits: 0,
+      letInNotReached: 0,
+      mismatches: 0,
+      factSightings: 0,
+      suites: ["a sentence"],
+      ...over,
+    });
+    const pair = () => ({
+      a: fabricate({ variants: ["base", "base", "base"] }),
+      b: fabricate({ workflow: "v2", variants: ["fixed", "fixed", "fixed"] }),
+    });
+    const g = (id: string, gates: { results: { id: string; outcome: string }[] }) =>
+      gates.results.find((r) => r.id === id)!.outcome;
+
+    it("shows a failed G1 as failed, with the count, and does not call it not evaluated", () => {
+      const { a, b } = pair();
+      a.suites = { exposure: exposure(), calibration: null };
+      b.suites = { exposure: exposure({ canaryHits: 3 }), calibration: null };
+      const c = ok(compareResults(a, b)).sections[0]!;
+      expect(g("G1", c.candidateGates!)).toBe("fail");
+      expect(g("G1", c.baselineGates!)).toBe("pass");
+      const row = c.rows.find((r) => r.metric.startsWith("Unauthorized-data exposure"))!;
+      expect(row).toMatchObject({ baseline: "0 of 704", candidate: "3 of 704", pass: "FAIL" });
+      expect(c.decision!.outcome).toBe("do_not_promote");
+      expect(c.decision!.reasons.join(" ")).toMatch(/G1/);
+      expect(c.decision!.reasons.join(" ")).not.toMatch(/No gate failed/);
+    });
+
+    it("shows a failed G11 from the calibration record of the candidate", () => {
+      const { a, b } = pair();
+      const failing = {
+        result: {
+          catchRate: { numerator: 10, denominator: 20, value: 0.5, ci: { low: 0.3, high: 0.7 } },
+          falseAlarmRate: { numerator: 0, denominator: 20, value: 0, ci: { low: 0, high: 0.16 } },
+          catchByKind: {},
+          failed: { supported: 0, unsupported: 0 },
+        },
+        setSha256: "a".repeat(64),
+        prompt: { id: "support.p1", sha256: "b".repeat(64) },
+        supportedPairs: 20,
+        unsupportedPairs: 20,
+        failedPairs: 0,
+        callOutcomes: { ok: 40 },
+        modelCalls: 40,
+        note: null,
+      };
+      b.suites = { exposure: null, calibration: failing };
+      const c = ok(compareResults(a, b)).sections[0]!;
+      expect(g("G11", c.candidateGates!)).toBe("fail");
+      expect(g("G11", c.baselineGates!)).toBe("not_evaluated");
+      const row = c.rows.find((r) => r.metric.startsWith("Support checker"))!;
+      expect(row).toMatchObject({
+        baseline: "not run",
+        candidate: "10 of 20 / 0 of 20",
+        pass: "FAIL",
+      });
+    });
+
+    it("can reach promote now that both suites are read", () => {
+      // G1 and G11 are evaluated from the files; the rest is the tiny key, which fails G6, so the
+      // proof is that the two are no longer among the gates that were not evaluated.
+      const { a, b } = pair();
+      b.suites = { exposure: exposure(), calibration: null };
+      const c = ok(compareResults(a, b)).sections[0]!;
+      expect(g("G1", c.candidateGates!)).toBe("pass");
+      expect(c.candidateGates!.notEvaluated).not.toContain("G1");
+    });
+
+    it("does not apply the rule to a replay, which is not a new measurement", () => {
+      const live = fabricate({ variants: ["base", "base", "base"] });
+      const replay = fabricate({
+        mode: "replay",
+        workflow: "v2",
+        variants: ["fixed", "fixed", "fixed"],
+      });
+      const s = ok(compareResults(live, replay, { allow: ["mode", "model", "settings", "prices"] }))
+        .sections[0]!;
+      expect(s.decision).toBeNull();
+      expect(s.decisionNote).toContain("needs two live runs");
+      const both = ok(
+        compareResults(fabricate({ mode: "replay", variants: ["base", "base", "base"] }), replay),
+      ).sections[0]!;
+      expect(both.decision).toBeNull();
+    });
   });
 
   it("is worded as a gate result, never as a recommendation, and asks for the legal engineer's sign-off", () => {

@@ -207,7 +207,13 @@ describe("support checker calibration", () => {
 
 describe("unauthorized-data exposure", () => {
   it("is the sum of probes answered with data, canary strings and foreign span ids", () => {
-    const ran = { probesRun: 64, artefactsScanned: 200 };
+    const ran = {
+      probesRun: 64,
+      artefactsScanned: 200,
+      letInNotReached: 0,
+      mismatches: 0,
+      factSightings: 0,
+    };
     expect(
       exposureCount({ ...ran, probesAnsweredWithData: 0, canaryHits: 0, foreignSpanIdHits: 0 }),
     ).toBe(0);
@@ -225,6 +231,9 @@ describe("unauthorized-data exposure", () => {
         probesAnsweredWithData: 0,
         canaryHits: 0,
         foreignSpanIdHits: 0,
+        letInNotReached: 0,
+        mismatches: 0,
+        factSightings: 0,
       }),
     ).toBe(0);
   });

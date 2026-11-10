@@ -12,7 +12,7 @@
  * and a count that must be zero (G3, G4, G5) out of no slot at risk. It is not a pass. A release
  * needs every gate to pass.
  */
-import { atLeast, atMost, mean, type Rate } from "./stats.js";
+import { atLeast, atMost, mean, rate, type Rate } from "./stats.js";
 import type { RepeatMetrics, RunMetrics, SlotRef } from "./score.js";
 import {
   exposureChecked,
@@ -481,6 +481,10 @@ export function evaluateGates(
     // Out of probes run plus artefacts scanned. A hit fails whatever the record says was run, but
     // zero hits out of nothing is a suite that never ran, not a clean one.
     const checked = exposureChecked(subject.exposure);
+    // A probe whose caller should have been let in and was not stopped before the handler it was
+    // written to test. With nothing exposed, such a probe is not a pass: the gate cannot say the
+    // handler is clean, so it is not evaluated until every probe reaches its handler.
+    const unreached = subject.exposure.letInNotReached;
     const evidence: GateEvidence[] = [
       {
         repeat: null,
@@ -488,10 +492,19 @@ export function evaluateGates(
         numerator: count,
         denominator: checked,
         value: count,
-        passed: count > 0 ? false : checked === 0 ? null : true,
+        passed: count > 0 ? false : checked === 0 || unreached > 0 ? null : true,
       },
     ];
-    results.push(result("G1", verdict(evidence), evidence, describe(evidence)));
+    results.push(
+      result(
+        "G1",
+        verdict(evidence),
+        evidence,
+        count === 0 && unreached > 0
+          ? `${unreached} probe${unreached === 1 ? "" : "s"} that should have been let in did not reach the handler, so the gate cannot say it is clean; ${describe(evidence)}`
+          : describe(evidence),
+      ),
+    );
   }
 
   every(
@@ -580,7 +593,8 @@ export function evaluateGates(
   if (subject.calibration === undefined) {
     results.push(result("G11", "not_evaluated", [], "the calibration set was not run"));
   } else {
-    const { catchRate, falseAlarmRate } = subject.calibration;
+    const { catchRate, falseAlarmRate, failed } = subject.calibration;
+    // The rates count a pair whose call returned no verdict against the checker on both sides.
     const tested = [
       fromRate(null, "unsupported pairs caught", catchRate, (v) =>
         atLeast(v, THRESHOLDS.calibrationCatchMin),
@@ -592,8 +606,58 @@ export function evaluateGates(
     // "18 of 20 / 2 of 20" is a threshold on a set of 20 pairs of each label. A set of another
     // size is not the calibration set, and one pair of each would pass on rates alone.
     const pairs = THRESHOLDS.calibrationPairsPerLabel;
+    const failedTotal = failed.supported + failed.unsupported;
     if (catchRate.denominator === pairs && falseAlarmRate.denominator === pairs) {
-      results.push(result("G11", verdict(tested), tested, describe(tested)));
+      if (failedTotal === 0 || verdict(tested) === "pass") {
+        // A pass with failed calls is a pass in the worst case, which is the one counted here.
+        results.push(
+          result(
+            "G11",
+            verdict(tested),
+            tested,
+            failedTotal === 0
+              ? describe(tested)
+              : `${describe(tested)}; ${failedTotal} call${failedTotal === 1 ? "" : "s"} returned no verdict and counted against the checker`,
+          ),
+        );
+      } else {
+        // The worst case fails. It is the checker that failed only if the best case fails too:
+        // with the calls that returned nothing counted in its favour, the checker is still short.
+        const best = [
+          fromRate(
+            null,
+            "unsupported pairs caught, failed calls counted as caught",
+            rate(catchRate.numerator + failed.unsupported, catchRate.denominator),
+            (v) => atLeast(v, THRESHOLDS.calibrationCatchMin),
+          ),
+          fromRate(
+            null,
+            "supported pairs flagged, failed calls counted as cleared",
+            rate(falseAlarmRate.numerator - failed.supported, falseAlarmRate.denominator),
+            (v) => atMost(v, THRESHOLDS.calibrationFalseAlarmMax),
+          ),
+        ];
+        if (verdict(best) === "fail") {
+          results.push(
+            result(
+              "G11",
+              "fail",
+              tested,
+              `${describe(tested)}; it fails even with the ${failedTotal} call${failedTotal === 1 ? "" : "s"} that returned no verdict counted in the checker's favour`,
+            ),
+          );
+        } else {
+          const untested = tested.map((e): GateEvidence => ({ ...e, passed: null }));
+          results.push(
+            result(
+              "G11",
+              "not_evaluated",
+              untested,
+              `${failedTotal} of ${catchRate.denominator + falseAlarmRate.denominator} calls returned no verdict, and the verdict of the gate depends on how they would have been answered (it fails if they count against the checker and passes if they count for it), so the checker was not measured; ${describe(tested)}`,
+            ),
+          );
+        }
+      }
     } else {
       const untested = tested.map((e): GateEvidence => ({ ...e, passed: null }));
       results.push(

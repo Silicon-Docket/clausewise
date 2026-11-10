@@ -4,7 +4,7 @@ import { compareResults, renderComparison } from "../src/parol/compare.js";
 import { evaluateGates } from "../src/parol/gates.js";
 import { md, rateCell, table } from "../src/parol/format.js";
 import { renderReport } from "../src/parol/report.js";
-import { parseResults, type ResultsFile } from "../src/parol/results.js";
+import { parseResults, runHealth, type ResultsFile } from "../src/parol/results.js";
 import { summarizeRates, summarizeRun } from "../src/parol/score.js";
 import { rate } from "../src/parol/stats.js";
 import { repeatMetrics } from "../src/parol/testing.js";
@@ -171,9 +171,11 @@ describe("the report of a run", () => {
   it("names what is not evaluated and why, and does not call the exposure gate zero", () => {
     const text = selftestReport;
     expect(text).toContain(
-      "G1 needs the authorization probes and the canary scan, which were not run, so it is not evaluated and not assumed to be 0.",
+      "G1 needs the authorization probes and the canary scan, which were not run (give --exposure), so it is not evaluated and not assumed to be 0.",
     );
-    expect(text).toContain("G11 needs the support checker's calibration set, which was not run.");
+    expect(text).toContain(
+      "G11 needs the support checker's calibration set, which has no result in this file",
+    );
     expect(text).toMatch(/\| G1 \| Unauthorized-data exposure \| 0 \| not evaluated \|/);
   });
 
@@ -291,6 +293,9 @@ describe("the supplementary suites in the report", () => {
     probesAnsweredWithData: 0,
     canaryHits: 0,
     foreignSpanIdHits: 0,
+    letInNotReached: 0,
+    mismatches: 0,
+    factSightings: 0,
     suites: ["Authorization probes: 36 routes as 7 callers, in 2 modes."],
   };
   const calibration = {
@@ -298,12 +303,14 @@ describe("the supplementary suites in the report", () => {
       catchRate: rate(19, 20),
       falseAlarmRate: rate(1, 20),
       catchByKind: { wrong_clause: rate(4, 4) },
+      failed: { supported: 0, unsupported: 0 },
     },
     setSha256: "a".repeat(64),
     prompt: { id: "support.p1", sha256: "b".repeat(64) },
     supportedPairs: 20,
     unsupportedPairs: 20,
     failedPairs: 0,
+    callOutcomes: { ok: 40 },
     modelCalls: 40,
     note: null,
   };
@@ -321,7 +328,8 @@ describe("the supplementary suites in the report", () => {
     expect(text).toContain("They do not test any model.");
     expect(text).toMatch(/\| Authorization probes run \| 1,008 \|/);
     expect(text).toMatch(/\| Total found \(G1 requires 0\) \| 0 \|/);
-    expect(text).toContain("The calibration set was not run, so gate G11 is not evaluated.");
+    expect(text).toContain("has no result in this file");
+    expect(text).toContain("Gate G11 is not evaluated.");
   });
 
   it("prints the calibration rates with their counts and intervals", () => {
@@ -333,5 +341,184 @@ describe("the supplementary suites in the report", () => {
       /\| Unsupported pairs caught \| 19 of 20 \(0\.950; 95% interval 0\.76 to 0\.99\) \|/,
     );
     expect(text).toContain("Caught, wrong_clause");
+  });
+});
+
+describe("what the report says about where the answers came from, and what the suites found", () => {
+  const exposureRecord = (over: Record<string, unknown> = {}) => ({
+    probesRun: 504,
+    artefactsScanned: 200,
+    probesAnsweredWithData: 0,
+    canaryHits: 0,
+    foreignSpanIdHits: 0,
+    letInNotReached: 0,
+    mismatches: 0,
+    factSightings: 0,
+    suites: ["a sentence"],
+    ...over,
+  });
+  const calibrationRecord = (over: Record<string, unknown> = {}) => ({
+    result: {
+      catchRate: rate(19, 20),
+      falseAlarmRate: rate(1, 20),
+      catchByKind: {},
+      failed: { supported: 0, unsupported: 0 },
+    },
+    setSha256: "a".repeat(64),
+    prompt: { id: "support.p1", sha256: "b".repeat(64) },
+    supportedPairs: 20,
+    unsupportedPairs: 20,
+    failedPairs: 0,
+    callOutcomes: { ok: 40 },
+    modelCalls: 40,
+    note: null,
+    ...over,
+  });
+  const asReplay = (file: ResultsFile): ResultsFile => {
+    file.mode = "replay";
+    file.selftest = false;
+    file.pins.mode = "replay";
+    file.usage = { available: false, note: null, calls: 9, total: null, costUsd: null };
+    return file;
+  };
+
+  it("does not say a replay called a model or sent the calibration pairs to one", () => {
+    const file = asReplay(clone());
+    file.suites = { exposure: null, calibration: calibrationRecord() };
+    const text = renderReport(file);
+    expect(text).toContain(
+      "answered from the recording of an earlier run (no model was called now)",
+    );
+    expect(text).not.toContain("sent to the model of this run");
+    expect(text).toContain("Answers re-scored from the recording: 9.");
+    expect(text).not.toContain("Model calls made");
+  });
+
+  it("says it when a replay is scored against answer keys that are not the recorded ones", () => {
+    const file = asReplay(clone());
+    file.recording = {
+      role: "replayed",
+      file: "run.responses.jsonl",
+      calls: 9,
+      recordedAt: "2026-11-09T10:00:00.000Z",
+      recordedResults: "run.json",
+      recordedCommit: "a".repeat(40),
+      datasetChanged: true,
+    };
+    const text = renderReport(file);
+    expect(text).toContain("**Recording.** The answers were read from run.responses.jsonl");
+    expect(text).toContain("recorded at 2026-11-09T10:00:00.000Z by the run that wrote run.json");
+    expect(text).toContain(
+      "THE ANSWER KEYS OR CASE FILES DIFFER FROM THOSE THE RECORDING WAS MADE AGAINST",
+    );
+    asReplay(file);
+    file.recording!.datasetChanged = false;
+    expect(renderReport(file)).not.toContain("DIFFER FROM THOSE");
+  });
+
+  it("does not say a run was recorded when the recording could not be written", () => {
+    const file = clone();
+    file.recording = { role: "recorded", file: "run.responses.jsonl", calls: 4, failed: true };
+    const text = renderReport(file);
+    expect(text).toContain("could not be recorded completely (4 calls written");
+    expect(text).toContain("cannot be replayed");
+    expect(text).not.toContain("Replay them with --replay");
+  });
+
+  it("prints the whole sentence of a suite, down to the mismatches and the first exposed probe", () => {
+    const file = clone();
+    const sentence = `${"x".repeat(700)} 12 answers differed from the expected one without exposing anything. First exposed: GET /matters/:matterId as outsider.`;
+    file.suites = { exposure: exposureRecord({ suites: [sentence] }), calibration: null };
+    const text = renderReport(file);
+    expect(text).toContain("12 answers differed from the expected one");
+    expect(text).toContain("First exposed: GET /matters/:matterId as outsider.");
+  });
+
+  it("shows the probes that never reached their handler, and says G1 is not a pass while there are any", () => {
+    const file = clone();
+    file.suites = {
+      exposure: exposureRecord({ letInNotReached: 3, mismatches: 5 }),
+      calibration: null,
+    };
+    const text = renderReport(file);
+    expect(text).toMatch(/Probes whose caller should have been let in and was not .* \| 3 \|/);
+    expect(text).toMatch(
+      /Probes answered otherwise than expected, without exposing data .* \| 5 \|/,
+    );
+  });
+
+  it("says plainly that a record which checked nothing is not a clean result", () => {
+    const file = clone();
+    file.suites = {
+      exposure: exposureRecord({ probesRun: 0, artefactsScanned: 0 }),
+      calibration: null,
+    };
+    expect(renderReport(file)).toContain("This record checked nothing");
+  });
+
+  it("names the outcomes of the calibration calls that returned no verdict", () => {
+    const file = clone();
+    file.suites = {
+      exposure: null,
+      calibration: calibrationRecord({
+        failedPairs: 3,
+        callOutcomes: { ok: 37, refusal: 1, transport: 2 },
+      }),
+    };
+    expect(renderReport(file)).toContain("(3 here: refusal 1, transport 2)");
+  });
+});
+
+describe("a calibration outage makes the run unclean", () => {
+  const withCalibrationOutcomes = (callOutcomes: Record<string, number>): ResultsFile => {
+    const file = clone();
+    file.suites = {
+      exposure: null,
+      calibration: {
+        result: {
+          catchRate: rate(0, 20),
+          falseAlarmRate: rate(20, 20),
+          catchByKind: {},
+          failed: { supported: 20, unsupported: 20 },
+        },
+        setSha256: "a".repeat(64),
+        prompt: { id: "support.p1", sha256: "b".repeat(64) },
+        supportedPairs: 20,
+        unsupportedPairs: 20,
+        failedPairs: 40,
+        callOutcomes,
+        modelCalls: 40,
+        note: "x",
+      },
+    };
+    return file;
+  };
+
+  it("when its calls were lost on the wire", () => {
+    const health = runHealth(withCalibrationOutcomes({ transport: 40 }));
+    expect(health.clean).toBe(false);
+    expect(health.transportCalls).toBe(40);
+    expect(health.problems.join(" ")).toMatch(/40 calibration calls failed on the wire/);
+    expect(renderReport(withCalibrationOutcomes({ transport: 40 }))).not.toContain(
+      "No call failed on the wire",
+    );
+  });
+
+  it("but not when the model refused or answered badly, which are the checker's own results", () => {
+    const health = runHealth(withCalibrationOutcomes({ refusal: 20, schema_error: 20 }));
+    expect(health.clean).toBe(true);
+  });
+});
+
+describe("a cell cannot be broken by a backslash before a pipe", () => {
+  it("never leaves a pipe that a table reader would take for a cell border", () => {
+    for (const hostile of ["a\\|b", "a\\\\|b", "ends with a backslash\\", "| \\| \\\\| x"]) {
+      const cell = md(hostile);
+      // Every pipe is preceded by an odd number of backslashes: it is escaped.
+      for (const match of cell.matchAll(/(\\*)\|/g)) {
+        expect(match[1]!.length % 2, hostile).toBe(1);
+      }
+      expect(table(["h"], [[cell]]).split("\n")).toHaveLength(3);
+    }
   });
 });

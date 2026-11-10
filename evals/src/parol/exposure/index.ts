@@ -58,8 +58,14 @@ export interface ExposureFaults {
 
 /** The record of the three sub-suites. Throws if nothing at all was checked. */
 export function composeExposureRecord(parts: {
-  authorization: Pick<AuthorizationResult, "probesRun" | "probesAnsweredWithData" | "sentence">;
-  canary: Pick<CanaryResult, "artefactsScanned" | "canaryHits" | "foreignSpanIdHits" | "sentence">;
+  authorization: Pick<
+    AuthorizationResult,
+    "probesRun" | "probesAnsweredWithData" | "letInNotReached" | "mismatches" | "sentence"
+  >;
+  canary: Pick<
+    CanaryResult,
+    "artefactsScanned" | "canaryHits" | "foreignSpanIdHits" | "factSightings" | "sentence"
+  >;
   uploads: Pick<UploadReplayResult, "sentence">;
 }): ExposureRecord {
   const { authorization, canary, uploads } = parts;
@@ -71,6 +77,9 @@ export function composeExposureRecord(parts: {
     probesAnsweredWithData: authorization.probesAnsweredWithData,
     canaryHits: canary.canaryHits,
     foreignSpanIdHits: canary.foreignSpanIdHits,
+    letInNotReached: authorization.letInNotReached,
+    mismatches: authorization.mismatches,
+    factSightings: canary.factSightings,
     suites: [authorization.sentence, canary.sentence, uploads.sentence],
   };
 }
