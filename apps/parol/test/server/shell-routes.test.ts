@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import {
   defineMatterRoute,
+  defineMiddleware,
   defineRoute,
   describeRoutes,
   findMatterUrlsWithoutGuard,
@@ -27,6 +28,15 @@ import { ALL_ACTIONS, makeShell } from "./support-app.js";
 const METHODS: RouteMethod[] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 const ok = (c: { text: (s: string) => Response }): Response => c.text("ok");
 
+/** The shell's own middleware (app.ts): the context, the host guard, the user-info refusal, the body limit. */
+const SHELL_MIDDLEWARE_COUNT = 4;
+
+/** Every route that was registered another way than through the declaring functions, as `METHOD /path`. */
+const undeclaredRoutes = (app: Hono): string[] =>
+  describeRoutes(app)
+    .filter((route) => route.kind === "unmanaged")
+    .map((route) => `${route.method} ${route.path}`);
+
 describe("the live application", () => {
   it("has no matter route that bypasses defineMatterRoute", () => {
     const { app } = makeShell();
@@ -38,12 +48,15 @@ describe("the live application", () => {
     expect(findMatterUrlsWithoutGuard(app)).toEqual([]);
   });
 
-  it("declares every route it owns: only middleware is registered any other way", () => {
+  it("declares every route it owns: its middleware is recognised, and nothing is registered any other way", () => {
     const { app } = makeShell();
-    const undeclared = describeRoutes(app).filter(
-      (route) => route.kind === "unmanaged" && route.method !== "ALL",
+    // Not even a route for every method, whatever its path: a middleware is told from a handler by
+    // the function that was registered and not by its path (see "a handler that answers").
+    expect(undeclaredRoutes(app)).toEqual([]);
+    const middleware = describeRoutes(app).filter((route) => route.kind === "middleware");
+    expect(middleware.map((route) => `${route.method} ${route.path}`)).toEqual(
+      Array(SHELL_MIDDLEWARE_COUNT).fill("ALL /*"),
     );
-    expect(undeclared).toEqual([]);
     const owned = describeRoutes(app)
       .filter((route) => route.kind !== "unmanaged")
       .map((route) => `${route.method} ${route.path} ${route.kind}`);
@@ -136,6 +149,71 @@ describe("no route is registered on the side", () => {
         ),
       ).toEqual([]);
     });
+  });
+});
+
+describe("a handler that answers is not taken for the shell's middleware", () => {
+  // A wildcard in the route list is middleware or a responder, and the path cannot say which: a
+  // handler on `app.all('/files/*')`, `app.use('/files/*')`, a mounted application and a sub-
+  // application's `all('/*')` register the same way the shell's own middleware does. The shell's
+  // own is recognised by the function it registered.
+  const responder = (c: { text: (s: string) => Response }): Response => c.text("ANSWERED");
+
+  const ways: Record<string, (app: Hono) => void> = {
+    "app.all on a prefix": (app) => app.all("/files/*", responder),
+    "app.use on a prefix": (app) => app.use("/files/*", async (c) => responder(c)),
+    "app.mount": (app) => app.mount("/files", () => new Response("ANSWERED")),
+    "a mounted application's all('/*')": (app) => {
+      const sub = new Hono();
+      sub.all("/*", responder);
+      app.route("/v2", sub);
+    },
+    "app.all('/*')": (app) => app.all("/*", responder),
+    "app.use('*')": (app) => app.use("*", async (c) => responder(c)),
+    "a handler that hands on, which the route list cannot tell from one that answers": (app) =>
+      app.use("/files/*", async (_c, next) => next()),
+  };
+
+  for (const [label, add] of Object.entries(ways))
+    it(`is reported as undeclared: ${label}`, async () => {
+      const { app } = makeShell();
+      add(app);
+      const found = undeclaredRoutes(app);
+      expect(found.length, label).toBeGreaterThan(0);
+      expect(found.every((line) => line.startsWith("ALL "))).toBe(true);
+      // The shell's own four are still recognised beside it.
+      expect(describeRoutes(app).filter((route) => route.kind === "middleware")).toHaveLength(
+        SHELL_MIDDLEWARE_COUNT,
+      );
+    });
+
+  it("is reported when a middleware of the shell is replaced by a responder and the count is the same", () => {
+    // Four routes for every method on `/*`, as in the shell: three of its kind and one that answers.
+    const app = new Hono();
+    defineMiddleware(app, async (_c, next) => next());
+    defineMiddleware(app, async (_c, next) => next());
+    defineMiddleware(app, async (_c, next) => next());
+    app.use("*", async (c) => responder(c));
+    const all = describeRoutes(app).filter(
+      (route) => route.method === "ALL" && route.path === "/*",
+    );
+    expect(all).toHaveLength(SHELL_MIDDLEWARE_COUNT);
+    expect(all.map((route) => route.kind)).toEqual([
+      "middleware",
+      "middleware",
+      "middleware",
+      "unmanaged",
+    ]);
+    expect(undeclaredRoutes(app)).toEqual(["ALL /*"]);
+  });
+
+  it("really answers, which is what the check is for", async () => {
+    const { app } = makeShell();
+    app.all("/files/*", responder);
+    const response = await app.request("/files/anything");
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("ANSWERED");
+    expect(undeclaredRoutes(app)).toEqual(["ALL /files/*"]);
   });
 });
 

@@ -206,7 +206,7 @@ describe("support checker calibration", () => {
 });
 
 describe("unauthorized-data exposure", () => {
-  it("is the sum of probes answered with data, canary strings and foreign span ids", () => {
+  it("is the sum of probes answered with data, canary strings and ids of another matter", () => {
     const ran = {
       probesRun: 64,
       artefactsScanned: 200,

@@ -2,12 +2,14 @@
  * Runs the support checker's calibration set (fixtures/parol/calibration.json, forty pairs, twenty
  * of each label) through the model of the run, for gate G11.
  *
- * A pair is a claim a finding makes and the one passage it cites. The checker is shown exactly what
- * it is shown in a review: the rule, the claimed status, the discrepancy and the cited paragraph,
- * and nothing else (apps/parol/src/services/support-checker.ts). The author's label says whether
- * the passage backs the claim. The checker catches an unsupported pair when it answers
- * `not_supported` or `insufficient`, and raises a false alarm on a supported pair when it answers
- * anything but `supported`.
+ * A pair is a claim a finding makes and the one passage it cites. The checker is the one a review
+ * uses (createSupportChecker, apps/parol/src/services/support-checker.ts) and is given the rule, the
+ * claimed status, the discrepancy and the cited paragraph a pair holds. A test compares the
+ * requests made here with the ones that function builds for the same rule, draft and passage; what
+ * verify.ts itself hands that function is pinned by its own tests and not by this file. The
+ * author's label says whether the passage backs the claim. The checker catches an unsupported pair
+ * when it answers `not_supported` or `insufficient`, and raises a false alarm on a supported pair
+ * when it answers anything but `supported`.
  *
  * This measures the checker, and nothing else about the workflow. It is run once per evaluation
  * run, not once per repeat: the pairs are fixed, so repeating them measures the model's noise on

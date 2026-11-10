@@ -48,12 +48,31 @@ export interface SiteHooks {
    * is matched first. This is where a test plants an authorization hole or a revealing refusal.
    */
   beforeRoutes?: (app: App, deps: AppDeps) => void;
+  /**
+   * Runs after the real routes are registered, so a route added here is matched last and answers
+   * only what no real route did. This is where a test plants a catch-all that the real routes do
+   * not shadow.
+   */
+  afterRoutes?: (app: App, deps: AppDeps) => void;
   /** Wraps the memo builder the services use. */
   wrapMemoBuilder?: (real: BuildMemo) => BuildMemo;
 }
 
+/**
+ * The workflow version the exposure suite reviews under when the run does not name one: the newest
+ * the application ships.
+ */
+export const DEFAULT_EXPOSURE_WORKFLOW: string = WORKFLOW_LABELS[WORKFLOW_LABELS.length - 1]!;
+
 export interface SiteOptions {
   playbook: LoadedPlaybook;
+  /**
+   * The workflow version the reviews of the suite run under. It is registered in the site's store
+   * beside the versions the application ships, so an evaluation candidate that the application does
+   * not ship (v3) can be exercised; the application itself registers only the shipped ones.
+   * Default: DEFAULT_EXPOSURE_WORKFLOW.
+   */
+  workflow?: string;
   /** The model the services call. The caller decides what it is. */
   generator: ObjectGenerator;
   /** Single-person demonstration: the services and the shell both relax segregation. */
@@ -62,6 +81,8 @@ export interface SiteOptions {
 }
 
 export interface ExposureSite {
+  /** The workflow version the suite's reviews run under. */
+  workflowLabel: string;
   repo: Repository;
   services: Services;
   app: App;
@@ -136,11 +157,12 @@ export class SiteClient {
  * the application does at start-up (`registerAll`), but with the playbook the evaluation loaded
  * and not the one on disk.
  */
-function register(repo: Repository, playbook: LoadedPlaybook): string {
+function register(repo: Repository, playbook: LoadedPlaybook, workflowLabel: string): string {
   repo.seedDemoUsers();
   for (const id of PROMPT_IDS) repo.upsertPromptVersion(promptRecord(id), { actorId: null });
-  for (const label of WORKFLOW_LABELS)
-    repo.upsertWorkflowVersion(workflowFor(label), { actorId: null });
+  // The shipped versions, and the one under test when the evaluation asks for another.
+  const labels = new Set<string>([...WORKFLOW_LABELS, workflowLabel]);
+  for (const label of labels) repo.upsertWorkflowVersion(workflowFor(label), { actorId: null });
   let version = repo.findPlaybookVersion(playbook.slug, playbook.version);
   if (version === undefined || version.sha256 !== playbook.sha256)
     version = repo.importPlaybookDraft(
@@ -168,7 +190,8 @@ export function createExposureSite(options: SiteOptions): ExposureSite {
     const repo = createRepository(openDatabase(":memory:"), {
       now: () => new Date((tick += 1000)),
     });
-    const playbookVersionId = register(repo, options.playbook);
+    const workflowLabel = options.workflow ?? DEFAULT_EXPOSURE_WORKFLOW;
+    const playbookVersionId = register(repo, options.playbook, workflowLabel);
     const files = new FileStore(join(root, "files"));
     const now = (): Date => new Date("2026-11-04T09:00:00.000Z");
 
@@ -202,6 +225,7 @@ export function createExposureSite(options: SiteOptions): ExposureSite {
     });
     options.hooks?.beforeRoutes?.(app, deps);
     registerRoutes(app, deps);
+    options.hooks?.afterRoutes?.(app, deps);
 
     const principal = (userId: string): Principal => {
       const user = repo.getUser(userId);
@@ -210,6 +234,7 @@ export function createExposureSite(options: SiteOptions): ExposureSite {
     };
 
     const site: ExposureSite = {
+      workflowLabel,
       repo,
       services,
       app,

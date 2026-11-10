@@ -28,6 +28,7 @@ import {
   SELFTEST_BANNER,
   REPLAY_BANNER,
   SIMULATED_BANNER,
+  exposureMismatch,
   gateSubjectOf,
   isScripted,
   runHealth,
@@ -462,7 +463,11 @@ const outcomeText = (gates: GateReport | null, id: GateId): string => {
 function exposureCell(file: ResultsFile): string {
   const exposure = file.suites.exposure;
   if (exposure === null) return "not run";
-  return `${exposureCount(exposure)} of ${exposureChecked(exposure)}`;
+  const found = `${exposureCount(exposure)} of ${exposureChecked(exposure)}`;
+  // Counts from reviews under another workflow are shown for what they are and are not read for G1.
+  return exposureMismatch(exposure, file.pins.workflow) === null
+    ? found
+    : `${found} (reviews under workflow ${exposure.workflow.label}, not this run's, so not read for G1)`;
 }
 
 /** What a file's calibration set found, as the two rates, or why there is nothing to show. */
@@ -492,6 +497,7 @@ function compareSections(
       isScripted(file.mode) ? null : section.latency,
       isScripted(file.mode) ? null : section.cost,
       file.suites,
+      file.pins.workflow,
     );
   const baselineSubject = subject(baseline, a, runA);
   const candidateSubject = subject(candidate, b, runB);

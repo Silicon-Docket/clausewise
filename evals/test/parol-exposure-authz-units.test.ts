@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { createRepository, openDatabase } from "../../apps/parol/src/store/index.js";
 import {
+  AUTHORIZATION_SENTENCE_BUDGET,
+  SENTENCE_CUT,
+  UNROUTED_ACTORS,
   classifyForged,
   classifyListing,
+  classifyUnrouted,
   expectedList,
   fingerprint,
+  sentenceLadder,
   sentenceOf,
   storeWatch,
   type AuthorizationResult,
@@ -19,15 +24,19 @@ import {
   LIST_PROBES,
   MATTER_PROBES,
   NO_RECORD,
+  UNROUTED_METHODS,
   effectOf,
   initFor,
   noRecordIds,
   pathFor,
   probeKeyOf,
   subResourcesOf,
+  unroutedRequests,
   type ProbeIds,
   type Scratch,
 } from "../src/parol/exposure/probes.js";
+import { SUITE_SENTENCE_MAX } from "../src/parol/results.js";
+import { longestExposed, worstResult } from "./parol-authz-support.js";
 import { DASHES, ID_SHAPE } from "./parol-exposure-support.js";
 
 /**
@@ -174,6 +183,110 @@ describe("a read of a route that names no matter", () => {
   });
 });
 
+describe("a request to a URL that no route owns", () => {
+  const reference: Snapshot = notFound;
+  const classify = (seen: Observed) => classifyUnrouted({ observed: seen, reference, forbidden });
+
+  it("is expected when the answer is the 404 that a URL nothing owns gets", () => {
+    expect(classify(observed({ letIn: false }))).toEqual({ verdict: "expected" });
+  });
+
+  it("is an exposure when anything but that 404 answers it, a refusal or a redirect included, because a handler answered", () => {
+    for (const status of [200, 201, 204, 303, 400, 401, 403, 405, 500])
+      expect(classify(observed({ status, letIn: false })), String(status)).toMatchObject({
+        verdict: "exposure",
+        reasons: expect.arrayContaining(["handler_answered"]),
+      });
+  });
+
+  it("is an exposure when the guard let a caller in, whatever the status", () => {
+    expect(classify(observed({ letIn: true }))).toMatchObject({
+      verdict: "exposure",
+      reasons: ["handler_answered"],
+    });
+  });
+
+  it("is an exposure when a 404 holds data of a matter, or a row changed, or the 404 is not the reference", () => {
+    expect(classify(observed({ letIn: false, body: "Second Matter Title" }))).toMatchObject({
+      reasons: expect.arrayContaining(["carried_data"]),
+    });
+    expect(classify(observed({ letIn: false, stateChanged: true }))).toMatchObject({
+      reasons: ["changed_state"],
+    });
+    expect(classify(observed({ letIn: false, body: '{"error":{"kind":"gone"}}' }))).toMatchObject({
+      verdict: "exposure",
+      reasons: ["refusal_differs"],
+    });
+    expect(
+      classify(observed({ letIn: false, headers: [...notFound.headers, ["x-extra", "1"]] })),
+    ).toMatchObject({ verdict: "exposure", reasons: ["refusal_differs"] });
+  });
+
+  it("is sent by a visitor, an outsider and a member, in every method, to shapes that no route owns", () => {
+    expect([...UNROUTED_ACTORS]).toEqual(["anonymous", "outsider", "associate"]);
+    expect([...UNROUTED_METHODS]).toEqual(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+    const ids = noRecordIds("mat_3333333333333333");
+    const requests = unroutedRequests(ids);
+    const names = requests.map((request) => request.name);
+    expect(new Set(names).size).toBe(names.length);
+    // Segments no route has, after the matter, deep and shallow, for pages and the API, in every method.
+    for (const prefix of ["/matters/:matterId", "/api/matters/:matterId"])
+      for (const tail of ["unrouted", "unrouted/unrouted", "unrouted/unrouted/unrouted"])
+        for (const method of UNROUTED_METHODS)
+          expect(names, `${method} ${prefix}/${tail}`).toContain(
+            `${method} ${prefix}/${tail} (no route)`,
+          );
+    // Every probed route under every method the table does not probe on it, and under none it probes.
+    const probed = new Set(MATTER_PROBES.map(probeKeyOf));
+    const templates = new Set(MATTER_PROBES.map((probe) => probe.template));
+    for (const template of templates)
+      for (const method of UNROUTED_METHODS) {
+        const listed = names.includes(`${method} ${template} (unprobed method)`);
+        expect(listed, `${method} ${template}`).toBe(!probed.has(`${method} ${template}`));
+      }
+    expect(requests.length).toBe(
+      2 * 3 * UNROUTED_METHODS.length +
+        templates.size * UNROUTED_METHODS.length -
+        MATTER_PROBES.length,
+    );
+    // No placeholder is left in a path, the matter is the one given, and no name holds an id.
+    for (const request of requests) {
+      expect(request.path, request.name).not.toMatch(/:[A-Za-z]/);
+      expect(request.path, request.name).toContain("mat_3333333333333333");
+      expect(request.name).not.toMatch(ID_SHAPE);
+      expect(request.name).not.toMatch(DASHES);
+    }
+  });
+
+  it("carries a body that a write would carry: nothing on a read, JSON for the API and a form for a page", () => {
+    const requests = unroutedRequests(noRecordIds());
+    for (const request of requests) {
+      if (request.method === "GET") expect(request.body.kind).toBe("none");
+      else
+        expect(request.body.kind, request.name).toBe(
+          request.template.startsWith("/api/") ? "json" : "form",
+        );
+    }
+  });
+
+  it("reaches the URL that each wildcard route answers, with the wildcard filled in, and only once", () => {
+    const requests = unroutedRequests(noRecordIds("mat_3333333333333333"), [
+      "/api/matters/:matterId/export/*",
+      "/api/matters/:matterId/*",
+      "/other/:matterId/*",
+    ]);
+    const paths = requests
+      .filter((request) => request.method === "PUT")
+      .map((request) => request.path);
+    expect(paths).toContain("/api/matters/mat_3333333333333333/export/unrouted/unrouted");
+    expect(paths).toContain("/other/mat_3333333333333333/unrouted/unrouted");
+    // The wildcard that fills in to a URL already in the list adds nothing.
+    expect(
+      paths.filter((path) => path === "/api/matters/mat_3333333333333333/unrouted/unrouted"),
+    ).toHaveLength(1);
+  });
+});
+
 describe("the hash of the store", () => {
   function repo() {
     const made = createRepository(openDatabase(":memory:"));
@@ -218,39 +331,54 @@ describe("the hash of the store", () => {
   });
 });
 
+const resume = [
+  "POST /matters/:matterId/runs/:runId/resume",
+  "POST /matters/:matterId/runs/:runId/cancel",
+  "POST /api/matters/:matterId/runs/:runId/resume",
+  "POST /api/matters/:matterId/runs/:runId/cancel",
+];
+
+/** The counts of the run on the real application, for the sentence of a clean run. */
+const cleanResult = (
+  over: Partial<AuthorizationResult> = {},
+): Omit<AuthorizationResult, "sentence"> => ({
+  probesRun: 1580,
+  probesAnsweredWithData: 0,
+  byReason: { handler_answered: 0, carried_data: 0, refusal_differs: 0, changed_state: 0 },
+  mismatches: 0,
+  letInNotReached: 0,
+  shouldBeLetIn: 128,
+  mustBeRefused: 376,
+  comparedWithMissing: 284,
+  matrixCells: 504,
+  forgedCells: 54,
+  listCells: 98,
+  unroutedCells: 924,
+  routes: 36,
+  forgedRequests: 27,
+  forgedPlaces: 25,
+  listRoutes: 7,
+  unroutedRequests: 154,
+  callers: 7,
+  modes: 2,
+  writeRoutes: 24,
+  writesWithEffect: 20,
+  writesWithoutBody: resume,
+  writesUnproven: 0,
+  tableDrift: 0,
+  exposed: [],
+  mismatched: [],
+  ...over,
+});
+
 describe("the sentence", () => {
-  const result = (
-    over: Partial<AuthorizationResult> = {},
-  ): Omit<AuthorizationResult, "sentence"> => ({
-    probesRun: 652,
-    probesAnsweredWithData: 0,
-    byReason: { handler_answered: 0, carried_data: 0, refusal_differs: 0, changed_state: 0 },
-    mismatches: 0,
-    letInNotReached: 0,
-    shouldBeLetIn: 128,
-    mustBeRefused: 376,
-    comparedWithMissing: 284,
-    matrixCells: 504,
-    forgedCells: 50,
-    listCells: 98,
-    routes: 36,
-    forgedRequests: 25,
-    listRoutes: 7,
-    callers: 7,
-    modes: 2,
-    writeRoutes: 24,
-    writesWithEffect: 20,
-    tableDrift: 0,
-    exposed: [],
-    mismatched: [],
-    ...over,
-  });
+  const result = cleanResult;
 
   it("counts cells, not requests, and states the counts it is given", () => {
     const sentence = sentenceOf(result({ probesRun: 1234, matrixCells: 999 }));
     expect(sentence).toMatch(/^Authorization probes: sent 1234 cells /);
     expect(sentence).toContain("999 for 36 routes");
-    expect(sentence).not.toMatch(/\d+ requests/);
+    expect(sentence).not.toMatch(/^Authorization probes: sent \d+ requests/);
     expect(sentence).not.toMatch(DASHES);
     expect(sentence).not.toMatch(ID_SHAPE);
     expect(sentence).not.toContain("\n");
@@ -274,20 +402,91 @@ describe("the sentence", () => {
     expect(missed).not.toContain("every cell whose caller should have been let in reached");
   });
 
+  it("counts the requests of the forged ids against the places they go, and the cells that are the same request again", () => {
+    const sentence = sentenceOf(result());
+    expect(sentence).toContain(
+      "54 in which a member of the matter named a record of another matter",
+    );
+    expect(sentence).toContain("27 requests in 25 places (a path, a body or a query string)");
+    expect(sentence).toContain("2 of them with every id from one record of that matter");
+    expect(sentence).not.toMatch(/in each of \d+ places/);
+    // Without a route that names several ids there is no such form to speak of.
+    const none = sentenceOf(result({ forgedRequests: 25 }));
+    expect(none).toContain("25 requests in 25 places");
+    expect(none).not.toContain("with every id from one record");
+  });
+
+  it("counts the cells for URLs that no route owns, says what was sent, and what must come back", () => {
+    const sentence = sentenceOf(result());
+    expect(sentence).toContain(
+      "924 in which a visitor, an outsider and a member sent 154 requests to URLs no route owns",
+    );
+    expect(sentence).toContain("which must get the 404 any such URL gets");
+    const without = sentenceOf(result({ unroutedCells: 0, probesRun: 656 }));
+    expect(without).not.toContain("URLs no route owns");
+  });
+
   it("says what was compared for changes, and does not claim a body for the write routes that were not proven", () => {
     expect(sentenceOf(result())).toContain("a hash of every row of every table");
     expect(sentenceOf(result())).toContain("on 20 of 24 write routes");
-    const none = sentenceOf(result({ writesWithEffect: 0 }));
-    expect(none).not.toContain("write routes (the others");
+    const none = sentenceOf(result({ writesWithEffect: 0, writesWithoutBody: [] }));
+    expect(none).not.toContain("write routes (");
     expect(none).toContain("none of the 24 write routes was sent one");
+  });
+
+  it("derives what it says of the other write routes from the routes, and does not call them unable to change anything", () => {
+    // Four routes have no body that changes the store: the sentence names what they end in.
+    const some = sentenceOf(result());
+    expect(some).toContain("on 20 of 24 write routes (4, ending in resume and cancel, have none)");
+    expect(some).not.toContain("cannot change");
+    expect(some).not.toContain("answered the same whoever sends them");
+    expect(some).not.toContain("finished run");
+    // Routes that have one and were not proven in every mode are said apart.
+    const unproven = sentenceLadder(result({ writesWithEffect: 18, writesUnproven: 2 }))[1]!;
+    expect(unproven).toContain(
+      "on 18 of 24 write routes (4, ending in resume and cancel, have none, and 2 had one that was stopped before the guard)",
+    );
+    // None without a body, none unproven: nothing in brackets.
+    const all = sentenceOf(result({ writeRoutes: 20, writesWithoutBody: [] }));
+    expect(all).toContain("on 20 of 20 write routes.");
+    // Another set of routes is named by its own ends.
+    const other = sentenceOf(
+      result({ writesWithoutBody: ["DELETE /matters/:matterId/x/:id/archive"] }),
+    );
+    expect(other).toContain("(1, ending in archive, have none)");
+  });
+
+  it("always says what the probes cannot see, in every wording and whatever groups ran", () => {
+    const fixed =
+      "Not seen: evidence ids inside a decision body, the sign-in, sign-out and create-a-matter POSTs, " +
+      "and any difference between the two matters but their title and ids (matter B is built from the same case).";
+    const bare = result({
+      matrixCells: 0,
+      forgedCells: 0,
+      listCells: 0,
+      unroutedCells: 0,
+      probesRun: 0,
+    });
+    for (const one of [result(), bare, result({ exposed: longestExposed(8), tableDrift: 9 })]) {
+      expect(sentenceOf(one)).toContain(fixed);
+      for (const rung of sentenceLadder(one)) expect(rung).toContain(fixed);
+    }
   });
 
   it("names a group only when it ran", () => {
     const only = sentenceOf(
-      result({ matrixCells: 0, listCells: 0, probesRun: 50, shouldBeLetIn: 0, mustBeRefused: 0 }),
+      result({
+        matrixCells: 0,
+        listCells: 0,
+        unroutedCells: 0,
+        probesRun: 54,
+        shouldBeLetIn: 0,
+        mustBeRefused: 0,
+      }),
     );
-    expect(only).toContain("50 in which a member of the matter named a record of another matter");
+    expect(only).toContain("54 in which a member of the matter named a record of another matter");
     expect(only).not.toContain("routes that name no matter and only read");
+    expect(only).not.toContain("URLs no route owns");
     expect(only).not.toContain("hash of every row");
   });
 
@@ -301,6 +500,81 @@ describe("the sentence", () => {
       }),
     );
     expect(sentence).toContain("First exposed: GET /api/matters as admin (relaxed).");
+  });
+});
+
+describe("the sentence of a run that found something", () => {
+  const worst = worstResult;
+
+  it("is the longest name of each table, so that the test is about the real worst case", () => {
+    const names = longestExposed(8).map((finding) => finding.probe);
+    expect(names).toHaveLength(8);
+    expect(Math.min(...names.map((name) => name.length))).toBeGreaterThan(75);
+    // A name of a forged request that is the other form of a route is among the longest.
+    expect(names.some((name) => name.includes("of one record of the other matter"))).toBe(true);
+  });
+
+  it("fits the budget, which is under the limit of the results file, and keeps the counts, the unreached clause, the drift and the first exposed cell", () => {
+    const sentence = sentenceOf(worst());
+    expect(AUTHORIZATION_SENTENCE_BUDGET).toBeLessThan(SUITE_SENTENCE_MAX);
+    expect(sentence.length).toBeLessThanOrEqual(AUTHORIZATION_SENTENCE_BUDGET);
+    expect(sentence).not.toContain(SENTENCE_CUT);
+    expect(sentence).toContain("sent 9999 cells");
+    expect(sentence).toContain("9999 were answered with data");
+    expect(sentence).toContain(
+      "999 of them cells whose caller should have been let in and was not",
+    );
+    expect(sentence).toContain("The action table differs from the documented one in 99 places.");
+    expect(sentence).toContain("First exposed: ");
+    expect(sentence).toContain(" as anonymous (relaxed)");
+    expect(sentence).toContain("Not seen: ");
+    expect(sentence).not.toMatch(DASHES);
+    expect(sentence).not.toMatch(ID_SHAPE);
+    expect(sentence).toMatch(/\.$/);
+  });
+
+  it("gives way in the order the explanations matter: the callers, then the paragraph about changes, then the names", () => {
+    const rungs = sentenceLadder(worst());
+    expect(rungs.length).toBeGreaterThanOrEqual(5);
+    for (let at = 1; at < rungs.length; at += 1)
+      expect(rungs[at]!.length, `rung ${at}`).toBeLessThanOrEqual(rungs[at - 1]!.length);
+    const [full, noCallers, shortEffects, shortCells, twoNames, oneName] = rungs as [
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+    ];
+    expect(full).toContain("a member of another matter only");
+    expect(noCallers).not.toContain("a member of another matter only");
+    expect(noCallers).toContain("Changes were found by comparing a hash");
+    expect(shortEffects).not.toContain("Changes were found by comparing a hash");
+    expect(shortEffects).toContain("Changes: a hash of every row");
+    expect(shortEffects).toContain("which must be answered as an id of no record is");
+    expect(shortCells).not.toContain("which must be answered as an id of no record is");
+    const named = (text: string) => (text.split("First exposed: ")[1] ?? "").split("; ").length;
+    expect([named(shortCells), named(twoNames), named(oneName)]).toEqual([3, 2, 1]);
+    // The first rung that fits is the one used, and it is not the fullest when the fullest does not fit.
+    expect(sentenceOf(worst())).toBe(rungs.find((text) => text.length <= 1900));
+    expect(full.length).toBeGreaterThan(AUTHORIZATION_SENTENCE_BUDGET);
+  });
+
+  it("is the fullest wording that fits: a run that found nothing keeps everything but the caller kinds if it must", () => {
+    const clean = sentenceLadder(cleanResult());
+    const used = sentenceOf(cleanResult());
+    expect(used).toBe(clean.find((text) => text.length <= AUTHORIZATION_SENTENCE_BUDGET));
+    expect(used).toContain("Changes were found by comparing a hash");
+    expect(used).toContain("which must get the 404 any such URL gets");
+  });
+
+  it("never throws: a sentence that fits no wording is cut and says so", () => {
+    const huge = { ...worst(), exposed: [{ ...worst().exposed[0]!, probe: "P".repeat(5000) }] };
+    const sentence = sentenceOf(huge);
+    expect(sentence.length).toBeLessThanOrEqual(AUTHORIZATION_SENTENCE_BUDGET);
+    expect(sentence.endsWith(SENTENCE_CUT)).toBe(true);
+    expect(sentence).toMatch(/\.$/);
+    expect(sentence).not.toMatch(DASHES);
   });
 });
 
@@ -357,6 +631,63 @@ describe("the tables of probes", () => {
     }
   });
 
+  it("forge a route that names several ids in both forms: the other matter's id with the caller's own, and every id from one record", () => {
+    const own: ProbeIds = {
+      matterId: "mat_1111111111111111",
+      firstDocumentId: "doc_1111111111111111",
+      versionId: "ver_1111111111111111",
+      runId: "run_1111111111111111",
+      findingId: "fnd_1111111111111111",
+      memoId: "memo_1111111111111111",
+    };
+    const borrowed = {
+      documentId: "doc_2222222222222222",
+      versionId: "ver_2222222222222222",
+      runId: "run_2222222222222222",
+      findingId: "fnd_2222222222222222",
+      memoId: "memo_2222222222222222",
+      findingContentSha256: "2".repeat(64),
+    };
+    const several = FORGED_PROBES.filter((probe) => probe.pairedWith.length > 0);
+    const routes = [...new Set(several.map((probe) => `${probe.method} ${probe.template}`))];
+    // The page form and the PATCH body: the two places where a document and a version are named together.
+    expect(routes.sort()).toEqual([
+      "PATCH /api/matters/:matterId",
+      "POST /matters/:matterId/documents/:documentId/operative",
+    ]);
+    for (const route of routes) {
+      const ofRoute = several.filter((probe) => `${probe.method} ${probe.template}` === route);
+      const mixed = ofRoute.filter((probe) => !probe.consistent);
+      const whole = ofRoute.filter((probe) => probe.consistent);
+      expect(mixed.length, route).toBeGreaterThanOrEqual(2);
+      expect(whole, route).toHaveLength(1);
+      for (const probe of mixed) {
+        const { path, body } = probe.request(own, borrowed);
+        const sent = path + JSON.stringify(body);
+        // One of the two is the other matter's and the other is the caller's own.
+        expect(sent, probe.name).toMatch(
+          /(doc_2222222222222222.*ver_1111111111111111|ver_2222222222222222.*doc_1111111111111111|doc_1111111111111111.*ver_2222222222222222|ver_1111111111111111.*doc_2222222222222222)/,
+        );
+      }
+      const { path, body } = whole[0]!.request(own, borrowed);
+      const sent = path + JSON.stringify(body);
+      expect(sent).toContain("doc_2222222222222222");
+      expect(sent).toContain("ver_2222222222222222");
+      expect(sent).not.toContain("doc_1111111111111111");
+      expect(sent).not.toContain("ver_1111111111111111");
+      // The matter in the path is the caller's own, as in every forged request.
+      expect(path).toContain("mat_1111111111111111");
+      expect(path).not.toContain("mat_2222222222222222");
+      expect(whole[0]!.name).not.toMatch(ID_SHAPE);
+      expect(whole[0]!.via).toBe("body");
+    }
+    // The routes with one id (and the run page, which picks its finding from the run's own list) have the one form.
+    expect(FORGED_PROBES.filter((probe) => probe.consistent)).toHaveLength(2);
+    expect(
+      FORGED_PROBES.filter((probe) => probe.pairedWith.length === 0 && probe.consistent),
+    ).toHaveLength(0);
+  });
+
   it("give well formed ids of no record in every segment, and only those", () => {
     for (const id of Object.values(noRecordIds())) expect(id).toMatch(/^[a-z]+_0000000000000000$/);
     const ids = noRecordIds();
@@ -383,6 +714,7 @@ describe("the tables of probes", () => {
       earlierVersionId: "ver_3333333333333332",
       amendmentId: "doc_3333333333333332",
       invitee: "usr_x",
+      workflow: "v2",
     };
     const writes = MATTER_PROBES.filter((probe) => probe.method !== "GET");
     const without = writes.filter((probe) => effectOf(probe, scratch) === null).map(probeKeyOf);

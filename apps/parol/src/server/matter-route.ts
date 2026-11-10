@@ -1,4 +1,4 @@
-import type { Context, Hono } from "hono";
+import type { Context, Hono, MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { TrieRouter } from "hono/router/trie-router";
 import { authorizeMatter, authorizeMatterDelete } from "../auth/authorize.js";
@@ -20,11 +20,16 @@ import { unauthenticatedResponse } from "./middleware/errors.js";
  * - `defineRoute` for everything else, with `access` saying whether the route is public or needs a
  *   person.
  *
- * Both record what they registered. `findUnguardedMatterRoutes` compares that record with the
+ * The shell's own middleware (the request context, the host guard and the like) goes through a
+ * third, `defineMiddleware`, which only records the function it registers: a handler on a wildcard
+ * is not told from middleware by its path, because a responder registered with `app.all('/x/*')`,
+ * `app.use` or `app.mount` has the same path.
+ *
+ * All three record what they registered. `findUnguardedMatterRoutes` compares that record with the
  * routes the application really holds, so a matter route added another way (`app.get`, `app.all`,
  * a mounted sub-application) is found whether or not the author remembered the rule, and
  * `findMatterUrlsWithoutGuard` routes matter URLs through the application to find a generic route
- * (`/:area/:id`, `*`) that would answer them.
+ * (`/:area/:id`, `*`) that would answer them. `describeRoutes` reports anything else as `unmanaged`.
  */
 
 export type RouteMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -61,8 +66,8 @@ export interface PrincipalRouteSpec {
 export type RouteSpec = PublicRouteSpec | PrincipalRouteSpec;
 
 export interface RouteRecord {
-  kind: RouteKind;
-  method: RouteMethod;
+  kind: RouteKind | "middleware";
+  method: RouteMethod | "ALL";
   path: string;
   /** The action a matter route checks; null for the others. */
   action: MatterAction | null;
@@ -97,6 +102,17 @@ const MATTER_PREFIX = /^(?:\/api)?\/matters\/:matterId(?:\{[^}]*\})?(?:\/|$)/;
  */
 export function isMatterScopedPath(path: string): boolean {
   return /(?:^|\/)matters\/(?::|\*|\{)/.test(path) || /:matterId\b/.test(path);
+}
+
+/**
+ * Registers a piece of the shell's own middleware for every path and every method. It is the only
+ * way the shell registers one, so that `describeRoutes` can tell it from a handler that was
+ * registered another way (kind `middleware`, by the identity of the function). The handler runs and
+ * hands on; a responder must not be registered here.
+ */
+export function defineMiddleware(app: Hono, handler: MiddlewareHandler): void {
+  records.set(handler, { kind: "middleware", method: "ALL", path: "/*", action: null });
+  app.use("*", handler);
 }
 
 /** The route's own template is logged, never the path the request carried. */
@@ -173,8 +189,11 @@ function recordOf(handler: unknown): RouteRecord | undefined {
 export interface RouteReport {
   method: string;
   path: string;
-  /** How it was declared, or `unmanaged` for anything registered another way (middleware too). */
-  kind: RouteKind | "unmanaged";
+  /**
+   * How it was declared: `middleware` for the shell's own (`defineMiddleware`), or `unmanaged` for
+   * anything registered another way, middleware of another kind included.
+   */
+  kind: RouteKind | "middleware" | "unmanaged";
   action: MatterAction | null;
 }
 
@@ -224,17 +243,20 @@ const PROBE_URLS = [
 ];
 
 /** A path template made into a URL that fits it: every parameter and wildcard becomes `probe`. */
-function concreteUrl(path: string): string {
+export function concreteUrl(path: string): string {
   return path.replace(/:[A-Za-z_]\w*(?:\{[^}]*\})?\??/g, "probe").replace(/\*/g, "probe");
 }
 
 /**
- * Whether a route is middleware that every request under some prefix passes through: registered
- * for every method on a wildcard with a fixed prefix, and not one declared another way. It runs
- * and hands on, so the route that answers is the next one that matches. A wildcard that names a
- * matter path is not exempt: the path check reports it.
+ * Whether a route is middleware that every request under some prefix passes through: the shell's
+ * own (`defineMiddleware`), or one registered for every method on a wildcard with a fixed prefix
+ * another way. It runs and hands on, so the route that answers is the next one that matches. The
+ * second kind is taken for middleware by its path alone, which cannot tell it from a responder:
+ * `findMatterUrlsWithoutGuard` is for matter URLs, and the canary scan asks what such a route
+ * answers. A wildcard that names a matter path is not exempt: the path check reports it.
  */
 function isPrefixMiddleware(route: RouteReport): boolean {
+  if (route.kind === "middleware") return true;
   return (
     route.method === "ALL" &&
     route.kind === "unmanaged" &&

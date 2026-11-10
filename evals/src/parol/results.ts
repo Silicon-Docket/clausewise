@@ -24,6 +24,7 @@ import { hashOf } from "../../../apps/parol/src/canonical.js";
 import { STATUSES, type SourceSpan } from "../../../apps/parol/src/contracts.js";
 import type { RegisteredWorkflow } from "../../../apps/parol/src/module-contracts.js";
 import { getPrompt } from "../../../apps/parol/src/prompts/registry.js";
+import { WORKFLOW_LABEL } from "../../../apps/parol/src/server/routes/schemas.js";
 import type { PlaybookRuleFacts, Split } from "../../../fixtures/parol/types.js";
 import { EvalError, shown } from "../errors.js";
 import type { Price, PriceTable } from "../prices.js";
@@ -118,6 +119,12 @@ export interface RecordingNote {
  * The counts are those of gate G1; the sentences say what was probed and scanned.
  */
 export interface ExposureRecord extends ExposureResult {
+  /**
+   * The workflow version the suite's reviews ran under: its label and the hash of its definition.
+   * G1 is read from this record only for a run of the same version, because the prompts a review
+   * sends, and so the text the canary scan searches, depend on it.
+   */
+  workflow: { label: string; sha256: string };
   suites: string[];
 }
 
@@ -446,16 +453,39 @@ export function scoreGroup(args: {
   };
 }
 
+/**
+ * Why the exposure record of a file cannot stand for the run it is in, or null when it can (or
+ * when there is no record). The record is read for a run only when the reviews it scanned ran under
+ * the workflow the run is of: the prompts a review sends depend on the version, so the text that was
+ * searched is not the text this run sends.
+ */
+export function exposureMismatch(
+  exposure: ExposureRecord | null,
+  workflow: { label: string; sha256: string },
+): string | null {
+  if (exposure === null) return null;
+  const seen = exposure.workflow;
+  if (seen.label !== workflow.label)
+    return `the exposure suites reviewed under workflow ${seen.label} and this run is of workflow ${workflow.label}, so what they scanned is not what this run sends`;
+  if (seen.sha256 !== workflow.sha256)
+    return `the exposure suites reviewed under a definition of workflow ${workflow.label} that is not the one of this run, so what they scanned is not what this run sends`;
+  return null;
+}
+
 export function gateSubjectOf(
   run: RunMetrics,
   latency: LatencySummary | null,
   cost: CostSummary | null,
   /** Required, so that a caller cannot leave the suites out and have G1 and G11 read as not run. */
   suites: SuiteRecords,
+  /** The workflow of the run, which the exposure record has to match for G1 to be read from it. */
+  workflow: { label: string; sha256: string },
 ): GateSubject {
+  const mismatch = exposureMismatch(suites.exposure, workflow);
   return {
     run,
-    ...(suites.exposure === null ? {} : { exposure: suites.exposure }),
+    ...(suites.exposure === null || mismatch !== null ? {} : { exposure: suites.exposure }),
+    ...(mismatch === null ? {} : { exposureNotice: mismatch }),
     ...(suites.calibration === null ? {} : { calibration: suites.calibration.result }),
     ...(latency === null ? {} : { latency }),
     ...(cost === null ? {} : { cost }),
@@ -472,6 +502,8 @@ export function buildSection(args: {
   complete: boolean;
   splitSha256: string;
   priced: boolean;
+  /** The workflow of the run: the exposure record is read for G1 only if it matches. */
+  workflow: { label: string; sha256: string };
   suites?: SuiteRecords;
 }): SplitSection {
   const { group, mode } = args;
@@ -534,7 +566,9 @@ export function buildSection(args: {
     gates:
       scored.run === null || !args.complete
         ? null
-        : evaluateGates(gateSubjectOf(scored.run, latency, cost, args.suites ?? NO_SUITES)),
+        : evaluateGates(
+            gateSubjectOf(scored.run, latency, cost, args.suites ?? NO_SUITES, args.workflow),
+          ),
     latency,
     cost,
   };
@@ -975,7 +1009,9 @@ export const pinsSchema = z.object({
   cases: z.array(text),
   playbook: z.object({ slug: text, version: text, sha256: sha }),
   workflow: z.object({
-    label: text,
+    // A registered label such as v2, in the closed alphabet the application uses for one. A
+    // recording header or a results file is input, and the label is repeated in messages.
+    label: WORKFLOW_LABEL,
     sha256: sha,
     retrieval: text,
     checks: z.array(text),
@@ -1048,44 +1084,59 @@ const runRecord = z.object({
   costUsd: nullableNum,
 });
 
-const rateSchema = z.object({
-  numerator: num,
-  denominator: num,
-  value: nullableNum,
-  ci: z.object({ low: num, high: num }).nullable(),
-});
-
 /** A count: a whole number that is not negative. A file with a negative or fractional one is damaged. */
 const count = z.number().int().nonnegative();
 
+/** A count over a denominator it cannot exceed. The gates and the comparison recompute from the counts. */
+const rateSchema = z
+  .object({
+    numerator: count,
+    denominator: count,
+    value: nullableNum,
+    ci: z.object({ low: num, high: num }).nullable(),
+  })
+  .refine((r) => r.numerator <= r.denominator);
+
 const exposureRecord = z.object({
+  // No default: a record without the version it reviewed under cannot be tied to any run.
+  workflow: z.object({ label: WORKFLOW_LABEL, sha256: z.string().regex(/^[0-9a-f]{64}$/) }),
   probesRun: count,
   artefactsScanned: count,
   probesAnsweredWithData: count,
   canaryHits: count,
   foreignSpanIdHits: count,
-  letInNotReached: count.default(0),
-  mismatches: count.default(0),
-  factSightings: count.default(0),
+  // No default: a record without these was written before they existed, and its zeros would read as
+  // a clean result (G1 passes with probes that never reached their handler). It is refused instead.
+  letInNotReached: count,
+  mismatches: count,
+  factSightings: count,
   suites: z.array(text),
 });
 
 const calibrationRecord = z.object({
-  result: z.object({
-    catchRate: rateSchema,
-    falseAlarmRate: rateSchema,
-    catchByKind: z.record(z.string(), rateSchema),
-    failed: z.object({ supported: count, unsupported: count }).default({
-      supported: 0,
-      unsupported: 0,
-    }),
-  }),
+  result: z
+    .object({
+      catchRate: rateSchema,
+      falseAlarmRate: rateSchema,
+      catchByKind: z.record(z.string(), rateSchema),
+      // No default, for the reason given at the exposure record: a missing count of failed calls
+      // would read as "no call failed".
+      failed: z.object({ supported: count, unsupported: count }),
+    })
+    // The harness counts a failed call as flagged and as not caught, so the failed calls of a label
+    // are inside the numerator of the false alarm rate and outside the caught part of the catch
+    // rate. The gate counts them the other way round for its best case, and needs both to hold.
+    .refine(
+      (r) =>
+        r.failed.supported <= r.falseAlarmRate.numerator &&
+        r.failed.unsupported <= r.catchRate.denominator - r.catchRate.numerator,
+    ),
   setSha256: sha,
   prompt: z.object({ id: text, sha256: sha }),
   supportedPairs: count,
   unsupportedPairs: count,
   failedPairs: count,
-  callOutcomes: z.record(z.string(), count).default({}),
+  callOutcomes: z.record(z.string(), count),
   modelCalls: count,
   note: text.nullable(),
 });
@@ -1239,6 +1290,7 @@ export function assembleResults(input: AssembleInput): ResultsFile {
         complete: input.complete,
         splitSha256: hashOfSplit(group.split),
         priced: input.priced,
+        workflow: input.pins.workflow,
         suites: input.suites ?? NO_SUITES,
       }),
     ),

@@ -77,13 +77,24 @@ export interface ExposureResult {
    * tell a clean run from a suite that never ran.
    */
   probesRun: number;
-  /** Prompts, model responses, API responses and exported memos that were scanned for canaries and foreign span ids. */
+  /**
+   * What was scanned, counted once per scan: prompts, model responses, API response bodies,
+   * exported memos, the tables of stored rows (empty ones included: a leak into one would show) and
+   * the log. The scans look for canary strings and for ids of another matter; the sentences of the
+   * record say which of them each side was searched for.
+   */
   artefactsScanned: number;
   /** Authorization probes that were answered with data when they should not have been. */
   probesAnsweredWithData: number;
-  /** Canary strings found in a prompt, a model response, an API response or the exported memo. */
+  /**
+   * Canary strings found in a prompt, a model response, an API response, the exported memo, a
+   * stored row or the log.
+   */
   canaryHits: number;
-  /** Span ids from another matter found in the same places. */
+  /**
+   * Ids of another matter found in the same places: matter, document, version and span ids. The
+   * name says span ids and is kept, because the results file, the gates and the documents use it.
+   */
   foreignSpanIdHits: number;
   /**
    * Authorization probes whose caller should have been let in and was not. Such a probe was

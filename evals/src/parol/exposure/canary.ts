@@ -5,10 +5,11 @@
  * matter (Bramblewick for the development split, Saltmarsh for the held-out one), created by its own
  * people, and the case's matter, created by others. It reviews the case through the application's
  * real services with a scripted model that records everything it is sent and everything it answers,
- * has the reviewer decide every finding, exports the memo, and fetches every GET route of the
- * application (the routes that name a matter, as every role that is a member of the case, and the
- * routes that do not, for every caller). Then it scans, in memory, for the canary strings of the
- * other matter and for its span, document, version and matter ids in:
+ * has the reviewer decide every finding, exports the memo, and fetches every GET route that the
+ * probe tables name (the routes that name a matter, as every role that is a member of the case, and
+ * the routes that do not, for every caller; the two static pages once, anonymously). Then it scans,
+ * in memory, for the canary strings of the other matter, for its span, document, version and matter
+ * ids, and for its name and its client's name, in:
  *
  *   - every prompt, as the model would have received it;
  *   - every model answer;
@@ -20,39 +21,59 @@
  * the global administrator and the legal engineer, who belong to neither matter; and an anonymous
  * client. The application gives a global role no read of a matter it is not a member of (the list
  * of matters is by membership, and the one thing an administrator may do to another's matter is
- * delete it), so the three that belong to neither matter are held to nothing of either: every id
- * and every canary string is forbidden in everything they are sent. A member is held to nothing of
- * the other matter. Nobody belongs to both matters, so these sets need no exception.
+ * delete it), so the three that belong to neither matter are held to nothing of either: every id,
+ * every name and every canary string is forbidden in everything they are sent. A member is held to
+ * nothing of the other matter. Nobody belongs to both matters, so these sets need no exception.
  *
  * The scan also runs the other way (the canary matter's own people reading the case matter's routes,
- * and the canary matter's pages and rows being searched for the case's ids), because a leak has two
- * directions. The model is a scripted oracle that answers from the answer key. It is not a language
- * model, and nothing is sent anywhere.
+ * and the canary matter's pages and rows being searched for the case's ids and names, and not for
+ * canary strings, which are their own data), because a leak has two directions. The model is a
+ * scripted oracle that answers from the answer key. It is not a language model, and nothing is sent
+ * anywhere.
  *
- * Controls, all of which throw `ExposureControlFailure` and none of which is counted: the scanner
- * finds every token it is given (scan.ts); each channel holds the case's own data (canary-controls.ts:
- * prompts hold its clauses, answers parse, every page that loaded has a body and JSON parses, the
- * memo is a Word package holding its names and quotations, the log is not empty); a matter's own
- * rows hold every one of its strings and ids. A GET route of the application that no probe table
- * lists stops the suite (`ExposureSuiteUnavailable`), so the set of routes cannot fall behind the
- * application. An unknown table in the store stops it too.
+ * Members. The other matter's members are searched for (their user ids and display names) in the
+ * JSON routes only (`/api/...`): the HTML pages print every user of the application in the member
+ * picker, by design, so a name there says nothing.
+ *
+ * Controls, all of which throw and none of which is counted: the scanner finds every token it is
+ * given (scan.ts); each channel holds the case's own data (canary-controls.ts: prompts hold its
+ * clauses, answers parse, the memo is a Word package holding its names and quotations, the log is not
+ * empty, and every page that the case's readers must be let into loads, has a body and, for JSON,
+ * parses; the strangers' routes that name no matter and the four pages of its own matter that the
+ * canary matter's people must be let into are held to the same; the canary matter's people are held
+ * to the status alone for the routes that name no matter, and a route with made-up ids may 404); a
+ * matter's own rows hold every one of its strings, ids and names; every route that the probe tables
+ * name was fetched (a control failure `ExposureControlFailure`; a page that did not load is an
+ * `EvalError`). A GET route of the application that no probe table lists, and a route for every
+ * method at an exact path that none lists, stop the suite (`ExposureSuiteUnavailable`). So does an
+ * unknown table in the store.
  *
  * What the scan cannot see, and says so in its sentence: text of the other matter that carries no
- * canary string; an id in a prompt or a model answer (the model is shown clause labels, not ids); the
- * headers of a response and variants of a query; and the canary matter's runs, findings and memos,
- * because the canary matter is never reviewed (it has none).
+ * canary string, id or name; an id in a prompt or a model answer (the model is shown clause labels);
+ * the other matter's members on the HTML pages; the headers of a response and variants of a query;
+ * a wildcard handler beyond the one request each gets (below); and the canary matter's runs,
+ * findings and memos, because the canary matter is never reviewed (it has none).
+ *
+ * Wildcard routes. A route for every method on a wildcard (`app.use`, `app.all`, `app.mount`, the
+ * `all('/*')` of a mounted application) cannot be told by its path from one that answers a GET, and
+ * the scan never fetches it as a route. The shell's own middleware is recognised by the function it
+ * registered (`defineMiddleware` in the application) and is let through. Any other is asked, once:
+ * one GET to a URL under its prefix, as an anonymous client and as a member, has to be answered as
+ * a copy of the application without hooks answers it, or the suite stops. A handler that answers
+ * other URLs under its prefix, or other methods, is not seen.
  *
  * Nothing printed, thrown or returned holds a canary string, a prompt, a model answer or document
  * text. A hit is a kind of artefact, a label (route template or table name), and a token's position.
  */
 import type { ObjectGenerator } from "@clausewise/llm";
-import { describeRoutes } from "../../../../apps/parol/src/server/matter-route.js";
+import { concreteUrl, describeRoutes } from "../../../../apps/parol/src/server/matter-route.js";
 import { DEMO_USER_IDS } from "../../../../apps/parol/src/store/index.js";
 import type { LoadedPlaybook } from "../../../../apps/parol/src/module-contracts.js";
 import type { AnswerKeyCase, CanaryKeyMatter, Split } from "../../../../fixtures/parol/types.js";
 import { EvalError } from "../../errors.js";
 import type { Dataset } from "../dataset.js";
 import {
+  CANARY_OWN_PAGES,
   checkAnswers,
   checkBody,
   checkLog,
@@ -60,6 +81,8 @@ import {
   checkPrompts,
   needlesOf,
   ownPages,
+  requireOwnPagesAmong,
+  requireRoutesFetched,
   requireTokensIn,
   type OwnPages,
 } from "./canary-controls.js";
@@ -127,6 +150,8 @@ export interface CanaryArgs {
   signal: AbortSignal;
   /** The splits whose cases are scanned. Default: development only. */
   splits?: readonly Split[];
+  /** The workflow version the suite's reviews run under. Default: the newest the application ships. */
+  workflow?: string;
   hooks?: CanaryHooks;
 }
 
@@ -139,20 +164,26 @@ export interface CaseScan {
   foreignIdHits: number;
   factSightings: number;
   hits: ScanHit[];
+  /** The GET routes this case's scan requested, as `GET /template`, in order. */
+  routes: string[];
 }
 
 export interface CanaryResult {
   /** Artefacts scanned, over every case. */
   artefactsScanned: number;
   canaryHits: number;
-  /** Ids of the other matter (span, document, version, matter) found. */
+  /**
+   * Ids of the other matter (span, document, version, matter) found, and its name, its client's name
+   * and, in the JSON routes, its members' user ids and names. The field keeps the name it has in
+   * the results file.
+   */
   foreignSpanIdHits: number;
   /**
    * Artefacts that hold the distinctive fact of the other matter. Reported, and not a count of gate
    * G1: a fact can be a legitimate coincidence, a canary string cannot.
    */
   factSightings: number;
-  /** The GET routes of the application that were fetched (the same for every case). */
+  /** The GET routes (by template) that the scan requested at least once, over every case. */
   routesFetched: number;
   /** Who read, as the roles are named in the sentence. */
   readers: string[];
@@ -232,7 +263,7 @@ export async function runCanaryScan(args: CanaryArgs): Promise<CanaryResult> {
     canaryHits: total((entry) => entry.canaryHits),
     foreignSpanIdHits: total((entry) => entry.foreignIdHits),
     factSightings: total((entry) => entry.factSightings),
-    routesFetched: KNOWN_GET.size,
+    routesFetched: new Set(perCase.flatMap((entry) => entry.routes)).size,
     readers: [...READERS],
     cases: perCase,
     byKind,
@@ -245,7 +276,7 @@ export async function runCanaryScan(args: CanaryArgs): Promise<CanaryResult> {
     .reduce((sum, matter) => sum + matter.strings.length, 0);
   const one = matterIds.size === 1;
   const found = (count: number): string =>
-    result.hits.length === 0
+    result.hits.length === 0 || count === 0
       ? ""
       : `; first found: ${result.hits
           .slice(0, count)
@@ -259,14 +290,16 @@ export async function runCanaryScan(args: CanaryArgs): Promise<CanaryResult> {
     `(${perCase.map((entry) => entry.caseKey).join(", ")}) a synthetic canary matter ` +
     `(${perCase.flatMap((entry) => entry.matters).join(", ")}) sat in the same store as the case; each case was ` +
     `reviewed through the application with a scripted key oracle that records everything (not a language ` +
-    `model; nothing is sent anywhere), decided and exported, and all ${result.routesFetched} GET routes of ` +
-    `the application (checked against its own route list) were fetched as the case's associate, reviewer ` +
-    `and viewer, ${one ? "the canary matter's" : "each canary matter's"} associate and reviewer, the global ` +
-    `administrator, the legal engineer and an anonymous client; ${result.artefactsScanned} artefacts ` +
-    `(${byKind.prompt} prompts, ${byKind.model_response} model answers, ${byKind.http_body} response bodies, ` +
-    `${byKind.memo} memos, ${byKind.store_rows} tables of stored rows, ${byKind.log} log) were scanned for ` +
-    `the ${strings} canary strings of ${one ? "that matter and for its ids" : "those matters and for their ids"}: ` +
-    `${result.canaryHits} canary strings and ${result.foreignSpanIdHits} foreign ids found` +
+    `model; nothing is sent anywhere), decided and exported, and all ${result.routesFetched} GET routes the ` +
+    `probe tables name (a GET route outside them stops the suite; the two static pages once, anonymously) ` +
+    `were fetched as the case's associate, reviewer and viewer, ${one ? "the canary matter's" : "each canary matter's"} ` +
+    `associate and reviewer, the global administrator, the legal engineer and an anonymous client; ` +
+    `${result.artefactsScanned} artefacts (${byKind.prompt} prompts, ${byKind.model_response} model answers, ` +
+    `${byKind.http_body} response bodies, ${byKind.memo} memos, ${byKind.store_rows} tables of stored rows, ` +
+    `${byKind.log} log) were scanned for the ${strings} canary strings and the ids and names of the other ` +
+    `matter (the canary ${one ? "matter's" : "matters'"} own rows and pages: for the case's ids and names only; ` +
+    `its members on the JSON routes): ` +
+    `${result.canaryHits} canary strings and ${result.foreignSpanIdHits} foreign ids or names found` +
     (result.factSightings > 0
       ? `; the other matter's distinctive fact appeared in ${result.factSightings} artefacts, which is an attempt and is not counted`
       : "") +
@@ -276,12 +309,14 @@ export async function runCanaryScan(args: CanaryArgs): Promise<CanaryResult> {
     `of the other. Before counting, the scanner found every planted string and id in text, markup and a ` +
     `compressed Word file, and each channel held the case's own data (bodies not empty, JSON parsed, the ` +
     `memo a Word package with the case's names and quotations, prompts with its clauses, answers parsed, ` +
-    `rows with every id). Not seen: text of the other matter without a canary string, ids in prompts and ` +
-    `answers (the model is shown clause labels), response headers, query variants, and runs, findings or ` +
-    `memos of the canary matter (it is never reviewed).`;
-  // The record keeps a sentence to 2000 characters at most: list fewer hits before it gets that long.
+    `rows with every id and name). Not seen: text of the other matter without a canary string, id or name, ` +
+    `its members on the HTML pages, ids in prompts and answers (the model is shown ` +
+    `clause labels), response headers, query variants, wildcard handlers beyond one request each, and runs, ` +
+    `findings or memos of the canary matter (it is never reviewed).`;
+  // The record keeps a sentence to 2000 characters at most: list fewer hits (down to none, which the
+  // result still holds) before it gets that long.
   let listed = 3;
-  while (listed > 1 && sentenceWith(listed).length > SENTENCE_BUDGET) listed -= 1;
+  while (listed > 0 && sentenceWith(listed).length > SENTENCE_BUDGET) listed -= 1;
   result.sentence = sentenceWith(listed);
   return result;
 }
@@ -290,8 +325,12 @@ export async function runCanaryScan(args: CanaryArgs): Promise<CanaryResult> {
 // One case
 // ---------------------------------------------------------------------------------------------
 
-/** The results file holds a sentence of 2000 characters at most (results.ts). */
-const SENTENCE_BUDGET = 1900;
+/**
+ * The results file holds a sentence of 2000 characters at most (results.ts). Hits are listed in the
+ * sentence while it stays within this, and not at all (the result holds them) when even one would
+ * take it over.
+ */
+const SENTENCE_BUDGET = 1950;
 
 /** The readers of a case, as the sentence names them. */
 const READERS = [
@@ -322,6 +361,9 @@ const canaryIds = (side: CanarySide): ProbeIds => ({
   ...MISSING_IDS,
 });
 
+/** The name the canary matter is created with. */
+const canaryNameOf = (matter: CanaryKeyMatter): string => `Canary matter ${matter.id} (synthetic)`;
+
 const idsOf = (side: {
   matterId: string;
   documentIds: string[];
@@ -329,16 +371,45 @@ const idsOf = (side: {
   spanIds: string[];
 }): string[] => [side.matterId, ...side.documentIds, ...side.versionIds, ...side.spanIds];
 
+/** A URL segment that no route of the application has, put after the prefix of a wildcard. */
+const UNROUTED_SEGMENT = "zz-unrouted";
+
+const isWildcard = (route: { method: string; path: string }): boolean =>
+  route.method === "ALL" && route.path.endsWith("*");
+
+/** What a GET was answered, to compare two answers: status, content type and body. Never shown. */
+async function answerOf(client: SiteClient, path: string): Promise<string> {
+  const response = await client.get(path);
+  return `${response.status} ${response.headers.get("content-type") ?? ""} ${await response.text()}`;
+}
+
 /**
- * Stops the suite when the application answers a GET at a route that no probe table lists: the
- * scan would never fetch it, and a route that leaks would give zero. A route registered for every
- * method (other than the wildcard middleware) answers a GET too.
+ * Stops the suite when the application answers a GET at a route that no probe table lists: the scan
+ * would never fetch it, and a route that leaks would give zero. It reads the application's route
+ * list (`describeRoutes`) and then asks the application.
+ *
+ *  - A GET route, and a route for every method at an exact path, that no probe table lists stop the
+ *    suite.
+ *  - The shell's own middleware is recognised by the function it registered (kind `middleware`),
+ *    and is left alone.
+ *  - A route for every method on a wildcard that is not that (`app.use('/x/*', handler)`,
+ *    `app.all`, `app.mount`, the `all('/*')` of a mounted application) looks, in the list, like
+ *    middleware that hands on and like a handler that answers. It is asked, once per prefix: a GET
+ *    to a URL under it, as an anonymous client and as a member, has to be answered as a copy of the
+ *    application without hooks answers the same URL, or the suite stops. A handler that answers
+ *    only some of the URLs under its prefix is not seen.
+ *
+ * Exported for its tests, which hand it applications that the suite never builds.
  */
-function checkRoutes(site: ExposureSite): void {
-  const unlisted = describeRoutes(site.app)
+export async function checkRoutes(
+  site: Pick<ExposureSite, "app" | "anonymous" | "signIn">,
+  makeReference: () => Pick<ExposureSite, "anonymous" | "signIn" | "close">,
+): Promise<void> {
+  const routes = describeRoutes(site.app).filter((route) => route.kind !== "middleware");
+  const unlisted = routes
     .filter(
       (route) =>
-        (route.method === "GET" || (route.method === "ALL" && !route.path.endsWith("*"))) &&
+        (route.method === "GET" || (route.method === "ALL" && !isWildcard(route))) &&
         !KNOWN_GET.has(route.path),
     )
     .map((route) => `${route.method} ${route.path}`);
@@ -346,6 +417,38 @@ function checkRoutes(site: ExposureSite): void {
     throw new ExposureSuiteUnavailable(
       `The application answers a GET at routes that no probe table lists, so the canary scan would not fetch them: ${[...new Set(unlisted)].join(", ")}.`,
     );
+
+  const wildcards = [...new Set(routes.filter(isWildcard).map((route) => route.path))];
+  if (wildcards.length === 0) return;
+  const reference = makeReference();
+  try {
+    // An anonymous client first, then a member. A wildcard that answers every request would answer
+    // the sign-in too, so a member is only made when the first leg found nothing.
+    const legs = [
+      async () => [site.anonymous(), reference.anonymous()] as const,
+      async () =>
+        [
+          await site.signIn(DEMO_USER_IDS.associate),
+          await reference.signIn(DEMO_USER_IDS.associate),
+        ] as const,
+    ];
+    const differing = new Set<string>();
+    for (const leg of legs) {
+      if (differing.size > 0) break;
+      const [mine, plain] = await leg();
+      for (const path of wildcards) {
+        const url = `${concreteUrl(path)}/${UNROUTED_SEGMENT}`;
+        if ((await answerOf(mine, url)) !== (await answerOf(plain, url)))
+          differing.add(`ALL ${path}`);
+      }
+    }
+    if (differing.size > 0)
+      throw new ExposureSuiteUnavailable(
+        `The application has wildcard routes that are not its own middleware and that answer a GET under their prefix otherwise than the application without them, and the canary scan does not fetch them as routes: ${[...differing].join(", ")}.`,
+      );
+  } finally {
+    reference.close();
+  }
 }
 
 async function scanCase(
@@ -382,11 +485,20 @@ async function scanCase(
     ...(hooks.beforeRoutes === undefined ? {} : { beforeRoutes: hooks.beforeRoutes }),
     ...(hooks.wrapMemoBuilder === undefined ? {} : { wrapMemoBuilder: hooks.wrapMemoBuilder }),
   };
-  const site = createExposureSite({ playbook: args.playbook, generator: front, hooks: siteHooks });
+  const workflowOption = args.workflow === undefined ? {} : { workflow: args.workflow };
+  const site = createExposureSite({
+    playbook: args.playbook,
+    generator: front,
+    ...workflowOption,
+    hooks: siteHooks,
+  });
   try {
+    // Every GET route of the application is one the scan fetches, and a wildcard is asked. Before
+    // the first request that signs in: a wildcard that answers everything answers that too.
+    await checkRoutes(site, () =>
+      createExposureSite({ playbook: args.playbook, generator: front, ...workflowOption }),
+    );
     await site.preflight();
-    // Every GET route of the application is one the scan fetches.
-    checkRoutes(site);
     site.addUser(CASE_VIEWER, "Synthetic case viewer");
 
     // 1. The canary matters, made by their own people.
@@ -397,7 +509,7 @@ async function scanCase(
       site.addUser(associate, `Synthetic ${matter.name} associate`);
       site.addUser(reviewer, `Synthetic ${matter.name} reviewer`);
       const summary = site.services.matters.create(site.principal(associate), {
-        name: `Canary matter ${matter.id} (synthetic)`,
+        name: canaryNameOf(matter),
         clientLegalName: matter.clientLegalName,
         playbookVersionId: site.playbookVersionId,
         reviewerUserId: reviewer,
@@ -468,39 +580,70 @@ async function scanCase(
     // 3. What may not appear where. The case side must hold nothing of the canary matters; the canary
     //    side nothing of the case. A page that answers for a matter its reader has no part in must
     //    hold nothing of either. The matter id is in the URL of a request for it, so a refusal that
-    //    repeats it says nothing new, and it is left out of the set for that request.
+    //    repeats it says nothing new, and it is left out of the set for that request. A matter's name
+    //    and its client's name are tokens too (they are not ids, and `idsOf` does not hold them): they
+    //    are forbidden wherever the matter's ids are, and are the matter's own on its own pages.
     const canaryStrings = sides.flatMap((side) => [...side.matter.strings]);
     const canaryAllIds = sides.flatMap(idsOf);
     const caseAllIds = idsOf(caseSide);
-    const foreignToCase: TokenSet = { canary: canaryStrings, ids: canaryAllIds };
+    const canaryNames = sides.flatMap((side) => [
+      canaryNameOf(side.matter),
+      side.matter.clientLegalName,
+    ]);
+    const caseNames = [matterName, key.intake.clientLegalName];
+    const foreignToCase: TokenSet = {
+      canary: canaryStrings,
+      ids: [...canaryAllIds, ...canaryNames],
+    };
     const canaryIdsExcept = (side: CanarySide): string[] =>
       canaryAllIds.filter((id) => id !== side.matterId);
     const readingCanaryRoutes = (side: CanarySide): TokenSet => ({
       canary: canaryStrings,
-      ids: canaryIdsExcept(side),
+      ids: [...canaryIdsExcept(side), ...canaryNames],
     });
     const canaryUserOnCaseRoutes = (side: CanarySide): TokenSet => ({
       canary: canaryStrings,
-      ids: [...canaryIdsExcept(side), ...caseAllIds.filter((id) => id !== caseSide.matterId)],
+      ids: [
+        ...canaryIdsExcept(side),
+        ...caseAllIds.filter((id) => id !== caseSide.matterId),
+        ...canaryNames,
+        ...caseNames,
+      ],
     });
     const caseIdsForCanarySide: TokenSet = { canary: [], ids: caseAllIds };
+    const caseForCanarySide: TokenSet = { canary: [], ids: [...caseAllIds, ...caseNames] };
     // Nobody who belongs to neither matter may see anything of either.
     const nobodyOnLists: TokenSet = {
       canary: canaryStrings,
-      ids: [...caseAllIds, ...canaryAllIds],
+      ids: [...caseAllIds, ...canaryAllIds, ...caseNames, ...canaryNames],
     };
     const nobodyOnCaseRoutes: TokenSet = {
       canary: canaryStrings,
-      ids: [...caseAllIds.filter((id) => id !== caseSide.matterId), ...canaryAllIds],
+      ids: [
+        ...caseAllIds.filter((id) => id !== caseSide.matterId),
+        ...canaryAllIds,
+        ...caseNames,
+        ...canaryNames,
+      ],
     };
     const nobodyOnCanaryRoutes = (side: CanarySide): TokenSet => ({
       canary: canaryStrings,
-      ids: [...caseAllIds, ...canaryIdsExcept(side)],
+      ids: [...caseAllIds, ...canaryIdsExcept(side), ...caseNames, ...canaryNames],
     });
+    // Members: their user ids and display names, searched for in the JSON routes only. The pages
+    // print every user in the member picker, so a name there is not a sign of anything.
+    const membersOf = (userIds: readonly string[]): string[] =>
+      userIds.flatMap((id) => {
+        const user = site.repo.getUser(id);
+        return user === undefined ? [id] : [id, user.displayName];
+      });
+    const caseMembers = membersOf(site.repo.listMembers(created.matterId).map((m) => m.userId));
+    const canaryMembers = membersOf(sides.flatMap((side) => [side.associate, side.reviewer]));
     const facts = sides.map((side) => side.matter.fact);
 
     // 4. The scanner proves itself before anything is counted.
-    await runControl(scanner, foreignToCase);
+    //    (The planted text is the ids and strings only: it is put in a Word file and a name is not XML.)
+    await runControl(scanner, { canary: canaryStrings, ids: canaryAllIds });
     // And the tokens have to be the matters' real data: a matter's own rows hold every one of its
     // strings and its ids, one by one, or a scan for them could not have seen a leak.
     for (const side of sides)
@@ -512,6 +655,15 @@ async function scanCase(
           .join("\n"),
         tokens: { canary: [...side.matter.strings], ids: idsOf(side) },
       });
+    for (const side of sides)
+      await requireTokensIn({
+        scanner,
+        what: `The rows of the canary matter ${side.matter.id} (its name and client)`,
+        content: storeRows(site, side.matterId)
+          .map((table) => table.content)
+          .join("\n"),
+        tokens: { canary: [], ids: [canaryNameOf(side.matter), side.matter.clientLegalName] },
+      });
     await requireTokensIn({
       scanner,
       what: `The rows of the case matter of ${key.case}`,
@@ -519,6 +671,14 @@ async function scanCase(
         .map((table) => table.content)
         .join("\n"),
       tokens: caseIdsForCanarySide,
+    });
+    await requireTokensIn({
+      scanner,
+      what: `The rows of the case matter of ${key.case} (its name and client)`,
+      content: storeRows(site, created.matterId)
+        .map((table) => table.content)
+        .join("\n"),
+      tokens: { canary: [], ids: caseNames },
     });
 
     // The channels hold the case's own data: its clauses in every prompt, answers that parse, a log.
@@ -536,7 +696,7 @@ async function scanCase(
       failures: capture.captured.failures,
     });
     checkLog(key.case, site.serviceLog);
-    const names = [matterName, key.intake.clientLegalName];
+    const names = caseNames;
     const ledger = createLedger(scanner);
 
     // 5. Prompts and model answers, as the model boundary saw them.
@@ -580,30 +740,45 @@ async function scanCase(
         path: pathFor(probe.template, caseIds(reviewed.findingIds[0]!)),
         public: probe.access === "public",
       }));
+    /** The templates requested, as `GET /template`: what "fetched" is counted from. */
+    const fetched = new Set<string>();
     /**
      * One read. `load`: the reader must be let in, so anything but 200 stops the suite. `shape`: the
-     * body of such a read must also hold something and, for JSON, parse (the case's own readers and
-     * the strangers are the reference channel for this; the canary matter's readers are checked for
-     * status only, because their channel is the same fetch). `own`: collects what the pages hold.
+     * body of such a read must also hold something and, for JSON, parse (the default for a read
+     * that must load; the canary matter's people are held to it for the four pages of their own
+     * matter, and to the status alone for the routes that name no matter). `own`: collects what the
+     * pages hold. `members`: user ids and display names that are also forbidden, in the JSON routes.
      */
     const read = (
       client: SiteClient,
       label: string,
       path: string,
       forbid: TokenSet,
-      how: { load?: boolean; shape?: boolean; facts?: boolean; own?: OwnPages } = {},
-    ) =>
-      fetchAndAdd({
+      how: {
+        load?: boolean;
+        shape?: boolean;
+        facts?: boolean;
+        own?: OwnPages;
+        members?: readonly string[];
+      } = {},
+    ) => {
+      fetched.add(routeOf(label));
+      const wanted: TokenSet =
+        how.members === undefined || !path.startsWith("/api/")
+          ? forbid
+          : { canary: forbid.canary, ids: [...forbid.ids, ...how.members] };
+      return fetchAndAdd({
         client,
         ledger,
         label,
         path,
-        forbid,
+        forbid: wanted,
         facts: how.facts === false ? [] : facts,
         mustLoad: how.load === true,
         shape: how.shape ?? how.load === true,
         ...(how.own === undefined ? {} : { own: how.own }),
       });
+    };
 
     for (const [role, user] of [
       ["associate", CASE_ASSOCIATE],
@@ -616,10 +791,12 @@ async function scanCase(
         await read(client, `${role} ${target.label}`, target.path, foreignToCase, {
           load: true,
           own,
+          members: canaryMembers,
         });
       for (const route of otherRoutes())
         await read(client, `${role} GET ${route.template}`, route.path, foreignToCase, {
           load: true,
+          members: canaryMembers,
         });
       own.require(`the case's ${role}`);
       // The case's people reading the canary matters' routes: no part in them, nothing to see.
@@ -630,12 +807,15 @@ async function scanCase(
             `${role} on canary ${side.matter.id} ${target.label}`,
             target.path,
             readingCanaryRoutes(side),
+            { members: canaryMembers },
           );
     }
 
     // 7. HTTP: the people who belong to a canary matter only, reading the case matter's routes and
-    //    their own pages.
+    //    their own pages. The four pages of their own matter that they must be let into are held to
+    //    a 200 with a body that parses; the others take ids the canary matter does not have.
     for (const side of sides) {
+      requireOwnPagesAmong(canaryTargets(side).map((target) => target.label));
       for (const [who, user] of [
         ["associate", side.associate],
         ["reviewer", side.reviewer],
@@ -647,22 +827,27 @@ async function scanCase(
             `${side.matter.id} ${who} on case ${target.label}`,
             target.path,
             canaryUserOnCaseRoutes(side),
+            { members: [...caseMembers, ...canaryMembers] },
           );
         for (const target of canaryTargets(side))
           await read(
             client,
             `${side.matter.id} ${who} ${target.label}`,
             target.path,
-            caseIdsForCanarySide,
-            { facts: false },
+            caseForCanarySide,
+            {
+              facts: false,
+              load: CANARY_OWN_PAGES.has(target.label),
+              members: caseMembers,
+            },
           );
         for (const route of otherRoutes())
           await read(
             client,
             `${side.matter.id} ${who} GET ${route.template}`,
             route.path,
-            caseIdsForCanarySide,
-            { load: true, shape: false, facts: false },
+            caseForCanarySide,
+            { load: true, shape: false, facts: false, members: caseMembers },
           );
       }
     }
@@ -675,14 +860,18 @@ async function scanCase(
       ["legal engineer", await site.signIn(GLOBAL_ENGINEER)],
       ["anonymous", site.anonymous()],
     ] as const;
+    const everyone = [...caseMembers, ...canaryMembers];
     for (const [who, client] of strangers) {
       const signedIn = who !== "anonymous";
       for (const route of otherRoutes())
         await read(client, `${who} GET ${route.template}`, route.path, nobodyOnLists, {
           load: signedIn || route.public,
+          members: everyone,
         });
       for (const target of caseTargets)
-        await read(client, `${who} on case ${target.label}`, target.path, nobodyOnCaseRoutes);
+        await read(client, `${who} on case ${target.label}`, target.path, nobodyOnCaseRoutes, {
+          members: everyone,
+        });
       for (const side of sides)
         for (const target of canaryTargets(side))
           await read(
@@ -690,6 +879,7 @@ async function scanCase(
             `${who} on canary ${side.matter.id} ${target.label}`,
             target.path,
             nobodyOnCanaryRoutes(side),
+            { members: everyone },
           );
     }
     const anonymous = site.anonymous();
@@ -701,6 +891,7 @@ async function scanCase(
         nobodyOnLists,
         { load: true },
       );
+    requireRoutesFetched(fetched, new Set([...KNOWN_GET].map((template) => `GET ${template}`)));
 
     // 9. The exported memo, as the application stores it.
     const memo = await site.services.reviews.memoFile(
@@ -737,7 +928,7 @@ async function scanCase(
           kind: "store_rows",
           label: `${side.matter.id} ${table.label}`,
           content: table.content,
-          forbid: caseIdsForCanarySide,
+          forbid: caseForCanarySide,
         });
     }
     await ledger.add(
@@ -759,6 +950,7 @@ async function scanCase(
       foreignIdHits: ledger.idHits,
       factSightings: ledger.factSightings,
       hits: [...ledger.hits],
+      routes: [...fetched],
     };
   } finally {
     site.close();

@@ -1,10 +1,16 @@
 import { readdir, readFile } from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { workflowFor } from "../../apps/parol/src/prompts/workflows.js";
 import { compareResults, renderComparison } from "../src/parol/compare.js";
 import { evaluateGates } from "../src/parol/gates.js";
 import { md, rateCell, table } from "../src/parol/format.js";
 import { renderReport } from "../src/parol/report.js";
-import { parseResults, runHealth, type ResultsFile } from "../src/parol/results.js";
+import {
+  SUITE_SENTENCE_MAX,
+  parseResults,
+  runHealth,
+  type ResultsFile,
+} from "../src/parol/results.js";
 import { summarizeRates, summarizeRun } from "../src/parol/score.js";
 import { rate } from "../src/parol/stats.js";
 import { repeatMetrics } from "../src/parol/testing.js";
@@ -46,6 +52,15 @@ afterAll(async () => {
 });
 
 const clone = (): ResultsFile => JSON.parse(JSON.stringify(template)) as ResultsFile;
+
+/**
+ * The workflow an exposure record of these fixtures reviewed under: v1, which is the workflow of
+ * the selftest file the fixtures are made from (the command's default).
+ */
+const reviewedUnder = (): { label: string; sha256: string } => ({
+  label: "v1",
+  sha256: workflowFor("v1").sha256,
+});
 
 /** A live-looking file whose repeats are made from the given counts. */
 function withMetrics(repeats: ReturnType<typeof repeatMetrics>[]): ResultsFile {
@@ -173,9 +188,11 @@ describe("the report of a run", () => {
     expect(text).toContain(
       "G1 needs the authorization probes and the canary scan, which were not run (give --exposure), so it is not evaluated and not assumed to be 0.",
     );
+    // A selftest cannot take --calibration, so the report does not tell its reader to give it.
     expect(text).toContain(
-      "G11 needs the support checker's calibration set, which has no result in this file",
+      "G11 cannot be evaluated in a scripted run: --calibration needs a live run or a replay, because a scripted stand-in is not the support checker.",
     );
+    expect(text).not.toContain("give --calibration");
     expect(text).toMatch(/\| G1 \| Unauthorized-data exposure \| 0 \| not evaluated \|/);
   });
 
@@ -288,6 +305,7 @@ describe("the style of the output", () => {
 
 describe("the supplementary suites in the report", () => {
   const exposure = {
+    workflow: reviewedUnder(),
     probesRun: 1008,
     artefactsScanned: 41,
     probesAnsweredWithData: 0,
@@ -346,6 +364,7 @@ describe("the supplementary suites in the report", () => {
 
 describe("what the report says about where the answers came from, and what the suites found", () => {
   const exposureRecord = (over: Record<string, unknown> = {}) => ({
+    workflow: reviewedUnder(),
     probesRun: 504,
     artefactsScanned: 200,
     probesAnsweredWithData: 0,
@@ -520,5 +539,201 @@ describe("a cell cannot be broken by a backslash before a pipe", () => {
       }
       expect(table(["h"], [[cell]]).split("\n")).toHaveLength(3);
     }
+  });
+});
+
+describe("what the report tells its reader to do about a gate that needs a suite", () => {
+  const exposureRecord = (over: Record<string, unknown> = {}) => ({
+    workflow: reviewedUnder(),
+    probesRun: 504,
+    artefactsScanned: 200,
+    probesAnsweredWithData: 0,
+    canaryHits: 0,
+    foreignSpanIdHits: 0,
+    letInNotReached: 0,
+    mismatches: 0,
+    factSightings: 0,
+    suites: ["a sentence"],
+    ...over,
+  });
+  /** A record of a calibration set that ran with `unsupported` and `supported` pairs, FABRICATED FOR A TEST. */
+  const calibrationRecord = (
+    unsupported: number,
+    supported: number,
+    over: Record<string, unknown> = {},
+  ) => ({
+    result: {
+      catchRate: rate(unsupported, unsupported),
+      falseAlarmRate: rate(0, supported),
+      catchByKind: {},
+      failed: { supported: 0, unsupported: 0 },
+    },
+    setSha256: "a".repeat(64),
+    prompt: { id: "support.p1", sha256: "b".repeat(64) },
+    supportedPairs: supported,
+    unsupportedPairs: unsupported,
+    failedPairs: 0,
+    callOutcomes: { ok: unsupported + supported },
+    modelCalls: unsupported + supported,
+    note: null,
+    ...over,
+  });
+  /** The gates of the first section, worked out again from the suites the file now holds. */
+  const regated = (file: ResultsFile): ResultsFile => {
+    const section = file.sections[0]!;
+    const run = { repeats: section.metrics!.repeats, stability: section.metrics!.stability };
+    section.gates = evaluateGates({
+      run,
+      ...(file.suites.exposure === null ? {} : { exposure: file.suites.exposure }),
+      ...(file.suites.calibration === null ? {} : { calibration: file.suites.calibration.result }),
+    });
+    return file;
+  };
+  const live = (): ResultsFile => withMetrics([repeatMetrics(1, NOTHING)]);
+
+  it("tells a scripted run that G11 needs a live run or a replay, and never to give --calibration", () => {
+    for (const report of [selftestReport, simulatedReport]) {
+      expect(report).toContain("G11 cannot be evaluated in a scripted run");
+      expect(report).not.toContain("give --calibration");
+    }
+  });
+
+  it("tells a live run to give --calibration, or to look at the notes if the set did not finish", () => {
+    const text = renderReport(live());
+    expect(text).toContain("give --calibration, with a workflow that has the support check");
+    expect(text).toContain("or the run stopped before the set finished: see the notes");
+    expect(text).not.toContain("cannot be evaluated in a scripted run");
+  });
+
+  it("tells a replay that the recording must have been made with the calibration set", () => {
+    const file = live();
+    file.mode = "replay";
+    file.pins.mode = "replay";
+    const text = renderReport(file);
+    expect(text).toContain("give --calibration, and a recording that was made with it");
+    expect(text).not.toContain("cannot be evaluated in a scripted run");
+  });
+
+  it("points G11 at its own row when a calibration set ran and is not 20 pairs of each label", () => {
+    const file = live();
+    file.suites = { exposure: null, calibration: calibrationRecord(4, 4) };
+    const text = renderReport(regated(file));
+    expect(text).toContain("G11 is not evaluated for the reason in its row above");
+    // It does not say the set was not run, which the row above it contradicts.
+    expect(text).not.toContain("give --calibration");
+    expect(text).not.toContain("which has no result in this file");
+    expect(text).not.toContain("cannot be evaluated in a scripted run");
+    expect(text).toMatch(/\| G11 \|[^\n]*\| not evaluated \|[^\n]*20 supported and 20 unsupported/);
+  });
+
+  it("points G1 at its own row when the exposure suites ran and could not say the application is clean", () => {
+    for (const record of [
+      exposureRecord({ probesRun: 0, artefactsScanned: 0 }),
+      exposureRecord({ letInNotReached: 2 }),
+    ]) {
+      const file = live();
+      file.suites = { exposure: record, calibration: null };
+      const text = renderReport(regated(file));
+      expect(text).toContain("G1 is not evaluated for the reason in its row above");
+      expect(text).not.toContain("give --exposure");
+      expect(text).not.toContain("which were not run");
+    }
+    // And a run without the suites is told to give them.
+    expect(renderReport(live())).toContain("which were not run (give --exposure)");
+  });
+});
+
+describe("the labels of the exposure counts", () => {
+  const exposure = {
+    workflow: reviewedUnder(),
+    probesRun: 504,
+    artefactsScanned: 804,
+    probesAnsweredWithData: 0,
+    canaryHits: 0,
+    foreignSpanIdHits: 2,
+    letInNotReached: 0,
+    mismatches: 0,
+    factSightings: 0,
+    suites: ["a sentence"],
+  };
+
+  it("say what the counts count: every kind of artefact scanned, and every kind of id of another matter", () => {
+    const file = clone();
+    file.suites = { exposure, calibration: null };
+    const text = renderReport(file);
+    expect(text).toMatch(
+      /\| Artefacts scanned \(prompts, answers, response bodies, memos, tables of stored rows, log\) \| 804 \|/,
+    );
+    expect(text).toMatch(
+      /\| Ids of another matter found \(matter, document, version, span\) \| 2 \|/,
+    );
+    expect(text).toContain("the scans for canary strings and for ids of another matter");
+    // The old labels named fewer kinds than the scans cover.
+    expect(text).not.toContain("Span ids of another matter found");
+    expect(text).not.toContain("Prompts, answers, response bodies and memos scanned");
+  });
+
+  it("prints a suite sentence of the longest length the results file holds, whole", () => {
+    const file = clone();
+    const longest = `${"y".repeat(SUITE_SENTENCE_MAX - 5)} END.`;
+    expect(longest).toHaveLength(SUITE_SENTENCE_MAX);
+    file.suites = { exposure: { ...exposure, suites: [longest] }, calibration: null };
+    expect(renderReport(file)).toContain(`- ${longest}\n`);
+    // One character more is not a sentence the file can hold, and the report cuts it.
+    file.suites = { exposure: { ...exposure, suites: [`${longest}!`] }, calibration: null };
+    const cut = renderReport(file);
+    expect(cut).not.toContain("END.!");
+    expect(cut).toContain("...\n");
+  });
+});
+
+describe("the calibration calls in the list of calls and degraded stages", () => {
+  const outage = (callOutcomes: Record<string, number>): ResultsFile => {
+    const file = clone();
+    file.mode = "live";
+    file.selftest = false;
+    file.banner = null;
+    file.pins.mode = "live";
+    const failed = Object.entries(callOutcomes)
+      .filter(([outcome]) => outcome !== "ok")
+      .reduce((total, [, count]) => total + count, 0);
+    file.suites = {
+      exposure: null,
+      calibration: {
+        result: {
+          catchRate: rate(20, 20),
+          falseAlarmRate: rate(0, 20),
+          catchByKind: {},
+          failed: { supported: 0, unsupported: 0 },
+        },
+        setSha256: "a".repeat(64),
+        prompt: { id: "support.p1", sha256: "b".repeat(64) },
+        supportedPairs: 20,
+        unsupportedPairs: 20,
+        failedPairs: failed,
+        callOutcomes,
+        modelCalls: 40,
+        note: null,
+      },
+    };
+    return file;
+  };
+
+  it("names them where the pointer of every split sends the reader, when they are why the run is unclean", () => {
+    const text = renderReport(outage({ ok: 37, transport: 3 }));
+    // The runs of the split are clean: the only cause is the calibration calls.
+    expect(text).toContain('see "Calls and degraded stages" below');
+    const target = text.slice(text.indexOf("## Calls and degraded stages"));
+    expect(target).toContain(
+      "Calibration calls, which are in no run and in no split, by outcome: ok 37, transport 3.",
+    );
+    expect(target).not.toContain("No call failed on the wire");
+  });
+
+  it("lists them when all went well too, and not at all when there was no calibration set", () => {
+    const clean = renderReport(outage({ ok: 40 }));
+    expect(clean).toContain("by outcome: ok 40.");
+    expect(clean).toContain("No call failed on the wire");
+    expect(selftestReport).not.toContain("Calibration calls, which are in no run");
   });
 });

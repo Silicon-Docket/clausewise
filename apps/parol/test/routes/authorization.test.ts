@@ -182,7 +182,9 @@ describe.each([{ relaxed: false }, { relaxed: true }])(
 
 describe("the matrix covers the routes the application has", () => {
   const site = makeSite();
-  const routes = describeRoutes(site.app).filter((route) => route.kind !== "unmanaged");
+  const routes = describeRoutes(site.app).filter(
+    (route) => route.kind !== "unmanaged" && route.kind !== "middleware",
+  );
   const key = (method: string, path: string): string => `${method} ${path}`;
 
   it("has a probe for every route that names a matter, with the action the route checks", () => {

@@ -15,7 +15,17 @@ import {
   type CanaryResult,
   type UploadReplayResult,
 } from "../src/parol/exposure/index.js";
-import { FORGED_PROBES, LIST_PROBES, MATTER_PROBES } from "../src/parol/exposure/probes.js";
+import {
+  AUTHORIZATION_SENTENCE_BUDGET,
+  UNROUTED_ACTORS,
+} from "../src/parol/exposure/authorization.js";
+import {
+  FORGED_PROBES,
+  LIST_PROBES,
+  MATTER_PROBES,
+  noRecordIds,
+  unroutedRequests,
+} from "../src/parol/exposure/probes.js";
 import { exposureChecked, exposureCount } from "../src/parol/suites.js";
 import {
   CANARY_SHAPE,
@@ -24,9 +34,10 @@ import {
   completeDataset,
   never,
   playbook,
+  reviewedUnder,
   ROOT,
 } from "./parol-exposure-support.js";
-import type { ExposureRecord } from "../src/parol/results.js";
+import { SUITE_SENTENCE_MAX, type ExposureRecord } from "../src/parol/results.js";
 
 /**
  * The exposure suite on the real application, with nothing planted: all zeros out of nonzero
@@ -88,12 +99,19 @@ beforeAll(async () => {
 
 describe("the real application", () => {
   it("answers every cell of the matrix, the forged ids and the lists, and none with data or with a revealing refusal", () => {
-    // 36 routes, 7 callers, 2 modes; every forged request in 2 modes; every list route as 7 callers in 2 modes.
+    // 36 routes, 7 callers, 2 modes; every forged request in 2 modes; every list route as 7 callers in 2 modes;
+    // every request to a URL that no route owns as 3 callers in 2 modes.
+    const unrouted = unroutedRequests(noRecordIds());
     expect(authorization.matrixCells).toBe(MATTER_PROBES.length * 7 * 2);
     expect(authorization.forgedCells).toBe(FORGED_PROBES.length * 2);
     expect(authorization.listCells).toBe(LIST_PROBES.length * 7 * 2);
+    expect(authorization.unroutedCells).toBe(unrouted.length * UNROUTED_ACTORS.length * 2);
+    expect(authorization.unroutedRequests).toBe(unrouted.length);
     expect(authorization.probesRun).toBe(
-      authorization.matrixCells + authorization.forgedCells + authorization.listCells,
+      authorization.matrixCells +
+        authorization.forgedCells +
+        authorization.listCells +
+        authorization.unroutedCells,
     );
     expect(authorization.routes).toBe(36);
     expect(authorization.callers).toBe(7);
@@ -116,20 +134,28 @@ describe("the real application", () => {
   });
 
   it("puts an id of another matter into every route that takes an id, and the places outside a path", () => {
-    // 20 ids in a path, 4 in a body (three in the PATCH body, one in a form), 1 in a query string.
+    // 20 ids in a path, 6 in a body (three in the PATCH body, one in a form, and the two routes that
+    // name a document and a version again with both from one record), 1 in a query string.
     expect(FORGED_PROBES.filter((probe) => probe.via === "path")).toHaveLength(20);
-    expect(FORGED_PROBES.filter((probe) => probe.via === "body")).toHaveLength(4);
+    expect(FORGED_PROBES.filter((probe) => probe.via === "body")).toHaveLength(6);
     expect(FORGED_PROBES.filter((probe) => probe.via === "query")).toHaveLength(1);
+    expect(FORGED_PROBES.filter((probe) => probe.consistent)).toHaveLength(2);
     expect(new Set(FORGED_PROBES.map((probe) => probe.position))).toEqual(
       new Set(["document", "version", "run", "finding", "memo"]),
     );
     expect(authorization.forgedRequests).toBe(FORGED_PROBES.length);
+    expect(authorization.forgedPlaces).toBe(FORGED_PROBES.length - 2);
   });
 
   it("sends the callers who must be refused a body that changes the store, on every write route that can be changed", () => {
     expect(authorization.writeRoutes).toBe(MATTER_PROBES.filter((p) => p.method !== "GET").length);
     // The rest are the resume and the cancel of a finished run, which are 409 whoever sends them.
     expect(authorization.writesWithEffect).toBe(authorization.writeRoutes - 4);
+    expect(authorization.writesWithoutBody).toHaveLength(4);
+    expect(authorization.writesWithoutBody.every((route) => /\/(resume|cancel)$/.test(route))).toBe(
+      true,
+    );
+    expect(authorization.writesUnproven).toBe(0);
   });
 
   it("answers every cell as the table says: no mismatch either, and every let-in caller reached its handler", () => {
@@ -179,7 +205,9 @@ describe("the real application", () => {
   });
 
   it("is the record the sub-suites compose", () => {
-    expect(record).toEqual(composeExposureRecord({ authorization, canary, uploads }));
+    expect(record).toEqual(
+      composeExposureRecord({ workflow: reviewedUnder(), authorization, canary, uploads }),
+    );
   });
 
   it("is deterministic: the same record, sentences included, on a second run", () => {
@@ -190,8 +218,15 @@ describe("the real application", () => {
     expect(record.suites).toHaveLength(3);
     expect(record.suites[0]).toMatch(/^Authorization probes: sent \d+ cells /);
     // The sentence counts cells and says so: the reference requests are not cells, and the counts are this run's.
-    expect(record.suites[0]).not.toMatch(/\d+ requests/);
+    // The requests it names are those of the forged ids (against the places they go) and of the URLs no route owns.
+    expect(record.suites[0]).not.toMatch(/^Authorization probes: sent \d+ requests/);
     expect(record.suites[0]).toContain(`sent ${authorization.probesRun} cells`);
+    expect(record.suites[0]).toContain(
+      `${authorization.forgedRequests} requests in ${authorization.forgedPlaces} places`,
+    );
+    expect(record.suites[0]).toContain(`${authorization.unroutedRequests} requests to URLs`);
+    expect(record.suites[0]).toContain("Not seen: evidence ids inside a decision body");
+    expect(record.suites[0]!.length).toBeLessThanOrEqual(AUTHORIZATION_SENTENCE_BUDGET);
     expect(record.suites[0]).toContain(
       `${authorization.matrixCells} for ${authorization.routes} routes`,
     );
@@ -376,6 +411,7 @@ describe("a suite that cannot run says so and does not return zeros", () => {
   it("refuses to compose a record from nothing", () => {
     expect(() =>
       composeExposureRecord({
+        workflow: reviewedUnder(),
         authorization: {
           probesRun: 0,
           probesAnsweredWithData: 0,
@@ -393,5 +429,50 @@ describe("a suite that cannot run says so and does not return zeros", () => {
         uploads: { sentence: "x." },
       }),
     ).toThrow(/checked nothing/);
+  });
+
+  it("refuses to compose a record with a sentence the results file could not hold, and says it is the suite's bug", () => {
+    const part = (length: number) => `${"x".repeat(length - 1)}.`;
+    const compose = (authorization: number, canary: number, uploads: number) =>
+      composeExposureRecord({
+        workflow: reviewedUnder(),
+        authorization: {
+          probesRun: 1,
+          probesAnsweredWithData: 0,
+          letInNotReached: 0,
+          mismatches: 0,
+          sentence: part(authorization),
+        },
+        canary: {
+          artefactsScanned: 1,
+          canaryHits: 0,
+          foreignSpanIdHits: 0,
+          factSightings: 0,
+          sentence: part(canary),
+        },
+        uploads: { sentence: part(uploads) },
+      });
+    // At the limit a sentence is accepted; one character over, whichever sub-suite wrote it, is not.
+    expect(compose(SUITE_SENTENCE_MAX, SUITE_SENTENCE_MAX, SUITE_SENTENCE_MAX).suites).toHaveLength(
+      3,
+    );
+    for (const [name, over] of [
+      ["authorization probes", () => compose(SUITE_SENTENCE_MAX + 1, 10, 10)],
+      ["canary scan", () => compose(10, SUITE_SENTENCE_MAX + 1, 10)],
+      ["upload replay", () => compose(10, 10, SUITE_SENTENCE_MAX + 1)],
+    ] as const) {
+      let caught: unknown;
+      try {
+        over();
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught, name).toBeInstanceOf(EvalError);
+      const message = (caught as EvalError).message;
+      expect(message, name).toContain(`The sentence of the ${name} is ${SUITE_SENTENCE_MAX + 1}`);
+      expect(message).toContain("bug in the exposure suite");
+      expect(message).not.toMatch(/x{20}/);
+      expect(message).not.toMatch(DASHES);
+    }
   });
 });

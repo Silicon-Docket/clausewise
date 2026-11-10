@@ -23,7 +23,8 @@ import {
 import { parseResults, workflowPin, type ResultsFile, type RunMode } from "../src/parol/results.js";
 import { scoreRun, summarizeRun } from "../src/parol/score.js";
 import { summarizeCost, summarizeLatency } from "../src/parol/timing.js";
-import { tinyKey, tinyObservations, tinyResolver } from "../src/parol/testing.js";
+import { rate } from "../src/parol/stats.js";
+import { repeatMetrics, tinyKey, tinyObservations, tinyResolver } from "../src/parol/testing.js";
 import { createKeyOracle } from "../src/parol/oracle.js";
 import { makeTempDir, removeDir, run } from "../src/parol/testing-run.js";
 
@@ -616,7 +617,12 @@ describe("the decision rule", () => {
   });
 
   describe("reads the exposure suites and the calibration set of the files", () => {
-    const exposure = (over: Partial<NonNullable<ResultsFile["suites"]["exposure"]>> = {}) => ({
+    // The record says which workflow its reviews ran under; these are of the file they are attached to.
+    const exposure = (
+      file: ResultsFile,
+      over: Partial<NonNullable<ResultsFile["suites"]["exposure"]>> = {},
+    ) => ({
+      workflow: { label: file.pins.workflow.label, sha256: file.pins.workflow.sha256 },
       probesRun: 504,
       artefactsScanned: 200,
       probesAnsweredWithData: 0,
@@ -637,8 +643,8 @@ describe("the decision rule", () => {
 
     it("shows a failed G1 as failed, with the count, and does not call it not evaluated", () => {
       const { a, b } = pair();
-      a.suites = { exposure: exposure(), calibration: null };
-      b.suites = { exposure: exposure({ canaryHits: 3 }), calibration: null };
+      a.suites = { exposure: exposure(a), calibration: null };
+      b.suites = { exposure: exposure(b, { canaryHits: 3 }), calibration: null };
       const c = ok(compareResults(a, b)).sections[0]!;
       expect(g("G1", c.candidateGates!)).toBe("fail");
       expect(g("G1", c.baselineGates!)).toBe("pass");
@@ -679,14 +685,115 @@ describe("the decision rule", () => {
       });
     });
 
-    it("can reach promote now that both suites are read", () => {
-      // G1 and G11 are evaluated from the files; the rest is the tiny key, which fails G6, so the
-      // proof is that the two are no longer among the gates that were not evaluated.
+    it("reads G1 from the file of the candidate, so it is no longer among the gates not evaluated", () => {
+      // The rest is the tiny key, which fails G6: this test proves only that G1 is read.
       const { a, b } = pair();
-      b.suites = { exposure: exposure(), calibration: null };
+      b.suites = { exposure: exposure(b), calibration: null };
       const c = ok(compareResults(a, b)).sections[0]!;
       expect(g("G1", c.candidateGates!)).toBe("pass");
       expect(c.candidateGates!.notEvaluated).not.toContain("G1");
+    });
+
+    /**
+     * Two live files of the whole held-out split with three repeats, built from counts that pass
+     * every gate: the metrics are perfect, the latency and the cost are those of the baseline, and
+     * both files hold the two suites. FABRICATED FOR A TEST.
+     */
+    const perfectPair = () => {
+      const perfect = (file: ResultsFile): ResultsFile => {
+        const repeats = [1, 2, 3].map((i) =>
+          repeatMetrics(i, {
+            strictRecall: [18, 18],
+            strictPrecision: [18, 18],
+            displayed: [161, 161],
+            requiredRecall: [4, 4],
+            unnecessary: [0, 100],
+            extractionRecall: [144, 144],
+          }),
+        );
+        const stability = { repeats: 3, slots: 112, meanAgreement: 1, belowUnanimous: [] };
+        const section = file.sections[0]!;
+        section.metrics = { repeats, stability, summary: summarizeRun({ repeats, stability }) };
+        file.suites = { exposure: exposure(file), calibration: calibrationRecord(20, 0) };
+        return file;
+      };
+      return {
+        a: perfect(fabricate({ variants: ["base", "base", "base"] })),
+        b: perfect(fabricate({ workflow: "v2", variants: ["base", "base", "base"] })),
+      };
+    };
+    const calibrationRecord = (caught: number, flagged: number, failed = [0, 0]) => ({
+      result: {
+        catchRate: rate(caught, 20),
+        falseAlarmRate: rate(flagged, 20),
+        catchByKind: {},
+        failed: { supported: failed[0]!, unsupported: failed[1]! },
+      },
+      setSha256: "a".repeat(64),
+      prompt: { id: "support.p1", sha256: "b".repeat(64) },
+      supportedPairs: 20,
+      unsupportedPairs: 20,
+      failedPairs: failed[0]! + failed[1]!,
+      callOutcomes: { ok: 40 - failed[0]! - failed[1]!, transport: failed[0]! + failed[1]! },
+      modelCalls: 40,
+      note: null,
+    });
+
+    it("reaches promote through compareResults when every gate passes with both suites in the files", () => {
+      const { a, b } = perfectPair();
+      const section = ok(compareResults(a, b)).sections[0]!;
+      expect(section.candidateGates!.failed).toEqual([]);
+      expect(section.candidateGates!.notEvaluated).toEqual([]);
+      expect(section.decisionNote).toBeNull();
+      expect(section.decision!.outcome).toBe("promote");
+      expect(section.decision!.reasons).toEqual(["Every gate passed and no slot got worse."]);
+    });
+
+    it("does not reach promote when either suite is missing or one of them fails", () => {
+      const outcome = (edit: (b: ResultsFile) => void): string => {
+        const { a, b } = perfectPair();
+        edit(b);
+        return ok(compareResults(a, b)).sections[0]!.decision!.outcome;
+      };
+      expect(outcome(() => undefined)).toBe("promote");
+      expect(outcome((b) => (b.suites = { ...b.suites, exposure: null }))).toBe("do_not_promote");
+      expect(outcome((b) => (b.suites = { ...b.suites, calibration: null }))).toBe(
+        "do_not_promote",
+      );
+      expect(
+        outcome((b) => (b.suites = { ...b.suites, exposure: exposure(b, { canaryHits: 1 }) })),
+      ).toBe("do_not_promote");
+      expect(
+        outcome((b) => (b.suites = { ...b.suites, calibration: calibrationRecord(14, 0) })),
+      ).toBe("do_not_promote");
+    });
+
+    it("shows how many calibration calls returned no verdict beside the two rates, and only when some did", () => {
+      const { a, b } = pair();
+      a.suites = { exposure: null, calibration: calibrationRecord(19, 1) };
+      b.suites = { exposure: null, calibration: calibrationRecord(18, 1, [1, 2]) };
+      const row = ok(compareResults(a, b)).sections[0]!.rows.find((r) =>
+        r.metric.startsWith("Support checker"),
+      )!;
+      expect(row.candidate).toBe("18 of 20 / 1 of 20, 3 without a verdict");
+      expect(row.baseline).toBe("19 of 20 / 1 of 20");
+      expect(row.baseline).not.toContain("without a verdict");
+    });
+
+    it("does not throw for a calibration record whose failed calls disagree with its rates", () => {
+      // A reader of a results file refuses such a record; this one was built by hand.
+      const { a, b } = pair();
+      b.suites = {
+        exposure: null,
+        calibration: {
+          ...calibrationRecord(10, 0),
+          result: { ...calibrationRecord(10, 0).result, failed: { supported: 5, unsupported: 0 } },
+        },
+      };
+      const c = ok(compareResults(a, b)).sections[0]!;
+      expect(g("G11", c.candidateGates!)).toBe("not_evaluated");
+      const detail = c.candidateGates!.results.find((r) => r.id === "G11")!.detail;
+      expect(detail).toContain("does not agree with itself");
     });
 
     it("does not apply the rule to a replay, which is not a new measurement", () => {

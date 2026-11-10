@@ -21,6 +21,7 @@ import {
   playbook,
   ROOT,
 } from "./parol-exposure-support.js";
+import { namesCanaryMatter } from "./parol-canary-support.js";
 
 /**
  * The real-data controls of the canary scan. A scan over a channel that was emptied by a fault of
@@ -144,11 +145,13 @@ describe("the pages", () => {
   it("do not turn a leak into a control failure: a damaged body that holds a canary string is counted", async () => {
     const leaked = "tail";
     const result = await scan({
-      beforeRoutes: (app) => {
+      beforeRoutes: (app, deps) => {
         app.use("/api/matters/*", async (c, next) => {
           await next();
           if (c.req.method !== "GET" || c.res.status !== 200) return;
           if (!(c.res.headers.get("content-type") ?? "").includes("json")) return;
+          // Only the case's pages: the canary matter's own people are held to a body that parses.
+          if (namesCanaryMatter(deps, c.req.path)) return;
           const body = await c.res.text();
           const headers = new Headers(c.res.headers);
           headers.delete("content-length");

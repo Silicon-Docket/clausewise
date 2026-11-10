@@ -93,6 +93,7 @@ import {
   evaluationPin,
   findContamination,
   loadResults,
+  parseResults,
   priceTableSha256,
   providerOwnHost,
   readGitInfo,
@@ -600,6 +601,15 @@ async function prepareModel(
   };
 }
 
+/**
+ * Where the calls of the calibration set are counted. Only a provider that reports usage has a
+ * usage total: for another, the calls are in the count of model calls and nothing more.
+ */
+const calibrationCallsAre = (usageAvailable: boolean): string =>
+  usageAvailable
+    ? "in the usage total and in no run's cost or latency"
+    : "in the count of model calls and in no run's latency";
+
 // The sampling temperature the adapter sends, by provider. Anthropic and OpenAI models that think
 // adaptively are sent none; the OpenAI-compatible adapter asks for 0 (packages/llm/src/generator.ts).
 const temperatureOf = (provider: LlmConfig["provider"]): number | null =>
@@ -971,11 +981,18 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
       playbook,
       signal: io.signal ?? new AbortController().signal,
       splits: [...new Set(groups.map((group) => group.split))],
+      // The reviews the suite runs and scans are of the version under test, not of a fixed one.
+      workflow: options.workflow,
     });
     io.stderr(
       `  ${suites.exposure.probesRun} authorization probes and ${suites.exposure.artefactsScanned} artefacts scanned.\n`,
     );
   }
+
+  // A run that was interrupted by now has shown nothing to a model: it makes no recording and
+  // leaves nothing in the held-out ledger. The exposure suites stop at the signal, and the rest of
+  // the run reads it in the loop, which is after the recording and the ledger line are made.
+  io.signal?.throwIfAborted();
 
   // A live run writes down the model's answers as they arrive, so that a change of scoring or of
   // an answer key can be applied to what was already paid for. Not being able to is not worth
@@ -999,12 +1016,23 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
     }
   }
 
+  // The recording made for a run that then does not start holds a header and nothing else. Leave
+  // no file that the next attempt with the same --out would trip over.
+  const discardRecording = async (): Promise<void> => {
+    if (writer !== undefined && recordPath !== undefined) {
+      await unlink(recordPath).catch(() => undefined);
+    }
+  };
+
   // A live run of the held-out split is written down before its first call, wherever its results
   // go, so that a later run is told the split was used. It is the last step before the first call:
   // a run that stops before then, because the exposure suites failed or the recording could not be
   // made, has shown the split to no model and leaves nothing in the ledger. A run that cannot be
   // recorded is not made.
   if (mode === "live" && touchesHeldout) {
+    // Outside the try below, whose catch would turn an interrupt into a refusal to run.
+    if (io.signal?.aborted === true) await discardRecording();
+    io.signal?.throwIfAborted();
     try {
       await recordHeldoutRun({
         resultsDir,
@@ -1015,11 +1043,7 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
         outPath,
       });
     } catch (error) {
-      // The recording made for this run holds a header and nothing else. Leave no file that the
-      // next attempt with the same --out would trip over.
-      if (writer !== undefined && recordPath !== undefined) {
-        await unlink(recordPath).catch(() => undefined);
-      }
+      await discardRecording();
       throw new EvalError(
         `Refusing to run the held-out split: this run cannot be recorded in the results folder (${(error as NodeJS.ErrnoException).code ?? "an error"}), and a later run could then not warn that the split was used. Nothing was sent.`,
       );
@@ -1205,7 +1229,9 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
         role: "recorded",
         file: basename(recordPath),
         calls: writer.written,
-        ...(writer.failed ? { failed: true } : {}),
+        // A line that could not be written, or a call the run scored that has no line: either way a
+        // replay would stop part-way, so the file is not one to replay.
+        ...(writer.failed || writer.unrecorded > 0 ? { failed: true } : {}),
       };
     }
     if (setup.recording === undefined) return null;
@@ -1228,7 +1254,7 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
   if (setup.recording !== undefined) {
     if (setup.recording.trailer === null || !setup.recording.trailer.complete) {
       notes.push(
-        "The recording is of a run that did not finish, so it holds the answers of the cases that did and nothing for the rest.",
+        "The recording is of a run that did not finish or that lost a call it could not record, so it holds the answers of the cases that did finish and nothing for the rest.",
       );
     }
     if (recordingNote()?.datasetChanged === true) {
@@ -1344,6 +1370,7 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
         `Running the support checker's calibration set: ${calibrationPairs.length} pairs.\n`,
       );
       const callsBefore = meter.totalCalls;
+      const replayedBefore = replaying?.counts.replayed ?? 0;
       try {
         suites.calibration = await runCalibration({
           set: calibrationSet.set,
@@ -1353,16 +1380,20 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
           signal: controller.signal,
         });
       } catch (error) {
-        // Its calls may already be in the usage total and in the recording, with no record of the
-        // set to explain them. Say so before the cause goes on up.
+        // Its calls may already be in the usage total (and in the recording), with no record of the
+        // set to explain them. Say so before the cause goes on up. A replay sent nothing: it says
+        // how many recorded answers it gave, which is not the number of requests it was asked for
+        // (the request it had no answer for is the last of those).
         notes.push(
-          `The calibration set was started and stopped before it finished (${meter.totalCalls - callsBefore} of ${calibrationPairs.length} calls were started). It was not scored; its calls are in the usage total and in no run's cost or latency.`,
+          mode === "replay"
+            ? `The calibration set was stopped before it finished (${(replaying?.counts.replayed ?? 0) - replayedBefore} of ${calibrationPairs.length} answers were replayed from the recording). It was not scored.`
+            : `The calibration set was started and stopped before it finished (${meter.totalCalls - callsBefore} of ${calibrationPairs.length} calls were started). It was not scored; its calls are ${calibrationCallsAre(setup.usageAvailable)}.`,
         );
         throw error;
       }
       if (mode !== "replay") {
         notes.push(
-          `The ${calibrationPairs.length} calls of the calibration set are in the usage total and in no run's cost or latency: they belong to the checker, not to a case.`,
+          `The ${calibrationPairs.length} calls of the calibration set are ${calibrationCallsAre(setup.usageAvailable)}: they belong to the checker, not to a case.`,
         );
       }
       if (mode === "live") await checkpoint();
@@ -1388,11 +1419,17 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
 
   // ---- 6. What came of it.
   await reporter.settle();
+  // A run that was stopped before any call started has nothing to report: no run, no response.
+  // The results file and the recording follow the same test.
+  const nothingRan = runs.length === 0 && meter.total.responses === 0;
   if (writer !== undefined) {
     writer.finish({ complete: stopped === undefined, reported: reportedModels() });
     await writer.settle().catch((error: unknown) => {
       notes.push(describeParolError(error));
     });
+    // A header and a trailer and no call is no use to a replay, and would stop the next attempt
+    // with the same --out. The held-out ledger line stays: a request may already have left.
+    if (nothingRan) await discardRecording();
   }
   const results = assemble(stopped === undefined, stopped?.reason ?? null);
   let exitCode = stopped?.exitCode ?? 0;
@@ -1423,7 +1460,9 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
       `Model calls made to the scripted stand-in: ${meter.totalCalls}. Nothing was sent anywhere.\n`,
     );
   }
-  if (writer !== undefined && recordPath !== undefined) {
+  if (writer !== undefined && recordPath !== undefined && nothingRan) {
+    io.stderr("Nothing was recorded: the run stopped before its first call.\n");
+  } else if (writer !== undefined && recordPath !== undefined) {
     io.stderr(
       writer.failed
         ? `The recording of the model's answers could not be completed (${writer.written} calls were written to ${recordPath}), so it cannot be replayed. The results are not affected.\n`
@@ -1456,11 +1495,23 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
     }
   }
 
-  if (runs.length > 0 || meter.total.responses > 0) {
+  if (!nothingRan) {
     try {
-      await writeFileAtomically(outPath, serialiseResults(results), { replace: false });
+      const written = serialiseResults(results);
+      await writeFileAtomically(outPath, written, { replace: false });
       io.stderr(`Results written to ${outPath}\n`);
       await unlink(partialPath).catch(() => undefined);
+      // The file is read back as --compare and every later reader will read it. One that this
+      // version cannot read (a sentence longer than the file holds, a count the schema refuses) is
+      // kept, because a failing run is the one whose evidence matters, and is said not to load.
+      try {
+        parseResults(written);
+      } catch {
+        io.stderr(
+          `Error: the results file ${outPath} is too long or malformed for its own reader: this version of the tool cannot read it back, so --compare and a later report will refuse it. The file was kept as written.\n`,
+        );
+        exitCode ||= 1;
+      }
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code ?? "an error";
       io.stderr(

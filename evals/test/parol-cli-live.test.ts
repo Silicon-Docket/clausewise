@@ -432,10 +432,27 @@ describe("a live run with a scripted model that reports usage", () => {
           "complete",
           "reported",
         ]);
+        // What each field outside the answer may look like. The stand-in of this test records only
+        // answers that were given (the lines with an outcome of ok), so `value` is the one field
+        // that holds text of the documents, and a refusal's message and a failed request's message
+        // are not exercised here. Every other field is a hash, a name or a number, and a prompt
+        // in one of them does not match.
+        const shape: Record<string, RegExp> = {
+          key: /^[0-9a-f]{64}$/,
+          schema: /^[a-z_]{1,40}$/,
+          run: /^(PAROL-[A-Z]\d{2}(-twin)?\|\d+|calibration)$/,
+          outcome: /^(ok|refusal|output|request)$/,
+        };
         for (const line of lines) {
-          for (const field of Object.keys(JSON.parse(line) as object)) {
+          const call = JSON.parse(line) as Record<string, unknown>;
+          for (const field of Object.keys(call)) {
             expect(allowed.has(field), field).toBe(true);
           }
+          if ("end" in call) continue;
+          for (const [field, pattern] of Object.entries(shape)) {
+            expect(String(call[field]), field).toMatch(pattern);
+          }
+          expect(Number.isInteger(call["n"]) && (call["n"] as number) >= 0, "n").toBe(true);
           // No field is a prompt: a recorded call has the hash of its request and not its text.
           expect(line).not.toContain('"prompt"');
           expect(line).not.toContain('"system"');

@@ -1,7 +1,7 @@
 /**
  * The authorization probes, run as an evaluation suite (gate G1, "probes answered with data").
  *
- * Three groups of cells, each sent in two modes: once with the segregation of duties on and once
+ * Four groups of cells, each sent in two modes: once with the segregation of duties on and once
  * relaxed for a single-person demonstration.
  *
  *  1. The matrix (the one the application tests, apps/parol/test/routes/authorization.test.ts):
@@ -16,6 +16,12 @@
  *     neither matter may change.
  *  3. The routes that name no matter and only read (the lists, the start page, the session), read
  *     as every caller, because a list can show a person the title of a matter they have no part in.
+ *  4. The URLs that no route owns: a matter's pages and API with segments after them that no route
+ *     has, each probed route under every method the table does not probe on it, and the path of
+ *     every wildcard route that names a matter, sent by a visitor, a signed-in person with no part
+ *     in the matter and a member. The answer must be the 404 of any URL that nothing owns. This is
+ *     the check for a route that answers more than it is listed for: the list of routes cannot
+ *     tell a wildcard that hands on from one that answers, and this can.
  *
  * What each matrix cell should get is written out below from the documented table of roles
  * (docs/parol/03 and 06), and is checked to be the table the application uses (`MATTER_ACTIONS`).
@@ -35,8 +41,13 @@
  *  - changed anything in the store (a hash of every row of every table, before and after).
  * A forged-id cell is an exposure when the answer is a success, holds an id or the title of the
  * second matter, differs from the answer for an id of no record (which tells the caller that the
- * record exists elsewhere), or changed any row of the store. A list cell is an exposure when it
- * holds the title or an id of a matter the caller has no part in, or answers a visitor.
+ * record exists elsewhere), or changed any row of the store. A route that names two ids that the
+ * application checks against each other (a version and its document) is forged in two forms: with
+ * one id of the second matter and the other the caller's own, which that check turns away whatever
+ * the lookups do, and with both from one record of the second matter, which gets past it. A list
+ * cell is an exposure when it holds the title or an id of a matter the caller has no part in, or
+ * answers a visitor. A cell for a URL that no route owns is an exposure when the answer is not the
+ * 404 of a URL that nothing owns, whatever answered it.
  *
  * An answer that differs from the expected one in no way that tells a caller more than it should
  * (a member refused with 404 instead of 403, a let-in caller sent away) is a mismatch: counted
@@ -61,6 +72,7 @@ import { urls } from "../../../../apps/parol/src/server/urls.js";
 import { DEMO_USER_IDS } from "../../../../apps/parol/src/store/index.js";
 import { EvalError } from "../../errors.js";
 import type { Dataset } from "../dataset.js";
+import { SUITE_SENTENCE_MAX } from "../results.js";
 import { ExposureControlFailure, ExposureSuiteUnavailable } from "./errors.js";
 import { createCaseOracle } from "./model.js";
 import {
@@ -84,6 +96,7 @@ import {
   type ProbeIds,
   type Scratch,
   type ScratchLevel,
+  unroutedRequests,
 } from "./probes.js";
 import { createCaseMatter, decisionFor, reviewAndExport } from "./review.js";
 import { createExposureSite, type ExposureSite, type SiteClient, type SiteHooks } from "./site.js";
@@ -120,6 +133,12 @@ const USER_OF: Record<Actor, string | null> = {
   admin: DEMO_USER_IDS.admin,
   anonymous: null,
 };
+/**
+ * The callers of the URLs that no route owns: a visitor, a signed-in person with no part in the
+ * matter and a member. A route that answers such a URL answers one of them, and every one of them
+ * must get the same 404.
+ */
+export const UNROUTED_ACTORS: readonly Actor[] = ["anonymous", "outsider", "associate"];
 /** The role each caller holds in the matter the matrix goes to. The stranger holds none in it. */
 const ROLE_OF: Partial<Record<Actor, MatterRole>> = {
   associate: "associate",
@@ -133,8 +152,8 @@ const SECOND_NAME = "Second matter for the forged id probes (Lanternfish / Corva
 
 /** What the sentence calls the seven callers, in the order of `ACTORS`. */
 const CALLER_KINDS =
-  "an associate, a reviewer and a viewer of the matter, a person who belongs to another matter only, " +
-  "a signed-in person who belongs to no matter, an administrator who is not a member, and a visitor with no session";
+  "an associate, a reviewer and a viewer of the matter, a member of another matter only, " +
+  "a signed-in person with no matter, an administrator who is not a member, and a visitor";
 
 /**
  * Who may do what, written out by hand from docs/parol/03 (the HTTP API table) and docs/parol/06,
@@ -369,6 +388,29 @@ export function classifyListing(args: {
     : { verdict: "mismatch" };
 }
 
+/**
+ * Decides one request to a URL that no route owns. `reference` is the answer the same caller got
+ * for the same method at a URL of the same kind (a page or the API) outside every matter's URL.
+ * Whatever answers such a URL, a wildcard that is registered as middleware included, has answered
+ * more than it is listed for, and the application's own 404 is the only answer there is: anything
+ * else, a redirect and an error included, is an answer from a handler. Holding data of a matter,
+ * changing a row, or a 404 that is not the reference are found as well.
+ */
+export function classifyUnrouted(args: {
+  observed: Observed;
+  reference: Snapshot;
+  forbidden: readonly string[];
+}): Verdict {
+  const { observed } = args;
+  const reasons: ExposureReason[] = [];
+  if (observed.letIn || observed.status !== 404) reasons.push("handler_answered");
+  if (observed.stateChanged) reasons.push("changed_state");
+  if (containsAny(observed.body, args.forbidden)) reasons.push("carried_data");
+  if (reasons.length === 0 && !sameSnapshot(observed, args.reference))
+    reasons.push("refusal_differs");
+  return reasons.length > 0 ? { verdict: "exposure", reasons } : { verdict: "expected" };
+}
+
 // ---------------------------------------------------------------------------------------------
 // The matters the probes go to
 // ---------------------------------------------------------------------------------------------
@@ -527,17 +569,32 @@ export interface AuthorizationResult {
   matrixCells: number;
   forgedCells: number;
   listCells: number;
+  unroutedCells: number;
   /** Routes that name a matter, in the matrix. */
   routes: number;
-  /** Forged-id requests (one per id a route takes, and one per place outside a path). */
+  /**
+   * Forged-id requests: one for each id a route takes in a path, one for each place outside a
+   * path, and one for each route that names several ids with all of them from one record.
+   */
   forgedRequests: number;
+  /** The places an id goes (a path, a body, a query string): the requests that are not that last form. */
+  forgedPlaces: number;
   /** Routes that name no matter and are only read. */
   listRoutes: number;
+  /** Requests to URLs that no route owns, for each caller: a method and a URL. */
+  unroutedRequests: number;
   callers: number;
   modes: number;
-  /** Write routes of the matrix, and those whose refused callers were sent a body that changes the store for a caller who is let in. */
+  /**
+   * Write routes of the matrix, and those whose refused callers were sent a body that changes the
+   * store for a caller who is let in (and who changed it, in every mode).
+   */
   writeRoutes: number;
   writesWithEffect: number;
+  /** The write routes that have no such body (a resume or a cancel of a finished run is a conflict whoever sends it). */
+  writesWithoutBody: string[];
+  /** The write routes that have one and whose proof was not made in every mode (it was stopped before the guard). */
+  writesUnproven: number;
   /** Differences between the application's role table and the documented one. */
   tableDrift: number;
   /** The first exposed cells, by route template, caller and mode. No content. */
@@ -549,14 +606,16 @@ export interface AuthorizationResult {
 
 /**
  * The groups of cells: the `matrix`, the bodies that change the store sent to refused callers in
- * the matrix (`effects`), the `forged` ids and the `lists`.
+ * the matrix (`effects`), the `forged` ids, the `lists` and the URLs that no route owns
+ * (`unrouted`).
  */
-export type AuthorizationGroup = "matrix" | "effects" | "forged" | "lists";
+export type AuthorizationGroup = "matrix" | "effects" | "forged" | "lists" | "unrouted";
 export const AUTHORIZATION_GROUPS: readonly AuthorizationGroup[] = [
   "matrix",
   "effects",
   "forged",
   "lists",
+  "unrouted",
 ];
 
 export interface AuthorizationArgs {
@@ -565,6 +624,8 @@ export interface AuthorizationArgs {
   playbook: LoadedPlaybook;
   signal: AbortSignal;
   hooks?: SiteHooks;
+  /** The workflow version the suite's reviews run under. Default: the newest the application ships. */
+  workflow?: string;
   /**
    * For the suite's own tests, which plant one fault and need only the cells that find it. The
    * command never passes this; the default is every group.
@@ -611,13 +672,20 @@ export async function runAuthorizationProbes(
     matrixCells: 0,
     forgedCells: 0,
     listCells: 0,
+    unroutedCells: 0,
     routes: MATTER_PROBES.length,
     forgedRequests: FORGED_PROBES.length,
+    forgedPlaces: FORGED_PROBES.filter((probe) => !probe.consistent).length,
     listRoutes: LIST_PROBES.length,
+    unroutedRequests: 0,
     callers: ACTORS.length,
     modes: 2,
     writeRoutes: MATTER_PROBES.filter((probe) => probe.method !== "GET").length,
     writesWithEffect: 0,
+    writesWithoutBody: MATTER_PROBES.filter(
+      (probe) => probe.method !== "GET" && effectOf(probe, DUMMY_SCRATCH) === null,
+    ).map(probeName),
+    writesUnproven: 0,
     tableDrift: tableDrift().length,
     exposed: [],
     mismatched: [],
@@ -634,6 +702,7 @@ export async function runAuthorizationProbes(
       playbook: args.playbook,
       generator: oracle,
       relaxed,
+      ...(args.workflow === undefined ? {} : { workflow: args.workflow }),
       ...(args.hooks === undefined ? {} : { hooks: args.hooks }),
     });
     try {
@@ -644,20 +713,69 @@ export async function runAuthorizationProbes(
   }
   // Counted only where the body was seen to change the store in both modes, not where it was assumed to.
   result.writesWithEffect = [...proven.values()].filter((modes) => modes === result.modes).length;
+  result.writesUnproven = groups.has("effects")
+    ? Math.max(0, result.writeRoutes - result.writesWithEffect - result.writesWithoutBody.length)
+    : 0;
 
   result.sentence = sentenceOf(result);
   return result;
 }
 
-/** The sentence of the record. It states the counts of this run and holds no number of its own. */
-export function sentenceOf(result: Omit<AuthorizationResult, "sentence">): string {
+/**
+ * The most characters an authorization sentence is built to. The limit of the results file is
+ * `SUITE_SENTENCE_MAX`; this is under it, as the canary scan's budget is, so that a sentence is
+ * never at the edge of what the file's reader accepts.
+ */
+export const AUTHORIZATION_SENTENCE_BUDGET = SUITE_SENTENCE_MAX - 100;
+
+/** What a sentence that fits no other way ends with, so that a cut is never silent. */
+export const SENTENCE_CUT = " (the rest was cut to fit).";
+
+/**
+ * How much of the sentence is spelled out. A run that found nothing says it all; a run that found
+ * something has more to say first, and the explanations give way to the counts, the unreached
+ * clause, the drift and the names of the first exposed cells.
+ */
+interface Wording {
+  /** The seven kinds of caller, in words. */
+  callers: boolean;
+  /** 0: in full. 1: the paragraph about changes compressed. 2: the cells compressed as well. */
+  compress: 0 | 1 | 2;
+  /** How many of the first exposed cells are named. */
+  names: number;
+}
+
+/** From the fullest wording to the shortest, each tried in turn until one fits the budget. */
+const LADDER: readonly Wording[] = [
+  { callers: true, compress: 0, names: 3 },
+  { callers: false, compress: 0, names: 3 },
+  { callers: false, compress: 1, names: 3 },
+  { callers: false, compress: 2, names: 3 },
+  { callers: false, compress: 2, names: 2 },
+  { callers: false, compress: 2, names: 1 },
+];
+
+/**
+ * What the probes cannot see, always said. Fixed text: it is a property of the probes and not of
+ * a run.
+ */
+const NOT_SEEN =
+  " Not seen: evidence ids inside a decision body, the sign-in, sign-out and create-a-matter POSTs, " +
+  "and any difference between the two matters but their title and ids (matter B is built from the same case).";
+
+/** The ends of the routes that have no body that changes the store: `resume and cancel`. */
+const endsOf = (routes: readonly string[]): string =>
+  [...new Set(routes.map((route) => route.split("/").pop() ?? route))].join(" and ");
+
+function sentenceWith(result: Omit<AuthorizationResult, "sentence">, wording: Wording): string {
+  const { compress } = wording;
   const drift =
     result.tableDrift > 0
       ? ` The action table differs from the documented one in ${result.tableDrift} places.`
       : "";
   const named = (list: AuthorizationFinding[]): string =>
     list
-      .slice(0, 3)
+      .slice(0, wording.names)
       .map((f) => `${f.probe} as ${f.actor}${f.relaxed ? " (relaxed)" : ""}`)
       .join("; ");
   const unreached =
@@ -665,39 +783,75 @@ export function sentenceOf(result: Omit<AuthorizationResult, "sentence">): strin
       ? `, ${result.letInNotReached} of them cells whose caller should have been let in and was not, ` +
         "which did not reach their handler and so tested nothing past the guard"
       : ", and every cell whose caller should have been let in reached its handler";
+  const callers = wording.callers ? ` (${CALLER_KINDS})` : "";
   const matrix =
     result.matrixCells === 0
       ? ""
-      : `${result.matrixCells} for ${result.routes} routes that name a matter as ${result.callers} ` +
-        `callers (${CALLER_KINDS}) in ${result.modes} modes, ${result.shouldBeLetIn} of which should be let in ` +
-        `and ${result.mustBeRefused} refused, with ${result.comparedWithMissing} refusals compared with the ` +
-        "answer for a matter and records that exist nowhere";
+      : compress < 2
+        ? `${result.matrixCells} for ${result.routes} routes that name a matter as ${result.callers} ` +
+          `callers${callers} in ${result.modes} modes, ${result.shouldBeLetIn} of which should be let in ` +
+          `and ${result.mustBeRefused} refused, with ${result.comparedWithMissing} refusals compared with the ` +
+          "answer for a matter and records that exist nowhere"
+        : `${result.matrixCells} for ${result.routes} routes that name a matter as ${result.callers} callers ` +
+          `in ${result.modes} modes (${result.shouldBeLetIn} let in, ${result.mustBeRefused} refused, ` +
+          `${result.comparedWithMissing} compared with a missing matter)`;
+  const pairs = result.forgedRequests - result.forgedPlaces;
   const forged =
     result.forgedCells === 0
       ? ""
-      : `${result.forgedCells} in which a member of the matter named a record of another matter in each of ` +
-        `${result.forgedRequests} places (a path, a body or a query string), which must be answered as an id of ` +
-        "no record is and change no row";
+      : compress < 2
+        ? `${result.forgedCells} in which a member of the matter named a record of another matter in ` +
+          `${result.forgedRequests} requests in ${result.forgedPlaces} places (a path, a body or a query ` +
+          `string)${pairs > 0 ? `, ${pairs} of them with every id from one record of that matter` : ""}, ` +
+          "which must be answered as an id of no record is, changing no row"
+        : `${result.forgedCells} naming a record of another matter in ${result.forgedRequests} requests ` +
+          `in ${result.forgedPlaces} places${pairs > 0 ? ` (${pairs} with every id from one record)` : ""}`;
   const lists =
     result.listCells === 0
       ? ""
-      : `${result.listCells} in which the ${result.listRoutes} routes that name no matter and only read were ` +
-        "read as every caller, which must hold no title or id of a matter the caller has no part in";
-  const groups = [matrix, forged, lists].filter((part) => part !== "");
+      : compress < 2
+        ? `${result.listCells} in which the ${result.listRoutes} routes that name no matter and only read were ` +
+          "read as every caller, which must show no matter the caller has no part in"
+        : `${result.listCells} reading ${result.listRoutes} routes that name no matter as every caller`;
+  const unrouted =
+    result.unroutedCells === 0
+      ? ""
+      : compress < 2
+        ? `${result.unroutedCells} in which a visitor, an outsider and a member sent ${result.unroutedRequests} ` +
+          "requests to URLs no route owns (after a matter, and at each probed route under the other methods), " +
+          "which must get the 404 any such URL gets"
+        : `${result.unroutedCells} sending ${result.unroutedRequests} requests to URLs no route owns as three callers`;
+  const groups = [matrix, forged, lists, unrouted].filter((part) => part !== "");
   const cells =
     groups.length === 0
       ? ""
       : ` The cells: ${groups.slice(0, -1).join("; ")}${groups.length > 1 ? "; and " : ""}${groups[groups.length - 1]}.`;
+  const without = result.writesWithoutBody.length;
+  /** The write routes that were not sent a body that changes the store, said from the counts. */
+  const others = [
+    without > 0 ? `${without}, ending in ${endsOf(result.writesWithoutBody)}, have none` : "",
+    result.writesUnproven > 0
+      ? `${result.writesUnproven} had one that was stopped before the guard`
+      : "",
+  ].filter((part) => part !== "");
   const effects =
     result.matrixCells === 0
       ? ""
-      : " Changes were found by comparing a hash of every row of every table before and after each cell" +
-        (result.writesWithEffect > 0
-          ? `, and callers who must be refused were sent a body that changes the store for a caller who is let in on ` +
-            `${result.writesWithEffect} of ${result.writeRoutes} write routes (the others, such as resuming a ` +
-            "finished run, are answered the same whoever sends them and cannot change it)."
-          : `, but the bodies sent to callers who must be refused change nothing even if they get through ` +
-            `(none of the ${result.writeRoutes} write routes was sent one).`);
+      : result.writesWithEffect > 0
+        ? compress === 0
+          ? " Changes were found by comparing a hash of every row of every table before and after each cell, " +
+            "and callers who must be refused were sent a body that changes the store for a caller who is let in on " +
+            `${result.writesWithEffect} of ${result.writeRoutes} write routes${others.length > 0 ? ` (${others.join(", and ")})` : ""}.`
+          : " Changes: a hash of every row of every table before and after each cell; a body that changes the store " +
+            `was sent to refused callers on ${result.writesWithEffect} of ${result.writeRoutes} write routes` +
+            `${without > 0 ? `, ${without} have none` : ""}` +
+            `${result.writesUnproven > 0 ? `, ${result.writesUnproven} stopped before the guard` : ""}.`
+        : compress === 0
+          ? " Changes were found by comparing a hash of every row of every table before and after each cell, " +
+            "but the bodies sent to callers who must be refused change nothing even if they get through " +
+            `(none of the ${result.writeRoutes} write routes was sent one).`
+          : " Changes: a hash of every row of every table before and after each cell; " +
+            `none of the ${result.writeRoutes} write routes was sent a body that changes the store.`;
   return (
     `Authorization probes: sent ${result.probesRun} cells to the application running in process ` +
     `on synthetic matters, reviewed where a review was needed by a scripted key oracle, which is not a language model. ` +
@@ -709,8 +863,30 @@ export function sentenceOf(result: Omit<AuthorizationResult, "sentence">): strin
     `without exposing anything${unreached}.` +
     cells +
     effects +
+    NOT_SEEN +
     drift +
     (result.exposed.length > 0 ? ` First exposed: ${named(result.exposed)}.` : "")
+  );
+}
+
+/** Every wording of the sentence, from the fullest to the shortest, whether or not it fits. */
+export function sentenceLadder(result: Omit<AuthorizationResult, "sentence">): string[] {
+  return LADDER.map((wording) => sentenceWith(result, wording));
+}
+
+/**
+ * The sentence of the record. It states the counts of this run and holds no number of its own. It
+ * is built to fit `AUTHORIZATION_SENTENCE_BUDGET`: the fullest wording that fits is the one used,
+ * and the explanations give way before the counts, the unreached clause, the drift and the names
+ * of the first exposed cells do. If nothing fits, the shortest is cut and says so. It never throws.
+ */
+export function sentenceOf(result: Omit<AuthorizationResult, "sentence">): string {
+  const wordings = sentenceLadder(result);
+  const fits = wordings.find((text) => text.length <= AUTHORIZATION_SENTENCE_BUDGET);
+  if (fits !== undefined) return fits;
+  const shortest = wordings[wordings.length - 1]!;
+  return (
+    shortest.slice(0, AUTHORIZATION_SENTENCE_BUDGET - SENTENCE_CUT.length).trimEnd() + SENTENCE_CUT
   );
 }
 
@@ -753,7 +929,7 @@ async function runMode(mode: Mode): Promise<void> {
 
   // The probe table must be the application's routes: a route that names a matter and has no
   // probe, or a probe for a route that is not there, would make a clean matrix mean less.
-  checkCoverage(site);
+  const wildcards = checkCoverage(site);
 
   site.addUser(VIEWER, "Synthetic exposure viewer");
   site.addUser(OUTSIDER, "Synthetic exposure outsider");
@@ -925,10 +1101,11 @@ async function runMode(mode: Mode): Promise<void> {
       earlierVersionId: made.versionIds[0]!,
       amendmentId: made.documentIds[made.documentIds.length - 1]!,
       invitee: INVITEE,
+      workflow: site.workflowLabel,
     };
     // Reviewed: a finished run whose findings are open.
     const starter = site.authorize(DEMO_USER_IDS.associate, made.matterId, "run.start");
-    const started = site.services.runs.start(starter, { workflowLabel: "v2" });
+    const started = site.services.runs.start(starter, { workflowLabel: site.workflowLabel });
     await site.services.runs.idle();
     const issues = site.services.runs.issues(starter, started.id);
     const reviewer = site.authorize(DEMO_USER_IDS.reviewer, made.matterId, "review.decide");
@@ -1022,7 +1199,11 @@ async function runMode(mode: Mode): Promise<void> {
 
     // The proof that the body sent to the refused callers changes the store when a caller who is
     // let in sends it, on the matter they were sent to. Without it a clean count says nothing. A
-    // request that the guard did not let in proves nothing either way: that cell is counted apart.
+    // request that the guard let in and that changed nothing is a body that does not do what it
+    // was written to do: the suite stops. A request that the guard did not let in proves nothing
+    // either way, and is a cell whose caller should have been let in and was not, as any other: it
+    // is counted in `letInNotReached` and in `mismatches` (so that gate G1 is not evaluated), once
+    // for the route and the mode, and it is not a cell, so `probesRun` does not count it.
     if (shape?.target === "scratch" && scratch !== null) {
       const effect = effectOf(probe, scratch)!;
       const role = DOCUMENTED_ROLES[probe.action][0] ?? "associate";
@@ -1034,7 +1215,20 @@ async function runMode(mode: Mode): Promise<void> {
       );
       await settle();
       if (watch.changedSince(before)) shown.add(key_);
-      else if (sent.letIn && !shown.has(key_)) ineffective.add(key_);
+      else if (!shown.has(key_)) {
+        if (sent.letIn) ineffective.add(key_);
+        else {
+          result.letInNotReached += 1;
+          result.mismatches += 1;
+          if (result.mismatched.length < KEPT)
+            result.mismatched.push({
+              probe: probeName(probe),
+              actor: letInActor,
+              relaxed,
+              reasons: [],
+            });
+        }
+      }
     }
   }
 
@@ -1103,6 +1297,56 @@ async function runMode(mode: Mode): Promise<void> {
     }
   }
 
+  // --- 4. the URLs that no route owns ----------------------------------------------------------
+
+  // The answer for the same method at a URL that nothing owns, outside every matter's prefix, as
+  // each caller gets it: a wildcard under a matter's URL answers that one too, if it answers this.
+  const references = new Map<string, Snapshot>();
+  const referenceFor = async (
+    actor: Actor,
+    request: { method: string; template: string; body: ProbeBody },
+  ): Promise<Snapshot> => {
+    const template = isApi(request.template) ? "/api/unrouted" : "/unrouted";
+    const id = `${actor} ${request.method} ${template}`;
+    let found = references.get(id);
+    if (found === undefined) {
+      found = (
+        await send(actor, { method: request.method, template, path: template, body: request.body })
+      ).snapshot;
+      references.set(id, found);
+    }
+    return found;
+  };
+  const planned = groups.has("unrouted") ? unroutedRequests(ids, wildcards) : [];
+  result.unroutedRequests = planned.length;
+  for (const request of planned) {
+    for (const actor of UNROUTED_ACTORS) {
+      signal.throwIfAborted();
+      const member = ROLE_OF[actor] !== undefined;
+      const forbidden = [...(member ? [] : tokens.all), ...tokensB.all];
+      const before = watch.take();
+      const answer = await send(actor, {
+        method: request.method,
+        template: request.template,
+        path: request.path,
+        body: request.body,
+      });
+      const reference = await referenceFor(actor, request);
+      await settle();
+      const verdict = classifyUnrouted({
+        observed: {
+          ...answer.snapshot,
+          letIn: answer.letIn,
+          stateChanged: watch.changedSince(before),
+        },
+        reference,
+        forbidden,
+      });
+      result.unroutedCells += 1;
+      record(verdict, { probe: request.name, actor }, false);
+    }
+  }
+
   // --- the controls ----------------------------------------------------------------------------
 
   if (groups.has("forged")) {
@@ -1154,6 +1398,7 @@ const DUMMY_SCRATCH: Scratch = {
   earlierVersionId: "ver_0000000000000001",
   amendmentId: "doc_0000000000000001",
   invitee: INVITEE,
+  workflow: "v2",
 };
 
 /**
@@ -1194,6 +1439,7 @@ async function textScratch(site: ExposureSite): Promise<Scratch> {
     earlierVersionId: nda.versionId,
     amendmentId: amendment.documentId,
     invitee: INVITEE,
+    workflow: site.workflowLabel,
   };
 }
 
@@ -1210,16 +1456,26 @@ function freshMatter(site: ExposureSite, name = "A matter made for one request")
 }
 
 /**
- * Every route that can name a matter has a probe. A route made with `defineMatterRoute` must have
- * the probe's action. A route that names a matter and was registered another way (`app.get`,
- * `app.all`) is not guarded by the shared code, so it is let through only if the table probes it
- * under the method and path it was registered with, which makes the matrix send it every caller;
- * any other is the suite's to refuse, because nothing would have sent it a request. A wildcard
- * middleware that hands on (`app.use("/api/matters/*")`) answers nothing itself and is covered by
- * every probe that passes through it. A generic route that would answer a matter's URL
- * (`/:area/:id`) is found by asking the router, as `findMatterUrlsWithoutGuard` does.
+ * Every route that can name a matter has a probe, and no route is let through on its path alone.
+ *
+ *  - A route made with `defineMatterRoute` must be in the table with the action it checks.
+ *  - A route that names a matter and was registered another way (`app.get`, `app.all`) is not
+ *    guarded by the shared code, so it is let through only if the table probes it under the method
+ *    and path it was registered with, which makes the matrix send it every caller. Any other is
+ *    the suite's to refuse, because nothing would have sent it a request.
+ *  - A route that names no matter and was registered another way (`app.post("/api/search")`) is
+ *    let through only if the table sends a request to it under its method and path. Reads were
+ *    all that was checked before; a write is the same case.
+ *  - A wildcard (`app.use("/api/matters/*")`, `app.all("/api/matters/:matterId/*")`) is let
+ *    through, and so is an `ALL` route at a path the table probes. The route list cannot tell
+ *    one that hands on from one that answers, and does not try to: the cells for URLs that no
+ *    route owns (group `unrouted`) send every method to URLs the routes do not own, as three kinds
+ *    of caller, and an answer other than the 404 of such a URL is counted as an exposure. The paths
+ *    of the wildcards are returned so that those cells reach the URL each one answers.
+ *  - A generic route that would answer a matter's URL (`/:area/:id`) is found by asking the router,
+ *    as `findMatterUrlsWithoutGuard` does.
  */
-function checkCoverage(site: ExposureSite): void {
+function checkCoverage(site: ExposureSite): string[] {
   const described = describeRoutes(site.app);
   const routes = described.filter((route) => route.kind === "matter");
   const key = (method: string, path: string): string => `${method} ${path}`;
@@ -1270,10 +1526,10 @@ function checkCoverage(site: ExposureSite): void {
     );
 
   const templates = new Set(MATTER_PROBES.map((probe) => probe.template));
-  const isMiddleware = (route: { method: string; path: string }): boolean =>
+  const isWildcard = (route: { method: string; path: string }): boolean =>
     route.method === "ALL" && route.path.endsWith("*");
   const covered = (route: { method: string; path: string }): boolean =>
-    isMiddleware(route) ||
+    isWildcard(route) ||
     probes.has(key(route.method, route.path)) ||
     (route.method === "ALL" && templates.has(route.path));
   const strayed = described
@@ -1293,4 +1549,31 @@ function checkCoverage(site: ExposureSite): void {
     throw new ExposureSuiteUnavailable(
       `A route other than a matter route would answer a URL that names a matter: ${answeredElsewhere.join(", ")}.`,
     );
+  // A route registered another way that names no matter, whatever its method, has to be one the
+  // suite sends a request to. The `ALL` routes are left to the cells for URLs that no route owns.
+  const sent = new Set([...listed, ...probes.keys()]);
+  const unsent = described
+    .filter(
+      (route) =>
+        route.kind === "unmanaged" &&
+        route.method !== "ALL" &&
+        !isMatterScopedPath(route.path) &&
+        !sent.has(key(route.method, route.path)),
+    )
+    .map((route) => key(route.method, route.path));
+  if (unsent.length > 0)
+    throw new ExposureSuiteUnavailable(
+      `The application has routes that were not made with defineRoute, name no matter, and are not among the requests the suite sends: ${unsent.join(", ")}.`,
+    );
+
+  return [
+    ...new Set(
+      described
+        .filter(
+          (route) =>
+            route.kind === "unmanaged" && isWildcard(route) && isMatterScopedPath(route.path),
+        )
+        .map((route) => route.path),
+    ),
+  ];
 }

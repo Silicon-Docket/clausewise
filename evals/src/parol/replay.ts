@@ -35,7 +35,9 @@ import {
   type ObjectGenerator,
 } from "@clausewise/llm";
 import { sha256Hex } from "../../../apps/parol/src/canonical.js";
-import { EvalError } from "../errors.js";
+import { isAbortError } from "../../../apps/parol/src/stages/analyze-call.js";
+import { WORKFLOWS } from "../../../apps/parol/src/prompts/workflows.js";
+import { EvalError, shown } from "../errors.js";
 import { pinsSchema, type Pins } from "./results.js";
 
 export const RECORDING_KIND = "parol-eval-recording" as const;
@@ -298,6 +300,9 @@ export class RecordingWriter {
     const line = `${JSON.stringify(call)}\n`;
     this.chain = this.chain
       .then(async () => {
+        // Checked here and not above: the failure of an earlier line is only known once it has
+        // happened, which is after this call was handed in.
+        if (this.failure !== undefined) return;
         await appendFile(this.path, line, "utf8");
         this.written += 1;
       })
@@ -313,8 +318,9 @@ export class RecordingWriter {
 
   /** Writes the last line, which says whether the run finished and what the provider named. */
   finish(trailer: RecordingTrailer): void {
-    // A line that failed leaves a gap; later lines and the trailer are not written after it, so
-    // the file is cut short and reads as an unfinished run and not as a complete one with holes.
+    // A line that failed leaves a gap; later lines (see `add`) and the trailer are not written
+    // after it, so the file is cut short and reads as an unfinished run and not as a complete one
+    // with holes.
     const line = `${JSON.stringify({ end: true, ...trailer, complete: trailer.complete && this.unrecorded === 0 })}\n`;
     this.chain = this.chain
       .then(() => (this.failure === undefined ? appendFile(this.path, line, "utf8") : undefined))
@@ -393,7 +399,7 @@ export function recordingGenerator(
         } else if (
           !(error instanceof ModelRequestError) &&
           request.signal?.aborted !== true &&
-          !isAbort(error)
+          !isAbortError(error)
         ) {
           // The stages score this as a failed call, and the recording has no line for it.
           writer.noteUnrecorded();
@@ -403,9 +409,6 @@ export function recordingGenerator(
     },
   };
 }
-
-const isAbort = (error: unknown): boolean =>
-  error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
 
 // ---------------------------------------------------------------------------------------------
 // Replaying
@@ -473,7 +476,7 @@ export function replayGenerator(
                 `(request ${key.slice(0, 12)}${n > 0 ? `, asked ${n + 1} times in this run` : ""}). ` +
                 "A replay re-scores recorded answers and cannot make new ones. " +
                 (unfinished
-                  ? "The recording is of a run that did not finish, so it may never have got this far; otherwise the prompts, the schemas, the workflow, the playbook or the documents differ from the run that was recorded. "
+                  ? "The recording may be of a run that did not finish or that lost a call it could not record, so it may never have got this far; otherwise the prompts, the schemas, the workflow, the playbook or the documents differ from the run that was recorded. "
                   : "The prompts, the schemas, the workflow, the playbook or the documents differ from the run that was recorded, or this run asks for a case or a repeat that the recorded run did not. ") +
                 "Nothing was sent.",
             ),
@@ -542,10 +545,16 @@ export function replayRefusal(args: {
     return "The recording is not of a live run, so it holds no model answers.";
   }
   if (pins.workflow.sha256 !== args.workflowSha256) {
+    // The label is the recording's and not this code's, so it is repeated only when it reads as a
+    // plain name, and offered as an option only when it is a workflow this code knows.
+    const label = shown(pins.workflow.label, "workflow label");
+    const plain = label === pins.workflow.label;
     return (
-      `The recording was made with workflow ${pins.workflow.label}, and this run is of ` +
+      `The recording was made with ${plain ? `workflow ${label}` : "a workflow whose label is not repeated here"}, and this run is of ` +
       `${args.workflowLabel}. Their prompts or checks differ, so no request would be found. ` +
-      `Replay with --workflow ${pins.workflow.label}.`
+      (plain && Object.hasOwn(WORKFLOWS, label)
+        ? `Replay with --workflow ${label}.`
+        : "No workflow this code knows matches the recording.")
     );
   }
   if (pins.playbook.sha256 !== args.playbookSha256) {

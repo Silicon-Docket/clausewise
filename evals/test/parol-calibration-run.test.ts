@@ -1,4 +1,4 @@
-import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ModelOutputError, ModelRequestError } from "@clausewise/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -661,6 +661,28 @@ describe("--calibration on the command line", () => {
     const [replayName] = await readdir(replayDir);
     const replayed = await readResults(join(replayDir, replayName!));
     expect(replayed.suites.calibration!.result).toEqual(file.suites.calibration!.result);
+    // Nothing was sent, so nothing is said to be in a usage total, and the plan says the pairs
+    // are answered from the recording and not sent.
+    expect(replayed.notes.join(" ")).not.toContain("usage total");
+    // The note about where the calls of the set are counted is for a run that made them.
+    expect(replayed.notes.join(" ")).not.toContain("calls of the calibration set");
+    expect(again.stderr).toContain("answered once from the recording");
+    expect(again.stderr).not.toContain("sent once for the run");
+    expect(out.stderr).toContain("sent once for the run");
+
+    // The calls of the set are recorded under a run of their own, and those of the cases under
+    // the case and the repeat.
+    const runs = (await readFile(join(resultsDir, recordingName), "utf8"))
+      .trim()
+      .split("\n")
+      .slice(1)
+      .map((line) => JSON.parse(line) as { run?: string })
+      .filter((line) => line.run !== undefined)
+      .map((line) => line.run);
+    expect(runs.filter((run) => run === "calibration")).toHaveLength(8);
+    expect(new Set(runs.filter((run) => run !== "calibration"))).toEqual(
+      new Set(["PAROL-D01|1", "PAROL-D01|2"]),
+    );
   });
 });
 
@@ -714,6 +736,169 @@ describe("--calibration that stops part way", () => {
     // The report does not claim the set was simply not run.
     expect(out.stdout).toContain("or the run stopped before the calibration set finished");
     expect(out.stdout).not.toContain("calibration set was not run");
+  });
+});
+
+describe("what a stopped calibration set says about its calls, by the way the run was made", () => {
+  /** Answers cases as the key does, and the calibration pairs by the label of the pair. */
+  const pairFactory = (
+    failAfterPairs?: number,
+  ): NonNullable<Parameters<typeof run>[1]["generatorFactory"]> => {
+    const stand = oracleFactory({});
+    let pairCalls = 0;
+    return (request) => {
+      const inner = stand.factory(request);
+      return {
+        ...inner,
+        async generate(call) {
+          const pair =
+            call.schemaName === "check_support"
+              ? pairs.find(
+                  (p) =>
+                    call.prompt.includes(p.evidence.quote) &&
+                    call.prompt.includes(p.claim.discrepancy),
+                )
+              : undefined;
+          if (pair === undefined) return inner.generate(call);
+          pairCalls += 1;
+          // The key is refused after some pairs: every further call would meet the same error.
+          if (failAfterPairs !== undefined && pairCalls > failAfterPairs) {
+            throw new ModelRequestError("bad key", 401, true);
+          }
+          return call.schema.parse({
+            verdict: pair.label === "unsupported" ? "not_supported" : "supported",
+            missingPremise: null,
+          });
+        },
+      };
+    };
+  };
+  const OTHER_PROVIDER = {
+    ANTHROPIC_API_KEY: "sk-test-not-a-real-key",
+    CLAUSEWISE_PROVIDER: "openai-compatible",
+    CLAUSEWISE_MODEL: "local-model",
+    CLAUSEWISE_BASE_URL: "http://127.0.0.1:9/v1",
+  };
+  const notesOf = async (resultsDir: string): Promise<string> => {
+    const names = await readdir(resultsDir);
+    const file = await readResults(
+      join(
+        resultsDir,
+        names.find((name) => name.endsWith(".json"))!,
+      ),
+    );
+    return file.notes.join(" ");
+  };
+  const pricesFile = async (): Promise<string> => {
+    const path = join(dir, `prices-${++n}.json`);
+    await writeFile(
+      path,
+      JSON.stringify({ "local-model": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }),
+    );
+    return path;
+  };
+
+  it("a replay says how many answers it replayed, takes the number from the replay, and has no usage total", async () => {
+    const r = await withSet();
+    const resultsDir = join(dir, `res-${++n}`);
+    const base = ["--calibration", "--workflow", "v3", "--case", "PAROL-D01"];
+    const made = await run(["--yes", ...base], {
+      resultsDir,
+      root: r,
+      generatorFactory: pairFactory(),
+    });
+    expect(made.code, made.stderr).toBe(0);
+    const recordingPath = join(
+      resultsDir,
+      (await readdir(resultsDir)).find((name) => name.endsWith(RECORDING_SUFFIX))!,
+    );
+    // The last pair of the set is missing from the recording, as if the run had been cut short.
+    const lines = (await readFile(recordingPath, "utf8")).trimEnd().split("\n");
+    const last = lines
+      .map((line) => (JSON.parse(line) as { run?: string }).run)
+      .lastIndexOf("calibration");
+    expect(last).toBeGreaterThan(0);
+    await writeFile(recordingPath, `${lines.filter((_, i) => i !== last).join("\n")}\n`);
+
+    const replayDir = join(dir, `res-${++n}`);
+    const replayed = await run(["--replay", recordingPath, ...base], {
+      resultsDir: replayDir,
+      root: r,
+      env: {},
+    });
+    expect(replayed.code).toBe(1);
+    const file = await readResults(
+      join(
+        replayDir,
+        (await readdir(replayDir)).find((name) => name.endsWith(".json"))!,
+      ),
+    );
+    expect(file.suites.calibration).toBeNull();
+    // What was replayed for the set is what was replayed in all, less what the runs of the cases
+    // took. The request that had no answer was asked for and is not an answer.
+    const forCases = file.runs.reduce((sum, record) => sum + record.modelCalls, 0);
+    const replayedForSet = file.usage.calls - forCases;
+    expect(replayedForSet).toBeGreaterThan(0);
+    expect(replayedForSet).toBeLessThan(8);
+    const notes = file.notes.join(" ");
+    expect(notes).toContain(
+      `The calibration set was stopped before it finished (${replayedForSet} of 8 answers were replayed from the recording). It was not scored.`,
+    );
+    expect(notes).not.toContain("usage total");
+    expect(notes).not.toContain("started");
+    expect(replayed.stdout).not.toContain("usage total");
+    // The same replay stops with the cause, which is the missing answer.
+    expect(replayed.stderr).toContain("The recording has no answer for a request of check_support");
+  });
+
+  it("a live run of a provider with no usage figures does not say its calls are in a usage total", async () => {
+    const r = await withSet();
+    const prices = await pricesFile();
+    const base = ["--yes", "--calibration", "--workflow", "v3", "--case", "PAROL-D01"];
+    const stopped = join(dir, `res-${++n}`);
+    const out = await run([...base, "--prices", prices], {
+      resultsDir: stopped,
+      root: r,
+      env: OTHER_PROVIDER,
+      generatorFactory: pairFactory(2),
+    });
+    expect(out.code, out.stderr).toBe(1);
+    const stoppedNotes = await notesOf(stopped);
+    expect(stoppedNotes).toMatch(
+      /calibration set was started and stopped before it finished \(\d+ of 8 calls were started\)/,
+    );
+    expect(stoppedNotes).toContain(
+      "its calls are in the count of model calls and in no run's latency",
+    );
+    expect(stoppedNotes).not.toContain("usage total");
+
+    const finished = join(dir, `res-${++n}`);
+    const whole = await run([...base, "--prices", prices], {
+      resultsDir: finished,
+      root: r,
+      env: OTHER_PROVIDER,
+      generatorFactory: pairFactory(),
+    });
+    expect(whole.code, whole.stderr).toBe(0);
+    const finishedNotes = await notesOf(finished);
+    expect(finishedNotes).toContain(
+      "The 8 calls of the calibration set are in the count of model calls",
+    );
+    expect(finishedNotes).not.toContain("usage total");
+  });
+
+  it("a live run of a provider that reports usage still says so", async () => {
+    const r = await withSet();
+    const stopped = join(dir, `res-${++n}`);
+    const out = await run(["--yes", "--calibration", "--workflow", "v3", "--case", "PAROL-D01"], {
+      resultsDir: stopped,
+      root: r,
+      generatorFactory: pairFactory(2),
+    });
+    expect(out.code, out.stderr).toBe(1);
+    expect(await notesOf(stopped)).toContain(
+      "its calls are in the usage total and in no run's cost or latency",
+    );
   });
 });
 

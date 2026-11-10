@@ -8,6 +8,7 @@ import {
 import { MATTER_PROBES, OTHER_PROBES } from "../src/parol/exposure/probes.js";
 import { createScanner } from "../src/parol/exposure/scan.js";
 import type { Dataset } from "../src/parol/dataset.js";
+import { expectedBodies } from "./parol-canary-support.js";
 import {
   CANARY_SHAPE,
   completeDataset,
@@ -51,8 +52,17 @@ const labelsOf = (result: CanaryResult, token?: "canary" | "id"): string[] =>
 
 describe("the real application", () => {
   let result: CanaryResult;
+  let findings = 0;
   beforeAll(async () => {
-    result = await scan();
+    result = await scan({
+      afterReview: (site, context) => {
+        findings = (
+          site.repo.db
+            .prepare("SELECT COUNT(*) AS n FROM findings WHERE matter_id = ?")
+            .get(context.caseMatterId) as { n: number }
+        ).n;
+      },
+    });
   });
 
   it("gives zero, out of the bodies of all eight readers", () => {
@@ -69,8 +79,10 @@ describe("the real application", () => {
       "legal engineer",
       "anonymous",
     ]);
-    // Each of the 8 readers fetches every route it can name: well over the 168 of the first version.
-    expect(result.byKind.http_body).toBeGreaterThan(300);
+    // Each of the 8 readers fetches every route it can name, a route that takes a finding id once
+    // for each finding of the case: readers times routes, and not a figure above which it passes.
+    expect(findings).toBeGreaterThan(0);
+    expect(result.byKind.http_body).toBe(expectedBodies({ canaryMatters: 1, findings }));
     expect(result.artefactsScanned).toBe(Object.values(result.byKind).reduce((a, b) => a + b, 0));
   });
 
@@ -97,11 +109,28 @@ describe("the real application", () => {
     expect(sentence).toMatch(/not a language model/);
     expect(sentence).toMatch(/nothing is sent anywhere/);
     expect(sentence).toMatch(/Before counting, the scanner found every planted string and id/);
-    expect(sentence).toMatch(/Not seen: text of the other matter without a canary string/);
+    expect(sentence).toMatch(
+      /Not seen: text of the other matter without a canary string, id or name/,
+    );
+    expect(sentence).toMatch(/its members on the HTML pages/);
     expect(sentence).toMatch(/ids in prompts and answers \(the model is shown clause labels\)/);
     expect(sentence).toMatch(/response headers/);
     expect(sentence).toMatch(/query variants/);
+    expect(sentence).toMatch(/wildcard handlers beyond one request each/);
     expect(sentence).toMatch(/of the canary matter \(it is never reviewed\)/);
+  });
+
+  it("says what was fetched, no more than the tables name, and for which side each artefact was searched", () => {
+    const { sentence } = result;
+    // The routes are the ones the probe tables name, and the claim is not that the application was checked.
+    expect(sentence).not.toContain("checked against its own route list");
+    expect(sentence).toContain(
+      `GET routes the probe tables name (a GET route outside them stops the suite; the two static pages once, anonymously) were fetched as`,
+    );
+    // What the artefacts were searched for, and what the canary matter's own rows and pages were.
+    expect(sentence).toMatch(
+      /were scanned for the 4 canary strings and the ids and names of the other matter \(the canary matter's own rows and pages: for the case's ids and names only; its members on the JSON routes\): 0 canary strings and 0 foreign ids or names found/,
+    );
   });
 
   it("writes a sentence the results file can hold: one line, 2000 characters at most, no dash", () => {
@@ -136,7 +165,7 @@ describe("a route that no probe table lists", () => {
     expect((failure as Error).message).toContain("ALL /export-all");
   });
 
-  it("does not stop for wildcard middleware, which is not a route that answers", async () => {
+  it("does not stop for wildcard middleware that hands on, which answers a URL under its prefix as the application does", async () => {
     const result = await scan({
       beforeRoutes: (app) => {
         app.use("/api/*", async (_c, next) => next());
@@ -366,6 +395,37 @@ describe("the sentence when there are hits", () => {
     );
     expect(result.sentence).not.toMatch(CANARY_SHAPE);
     expect(result.sentence).not.toMatch(ID_SHAPE);
+    expect(result.sentence).not.toMatch(DASHES);
+  });
+
+  it("stays within 2000 characters for the two cases of both splits, with the leak, the fact and the hits all there", async () => {
+    const result = await runCanaryScan({
+      dataset,
+      root: ROOT,
+      playbook,
+      signal: never(),
+      splits: ["dev", "heldout"],
+      hooks: {
+        beforeCapture: (inner, context) => ({
+          provider: inner.provider,
+          model: inner.model,
+          disclosure: inner.disclosure,
+          generate: ((request: Parameters<typeof inner.generate>[0]) => {
+            const span = context.foreign[0]!.spans.find((s) => s.text.includes("CANARY-"))!;
+            return inner.generate({
+              ...request,
+              prompt: `${request.prompt}\n[${span.id}] ${span.text} ${context.foreign[0]!.fact}`,
+            });
+          }) as typeof inner.generate,
+        }),
+      },
+    });
+    expect(result.cases).toHaveLength(2);
+    expect(result.canaryHits).toBeGreaterThan(0);
+    expect(result.factSightings).toBeGreaterThan(0);
+    expect(result.sentence.length).toBeLessThan(2000);
+    expect(result.sentence).toMatch(/distinctive fact appeared in \d+ artefacts/);
+    expect(result.sentence).toMatch(/\.$/);
     expect(result.sentence).not.toMatch(DASHES);
   });
 });

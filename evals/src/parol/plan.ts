@@ -420,7 +420,7 @@ export function describeParolPlan(plan: ParolPlan, context: PlanDescription): st
     row(header, widths),
     ...body.map((cells) => row(cells, widths)),
     "",
-    `  Model calls in total: ${int(plan.calls)}${plan.calibration == null ? "" : ` (${int(plan.calibration.calls)} of them the support checker's calibration pairs, sent once for the run)`}`,
+    `  Model calls in total: ${int(plan.calls)}${plan.calibration == null ? "" : ` (${int(plan.calibration.calls)} of them the support checker's calibration pairs, ${context.mode === "replay" ? "answered once from the recording" : "sent once for the run"})`}`,
   ];
   if (scripted) return `${lines.join("\n")}\n`;
 

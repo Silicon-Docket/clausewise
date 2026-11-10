@@ -97,7 +97,7 @@ export async function reviewAndExport(args: {
 }): Promise<Pick<ReviewedMatter, "runId" | "findingIds" | "findingId" | "memoId">> {
   const { site, key, people, matterId } = args;
   const am = site.authorize(people.associate, matterId, "run.start");
-  const started = site.services.runs.start(am, { workflowLabel: "v2" });
+  const started = site.services.runs.start(am, { workflowLabel: site.workflowLabel });
   await site.services.runs.idle();
   const run = site.services.runs.get(am, started.id);
   if (run.status !== "succeeded") throw fail(key, `finish the review (it ended ${run.status})`);

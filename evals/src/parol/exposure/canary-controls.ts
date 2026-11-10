@@ -12,7 +12,7 @@
  * canary string or an id.
  */
 import { EvalError } from "../../errors.js";
-import { ExposureControlFailure } from "./errors.js";
+import { ExposureControlFailure, ExposureSuiteUnavailable } from "./errors.js";
 import { docxParts, isZip, plainTextOf, textViewsOf, type Scanner, type TokenSet } from "./scan.js";
 
 /** Lower case, with every run of white space made one space. */
@@ -152,6 +152,48 @@ export function checkBody(args: { label: string; contentType: string; bytes: Uin
     );
 }
 
+/**
+ * The pages of its own matter that a canary matter's people must be let into: a 200 with a body that
+ * parses. The other routes of the matter take a run, finding, memo or file id that the canary matter
+ * (never reviewed) does not have, so a 404 there is the right answer and is not held to anything.
+ */
+export const CANARY_OWN_PAGES: ReadonlySet<string> = new Set([
+  "GET /matters/:matterId",
+  "GET /api/matters/:matterId",
+  "GET /matters/:matterId/memos",
+  "GET /api/matters/:matterId/runs",
+]);
+
+/**
+ * Stops the suite when a page of `CANARY_OWN_PAGES` is not among the routes the canary matter's
+ * people read (`labels`): a route renamed in the probe tables would otherwise drop the guard without
+ * a sign. The message names route templates only.
+ */
+export function requireOwnPagesAmong(labels: Iterable<string>): void {
+  const present = new Set(labels);
+  const missing = [...CANARY_OWN_PAGES].filter((label) => !present.has(label));
+  if (missing.length > 0)
+    throw new ExposureSuiteUnavailable(
+      `The canary matter's people are to be let into pages that the probe tables do not name (${missing.join(", ")}), so the guard on their own pages would hold nothing.`,
+    );
+}
+
+/**
+ * Every GET route that the probe tables name was fetched by someone. `fetched` is what the scan
+ * actually requested (as `GET /template`), `known` is what the tables name. A route that was left
+ * out would make "all N routes were fetched" a claim and not a count.
+ */
+export function requireRoutesFetched(
+  fetched: ReadonlySet<string>,
+  known: ReadonlySet<string>,
+): void {
+  const missing = [...known].filter((route) => !fetched.has(route));
+  if (missing.length > 0)
+    throw new ExposureControlFailure(
+      `${missing.length} of the ${known.size} GET routes that the probe tables name were never fetched (${missing.join(", ")}), so the scan did not read what it says it read. No count can be trusted.`,
+    );
+}
+
 /** The pages that must hold the case's matter name and its client, and those that must hold its clauses. */
 const NAME_PAGES = ["GET /matters/:matterId", "GET /api/matters/:matterId"] as const;
 const CLAUSE_PAGES = [
@@ -250,8 +292,8 @@ export async function checkMemo(args: {
 // ---------------------------------------------------------------------------------------------
 
 /**
- * The rows of a matter hold every token that is scanned for in them, one by one: each canary string
- * and each id. (A full-set scan reports an id that is a part of a longer id once, as the longer one,
+ * The rows of a matter hold every token that is scanned for in them, one by one: each canary string,
+ * id and name. (A full-set scan reports an id that is a part of a longer id once, as the longer one,
  * so it cannot tell whether the shorter one is there at all.) A token that the matter's own rows do
  * not hold is a token the scan could not have found anywhere.
  */
@@ -284,6 +326,6 @@ export async function requireTokensIn(args: {
   }
   if (missing > 0)
     throw new ExposureControlFailure(
-      `${args.what} do not hold ${missing} of the ${total} canary strings and ids that are scanned for in them, so a scan for them could not see a leak. No count can be trusted.`,
+      `${args.what} do not hold ${missing} of the ${total} tokens (canary strings, ids and names) that are scanned for in them, so a scan for them could not see a leak. No count can be trusted.`,
     );
 }

@@ -11,7 +11,7 @@ import { composeExposureRecord } from "../src/parol/exposure/index.js";
 import { FORGED_PROBES, MATTER_PROBES } from "../src/parol/exposure/probes.js";
 import type { SiteHooks } from "../src/parol/exposure/site.js";
 import { exposureCount } from "../src/parol/suites.js";
-import { completeDataset, never, playbook, ROOT } from "./parol-exposure-support.js";
+import { completeDataset, never, playbook, reviewedUnder, ROOT } from "./parol-exposure-support.js";
 
 /**
  * Negative tests for the authorization half of the exposure suite: each way the application could
@@ -343,6 +343,7 @@ describe("cells that never reach the handler", () => {
     expect(result.writesWithEffect).toBeLessThan(result.writeRoutes - 4);
     // The record carries both numbers, which is what gate G1 reads.
     const record = composeExposureRecord({
+      workflow: reviewedUnder(),
       authorization: result,
       canary: {
         artefactsScanned: 1,

@@ -15,9 +15,11 @@ import {
   type SlotScore,
   type Stability,
 } from "../src/parol/score.js";
+import type { Rate } from "../src/parol/stats.js";
 import {
   scoreCalibration,
   type CalibrationPair,
+  type CalibrationResult,
   type ExposureResult,
 } from "../src/parol/suites.js";
 import {
@@ -587,6 +589,59 @@ describe("G11 support checker calibration: at least 18 of 20 caught, at most 2 o
 
     it("is a plain failure when the failed calls could not have saved it", () => {
       expect(gate(withFailures(20, 0, 5, 1)).outcome).toBe("fail");
+    });
+  });
+
+  describe("with a record whose counts cannot all be true", () => {
+    // 14 of 20 caught, none flagged, none without a verdict: edited below into a record that no
+    // run of the harness writes. The reader of a results file refuses these, and a record built by
+    // hand must not make the gates throw either.
+    const good = scoreCalibration(pairs(14, 0));
+    const edited = (change: (r: CalibrationResult) => void): CalibrationResult => {
+      const copy = structuredClone(good);
+      change(copy);
+      return copy;
+    };
+    const by = (numerator: number, denominator = 20): Rate => ({
+      numerator,
+      denominator,
+      value: denominator === 0 ? null : numerator / denominator,
+      ci: null,
+    });
+    const cases: [string, CalibrationResult][] = [
+      [
+        "more supported calls without a verdict than pairs flagged",
+        edited((r) => (r.failed.supported = 5)),
+      ],
+      [
+        "more unsupported calls without a verdict than pairs not caught",
+        edited((r) => (r.failed.unsupported = 7)),
+      ],
+      ["more pairs flagged than there are", edited((r) => (r.falseAlarmRate = by(25)))],
+      ["more pairs caught than there are", edited((r) => (r.catchRate = by(25)))],
+      ["a fractional count", edited((r) => (r.catchRate = by(14.5)))],
+      ["a negative count", edited((r) => (r.catchRate = by(-3)))],
+      ["a failed count that is not whole", edited((r) => (r.failed.unsupported = 0.5))],
+    ];
+
+    it.each(cases)("is not evaluated, and does not throw, for %s", (_name, record) => {
+      let report: GateReport | undefined;
+      expect(() => (report = evaluateGates(subject({ calibration: record })))).not.toThrow();
+      const g11 = report!.results.find((r) => r.id === "G11")!;
+      expect(g11.outcome).toBe("not_evaluated");
+      expect(g11.detail).toContain("does not agree with itself");
+      expect(report!.passed).toBe(false);
+      expect(report!.notEvaluated).toContain("G11");
+    });
+
+    it("still evaluates a record that is consistent with every failed call it counts", () => {
+      // 6 unsupported calls without a verdict are exactly the 6 pairs not caught: the best case is 20 of 20.
+      const g11 = evaluateGates(
+        subject({ calibration: edited((r) => (r.failed.unsupported = 6)) }),
+      ).results.find((r) => r.id === "G11")!;
+      expect(g11.outcome).toBe("not_evaluated");
+      expect(g11.detail).not.toContain("does not agree with itself");
+      expect(g11.detail).toContain("6 of 40 calls returned no verdict");
     });
   });
 

@@ -16,7 +16,9 @@
  *  - A text is searched in several views, and a token counts if any view holds it: as written; with
  *    the tags taken out (the application wraps a quoted passage in a mark element, which can cut a
  *    string in two); and with entities, percent escapes and JSON escapes decoded and the invisible
- *    characters (soft hyphen, zero width, bidi marks) removed. It does not normalise anything else.
+ *    characters removed: the Unicode default ignorable code points and the format characters
+ *    (soft hyphen, zero width, bidi marks and isolates, variation selectors, the byte order mark).
+ *    It does not normalise anything else.
  *  - A package that starts as a zip and cannot be read is not searched as the bytes it is: its
  *    content is compressed, so a search of the bytes would find nothing and call it clean. It stops
  *    the suite with an `ExposureControlFailure`.
@@ -86,8 +88,14 @@ const NAMED_ENTITIES: Readonly<Record<string, string>> = {
   shy: "",
 };
 
-/** Characters that show nothing: soft hyphen, zero width, bidi marks and isolates, the byte order mark. */
-const INVISIBLE = /[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]/g;
+/**
+ * Characters that show nothing: the Unicode default ignorable code points (soft hyphen, zero width
+ * characters, the combining grapheme joiner, the Mongolian vowel separator, variation selectors,
+ * the Hangul fillers, tag characters) and the format characters (bidi marks, embeddings and
+ * isolates, the Arabic letter mark, the byte order mark). A property class and not a list, so that
+ * a character added to Unicode is covered.
+ */
+const INVISIBLE = /[\p{Default_Ignorable_Code_Point}\p{Cf}]/gu;
 
 const codePoint = (value: number, whole: string): string => {
   try {
@@ -373,6 +381,15 @@ export async function runControl(scanner: Scanner, forbid: TokenSet): Promise<vo
   await attempt(
     "canary string with a soft hyphen",
     `${clean} ${first.slice(0, half(first))}\u00ad${first.slice(half(first))}`,
+    "http_body",
+    [{ token: "canary", index: 0 }],
+  );
+  // Invisible characters that are not the soft hyphen or a zero width space: a bidi isolate and the
+  // Arabic letter mark (both format characters), in one string.
+  const third = Math.floor(first.length / 3);
+  await attempt(
+    "canary string with a bidi isolate and an Arabic letter mark",
+    `${clean} ${first.slice(0, third)}\u2068${first.slice(third, third * 2)}\u061c${first.slice(third * 2)}`,
     "http_body",
     [{ token: "canary", index: 0 }],
   );

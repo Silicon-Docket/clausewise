@@ -181,6 +181,11 @@ export interface GateReport {
 export interface GateSubject {
   run: RunMetrics;
   exposure?: ExposureResult;
+  /**
+   * Why there is no `exposure` although the file holds a record: it was made under another workflow
+   * than the run's, so G1 is not read from it. Said in the gate's detail.
+   */
+  exposureNotice?: string;
   calibration?: CalibrationResult;
   latency?: LatencySummary;
   cost?: CostSummary;
@@ -459,6 +464,38 @@ function latencyAndCost(
 // ---------------------------------------------------------------------------------------------
 
 /**
+ * Why the counts of a calibration result cannot all be true, or null. A count is a whole number
+ * that is not negative, a numerator is at most its denominator, and the calls that returned no
+ * verdict are inside the pairs they were for: the supported ones inside the pairs flagged, the
+ * unsupported ones inside the pairs not caught.
+ */
+function calibrationProblem(calibration: CalibrationResult): string | null {
+  const { catchRate, falseAlarmRate, failed } = calibration;
+  const counts = [
+    catchRate.numerator,
+    catchRate.denominator,
+    falseAlarmRate.numerator,
+    falseAlarmRate.denominator,
+    failed.supported,
+    failed.unsupported,
+  ];
+  if (counts.some((n) => !Number.isInteger(n) || n < 0)) {
+    return "a count is not a whole number of at least 0";
+  }
+  if (catchRate.numerator > catchRate.denominator) return "more pairs caught than there are";
+  if (falseAlarmRate.numerator > falseAlarmRate.denominator) {
+    return "more pairs flagged than there are";
+  }
+  if (failed.supported > falseAlarmRate.numerator) {
+    return "more supported pairs without a verdict than supported pairs flagged";
+  }
+  if (failed.unsupported > catchRate.denominator - catchRate.numerator) {
+    return "more unsupported pairs without a verdict than unsupported pairs not caught";
+  }
+  return null;
+}
+
+/**
  * Evaluates all fourteen gates for a candidate on one split. `baseline` is the current pilot
  * version on the same split, for G12 and G13.
  */
@@ -475,7 +512,16 @@ export function evaluateGates(
 
   // G1
   if (subject.exposure === undefined) {
-    results.push(result("G1", "not_evaluated", [], "the exposure suites were not run"));
+    results.push(
+      result(
+        "G1",
+        "not_evaluated",
+        [],
+        subject.exposureNotice === undefined
+          ? "the exposure suites were not run"
+          : subject.exposureNotice,
+      ),
+    );
   } else {
     const count = exposureCount(subject.exposure);
     // Out of probes run plus artefacts scanned. A hit fails whatever the record says was run, but
@@ -488,7 +534,7 @@ export function evaluateGates(
     const evidence: GateEvidence[] = [
       {
         repeat: null,
-        measure: "probes answered with data plus canary strings and foreign span ids found",
+        measure: "probes answered with data plus canary strings and ids of another matter found",
         numerator: count,
         denominator: checked,
         value: count,
@@ -590,8 +636,21 @@ export function evaluateGates(
   );
 
   // G11
+  const calibrationFault =
+    subject.calibration === undefined ? null : calibrationProblem(subject.calibration);
   if (subject.calibration === undefined) {
     results.push(result("G11", "not_evaluated", [], "the calibration set was not run"));
+  } else if (calibrationFault !== null) {
+    // The reader of a results file refuses such a record, so only a record built by hand gets here.
+    // Working the best case out of counts that disagree would throw, and the gate has no verdict.
+    results.push(
+      result(
+        "G11",
+        "not_evaluated",
+        [],
+        `the calibration record does not agree with itself (${calibrationFault}), so the checker was not measured`,
+      ),
+    );
   } else {
     const { catchRate, falseAlarmRate, failed } = subject.calibration;
     // The rates count a pair whose call returned no verdict against the checker on both sides.

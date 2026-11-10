@@ -249,6 +249,67 @@ describe("the scanner", () => {
       ).toEqual(["id"]);
   });
 
+  // The characters that show nothing, by code point. A list kept by hand goes stale: the scanner
+  // removes the Unicode default ignorable code points and the format characters, and this list is a
+  // sample of them (the bidi isolates, the Arabic letter mark, the combining grapheme joiner, the
+  // Mongolian vowel separator, variation selectors, a tag character, the Hangul filler).
+  const INVISIBLE_CODE_POINTS: [string, number][] = [
+    ["soft hyphen", 0x00ad],
+    ["combining grapheme joiner", 0x034f],
+    ["Arabic letter mark", 0x061c],
+    ["Mongolian vowel separator", 0x180e],
+    ["zero width space", 0x200b],
+    ["zero width non-joiner", 0x200c],
+    ["zero width joiner", 0x200d],
+    ["left-to-right mark", 0x200e],
+    ["right-to-left mark", 0x200f],
+    ["left-to-right embedding", 0x202a],
+    ["right-to-left override", 0x202e],
+    ["word joiner", 0x2060],
+    ["invisible separator", 0x2063],
+    ["left-to-right isolate", 0x2066],
+    ["right-to-left isolate", 0x2067],
+    ["first strong isolate", 0x2068],
+    ["pop directional isolate", 0x2069],
+    ["Hangul filler", 0x3164],
+    ["variation selector 1", 0xfe00],
+    ["variation selector 16", 0xfe0f],
+    ["byte order mark", 0xfeff],
+    ["language tag", 0xe0001],
+    ["tag space", 0xe0020],
+  ];
+
+  it("finds a string with any invisible character inside it, whichever the character", async () => {
+    for (const [name, codePoint] of INVISIBLE_CODE_POINTS) {
+      const hidden = `${CANARY.slice(0, 14)}${String.fromCodePoint(codePoint)}${CANARY.slice(14)}`;
+      expect(hidden, name).not.toContain(CANARY);
+      expect(
+        (await scanner.scan(target(`<p>${hidden}</p>`))).map((hit) => hit.index),
+        name,
+      ).toEqual([0]);
+      // An id with one in it, and the character written as an entity or a JSON escape.
+      const hiddenId = `${SPAN.slice(0, 10)}${String.fromCodePoint(codePoint)}${SPAN.slice(10)}`;
+      expect(
+        (await scanner.scan(target(hiddenId))).map((hit) => hit.token),
+        name,
+      ).toEqual(["id"]);
+      expect(
+        (
+          await scanner.scan(
+            target(`${CANARY.slice(0, 14)}&#x${codePoint.toString(16)};${CANARY.slice(14)}`),
+          )
+        ).map((hit) => hit.index),
+        name,
+      ).toEqual([0]);
+    }
+  });
+
+  it("leaves ordinary text alone: accents, Arabic letters, combining marks and emoji are not invisible", () => {
+    const ordinary = "r\u00e9sum\u00e9 \u0639\u0631\u0628\u064a e\u0301 \u00f1 \u3042 \ud83d\ude00";
+    expect(plainTextOf(ordinary)).toBe(ordinary);
+    expect(textViewsOf(ordinary)).toContain(ordinary.toLowerCase());
+  });
+
   it("does not find a token in text that only looks a little like it", async () => {
     for (const text of [
       "<p>CANARY</span><mark>TESTMATTER</mark> 0123456789ab</p>",
@@ -375,6 +436,22 @@ describe("the control", () => {
           real.scan({ ...t, forbid: { ...t.forbid, canary: t.forbid.canary.slice(0, 1) } }),
       };
       await expect(runControl(firstStringOnly, forbid)).rejects.toThrow(/canary it was given/);
+    });
+
+    it("throws for a scanner that does not see through a bidi isolate or the Arabic letter mark", async () => {
+      // The narrow list that stopped at the bidi marks: the isolates and U+061C show as letters to it.
+      const narrow: Scanner = {
+        scan: (t) =>
+          real.scan(
+            typeof t.content === "string"
+              ? { ...t, content: t.content.replace(/[\u2066-\u2069\u061c]/g, "#") }
+              : t,
+          ),
+      };
+      const failure = await runControl(narrow, forbid).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(ExposureControlFailure);
+      expect((failure as Error).message).toMatch(/bidi isolate and an Arabic letter mark/);
+      expect((failure as Error).message).not.toContain("CANARY");
     });
 
     it("throws for a scanner that searches the text as written only", async () => {

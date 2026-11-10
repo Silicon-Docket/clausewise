@@ -26,7 +26,9 @@ import {
   CALL_OUTCOME_MEANINGS,
   HELDOUT_SEAL_WARNING,
   NOT_CLEAN,
+  SUITE_SENTENCE_MAX,
   bannerOf,
+  exposureMismatch,
   isScripted,
   runHealth,
   type ResultsFile,
@@ -87,7 +89,7 @@ function cleanWarning(health: RunHealth): string[] {
 }
 
 /** The calls the stages made, by outcome, and the stages that fell back or skipped a rule. */
-function healthLines(health: RunHealth): string[] {
+function healthLines(health: RunHealth, file: ResultsFile): string[] {
   const outcomes = Object.entries(health.calls);
   const lines: string[] = [
     "## Calls and degraded stages",
@@ -117,6 +119,16 @@ function healthLines(health: RunHealth): string[] {
     `Extraction degraded in ${health.extractDegradedRuns} of ${health.runs} runs. Rules not sent because the context was over the workflow's budget: ${health.rulesOverBudget} (summed over runs).`,
     "",
   );
+  // The calibration calls belong to no run and to no split, but a failed one makes every split
+  // unclean, and the pointer of each split ends here.
+  const calibrationCalls = file.suites.calibration?.callOutcomes;
+  if (calibrationCalls !== undefined) {
+    const listed = Object.entries(calibrationCalls);
+    lines.push(
+      `Calibration calls, which are in no run and in no split, by outcome: ${listed.length === 0 ? "none recorded" : listed.map(([outcome, n]) => `${md(outcome)} ${whole(n)}`).join(", ")}.`,
+      "",
+    );
+  }
   if (health.clean) {
     lines.push(
       "No call failed on the wire, no extraction fell back to the whole document and no rule was left unsent.",
@@ -207,20 +219,30 @@ export function suiteLines(file: ResultsFile): string[] {
   } else {
     const found =
       exposure.probesAnsweredWithData + exposure.canaryHits + exposure.foreignSpanIdHits;
+    const mismatch = exposureMismatch(exposure, file.pins.workflow);
     lines.push(
-      "**Exposure (gate G1).** These suites test the application's handling of matters: the authorization probes and the scans for canary strings and span ids from another matter. They do not test any model.",
+      "**Exposure (gate G1).** These suites test the application's handling of matters: the authorization probes and the scans for canary strings and for ids of another matter. They do not test any model.",
+      "",
+      `The reviews they ran and scanned were of workflow ${md(exposure.workflow.label)}.` +
+        (mismatch === null ? "" : ` Gate G1 is not evaluated for this run: ${md(mismatch, 600)}.`),
       "",
       table(
         ["Count", "Value"],
         [
           ["Authorization probes run", whole(exposure.probesRun)],
-          ["Prompts, answers, response bodies and memos scanned", whole(exposure.artefactsScanned)],
+          [
+            "Artefacts scanned (prompts, answers, response bodies, memos, tables of stored rows, log)",
+            whole(exposure.artefactsScanned),
+          ],
           [
             "Probes answered with data they should not return",
             whole(exposure.probesAnsweredWithData),
           ],
           ["Canary strings found", whole(exposure.canaryHits)],
-          ["Span ids of another matter found", whole(exposure.foreignSpanIdHits)],
+          [
+            "Ids of another matter found (matter, document, version, span)",
+            whole(exposure.foreignSpanIdHits),
+          ],
           ["Total found (G1 requires 0)", whole(found)],
           [
             "Probes whose caller should have been let in and was not (G1 is not evaluated while any)",
@@ -246,7 +268,7 @@ export function suiteLines(file: ResultsFile): string[] {
     }
     // The sentences carry what the counts do not: the mismatches, the drift of the action table and
     // the first probe that was exposed. They are cut at the limit of the results file and no earlier.
-    for (const suite of exposure.suites) lines.push(`- ${md(suite, 2000)}`);
+    for (const suite of exposure.suites) lines.push(`- ${md(suite, SUITE_SENTENCE_MAX)}`);
     if (exposure.suites.length > 0) lines.push("");
   }
   if (calibration === null) {
@@ -336,9 +358,13 @@ function gatesTable(section: SplitSection, file: ResultsFile): string[] {
   }
   if (open.includes("G11")) {
     lines.push(
-      file.suites.calibration === null
-        ? "G11 needs the support checker's calibration set, which has no result in this file (give --calibration, with a workflow that has the support check)."
-        : "G11 is not evaluated for the reason in its row above, and is not assumed to pass.",
+      file.suites.calibration !== null
+        ? "G11 is not evaluated for the reason in its row above, and is not assumed to pass."
+        : isScripted(file.mode)
+          ? "G11 cannot be evaluated in a scripted run: --calibration needs a live run or a replay, because a scripted stand-in is not the support checker."
+          : file.mode === "replay"
+            ? "G11 needs the support checker's calibration set, which has no result in this file (give --calibration, and a recording that was made with it: a replay re-scores only the answers the recording holds)."
+            : "G11 needs the support checker's calibration set, which has no result in this file (give --calibration, with a workflow that has the support check; or the run stopped before the set finished: see the notes).",
     );
   }
   if (open.includes("G12") || open.includes("G13")) {
@@ -649,7 +675,7 @@ export function renderReport(file: ResultsFile): string {
   for (const section of file.sections) lines.push(...renderSection(file, section));
 
   lines.push(...suiteLines(file));
-  lines.push(...healthLines(runHealth(file)));
+  lines.push(...healthLines(runHealth(file), file));
   lines.push("## Usage", "");
   if (scripted) {
     lines.push(

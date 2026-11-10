@@ -709,7 +709,7 @@ describe("answers belong to the run that was given them", () => {
     await writer.settle();
     const replay = replayGenerator(await loadRecording(path)).forRun("CASE-A|1");
     await expect(ask(replay, "unknown")).rejects.toThrow(
-      /recording is of a run that did not finish/,
+      /recording may be of a run that did not finish or that lost a call it could not record/,
     );
   });
 });

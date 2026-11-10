@@ -178,7 +178,7 @@ describe("the rest of the rule", () => {
       ...OTHER_PROBES.map((p) => `${p.method} ${p.template}`),
     ]);
     const unsafe = describeRoutes(site.app).filter(
-      (route) => route.kind !== "unmanaged" && UNSAFE(route.method),
+      (route) => route.kind !== "unmanaged" && route.kind !== "middleware" && UNSAFE(route.method),
     );
     // Every unsafe probe is a route, so the count says nothing was left out of either list.
     expect(unsafe.length).toBe([...probed].filter((k) => !k.startsWith("GET ")).length);

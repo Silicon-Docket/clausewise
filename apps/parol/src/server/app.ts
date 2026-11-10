@@ -8,7 +8,7 @@ import { ValidationError } from "../store/errors.js";
 import { assetHandler, loadAssets, DEFAULT_ASSETS_DIR } from "./assets.js";
 import type { AppDeps } from "./deps.js";
 import { bodyMediaType, formString, readForm } from "./http.js";
-import { defineRoute } from "./matter-route.js";
+import { defineMiddleware, defineRoute } from "./matter-route.js";
 import { requestContext } from "./middleware/context.js";
 import { hostGuard, refuseUserInfo } from "./middleware/host-guard.js";
 import { NOT_FOUND, errorResponse, toSafeError, type RenderError } from "./middleware/errors.js";
@@ -88,11 +88,12 @@ export function createApp(deps: AppDeps, options: AppOptions = {}): Hono {
 
   // Order matters: the context wraps everything, so a body that is too large still gets the
   // headers, the request id and a log line.
-  app.use("*", requestContext(authDeps, { log, renderError: options.renderError }));
-  app.use("*", hostGuard(config));
+  // They go through defineMiddleware, so that the route list tells them from any other handler.
+  defineMiddleware(app, requestContext(authDeps, { log, renderError: options.renderError }));
+  defineMiddleware(app, hostGuard(config));
   // Before the body limit, which is the first thing to read the request and would fail on it.
-  app.use("*", refuseUserInfo());
-  app.use("*", bodyLimit({ maxSize: config.maxUploadBytes + UPLOAD_MARGIN_BYTES }));
+  defineMiddleware(app, refuseUserInfo());
+  defineMiddleware(app, bodyLimit({ maxSize: config.maxUploadBytes + UPLOAD_MARGIN_BYTES }));
 
   app.onError((err, c) => {
     const state = requestState(c);

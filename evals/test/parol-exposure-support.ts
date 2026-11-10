@@ -11,6 +11,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { LoadedPlaybook } from "../../apps/parol/src/module-contracts.js";
+import { workflowFor } from "../../apps/parol/src/prompts/workflows.js";
 import { loadPlaybook } from "../../apps/parol/src/playbooks/load.js";
 import { buildDataset, type BuiltDataset } from "../../fixtures/parol/build.js";
 import { PLAYBOOK_FILE, PLAYBOOK_SLUG } from "../../fixtures/parol/cases.js";
@@ -23,6 +24,11 @@ import type { Dataset } from "../src/parol/dataset.js";
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const YAML = readFileSync(join(ROOT, PLAYBOOK_FILE), "utf8");
+
+/** What an exposure record says about the workflow its reviews ran under, for a record a test composes. */
+export function reviewedUnder(label = "v2"): { label: string; sha256: string } {
+  return { label, sha256: workflowFor(label).sha256 };
+}
 
 export const playbook: LoadedPlaybook = loadPlaybook({ yaml: YAML, slug: PLAYBOOK_SLUG });
 

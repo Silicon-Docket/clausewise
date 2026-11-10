@@ -30,6 +30,19 @@ import { ExposureSuiteUnavailable, UploadReplayMismatch } from "./errors.js";
 import { fileBytes } from "./files.js";
 import { createExposureSite, type ExposureSite } from "./site.js";
 
+/**
+ * What a test may change to show that a comparison can fail. The replay itself never does. The key
+ * cannot disagree with the application about everything (the stated date of a step is the one the
+ * step was given, and the store itself refuses a document with two governing versions), so those
+ * comparisons are shown with a fault planted in the store between the step and the comparison.
+ */
+export interface UploadReplayHooks {
+  /** Runs after a step was played and before it is compared with the key (`step` counts from 1). */
+  afterStep?: (site: ExposureSite, where: { matterId: string; step: number }) => void;
+  /** Runs after the last step was compared and before the final state is. */
+  beforeFinal?: (site: ExposureSite, where: { matterId: string }) => void;
+}
+
 export interface UploadReplayArgs {
   dataset: Dataset;
   root: string;
@@ -37,6 +50,7 @@ export interface UploadReplayArgs {
   signal: AbortSignal;
   /** The splits whose cases are replayed. Default: development only. */
   splits?: readonly Split[];
+  hooks?: UploadReplayHooks;
 }
 
 export interface UploadReplayResult {
@@ -53,8 +67,11 @@ const inertModel = createScriptedGenerator(
   { disclosure: "a scripted generator that is never called: the upload replay uses no model" },
 );
 
-/** A value as a message may show it: numbers, booleans, and words that are codes or labels. */
-function show(value: unknown): string {
+/**
+ * A value as a message may show it: numbers, booleans, and words that are codes or labels. Anything
+ * else (text, or a word too long to be a code) is not shown. Exported for its test.
+ */
+export function show(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(show).join(", ")}]`;
   if (value === null || typeof value === "number" || typeof value === "boolean")
     return String(value);
@@ -68,7 +85,8 @@ interface Difference {
   got: unknown;
 }
 
-const codeOf = (error: unknown): string => {
+/** The code of a refusal, or the name of the error if that is a plain word, and `unknown` otherwise. */
+export const codeOf = (error: unknown): string => {
   if (typeof error === "object" && error !== null) {
     const code = (error as { code?: unknown }).code;
     if (typeof code === "string" && /^[a-z_]{1,40}$/.test(code)) return code;
@@ -140,11 +158,20 @@ async function replayCase(args: UploadReplayArgs, key: AnswerKeyCase): Promise<n
         throw new EvalError(
           `${key.case} step ${index + 1}: the step names a file the key does not hold.`,
         );
-      const differences = await playStep({ site, matterId, associate, step, content });
+      const differences = await playStep({
+        site,
+        matterId,
+        associate,
+        step,
+        content,
+        number: index + 1,
+        ...(args.hooks?.afterStep === undefined ? {} : { afterStep: args.hooks.afterStep }),
+      });
       if (differences.length > 0)
         throw mismatch(key.case, `step ${index + 1} (${step.action})`, differences);
     }
 
+    args.hooks?.beforeFinal?.(site, { matterId });
     const differences = finalDifferences(site, matterId, key);
     if (differences.length > 0) throw mismatch(key.case, "after the last step", differences);
     return uploads.steps.length;
@@ -160,6 +187,8 @@ async function playStep(args: {
   associate: string;
   step: UploadStep;
   content: Uint8Array;
+  number: number;
+  afterStep?: NonNullable<UploadReplayHooks["afterStep"]>;
 }): Promise<Difference[]> {
   const { site, matterId, step } = args;
   const am = site.authorize(args.associate, matterId, "document.write");
@@ -190,6 +219,7 @@ async function playStep(args: {
     thrown = error;
   }
 
+  args.afterStep?.(site, { matterId, step: args.number });
   const documentsAfter = site.repo.listDocuments(matterId);
   const versionsAfter = site.repo.listVersions(matterId);
   const expect: UploadExpectation = step.expect;

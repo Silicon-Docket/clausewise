@@ -5,6 +5,7 @@ import { authorizeMatter } from "../../apps/parol/src/auth/authorize.js";
 import { DEMO_USER_IDS } from "../../apps/parol/src/store/index.js";
 import { BRAMBLEWICK_STRINGS } from "../../fixtures/parol/canary.js";
 import {
+  UNROUTED_ACTORS,
   runAuthorizationProbes,
   type AuthorizationGroup,
   type AuthorizationResult,
@@ -15,10 +16,16 @@ import {
   type CanaryResult,
 } from "../src/parol/exposure/canary.js";
 import { runExposureSuite } from "../src/parol/exposure/index.js";
-import { FORGED_PROBES, LIST_PROBES } from "../src/parol/exposure/probes.js";
+import {
+  FORGED_PROBES,
+  LIST_PROBES,
+  noRecordIds,
+  unroutedRequests,
+} from "../src/parol/exposure/probes.js";
 import type { Scanner } from "../src/parol/exposure/scan.js";
 import type { SiteHooks } from "../src/parol/exposure/site.js";
 import { exposureChecked, exposureCount } from "../src/parol/suites.js";
+import { namesCanaryMatter } from "./parol-canary-support.js";
 import { CANARY_SHAPE, completeDataset, never, playbook, ROOT } from "./parol-exposure-support.js";
 import type { Dataset } from "../src/parol/dataset.js";
 
@@ -211,11 +218,14 @@ describe("(c) an exported memo or a response body that carries a canary string",
 
   it("is counted when a response body carries it", async () => {
     const result = await canary({
-      beforeRoutes: (app) => {
+      beforeRoutes: (app, deps) => {
         app.use("/api/matters/*", async (c, next) => {
           await next();
           const type = c.res.headers.get("content-type") ?? "";
           if (c.req.method !== "GET" || c.res.status !== 200 || !type.includes("json")) return;
+          // The canary matters' own pages must still parse (the scan checks that they do), so the
+          // string goes into the case's pages and the other routes only.
+          if (namesCanaryMatter(deps, c.req.path)) return;
           const body = await c.res.text();
           const headers = new Headers(c.res.headers);
           headers.delete("content-length");
@@ -514,9 +524,13 @@ describe("the record of all three sub-suites with faults planted", () => {
         },
       },
     );
-    // The matrix of 36 routes by 7 callers by 2 modes, the forged ids and the lists, all of which ran.
+    // The matrix of 36 routes by 7 callers by 2 modes, the forged ids, the lists and the URLs that no
+    // route owns (by 3 callers), all of which ran.
     expect(record.probesRun).toBe(
-      36 * 7 * 2 + FORGED_PROBES.length * 2 + LIST_PROBES.length * 7 * 2,
+      36 * 7 * 2 +
+        FORGED_PROBES.length * 2 +
+        LIST_PROBES.length * 7 * 2 +
+        unroutedRequests(noRecordIds()).length * UNROUTED_ACTORS.length * 2,
     );
     expect(record.artefactsScanned).toBeGreaterThan(100);
     expect(record.probesAnsweredWithData).toBeGreaterThan(0);

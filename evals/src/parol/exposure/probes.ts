@@ -17,7 +17,9 @@
  *    the places outside the path where an id goes (a body, a query string);
  *  - the bodies that would change the store if a caller who must be refused got through, for the
  *    write routes whose probe body is built to change nothing;
- *  - the routes that name no matter, read as every caller.
+ *  - the routes that name no matter, read as every caller;
+ *  - the URLs that no route owns (under a matter, and at each probed route under the methods the
+ *    table does not probe), which must be answered with the 404 of any URL that nothing owns.
  *
  * Nothing here sends a request. It is data and small pure functions.
  */
@@ -489,6 +491,19 @@ export interface ForgedProbe {
   action: MatterAction;
   position: SubResource;
   via: "path" | "body" | "query";
+  /**
+   * The ids of other records that the application checks against the borrowed one, which the
+   * request also names: a version must belong to the document named with it. A request that has
+   * any is sent in two forms, and `consistent` says which this is.
+   */
+  pairedWith: readonly SubResource[];
+  /**
+   * Every id the request names, the paired ones too, comes from one record of the other matter.
+   * When it is false the id under test is the other matter's and the paired ones are the caller's
+   * own, which the application's check of the pair turns away whether or not the lookups are
+   * scoped to the matter; when it is true that check is passed and the lookups are what answers.
+   */
+  consistent: boolean;
   /** What a member gets for an id the matter does not hold: 404, or 200 for a page that shows no inspector. */
   reaches: number;
   request(own: ProbeIds, borrowed: BorrowedIds): { path: string; body: ProbeBody };
@@ -496,6 +511,14 @@ export interface ForgedProbe {
 
 const viaName = (via: ForgedProbe["via"], position: SubResource): string =>
   via === "path" ? `${position} in the path` : `${position} in the ${via}`;
+
+/**
+ * The ids a body carries besides the one in the path, for the routes where the application checks
+ * the two against each other.
+ */
+const PAIRED_IN_BODY: Record<string, readonly SubResource[]> = {
+  [`POST ${M}/documents/:documentId/operative`]: ["version"],
+};
 
 function forgedInPath(probe: Probe): ForgedProbe[] {
   return PLACEHOLDERS.filter((entry) => probe.template.includes(entry.token)).map((entry) => ({
@@ -505,6 +528,8 @@ function forgedInPath(probe: Probe): ForgedProbe[] {
     action: probe.action,
     position: entry.position,
     via: "path" as const,
+    pairedWith: PAIRED_IN_BODY[probeKey(probe)] ?? [],
+    consistent: false,
     reaches: 404,
     request: (own, borrowed) => ({
       path: pathFor(probe.template, { ...own, [entry.field]: borrowed[entry.borrowed] }),
@@ -522,6 +547,8 @@ const FORGED_ELSEWHERE: readonly ForgedProbe[] = [
     action: "document.write",
     position: "version",
     via: "body",
+    pairedWith: ["document"],
+    consistent: false,
     reaches: 404,
     request: (own, borrowed) => ({
       path: pathFor(`${M}/documents/:documentId/operative`, own),
@@ -535,6 +562,8 @@ const FORGED_ELSEWHERE: readonly ForgedProbe[] = [
     action: "matter.update",
     position: "document",
     via: "body",
+    pairedWith: ["version"],
+    consistent: false,
     reaches: 404,
     request: (own, borrowed) => ({
       path: pathFor(A, own),
@@ -548,6 +577,8 @@ const FORGED_ELSEWHERE: readonly ForgedProbe[] = [
     action: "matter.update",
     position: "version",
     via: "body",
+    pairedWith: ["document"],
+    consistent: false,
     reaches: 404,
     request: (own, borrowed) => ({
       path: pathFor(A, own),
@@ -561,6 +592,8 @@ const FORGED_ELSEWHERE: readonly ForgedProbe[] = [
     action: "matter.update",
     position: "version",
     via: "body",
+    pairedWith: [],
+    consistent: false,
     reaches: 404,
     request: (own, borrowed) => ({
       path: pathFor(A, own),
@@ -574,6 +607,9 @@ const FORGED_ELSEWHERE: readonly ForgedProbe[] = [
     action: "run.read",
     position: "finding",
     via: "query",
+    // The page picks the finding from the run's own list, so there is no pair to check.
+    pairedWith: [],
+    consistent: false,
     reaches: 200,
     request: (own, borrowed) => ({
       path: `${pathFor(`${M}/runs/:runId`, own)}?finding=${borrowed.findingId}`,
@@ -583,14 +619,131 @@ const FORGED_ELSEWHERE: readonly ForgedProbe[] = [
 ];
 
 /**
- * Every forged request: one for each id a route of `MATTER_PROBES` takes in its path (so a route
- * added to the table with an id is forged without anyone remembering to), and the places outside
- * the path.
+ * Every id of a record that a request can name, taken from one record of the other matter and not
+ * only the one under test: the matter stays the caller's own.
  */
-export const FORGED_PROBES: readonly ForgedProbe[] = [
+const wholeRecord = (own: ProbeIds, borrowed: BorrowedIds): ProbeIds => ({
+  ...own,
+  firstDocumentId: borrowed.documentId,
+  versionId: borrowed.versionId,
+  runId: borrowed.runId,
+  findingId: borrowed.findingId,
+  memoId: borrowed.memoId,
+});
+
+/**
+ * The consistent form of the requests that name several ids: one for each route and set of ids,
+ * made from the first of the mixed requests that names them, with the ids the caller would have
+ * kept as their own taken from the record of the other matter as well. A route that names several
+ * ids is therefore never forged only in the form that its own check of the pair turns away.
+ */
+function consistentForms(mixed: readonly ForgedProbe[]): ForgedProbe[] {
+  const seen = new Set<string>();
+  const out: ForgedProbe[] = [];
+  for (const base of mixed) {
+    if (base.pairedWith.length === 0) continue;
+    const kinds = [base.position, ...base.pairedWith].sort();
+    const identity = `${base.method} ${base.template} ${kinds.join(" ")}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    out.push({
+      ...base,
+      name: `${base.method} ${base.template} (${kinds.join(" and ")} of one record of the other matter)`,
+      via: "body",
+      consistent: true,
+      request: (own, borrowed) => base.request(wholeRecord(own, borrowed), borrowed),
+    });
+  }
+  return out;
+}
+
+const MIXED_FORGED: readonly ForgedProbe[] = [
   ...MATTER_PROBES.flatMap(forgedInPath),
   ...FORGED_ELSEWHERE,
 ];
+
+/**
+ * Every forged request: one for each id a route of `MATTER_PROBES` takes in its path (so a route
+ * added to the table with an id is forged without anyone remembering to), the places outside the
+ * path, and, for each route that names several ids, the request with all of them from one record
+ * of the other matter.
+ */
+export const FORGED_PROBES: readonly ForgedProbe[] = [
+  ...MIXED_FORGED,
+  ...consistentForms(MIXED_FORGED),
+];
+
+// ---------------------------------------------------------------------------------------------
+// URLs that no route owns
+// ---------------------------------------------------------------------------------------------
+
+/** The methods sent to a URL that no route owns. HEAD is answered by the GET handler, so it adds nothing. */
+export const UNROUTED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
+export type UnroutedMethod = (typeof UNROUTED_METHODS)[number];
+
+/** One request to a URL that no route owns, and so must get the answer of any URL that nothing owns. */
+export interface UnroutedRequest {
+  method: UnroutedMethod;
+  /** The route it was made from, parameters and no ids, for a message. */
+  template: string;
+  /** For a message: the method and the route, and why no route owns it. No id. */
+  name: string;
+  path: string;
+  body: ProbeBody;
+}
+
+/** The segment that no route has. */
+const NOWHERE = "unrouted";
+
+/** A matter's URL with one, two and three segments that no route has after it. */
+const UNROUTED_TAILS: readonly string[] = [
+  NOWHERE,
+  `${NOWHERE}/${NOWHERE}`,
+  `${NOWHERE}/${NOWHERE}/${NOWHERE}`,
+];
+
+/**
+ * The requests that nothing should answer, with the real ids of the matter the probes go to:
+ *  - a matter's pages and its API with segments after them that no route has, in every method;
+ *  - each route of `MATTER_PROBES` under every method that the table does not probe on it, which
+ *    is where an `ALL` route registered at a probed path would answer a method nobody sent;
+ *  - the path of each wildcard route that names a matter (`wildcards`, as registered), with the
+ *    wildcard filled in with two segments that no route has, which is the URL that a wildcard
+ *    under a longer prefix answers and the shapes above do not reach.
+ * A route that hands on (middleware) leaves every one of them to the 404 of the application. One
+ * that answers, whatever the route list says about it, does not.
+ */
+export function unroutedRequests(
+  ids: ProbeIds,
+  wildcards: readonly string[] = [],
+): UnroutedRequest[] {
+  const probed = new Set(MATTER_PROBES.map(probeKey));
+  const wanted: { method: UnroutedMethod; template: string; why: string }[] = [];
+  const fixed = [M, A].flatMap((prefix) => UNROUTED_TAILS.map((tail) => `${prefix}/${tail}`));
+  // Two segments in place of the wildcard, so that the URL is not one that a route with a parameter there owns.
+  const filled = wildcards.map((path) => path.replace(/\*/g, `${NOWHERE}/${NOWHERE}`));
+  for (const template of [...fixed, ...filled])
+    for (const method of UNROUTED_METHODS) wanted.push({ method, template, why: "no route" });
+  for (const template of new Set(MATTER_PROBES.map((probe) => probe.template)))
+    for (const method of UNROUTED_METHODS)
+      if (!probed.has(`${method} ${template}`))
+        wanted.push({ method, template, why: "unprobed method" });
+  const seen = new Set<string>();
+  const out: UnroutedRequest[] = [];
+  for (const { method, template, why } of wanted) {
+    const identity = `${method} ${template}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    out.push({
+      method,
+      template,
+      name: `${identity} (${why})`,
+      path: pathFor(template, ids).replace(/:[A-Za-z_]\w*(?:\{[^}]*\})?\??/g, NOWHERE),
+      body: method === "GET" ? NONE : isApi(template) ? json() : form(),
+    });
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------------------------------------
 // Bodies that would change the store
@@ -609,6 +762,8 @@ export interface Scratch {
   earlierVersionId: string;
   amendmentId: string;
   invitee: string;
+  /** The workflow version a review of this matter is asked for: the one the suite reviews under. */
+  workflow: string;
   runId?: string;
   findingId?: string;
   /** The decision a reviewer would make on `findingId`, as the suite's own reviewer makes it. */
@@ -698,11 +853,11 @@ const EFFECTS: Record<string, (scratch: Scratch) => Effect> = {
     ids: (s, own) => ({ ...onScratch(s, own), firstDocumentId: scratch.amendmentId }),
     body: form({ confirm: "yes" }),
   }),
-  [`POST ${M}/runs`]: () => ({
+  [`POST ${M}/runs`]: (scratch) => ({
     target: "scratch",
     needs: "documents",
     ids: onScratch,
-    body: form({ workflow: "v2" }),
+    body: form({ workflow: scratch.workflow }),
   }),
   [`POST ${M}/findings/:findingId/reviews`]: (scratch) => ({
     target: "scratch",
@@ -747,11 +902,11 @@ const EFFECTS: Record<string, (scratch: Scratch) => Effect> = {
     ids: (s, own) => ({ ...onScratch(s, own), firstDocumentId: scratch.amendmentId }),
     body: NONE,
   }),
-  [`POST ${A}/runs`]: () => ({
+  [`POST ${A}/runs`]: (scratch) => ({
     target: "scratch",
     needs: "documents",
     ids: onScratch,
-    body: json({ workflow: "v2" }),
+    body: json({ workflow: scratch.workflow }),
   }),
   [`POST ${A}/findings/:findingId/reviews`]: (scratch) => ({
     target: "scratch",
