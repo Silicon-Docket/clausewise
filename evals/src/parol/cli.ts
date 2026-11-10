@@ -192,7 +192,8 @@ Options:
   --exposure                   Also run the exposure suites for gate G1: the authorization probes, the canary
                                scan and the replay of upload steps, against the real application with a
                                scripted stand-in for the model. It sends nothing and costs nothing, takes a
-                               few seconds, and tests the application and not any model.
+                               few seconds, and tests the application and not any model. Its reviews run
+                               under the --workflow of the run, and G1 is read only for that workflow.
   --no-record                  Do not write a recording of a live run's answers. By default a live run
                                writes them to <results>.responses.jsonl, beside the results file. The
                                file quotes the (synthetic) documents; git ignores every file with that

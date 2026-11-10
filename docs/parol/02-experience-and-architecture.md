@@ -226,10 +226,12 @@ used it. On the command line, `pnpm eval:parol --simulate --workflow v1 --out a.
 cases against the scripted simulated reader, as a Markdown report on standard output; every report
 and results file says in capitals that it is not a measurement of any model. The comparison also
 reads each file's exposure record (`--exposure`) and calibration record (`--calibration`), which
-fill the "Unauthorized exposure" row and a support checker row, and it skips the decision rule for
-a selftest, a simulated run or a replay. A run against a real model needs a key and `--yes`, and has
-never been made. The sketch below is the design, with the values left blank (it has no row for the
-support checker, which the report has).
+fill the "Unauthorized-data exposure (found of checked)" row and a "Support checker, caught /
+flagged" row (an exposure record counts for the gate only if its reviews were of the file's own
+workflow; otherwise the row shows the counts with that note and G1 is not evaluated), and it skips
+the decision rule for a selftest, a simulated run or a replay. A run against a real model needs a
+key and `--yes`, and has never been made. The sketch below is the design, with the values left blank
+(it has no row for the support checker, which the report has).
 
 ```text
 +-----------------------------------------------------------------------------------------+
@@ -336,7 +338,14 @@ service that reads matter data, calls a model or writes a file. As built:
   the database. A non-member, a missing matter and a deleted matter all give the same 404; a member
   whose role may not do the thing gets 403. The service behind the route checks the role again. The
   `AuthorizedMatter` type can be made only in `src/auth/authorize.ts`, and a test scans the source for
-  any other place that makes one.
+  any other place that makes one. The shell's own four middleware are registered through
+  `defineMiddleware`, so that the list of routes tells them from a handler that answers: a test fails
+  if the shell as `createApp` builds it holds a route registered another way, of any method, and a
+  scan of the source fails for a direct `app.get`, `app.all` or the like. A wildcard handler added
+  by `app.use` or `app.mount` among the page and API routes is found only by the evaluation's
+  exposure suite, which stops if a wildcard route for every method that is not one of the four
+  makes a GET under its prefix come out differently from the application without it (see
+  [document 5](05-evaluation.md#supplementary-suites)).
 - Responses carry a content security policy that allows script, style and connections from the same
   origin only (`default-src 'none'`), no framing, `nosniff`, `no-referrer`, a permissions policy that
   denies browser features Parol does not use, and `Cache-Control: no-store` except for static files.
@@ -355,10 +364,17 @@ reference pipeline on the development cases. Nothing makes a later change to
 
 The exposure suite is the exception to that composition. `pnpm eval:parol --exposure`
 (`evals/src/parol/exposure/`) builds the real application in process (the real shell, routes and
-services over an in-memory store, with no socket) and sends the authorization probes, the canary
-scan and the replay of upload steps through it. The model in that application is a scripted
-key-oracle that is not a language model, so the suite tests the application and not a model; it
-feeds gate G1, and [document 5](05-evaluation.md#supplementary-suites) has the detail.
+services over an in-memory store, with no socket) and sends the authorization probes (which include
+requests to URLs that no route owns, sent with each of GET, POST, PUT, PATCH and DELETE, and which
+must all get the 404 of a URL that nothing owns), the canary scan and the replay of upload steps
+through it. The model in that application is a scripted key-oracle that is not a language model, so
+the suite tests the application and not a model. The reviews it starts follow the workflow of the
+run (`--workflow`, v1 unless given; a call from code that names none gets the newest version the
+application ships), because the prompts a review sends depend on the version. A version that the
+application does not ship (v3) is registered in the suite's own copy of the application and nowhere
+else. The record carries the label and the hash of that workflow, and gate G1 is read from it only
+for a run of the same workflow. The suite feeds gate G1, and
+[document 5](05-evaluation.md#supplementary-suites) has the detail.
 
 ## Stage graph
 

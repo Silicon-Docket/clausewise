@@ -1265,9 +1265,12 @@ and 20 unsupported, with four unsupported pairs of each of five kinds (a superse
 overlooked exception, the other party's obligation, a definition quoted as a duty and a number in the
 wrong frame), written from the development documents (`fixtures/parol/calibration/pairs.ts`, built
 into `calibration.json`). The scoring (`scoreCalibration`), gate G11 and the runner step
-(`--calibration`, which sends the 40 pairs once per run through the same request a review builds)
-are built. The checker has never been run on a model, so its catch rate and false alarm rate are
-unknown, and G11 is not evaluated in any report.
+(`--calibration`, which sends the 40 pairs once per run through the support checker a review uses,
+`createSupportChecker`, given the rule, the claimed status, the discrepancy and the cited paragraph
+of each pair) are built. A test compares the requests of the step with the ones that function
+builds for the same rule, draft and passage; what the verify stage itself hands that function is
+pinned by that stage's own tests. The checker has never been run on a model, so its catch rate and
+false alarm rate are unknown, and G11 is not evaluated in any report.
 
 ## Structured output, retries and recovery
 

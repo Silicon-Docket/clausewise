@@ -264,6 +264,7 @@ measurement of any model; a live run needs `--yes` and a key, and none has been 
 also writes its answers to `<results>.responses.jsonl` (git-ignored), which `--replay <file>`
 re-scores with no model and no key. `--calibration` adds the support checker's 40 calibration pairs
 (workflow v3, live or replay) and `--exposure` the suites that test the application's handling of
-matters with a scripted stand-in for the model; they feed gates G11 and G1. Results go to
-`evals/results/parol-<UTC time>.json`. What is built, the metrics and the gates are in
-[docs/parol/05-evaluation.md](../docs/parol/05-evaluation.md).
+matters with a scripted stand-in for the model; they feed gates G11 and G1. The exposure suites
+review under the run's `--workflow`, and a results file is read for G1 only if its exposure record
+was made under that workflow. Results go to `evals/results/parol-<UTC time>.json`. What is built,
+the metrics and the gates are in [docs/parol/05-evaluation.md](../docs/parol/05-evaluation.md).

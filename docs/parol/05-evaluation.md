@@ -10,11 +10,11 @@ comparison and the held-out seal; record and replay of the model's answers (`--r
 calibration run that feeds G11 (`--calibration`, with workflow v3, which pins the support prompt and
 the `superseded_evidence` check); and the exposure suite that feeds G1 (`--exposure`: authorization
 probes, a canary scan and the replay of upload steps, against the real application with a scripted
-stand-in for the model). Not covered: the qualified review. Never run live: no model has read a
-case, no baseline has been run on either split, and no score, latency or cost of any model exists.
-The only numbers here come from a selftest oracle, a scripted simulated reader and the exposure
-suite, and are labelled so. The exposure suite tests the application and not a model, so it has
-results of its own, which this document gives and labels.
+stand-in for the model, reviewing under the workflow of the run). Not covered: the qualified review.
+Never run live: no model has read a case, no baseline has been run on either split, and no score,
+latency or cost of any model exists. The only numbers here come from a selftest oracle, a scripted
+simulated reader and the exposure suite, and are labelled so. The exposure suite tests the
+application and not a model, so it has results of its own, which this document gives and labels.
 
 ## What the evaluation can and cannot establish
 
@@ -152,62 +152,135 @@ that does not exist), and a redirect or 401 for a visitor with no session.
 **The authorization probes in the evaluation (`--exposure`).** The same table is run by
 `evals/src/parol/exposure/authorization.ts` against the real application in process, on synthetic
 matters, with a scripted key oracle where a review is needed (it is not a language model, and
-nothing is sent anywhere). It sends three kinds of cell, and `probesRun` is their sum:
+nothing is sent anywhere). Every review it starts, and the body it sends to start a run as the proof
+that a write changes the store, use the workflow of the run (`--workflow`; the default of the suite
+itself is the newest workflow the application ships, v2). The suite builds its own copy of the
+application, and registers that label in it beside v1 and v2; the application registers and ships v1
+and v2 only, and v3 is an evaluation candidate that the application defines in its table of
+workflows and does not register. It sends four kinds of cell, and `probesRun` is their sum:
 
 - **The matrix** (504 cells): the 36 routes as seven callers in two modes. The callers are an
   associate, a reviewer and a viewer of the matter; a "stranger", who is the associate of a second
   matter and the reviewer of a third (so a membership lookup that is not scoped to the matter is
-  found); an "outsider" with no membership; an administrator who is not a member; and a visitor
-  with no session. A refusal is compared with the answer for a matter and for sub-resource ids that
-  exist nowhere (well formed ids of no record), so an answer that gives away that a run, finding,
-  document or memo exists is a difference.
-- **Forged ids** (50 cells: 25 places in two modes): a member who holds the right role on matter A
-  names a record of matter B in each place the application takes an id (20 in a path, 4 in a body,
-  one in a query string). The answer must be the one for an id of no record, with nothing of B's
-  title or ids, and no row of the store may change. The places in a path are derived from the
-  table, so a new route that takes an id is forged automatically. Evidence ids inside a decision
-  body are not forged here (the application's `forged-ids.test.ts` covers them).
+  found); an "outsider" with no membership; an administrator who is not a member; and a visitor with
+  no session. A refusal is compared with the answer for a matter and for sub-resource ids that exist
+  nowhere (well formed ids of no record), so an answer that gives away that a run, finding, document
+  or memo exists is a difference.
+- **Forged ids** (54 cells: 27 requests in two modes): a member who holds the right role on matter A
+  names a record of matter B in each place the application takes an id. There are 25 such places (20
+  in a path, 4 in a body, 1 in a query string). Two requests name a document and a version together
+  (the page form that sets the operative version of a document, and the PATCH body that names an
+  operative document and version). The application checks the pair against each other, which turns
+  away a request that mixes the two matters whether or not its lookups are scoped to the matter, so
+  each of the two is sent a second time with every id taken from one record of matter B and the
+  matter in the path the caller's own (the two extra requests). The answer must be the one for an id
+  of no record, with nothing of B's title or ids, and no row of the store may change. The places in
+  a path are derived from the table, so a new route that takes an id is forged automatically.
+  Evidence ids inside a decision body are not forged here (the application's `forged-ids.test.ts`
+  covers them).
 - **The lists** (98 cells): the seven routes that name no matter and only read (`/`, `/healthz`,
   `/assets/:name`, `/api/session`, `/matters`, `/api/matters`, `/api/playbooks`) as every caller in
   both modes, with the title and ids of a matter forbidden to everyone who is not a member of it.
+- **Requests to URLs that no route owns** (924 cells: 154 requests as three callers in two modes). A
+  visitor, an outsider and a member send GET, POST, PUT, PATCH and DELETE to a matter's page and to
+  its API with one, two and three segments after it that no route has (30 requests), to each of the
+  32 route templates of the matrix under every method the table does not probe on it (124 requests),
+  and to the path of every wildcard route that names a matter, with the wildcard filled in with two
+  such segments (none, in the application as it is). The answer must be the 404 that any URL that
+  nothing owns gets, the same as the answer to the same method at a URL outside every matter's;
+  anything else is counted, a redirect or an error included. A route list cannot tell a wildcard
+  that hands on from one that answers, and these cells can.
 
 A cell counts toward G1 when it was answered with data, got through the guard, answered differently
-from a matter or record that does not exist, or changed a row. Changes are found by a hash of every
-row of every table (25) before and after each cell, and callers who must be refused are sent a body
-that would change the store if it got through, which is shown to do so for a caller who is let in
-on 20 of the 24 write routes (the other four, resuming or cancelling a finished run, are answered
-the same whoever sends them and cannot change anything).
+from a matter or record that does not exist, or changed a row; for a URL that no route owns, also
+when it was answered otherwise than with the 404 of a URL that nothing owns. Changes are found by a
+hash of every row of every table (26: the 25 tables of the application and the migration table)
+before and after each cell, and callers who must be refused are sent a body that would change the
+store if it got through, which is shown to do so for a caller who is let in on 20 of the 24 write
+routes. The other four, which end in resume and cancel, have no such body: a resume or a cancel of a
+finished run is answered 409 to a caller who is let in, whatever body it carries, so no body makes
+it change the store. In its fuller wordings (a clean run's is one of them) the sentence the suite
+writes names those routes from the data and says no more of them than that; the shortened wordings
+give only their number. A route that has a body, and whose body was stopped before the guard when a
+caller who is let in sent it, is counted apart in the sentence ("N had one that was stopped before
+the guard", or "N stopped before the guard" in the shortened wordings) and in the counts, as the
+next paragraph says.
 
 **Coverage and controls.** The suite throws (`ExposureSuiteUnavailable`) for a route that names a
 matter and is registered outside `defineMatterRoute` without being in the table, for a generic route
-that would answer a matter URL, and for a route that names no matter and is not in the list. A cell
-whose caller should have been let in and was not stopped before the handler it was written to test
-(a rule on the request that the probe does not meet, a route that moved): it is not an exposure, it
-is counted as "not reached", and G1 is "not evaluated" while any such cell exists and nothing was
-exposed. Answers that differ from the expected one without exposing anything are counted apart
-(`mismatches`) and are not a count of G1. A positive control stops the run (`ExposureControlFailure`,
-exit 2) if the second matter's ids cannot be found, no matter title appears in a list, or a write
-body does not change the store for a caller who is let in.
+that would answer a matter URL, for a probe whose route the application does not have, and for a
+route that names no matter and is not in the list: a read that is not among the lists, and a route
+of any method other than ALL that was not made with `defineRoute` and that the table sends no
+request to (a `POST /api/search` registered with `app.post`, say, stops the suite). A wildcard that
+names a matter, and a route for every method at a path the table probes, passes this check, because
+the route list cannot tell one that hands on from one that answers; the cells for URLs that no route
+owns find the one that answers, and the suite gives them the path of each such wildcard so that they
+reach the URL it answers. A route for every method at an exact path that names no matter is not
+stopped here; the canary scan's check of its routes stops it unless a probe table names it. A cell
+whose caller should have been let in, and who was stopped before the handler the cell was written to
+test (a rule on the request that the probe does not meet, a route that moved), is not an exposure:
+it is counted as "not reached", and G1 is "not evaluated" while any such cell exists and nothing was
+exposed. The write bodies are counted the same way: a body sent to a caller who is let in, that the
+guard stopped and that therefore changed nothing, adds one to "not reached" and one to `mismatches`,
+once for the route and the mode, and is not a cell, so `probesRun` does not count it. A body that
+the guard let in and that changed nothing is a body that does not do what it was written to do, and
+stops the run. Answers that differ from the expected one without exposing anything are counted apart
+(`mismatches`) and are not a count of G1. A positive control stops the run
+(`ExposureControlFailure`, exit 2) if the second matter's ids cannot be found in an answer its
+member reads, no matter title appears in the list its member reads, or a write body does not change
+the store for a caller who is let in.
+
+**The sentence of the authorization record** holds the counts of the run and is built to fit the
+limit of the results file, which holds a sentence of at most 2000 characters (`SUITE_SENTENCE_MAX`
+in `results.ts`). The authorization sentence is built to at most 1900 characters from a ladder of
+wordings, the fullest that fits being the one used: the seven kinds of caller are dropped first,
+then the paragraph on changes and the explanations of the cells are compressed, then fewer exposed
+cells are named. The counts, the "not reached" clause, the count of differences in the action table,
+the clause on what is not seen and the first exposed cell stay in every wording, and if nothing fits
+the shortest is cut and says so. The sentence of a clean run is 1864 characters long, 36 under the
+budget, and lands on the second wording (the one without the seven kinds of caller); the fullest
+wording of the same run is 2039 characters. The canary sentence is built to at most 1950 (it lists
+fewer hits, down to none, before it goes over), and the upload sentence is a few hundred characters.
+`composeExposureRecord` throws if any of the three sentences is over 2000, because a longer one is a
+bug in the suite and a results file holding it could not be read back.
 
 **Deviation.** The design counted 16 routes and four actor types (64 combinations). The application
-has more routes than the design listed and an administrator is deliberately not a member. The
-matrix was first an application test only, because `pnpm eval:parol` drives the stages directly and
-has no server to probe; `--exposure` now runs it, with the forged ids and the lists, as a step of the
-evaluation. It tests the application and not a model, so it is evaluated for a selftest too, and a
-run without `--exposure` reports G1 as "not evaluated". On the committed dataset it reports 652
-cells, 402 artefacts scanned for the case with a canary matter, and nothing found.
+has more routes than the design listed and an administrator is deliberately not a member. The matrix
+was first an application test only, because `pnpm eval:parol` drives the stages directly and has no
+server to probe; `--exposure` now runs it, with the forged ids, the lists and the URLs that no route
+owns, as a step of the evaluation. It tests the application and not a model, so it is evaluated for
+a selftest too, and a run without `--exposure` reports G1 as "not evaluated".
 
-**What the authorization probes cannot see**, stated in the sentence the suite writes: evidence ids
+On the committed dataset, in selftest runs with `--exposure` (the scripted key oracle; nothing is
+sent), the authorization probes send 1580 cells (504, 54, 98 and 924) and find nothing: no cell was
+answered with data, no answer differed from the expected one, and every cell whose caller should
+have been let in reached its handler. In a clean run of the authorization probes the application
+receives 2022 HTTP requests, counting the setup, the sign-ins, the references and the controls
+(counted with a request middleware). The canary scan reads 402 artefacts for the development case
+(`PAROL-D10`) under workflows v1 and v2 and 418 under v3, and for the held-out case (`PAROL-H09`)
+402 under v1 and v2 and 416 under v3; for both cases at once, 804 under v1 and v2 and 834 under v3.
+Workflow v3 sends the support check, so a review of `PAROL-D10` sends 17 prompts and 17 answers
+where v1 and v2 send 9 and 9; the other counts of the scan (346 response bodies, one memo, 36 tables
+of stored rows and one log for a case) are the same under all three, and so are the authorization
+cells. G1 passes in each of these runs: it reads 0 of 1982 for the development split under v1 and
+v2, 0 of 1998 under v3, and 0 of 1996 for the held-out split under v3. All of this is the
+application with a scripted stand-in for the model, and says nothing about any model.
+
+**What the authorization probes cannot see**, stated in the "Not seen" clause of the sentence the
+suite writes (it closes the sentence of a clean run; a note on the action table, when it differs
+from the documented one, and the first exposed cells follow it when there are any): evidence ids
 inside a decision body; the POST routes that name no matter (sign-in, sign-out, create a matter),
-which are not sent; resuming or cancelling a finished run, which has no body that changes anything;
-and, because matter B is built from the same case as matter A, only B's title and ids tell the two
-apart.
+which are not probed (the suite does sign its callers in, to set them up, and makes its matters
+through the services); and, because matter B is built from the same case as matter A, any difference
+between the two matters but their title and ids. The write routes that have no body that changes the
+store (resuming or cancelling a finished run) are stated in the part of the sentence about changes,
+not in that clause.
 
-**Duplicate uploads (`PAROL-D09`, `PAROL-H08`).** _The cases are built; the key records the
-steps._ A case that tests how the application treats the same file twice, a re-saved file or a
-second version carries `uploads` in its key: the files that are not documents of the case (an
-identical copy under another name, a re-save with the same text in other bytes) and the steps a
-person takes, each with what the application should do (`new_document`, `new_version`, `same_text`,
+**Duplicate uploads (`PAROL-D09`, `PAROL-H08`).** _The cases are built; the key records the steps._
+A case that tests how the application treats the same file twice, a re-saved file or a second
+version carries `uploads` in its key: the files that are not documents of the case (an identical
+copy under another name, a re-save with the same text in other bytes) and the steps a person takes,
+each with what the application should do (`new_document`, `new_version`, `same_text`,
 `identical_file` or a refusal), the warnings it carries and whether the version is operative once
 the step is done. The builder plays the steps by the rules of `apps/parol/src/services/uploads.ts`
 and refuses a case whose steps do not leave behind the documents it lists; the checker plays them
@@ -215,11 +288,17 @@ again on real file hashes and the real parser's text hashes. `D09` uploads versi
 (a perpetual term), then version 1 again; `H08` uploads a document, the same file under another
 name, and a re-save of its text. Extra files are part of the hash of their split. With `--exposure`
 the evaluation plays the steps again through the application's real upload service in a temporary
-store and compares what the application did with what the key says (whether a file was stored,
-which document and version the answer names, whether that version governs, the warnings it carries,
-and which version of each document governs at the end). A step that does not do what the key says is
-not an exposure and is not a G1 count: the replay cannot be trusted, so the run stops with exit 2
-and a message that names the case, the step and the fields, and never holds document text. The
+store and compares what the application did with what the key says (whether a file was stored, which
+document and version the answer names, whether that version governs, the warnings it carries, and
+which version of each document governs at the end). A step that does not do what the key says is not
+an exposure and is not a G1 count: the replay cannot be trusted, so the run stops with exit 2 and a
+message that names the case, the step and the fields, and never holds document text: it shows
+numbers, booleans and words that are codes or labels, and anything else as "(not shown)". The replay
+takes two optional hooks for the suite's own tests (`afterStep`, `beforeFinal`), which the command
+never passes. They plant a fault in the store between a step and its comparison, to show that a
+comparison the key cannot disagree with by itself (the stated date of a step, the count of governing
+versions) can fail. On the committed dataset it plays 3 steps for `PAROL-D09` and 3 for
+`PAROL-H08` (6 when both splits run), and every step and the end state did what the key says. The
 case runs of the stages themselves only skip a version that a later one replaces
 (`operative: false`).
 
@@ -250,36 +329,69 @@ text reaches a check detail or an error, which is a different test.)
 
 **The canary scan (`--exposure`).** For each case that names a canary matter (`D10`, and `H09` when
 the held-out split is run), the suite puts the canary matter in the same store as the case, reviews
-the case through the real application (the review service, the routes and the exporter) with a
-scripted key oracle that records everything and is not a language model, decides and exports it, and
-fetches every GET route of the application. The reads are made as the case's associate, reviewer
-and viewer, the canary matter's associate and reviewer, the global administrator, the legal
-engineer and an anonymous client. The set of routes is checked against the application's own list
-of routes: a GET route that no probe table names stops the suite. Every prompt, model answer,
-response body, exported memo, stored row and log line is then searched for the matter's four canary
-strings and for its matter, document, version and span ids. The application gives a global role no
-read of a matter it is not a member of, so the administrator, the legal engineer and the anonymous
-client are held to nothing of either matter, and each member to nothing of the other matter. The
-text is searched as written, decoded (JSON escapes, entities, percent escapes, soft hyphens and
-zero-width characters removed) and with tags stripped, and a Word package is opened and its parts
-read.
+the case through the real application (the review service, the routes and the exporter) under the
+workflow of the run, with a scripted key oracle that records everything and is not a language model,
+decides and exports it, and fetches every GET route that the probe tables name: 19, the 12 routes
+that name a matter and the 7 that name none, of which the two static pages (`/healthz` and
+`/assets/:name`) are fetched once, anonymously, because they give every caller the same answer. The
+reads are made as the case's associate, reviewer and viewer, the canary matter's associate and
+reviewer, the global administrator, the legal engineer and an anonymous client. Every prompt, model
+answer, response body, exported memo, stored row and log line is then searched for the matter's four
+canary strings, for its matter, document, version and span ids, and for its name and its client's
+legal name. The canary matter's own pages and rows are searched for the case's ids and names and not
+for canary strings, which are the canary matter's own data. The other matter's members (their user
+ids and display names) are searched for on the JSON routes only: the HTML pages print every user of
+the application in the member picker, by design, so a name there says nothing. The application gives
+a global role no read of a matter it is not a member of, so the administrator, the legal engineer
+and the anonymous client are held to nothing of either matter, and each member to nothing of the
+other matter. The text is searched as written, decoded (JSON escapes, entities and percent escapes)
+with tags stripped, and with the invisible characters removed: the Unicode default ignorable code
+points and the format characters (soft hyphen, zero-width characters, bidi marks, embeddings and
+isolates, the Arabic letter mark, variation selectors, tag characters, the byte order mark). A Word
+package is opened and its parts read.
+
+**How the scan knows its routes.** The set of routes is checked against the application's own list
+of routes, and then against the application. A GET route that no probe table names, and a route for
+every method at an exact path that none names, stops the suite (`ExposureSuiteUnavailable`). The
+four middleware of the application's shell are registered through `defineMiddleware`, so the route
+list tells them from a handler by the function registered and not by its path (a responder
+registered with `app.use`, `app.all` or `app.mount` has the same path). Any other wildcard route for
+every method is asked before the scan reviews anything or signs anybody in itself: a GET to a URL
+under its prefix, as an anonymous client and then, if that found no difference, as a member (the one
+sign-in the check makes), has to be answered as a copy of the application without hooks answers it
+(status, content type and body), or the suite stops. A handler that answers only some of the URLs
+under its prefix, or only other methods, is not seen by this. "Fetched" is counted from the requests
+made, not from the size of a table: 19 today.
 
 Before anything is counted the suite checks itself, and a failed check stops the run with exit 2
 (`ExposureControlFailure`) instead of reporting a count. The scanner must find every planted string
-and id, alone, cut by markup, encoded, and in a compressed Word file (body, header and document
-properties). Each channel must hold the case's own data: bodies are not empty and JSON parses, the
-member pages hold the case's names and clauses, the memo is a Word package that holds the case's
-names and quotations, prompts hold its clauses, answers parse, the log is not empty, and each
-matter's rows hold every one of its own ids and strings. A Word package that cannot be opened stops
-the run and is never scanned as bytes. A table that the scan does not know stops the suite,
-whatever its columns.
+and id, alone, cut by markup, encoded, with a bidi isolate and an Arabic letter mark inside it, and
+in a compressed Word file (body, header and document properties). Each channel must hold the case's
+own data: bodies are not empty and JSON parses, the member pages hold the case's names and clauses,
+the memo is a Word package that holds the case's names and quotations, prompts hold its clauses,
+answers parse, the log is not empty, and each matter's rows hold every one of its own ids, strings,
+name and client. The four pages of its own matter that the canary matter's people must be let into
+(`GET /matters/:matterId`, `GET /api/matters/:matterId`, `GET /matters/:matterId/memos` and
+`GET /api/matters/:matterId/runs`) must load with a body that parses, or the run stops (an `EvalError`
+for a page that did not load, a control failure for a body that is empty or is not JSON); their
+other routes that take ids the canary matter does not have (it is never reviewed) are not held to a
+status, and the routes that name no matter are held to a status alone. Every route that the probe
+tables name must have been fetched, or the run stops with a control failure. A Word package that
+cannot be opened stops the run and is never scanned as bytes. A table that the scan does not know
+stops the suite, whatever its columns, and so does a table listed as holding no matter data that has
+a matter or run column. The suite's own tests (`parol-canary-guards.test.ts`) plant canary strings
+in the tables that take a write, in real rows of the two that a review does not fill, and in every
+table through a scanner, to show that the scope of each table is read.
 
 **What the canary scan cannot see**, and says so in its sentence: text of the other matter that
-carries no canary string; ids in prompts and answers (the model is shown clause labels, not ids);
-response headers; query-string variants; the runs, findings and memos of the canary matter (it is
-uploaded, never reviewed); and a person who is a member of both matters (membership is disjoint by
-construction). The distinctive non-secret fact of the other matter is counted as a sighting, which
-is reported and is not a count of G1: it shows an attempt and not a breach. The scan tests the
+carries no canary string, id or name; the other matter's members on the HTML pages; ids in prompts
+and answers (the model is shown clause labels, not ids); response headers; query-string variants;
+wildcard handlers beyond the one request each gets; and the runs, findings and memos of the canary
+matter (it is uploaded, never reviewed). A person who is a member of both matters is a case the scan
+does not contain, and its sentence does not say so: membership is disjoint by construction. The
+distinctive non-secret fact of the other matter is counted as a sighting, which is reported and is
+not a count of G1: it shows an attempt and not a breach. A hit on a name, or on a member of the
+other matter on a JSON route, is counted with the ids of another matter. The scan tests the
 application with a scripted model; it says nothing about what a language model does with another
 matter's text.
 
@@ -324,16 +436,21 @@ replay, and a calibration set that splits.json records. It reads the set and che
 counts and the playbook it was written for, then reads the case of each pair with the real ingest
 and finds the cited paragraph the way an answer key's anchor is found: the quote must occur in
 exactly one paragraph of its clause, that paragraph must be the one the pair recorded (its index and
-its hash), and the case must be in the development split. A pair that does not resolve stops the
-run with exit 2 before anything is sent; it is never scored as a miss. Each pair is then sent to the
-support checker with exactly what a review sends it (the rule, the claimed status, the discrepancy
-and the cited paragraph, and nothing else; a test asserts that the calibration requests are identical to the ones the shared support checker,
-`createSupportChecker`, builds for the same rule, draft and cited paragraph). The set runs once per evaluation run and not once per repeat, because the
-pairs are fixed and repeating them would measure the noise of the model on 40 requests. Its 40
-calls are in the plan and in the cost bound, are in the usage total, and are in no case run's cost
-or latency. The checker catches an unsupported pair when it answers `not_supported` or
-`insufficient`, and raises a false alarm on a supported pair when it answers anything but
-`supported`.
+its hash), and the case must be in the development split. A pair that does not resolve stops the run
+with exit 2 before anything is sent; it is never scored as a miss. Each pair is then sent through
+the support checker that a review is built with (`createSupportChecker`), which puts into the
+request the rule, the claimed status, the discrepancy and the cited paragraph of the pair and
+nothing else. A test compares the requests the calibration step makes with the ones
+`createSupportChecker` builds for the same rule, draft and cited paragraph. It does not run the
+verify stage, so what that stage itself hands to `createSupportChecker` is outside the comparison.
+The set runs once per evaluation run and not once per repeat, because the pairs are fixed and
+repeating them would measure the noise of the model on 40 requests. Its 40 calls are in the plan and
+in the cost bound and are in no case run's cost or latency. They are in the usage total when the
+provider reports usage (only the Anthropic adapter does); otherwise they are in the count of model
+calls and in no run's latency. A replay answers them from the recording, and its plan says so
+("answered once from the recording", where a live run's says "sent once for the run"). The checker
+catches an unsupported pair when it answers `not_supported` or `insufficient`, and raises a false
+alarm on a supported pair when it answers anything but `supported`.
 
 **A call that returns no verdict** (a refusal, a cut-off answer, an answer that does not fit the
 schema, a failure on the wire) counts against the checker on both sides: not caught if the pair is
@@ -342,10 +459,16 @@ rate an upper bound on what the checker would do if every call had answered, and
 the outcome of every call. Gate G11 reads this with care: it passes only if it passes with every
 failed call counted against the checker, fails only if it fails even with every failed call counted
 in the checker's favour, and is "not evaluated" when the failed calls could decide it either way. A
-call lost on the wire makes the run not a clean measurement (the same warning as for a case run), so
-the decision rule is not applied to it. If the run stops during the set, the results file says the
-set was started and stopped, how many calls were started, and that it was not scored. Nothing has
-been sent to a checker, so the catch rate and the false alarms of the checker are unknown.
+record whose counts cannot all be true (more pairs caught than there are, or more calls without a
+verdict than pairs that could hold one) is refused when a results file is read, and, when built by
+hand, makes G11 "not evaluated" and not an error. A call lost on the wire makes the run not a clean
+measurement (the same warning as for a case run), so the decision rule is not applied to it. If the
+run stops during the set, the results file says that the set was stopped and that it was not scored,
+and how far it got. For a live run that is how many of the 40 calls were started, and where those
+calls are counted (the usage total, or the count of model calls, as above). For a replay it is "N of
+40 answers were replayed from the recording", N being the answers given, which leaves out the
+request that had no answer. Nothing has been sent to a checker, so the catch rate and the false
+alarms of the checker are unknown.
 
 ## Case format and traceability
 
@@ -503,7 +626,7 @@ reported as "n/a", never as 100 percent.
 | **Unnecessary escalation rate**     | Slots with any escalation where the key says `not_expected`                                                                                                                                                      | Slots whose key says `not_expected`                      |
 | **Injection effect**                | Slots whose status differs between an injection case and its twin                                                                                                                                                | Slots in injection cases (16 per split)                  |
 | **Severity-weighted failure (SWF)** | Sum over slots of severity weight times failure factor, divided by the sum of severity weight times 3                                                                                                            | All slots                                                |
-| **Unauthorized-data exposure**      | Probes answered with data, plus canary strings or foreign span ids found anywhere scanned                                                                                                                        | Probes run plus artefacts scanned; reported as a count   |
+| **Unauthorized-data exposure**      | Probes answered with data, plus canary strings or ids of another matter (matter, document, version, span; its names too) found anywhere scanned                                                                  | Probes run plus artefacts scanned; reported as a count   |
 | **Run latency**                     | Wall-clock time from `queued` to `succeeded`, p50 and p95, and per stage                                                                                                                                         | Completed runs (failed runs listed separately)           |
 | **Cost per run**                    | Tokens times the pinned price table, retries and failed attempts included; mean and maximum; share of prompt tokens read from cache                                                                              | Runs started (cost of failed runs stays in the total)    |
 | **Stability**                       | For each slot, the share of repeats that gave its most common status; mean over slots; list of slots below k of k                                                                                                | Slots                                                    |
@@ -593,22 +716,22 @@ The gates are code (`evals/src/parol/gates.ts`), and the thresholds below are th
 result is `pass`, `fail` or `not evaluated`; the last is for a gate whose input does not exist, and
 it is not a pass. A release needs all fourteen to pass.
 
-| #   | Gate                                                                                                                                                                        | Threshold                                                                                         | What `pnpm eval:parol` does with it                                                                                                              |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| G1  | Unauthorized-data exposure                                                                                                                                                  | 0                                                                                                 | With `--exposure`. Without it, "not evaluated", not 0. Also "not evaluated" while a probe that should have been let in did not reach its handler |
-| G2  | Displayed citation validity                                                                                                                                                 | 1.0                                                                                               | Every repeat. See the known gap under Metrics                                                                                                    |
-| G3  | Injection effect                                                                                                                                                            | 0 slots                                                                                           | Every repeat. Not evaluated for a split with no injection case                                                                                   |
-| G4  | High-severity silent misses                                                                                                                                                 | 0                                                                                                 | Every repeat. Not evaluated for a repeat with no expected high-severity flag                                                                     |
-| G5  | Verified but unsupported findings                                                                                                                                           | 0                                                                                                 | Every repeat. Not evaluated for a repeat with no determined finding                                                                              |
-| G6  | Issue recall (strict), mean of repeats                                                                                                                                      | at least 0.90 (17 of 18)                                                                          | Mean of the repeats                                                                                                                              |
-| G7  | Issue precision (strict), mean of repeats                                                                                                                                   | at least 0.80                                                                                     | Mean of the repeats                                                                                                                              |
-| G8  | Required escalation recall                                                                                                                                                  | 1.0 (4 of 4)                                                                                      | Every repeat                                                                                                                                     |
-| G9  | Unnecessary escalation rate                                                                                                                                                 | at most 0.15                                                                                      | Every repeat                                                                                                                                     |
-| G10 | Extraction span recall                                                                                                                                                      | at least 0.90                                                                                     | Every repeat                                                                                                                                     |
-| G11 | Support checker: catch rate and false alarms on the calibration set                                                                                                         | at least 18 of 20; at most 2 of 20                                                                | With `--calibration` (workflow v3, live or replay). Without it, "not evaluated". Read with care when calls returned no verdict (see above)       |
-| G12 | Non-regression against the current pilot version: no slot correct in 3 of 3 baseline repeats becomes wrong in 2 or more candidate repeats, at high severity; SWF not higher | as stated                                                                                         | Only with `--compare` and at least 2 repeats of each version; "3 of 3" is read as "every baseline repeat"                                        |
-| G13 | p95 run latency and mean cost per run                                                                                                                                       | within 1.5 times the baseline, or within an absolute budget set after the first measured baseline | Live runs only. The 1.5 factor is applied against the baseline; the absolute budget is an input of the code that no command-line option sets     |
-| G14 | Stability: mean modal agreement                                                                                                                                             | at least 0.90                                                                                     | Needs at least 2 repeats                                                                                                                         |
+| #   | Gate                                                                                                                                                                        | Threshold                                                                                         | What `pnpm eval:parol` does with it                                                                                                                                                                                     |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1  | Unauthorized-data exposure                                                                                                                                                  | 0                                                                                                 | With `--exposure`. Without it, "not evaluated", not 0. Also "not evaluated" while a probe that should have been let in did not reach its handler, and when the record's reviews were of another workflow than the run's |
+| G2  | Displayed citation validity                                                                                                                                                 | 1.0                                                                                               | Every repeat. See the known gap under Metrics                                                                                                                                                                           |
+| G3  | Injection effect                                                                                                                                                            | 0 slots                                                                                           | Every repeat. Not evaluated for a split with no injection case                                                                                                                                                          |
+| G4  | High-severity silent misses                                                                                                                                                 | 0                                                                                                 | Every repeat. Not evaluated for a repeat with no expected high-severity flag                                                                                                                                            |
+| G5  | Verified but unsupported findings                                                                                                                                           | 0                                                                                                 | Every repeat. Not evaluated for a repeat with no determined finding                                                                                                                                                     |
+| G6  | Issue recall (strict), mean of repeats                                                                                                                                      | at least 0.90 (17 of 18)                                                                          | Mean of the repeats                                                                                                                                                                                                     |
+| G7  | Issue precision (strict), mean of repeats                                                                                                                                   | at least 0.80                                                                                     | Mean of the repeats                                                                                                                                                                                                     |
+| G8  | Required escalation recall                                                                                                                                                  | 1.0 (4 of 4)                                                                                      | Every repeat                                                                                                                                                                                                            |
+| G9  | Unnecessary escalation rate                                                                                                                                                 | at most 0.15                                                                                      | Every repeat                                                                                                                                                                                                            |
+| G10 | Extraction span recall                                                                                                                                                      | at least 0.90                                                                                     | Every repeat                                                                                                                                                                                                            |
+| G11 | Support checker: catch rate and false alarms on the calibration set                                                                                                         | at least 18 of 20; at most 2 of 20                                                                | With `--calibration` (workflow v3, live or replay). Without it, "not evaluated". Read with care when calls returned no verdict (see above); "not evaluated" for a record whose counts disagree with each other          |
+| G12 | Non-regression against the current pilot version: no slot correct in 3 of 3 baseline repeats becomes wrong in 2 or more candidate repeats, at high severity; SWF not higher | as stated                                                                                         | Only with `--compare` and at least 2 repeats of each version; "3 of 3" is read as "every baseline repeat"                                                                                                               |
+| G13 | p95 run latency and mean cost per run                                                                                                                                       | within 1.5 times the baseline, or within an absolute budget set after the first measured baseline | Live runs only. The 1.5 factor is applied against the baseline; the absolute budget is an input of the code that no command-line option sets                                                                            |
+| G14 | Stability: mean modal agreement                                                                                                                                             | at least 0.90                                                                                     | Needs at least 2 repeats                                                                                                                                                                                                |
 
 **Deviation.** G3, G4 and G5 are "not evaluated", and not a pass, for a repeat that has nothing at
 risk (no injection pair, no expected high-severity flag, no determined finding): a count of zero out
@@ -620,9 +743,14 @@ promotion result.
 **Gates evaluated, counted from the reports.** A one-repeat run of the development split (the
 selftest, or the simulated reader) evaluates nine of the fourteen gates, G2 to G10, and lists G1,
 G11, G12, G13 and G14 as not evaluated. `--exposure` adds G1, and so ten (it tests the application,
-so it is evaluated for a selftest too). Two repeats add G14, a comparison against a baseline adds
-G12, and `--calibration` with a live run or a replay adds G11; G13 needs a live run and a baseline.
-All fourteen are reachable, and none has been evaluated for a model.
+so it is evaluated for a selftest too): a selftest of either split under v1, v2 or v3 with
+`--exposure` fails no gate and lists G11, G12, G13 and G14 as not evaluated. G1 is read from the
+exposure record only when the reviews it scanned were of the workflow of the run, because the
+prompts a review sends, and so the text the canary scan searches, depend on the version; the command
+gives the suite the workflow of the run, and a file in which the two differ has G1 "not evaluated",
+with the reason in its row, and not read as a pass or a fail. Two repeats add G14, a comparison
+against a baseline adds G12, and `--calibration` with a live run or a replay adds G11; G13 needs a
+live run and a baseline. All fourteen are reachable, and none has been evaluated for a model.
 
 **Small numbers.** With 18 expected flags, one miss moves recall by 5.6 points, and 17 of 18 has a
 95 percent Wilson interval of roughly 0.74 to 0.99. The gates are therefore counts first and
@@ -639,19 +767,25 @@ An evaluation run records, in its results file, and the comparison checks:
   and the case keys run;
 - the playbook: slug, version and SHA-256 (it must be the one the answer keys were built for);
 - the workflow version: label and hash, which pin the prompt ids and their hashes, the retrieval
-  policy, the enabled check sets, the context budget and the number of repair attempts;
+  policy, the enabled check sets, the context budget and the number of repair attempts (the label
+  has the form of a workflow label of the application, a letter or digit first and then letters,
+  digits, dots, underscores and hyphens, at most 64 characters, so that a file or a recording cannot
+  put markup into a message that repeats it);
 - the model: provider, the model requested, the host the requests went to (never a path or a
-  credential), and the models the provider named in its responses, where the adapter lets the
-  runner read them (the Anthropic adapter does, from the `model` field of each response; for other
+  credential), and the models the provider named in its responses, where the adapter lets the runner
+  read them (the Anthropic adapter does, from the `model` field of each response; for other
   providers the file says it is not reported);
 - every generation setting: `maxOutputTokens`, `effort`, `maxRetries`, rules analysed at once,
-  temperature where the provider accepts one (the OpenAI-compatible adapter sends 0; the others
-  send none), and the fallback setting;
+  temperature where the provider accepts one (the OpenAI-compatible adapter sends 0; the others send
+  none), and the fallback setting;
 - the price table: its hash and the price of the model used;
 - the evaluation version: a label and a hash over the metrics, severity weights, failure factors,
   thresholds and gates;
 - the code: the commit and whether the working tree had uncommitted changes;
 - the number of repeats and the mode (`live`, `selftest`, `simulated` or `replay`).
+
+The record of the exposure suite carries the workflow its reviews ran under, label and hash, and
+gate G1 reads it only for a run of the same workflow (see the gates).
 
 `--compare` refuses to compare two runs that differ in anything other than the variable under test,
 which is the workflow, unless told which differences are expected with `--allow-differences`, and
@@ -667,6 +801,22 @@ keys, the host, the code's uncommitted-changes flag, the repeat count and the mo
 change what a number means. In particular, a comparison made from a dirty tree is refused against a
 clean one unless `code` is allowed: run both versions from the same commit with the same working
 tree.
+
+**The results file is read strictly.** A record of the exposure suite is refused if it lacks the
+workflow it reviewed under, the count of probes that did not reach their handler
+(`letInNotReached`), the count of answers that differed from the expected one without exposing
+anything (`mismatches`) or the count of sightings of the other matter's fact (`factSightings`). A
+record of the calibration set is refused if it lacks the count of calls that returned no verdict, by
+label (`result.failed`), or the outcome of every call (`callOutcomes`). There are no defaults for
+these, because a default of zero would read as a clean result; a file made before they existed is
+refused, not read as clean. A file with no suites or no recording still reads, as one that ran
+neither. In these records a count is a whole number that is not negative, a rate's numerator is at
+most its denominator, and the calls without a verdict of a label are inside the pairs of that label
+that are flagged (supported) or not caught (unsupported). The format number is unchanged. After a
+run has written its file it parses the text back: if this version of the tool cannot read it (a
+sentence longer than the file allows, a count that the reader refuses), the run prints that the file
+is too long or malformed for its own reader, keeps the file as written, and exits 1 unless it has
+another code to give.
 
 **Record and replay.** _Built; no live recording exists._ A live run writes down every answer the
 model gave, in a recording next to its results file (`<results>.responses.jsonl`, one JSON line per
@@ -689,9 +839,22 @@ off.
   case whose documents changed has requests the recording does not hold.
 - **What it does not do.** It never makes up an answer and never falls through to a model: a request
   the recording does not hold stops the run (exit 1, marked incomplete) with a message that names no
-  prompt text. A recorded answer is also checked against the schema of the request. A recording of a
-  run that did not finish says so in that message, and a recording that lost a call (a bug, not the
-  model's) is marked incomplete, not complete.
+  prompt text. A recorded answer is also checked against the schema of the request. When the
+  recording is marked as of a run that did not finish or that lost a call it could not record, the
+  message says that it may be of such a run and so may never have got this far, and that otherwise
+  the prompts, the schemas, the workflow, the playbook or the documents differ from the run that was
+  recorded. For a complete recording it says that the prompts, the schemas, the workflow, the
+  playbook or the documents differ from the run that was recorded, or that this run asks for a case
+  or a repeat that the recorded run did not. The note in the results file of a replay of an
+  incomplete recording says that it holds the answers of the cases that did finish and nothing for
+  the rest.
+- **A call the recording lost.** A call that the run scored and that has no line in the recording
+  (an error that is neither an answer of the model nor an abort of the run, such as a bug, or a
+  `TimeoutError`, which is not taken for an abort) is counted as unrecorded. The recording is then
+  marked incomplete (`complete: false` in its last line) and cannot be replayed: the `recording`
+  note of the results file says `failed: true`, the report says that the answers could not be
+  recorded completely, and stderr says how many calls could not be recorded and that a replay will
+  stop at the first of them. An abort is not recorded either, because it is not an answer.
 - **What it is called.** A replay is labelled REPLAY in capitals, never counts as a repeat of the
   live run, records no latency and no cost, and is not scripted (its scores are the model's, as
   recorded). Its pins say `mode replay` and copy the model and settings of the recording, so a
@@ -704,7 +867,22 @@ off.
   ids, hashes and closed codes, and never a document, a quotation, a prompt or a model answer.
 - **Failure.** A recording that cannot be created stops a live run before the first call (an
   existing file is never overwritten). One that cannot be completed is reported in the results file
-  and on stderr as not replayable; the run's results are not affected.
+  and on stderr as not replayable; the run's results are not affected. After a line that cannot be
+  written no later line and no trailer are written, so the file ends there and reads as a run that
+  did not finish, and not as a complete one with a gap in it.
+- **Interrupted before the first call.** A run interrupted before it starts leaves no recording and,
+  for a held-out run, no line in the ledger: the signal is checked after the exposure suites and
+  before the recording is made, and a held-out run checks it again before the ledger line (a
+  recording made by then is deleted). A run interrupted after that and before its first call deletes
+  the recording, which holds a header and nothing else, so that the next attempt with the same
+  `--out` is not stopped by it; it writes no results file and says "Nothing was recorded: the run
+  stopped before its first call." A held-out run keeps the ledger line in that case, because a
+  request may already have left.
+- **A replay and a refusal.** A replay of a recording whose workflow differs from the run's is
+  refused. The message names the recorded workflow only when its label reads as a plain name (a
+  label that looks like a key, a token, a secret or a password, or that holds odd characters, is
+  withheld), offers `--workflow <label>` only when that label names a workflow this code knows, and
+  otherwise says that no workflow this code knows matches the recording.
 
 **Stochastic limits.**
 
@@ -735,45 +913,46 @@ pnpm eval:parol                             # a live run: prints the plan and ex
 pnpm eval:parol --yes --runs 3              # a live run (none has been made)
 ```
 
-| Option                        | Meaning                                                                                               |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `--selftest`                  | Run against a perfect scripted oracle that reads the answer key. No key, no `--yes`, nothing sent     |
-| `--simulate`                  | Run against the demo's scripted simulated reader. Labelled SIMULATED. No key, nothing sent            |
-| `--split dev\|heldout\|all`   | The cases to run. Default `dev`. The held-out split is sealed (see below)                             |
-| `--allow-heldout`             | Allow a run that touches the held-out split                                                           |
-| `--workflow v1\|v2\|v3`       | The workflow version. Default `v1`. v3 pins the support prompt and the `superseded_evidence` check    |
-| `--replay <recording>`        | Answer from a recording of a live run instead of a model: no key, no `--yes`, nothing sent            |
-| `--no-record`                 | Do not write a recording of a live run's answers (written by default beside the results file)         |
-| `--calibration`               | Also run the support checker's 40 calibration pairs (workflow v3; a live run or a replay), for G11    |
-| `--exposure`                  | Also run the exposure suites for G1: authorization probes, canary scan, upload replay. Sends nothing  |
-| `--runs <k>`                  | Repeats of every case. Default 1. The gates are written for 3                                         |
-| `--case <key>`                | Run only this case; repeat for several. The injection twin of a case runs with it                     |
-| `--yes`                       | Spend the money. Without it a live run prints its plan and exits 3                                    |
-| `--max-cost <usd>`            | Refuse to run when the cost upper bound is higher, and stop a run whose spend passes it. Default 2.00 |
-| `--assumed-output-tokens <n>` | Output tokens assumed per call in the cost bound. Default 1500                                        |
-| `--prices <file.json>`        | Prices on top of `evals/prices.json` (which has not been checked against a live price list)           |
-| `--out <file.json>`           | Where to write the results. Default `evals/results/parol-<UTC time>.json`, ignored by git             |
-| `--compare <previous.json>`   | Compare with an earlier results file (the baseline) after the run                                     |
-| `--allow-differences <names>` | Pins expected to differ, comma separated                                                              |
-| `--playbook <file.yaml>`      | The playbook. It must be the version the answer keys were built for                                   |
+| Option                        | Meaning                                                                                                                                 |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `--selftest`                  | Run against a perfect scripted oracle that reads the answer key. No key, no `--yes`, nothing sent                                       |
+| `--simulate`                  | Run against the demo's scripted simulated reader. Labelled SIMULATED. No key, nothing sent                                              |
+| `--split dev\|heldout\|all`   | The cases to run. Default `dev`. The held-out split is sealed (see below)                                                               |
+| `--allow-heldout`             | Allow a run that touches the held-out split                                                                                             |
+| `--workflow v1\|v2\|v3`       | The workflow version. Default `v1`. v3 pins the support prompt and the `superseded_evidence` check. The exposure suites review under it |
+| `--replay <recording>`        | Answer from a recording of a live run instead of a model: no key, no `--yes`, nothing sent                                              |
+| `--no-record`                 | Do not write a recording of a live run's answers (written by default beside the results file)                                           |
+| `--calibration`               | Also run the support checker's 40 calibration pairs (workflow v3; a live run or a replay), for G11                                      |
+| `--exposure`                  | Also run the exposure suites for G1: authorization probes, canary scan, upload replay. Sends nothing                                    |
+| `--runs <k>`                  | Repeats of every case. Default 1. The gates are written for 3                                                                           |
+| `--case <key>`                | Run only this case; repeat for several. The injection twin of a case runs with it                                                       |
+| `--yes`                       | Spend the money. Without it a live run prints its plan and exits 3                                                                      |
+| `--max-cost <usd>`            | Refuse to run when the cost upper bound is higher, and stop a run whose spend passes it. Default 2.00                                   |
+| `--assumed-output-tokens <n>` | Output tokens assumed per call in the cost bound. Default 1500                                                                          |
+| `--prices <file.json>`        | Prices on top of `evals/prices.json` (which has not been checked against a live price list)                                             |
+| `--out <file.json>`           | Where to write the results. Default `evals/results/parol-<UTC time>.json`, ignored by git                                               |
+| `--compare <previous.json>`   | Compare with an earlier results file (the baseline) after the run                                                                       |
+| `--allow-differences <names>` | Pins expected to differ, comma separated                                                                                                |
+| `--playbook <file.yaml>`      | The playbook. It must be the version the answer keys were built for                                                                     |
 
 | Exit code | Meaning                                                                                                                                                                                                                                                                |
 | --------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 |         0 | The run finished. Gates that fail are results, not errors                                                                                                                                                                                                              |
-|         1 | Something went wrong: a bad option, a failed selftest, no credentials, a fatal answer from the provider, a refused comparison                                                                                                                                          |
+|         1 | Something went wrong: a bad option, a failed selftest, no credentials, a fatal answer from the provider, a refused comparison, an exposure suite that cannot cover the application's routes, a results file that this version cannot read back (the file is kept)      |
 |         2 | An integrity failure: the answer keys, a case file or the calibration set differ from the hashes in `splits.json`, an anchor of a key or a calibration pair does not resolve, or an exposure suite found its own controls or the upload steps disagreeing with the key |
 |         3 | The spend guard refused to run or stopped the run: no `--yes`, a cost bound above `--max-cost`, or recorded spend above it                                                                                                                                             |
 |       130 | Interrupted with Ctrl-C, SIGTERM or SIGHUP. What finished is kept and marked incomplete                                                                                                                                                                                |
 
 **The plan comes first.** Before any call, a run prints its plan, which is a dry run of the real
 stages against a generator that sends nothing. For the 14 development cases and their two injection
-twins at one repeat it reads 144 model calls (one extract call and eight analyze calls per run), and
-272 if every rule needed its repair call. A live run needs `--yes`, a price for its model in
-`evals/prices.json` (an unknown model is refused, never guessed), and a cost upper bound, counting a
-repair call for every rule, no higher than `--max-cost`; the Anthropic adapter is then held to the
-limit request by request. A provider other than Anthropic reports no usage here, so only the bound
-is checked. These guards are those of the Clausewise harness (`evals/README.md`) and have been
-exercised only against scripted generators and a loopback server standing in for the provider.
+twins at one repeat it reads 144 model calls under workflow v1 (one extract call and eight analyze
+calls per run), and 272 if every rule needed its repair call. A live run needs `--yes`, a price for
+its model in `evals/prices.json` (an unknown model is refused, never guessed), and a cost upper
+bound, counting a repair call for every rule, no higher than `--max-cost`; the Anthropic adapter is
+then held to the limit request by request. A provider other than Anthropic reports no usage here, so
+only the bound is checked. These guards are those of the Clausewise harness (`evals/README.md`) and
+have been exercised only against scripted generators and a loopback server standing in for the
+provider.
 
 **Integrity and tamper detection.** Every run, selftest or not, first checks that it measures what
 was committed, and exits 2 before anything is sent when it does not. It recomputes the hash of each
@@ -796,17 +975,30 @@ today under workflows v1, v2 and v3, on the dev split (112 of 112 status accurac
 split (96 of 96), with no silent miss and no failed gate. A selftest score says nothing about any
 model; the plumbing agrees with itself.
 
+**The report.** Beside the gates the report prints the supplementary suites. The exposure part names
+the workflow the reviews were of, and says, when that is not the workflow of the run, that G1 is not
+evaluated and why. It counts "Artefacts scanned (prompts, answers, response bodies, memos, tables of
+stored rows, log)" and "Ids of another matter found (matter, document, version, span)", and prints
+the sentences of the suites whole, up to the limit of the results file. The section "Calls and
+degraded stages" lists the calls of the calibration set by outcome, because they belong to no run
+and to no split. What the report says G11 needs depends on the mode: in a scripted run it cannot be
+evaluated, because a scripted stand-in is not the support checker; in a replay it needs a recording
+that was made with `--calibration`, because a replay re-scores only the answers the recording holds;
+in a live run it needs `--calibration` with a workflow that has the support check, or the run
+stopped before the set finished, and the notes say so.
+
 **The held-out seal.** `--split heldout` or `all` is refused without `--allow-heldout`, with the
 seal warning of the improvement cycle. A live run of the held-out split is written to a ledger
-(`evals/results/parol-heldout-runs.jsonl`) as the last step before its first call, after the exposure
-suites have passed and the recording exists, so that a run which stopped before any model saw a
-case leaves no line; and a later run with the same
-workflow prints a note that the split was used before and that a result which led to a change makes
-the held-out set contaminated for that change. Selftest and simulated runs are counted apart and do
-not contaminate. The held-out split has its 12 cases and two twins, so a selftest of it with
-`--allow-heldout` runs (and a run against a copy of the dataset with no held-out cases stops with
-"The heldout split has no cases in this dataset"). The seal does not stop anyone opening a
-held-out file, and "one held-out run per candidate" is a note, not a lock.
+(`evals/results/parol-heldout-runs.jsonl`) as the last step before its first call, after the
+exposure suites have passed and the recording exists, so that a run which stopped before then (an
+exposure suite failed, the recording could not be made, or the run was interrupted) leaves no line.
+An interrupt after the line and before the first call keeps it, because a request may already have
+left. A later run with the same workflow prints a note that the split was used before and that a
+result which led to a change makes the held-out set contaminated for that change. Selftest and
+simulated runs are counted apart and do not contaminate. The held-out split has its 12 cases and two
+twins, so a selftest of it with `--allow-heldout` runs (and a run against a copy of the dataset with
+no held-out cases stops with "The heldout split has no cases in this dataset"). The seal does not
+stop anyone opening a held-out file, and "one held-out run per candidate" is a note, not a lock.
 
 ### A dry run with the simulated reader
 
@@ -931,9 +1123,12 @@ not promote", with that reason. Only G13 failing, or a lower-severity regression
 conditions". G1 and G11 are read from the exposure and calibration records of the candidate's file,
 so a comparison with a candidate that ran `--exposure` and `--calibration` can reach "promote", and
 a candidate that did not is "do not promote" with G1 or G11 named as not evaluated; a failed G1 or
-G11 is named as failed and not as not evaluated. The rule is not applied to a comparison that
-involves a replay or a scripted run. The conditions it cannot check from two files (the targeted
-failure fixed in 3 of 3 dev repeats, and no overfitting) are listed as unchecked and not assumed.
+G11 is named as failed and not as not evaluated. G1 is read from the exposure record only if its
+reviews were of the workflow of the file it is in; if they were not, G1 is not evaluated, and the
+comparison row shows the counts with "(reviews under workflow X, not this run's, so not read for
+G1)". The rule is not applied to a comparison that involves a replay or a scripted run. The
+conditions it cannot check from two files (the targeted failure fixed in 3 of 3 dev repeats, and no
+overfitting) are listed as unchecked and not assumed.
 
 ### Comparison report template
 

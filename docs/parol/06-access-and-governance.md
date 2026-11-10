@@ -39,8 +39,13 @@ application).
 declaration itself: every route is registered through `defineMatterRoute`
 (`apps/parol/src/server/matter-route.ts`), which resolves the person, checks the CSRF token on a
 write, authorizes against the database and only then calls the handler. A matter route registered
-any other way is found by a scan. Services that read matter data accept only an `AuthorizedMatter`
-value, a branded TypeScript type that only `authorizeMatter` (`src/auth/authorize.ts`) constructs.
+any other way is found by a scan. The shell's own four middleware (request context, host guard,
+refusal of an address with a user part, body limit) are registered through `defineMiddleware` in
+the same file, which records the function it registers, so that the route list tells them from a
+handler that answers; any other route of the shell registered another way, of any method, fails the
+test of the route list (`shell-routes.test.ts`, which builds the shell and not the page and API
+routes). Services that read matter data accept only an `AuthorizedMatter` value, a branded
+TypeScript type that only `authorizeMatter` (`src/auth/authorize.ts`) constructs.
 
 **Not met in full.** The plan said that code reaching the store, the workflow runner, the model
 layer or the exporter without passing authorization would not compile. That holds for the service
@@ -72,17 +77,25 @@ approved playbook, a prompt or a workflow manifest.
 **Tests.** The authorization probe matrix runs in the unit suite (`test/routes/authorization.test.ts`:
 one request for every route, as every kind of caller). The matrix is also run as a step of the
 evaluation (`pnpm eval:parol --exposure`), with the ids of one matter named in requests for another
-and the routes that name no matter read as every caller, and it feeds gate G1 of [document
-5](05-evaluation.md#supplementary-suites); it tests the application with a scripted stand-in for the
-model and not a model. A test enumerates the application's matter routes and fails if any lacks the guard, or if
-a generic route would answer a matter URL (`test/server/shell-routes.test.ts`); a scan fails if any
-file other than `authorize.ts` makes an `AuthorizedMatter` (`test/auth/brand.test.ts`, and a
-type-aware scan in `brand-typed.test.ts`); every route that changes state is tested to refuse a
-request without its token (`test/routes/csrf.test.ts`); a finding, run or memo id from another matter
-is a 404 in every place an id can go (`test/routes/forged-ids.test.ts`); and a non-member's 404 is
-byte for byte the same as a missing or deleted matter's, status, headers and body
-(`test/server/shell-matter.test.ts`). A new route cannot ship unprotected by accident, but the check
-was shown on routes registered the wrong way inside the tests and not by removing the guard from a real route.
+(a route that takes several ids is also sent with all of them from one record of the other matter),
+the routes that name no matter read as every caller, and URLs that no route owns sent with each of
+GET, POST, PUT, PATCH and DELETE as a visitor, an outsider and a member, each of which must get the
+404 of a URL that nothing owns. It feeds gate G1 of
+[document 5](05-evaluation.md#supplementary-suites); it tests the application with a scripted
+stand-in for the model and not a model. The reviews it starts follow the workflow of the run, and G1
+is read only from a record made under the workflow of the run it is reported for. A test enumerates
+the application's matter routes and fails if any lacks the guard, if a generic route would answer a
+matter URL, or, for the shell as `createApp` builds it, if any route of any method is registered
+other than through the declaring functions (`test/server/shell-routes.test.ts`; a wildcard handler
+that `registerRoutes` adds with `app.use` or `app.mount` is found only by the exposure suite); a
+scan fails if any file other than `authorize.ts` makes an `AuthorizedMatter`
+(`test/auth/brand.test.ts`, and a type-aware scan in `brand-typed.test.ts`); every route that
+changes state is tested to refuse a request without its token (`test/routes/csrf.test.ts`); a
+finding, run or memo id from another matter is a 404 in every place an id can go
+(`test/routes/forged-ids.test.ts`); and a non-member's 404 is byte for byte the same as a missing or
+deleted matter's, status, headers and body (`test/server/shell-matter.test.ts`). A new route cannot
+ship unprotected by accident, but the check was shown on routes registered the wrong way inside the
+tests and not by removing the guard from a real route.
 
 **Segregation.** By default a matter's reviewer must be a different user from the associate who
 started the run: a decision is refused when the person deciding started the run, and a person holds
