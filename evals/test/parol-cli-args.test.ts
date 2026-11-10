@@ -24,6 +24,7 @@ describe("the argument parser", () => {
       replay: undefined,
       record: true,
       calibration: false,
+      exposure: false,
       split: "dev",
       allowHeldout: false,
       workflow: "v1",
@@ -80,6 +81,7 @@ describe("the argument parser", () => {
       replay: undefined,
       record: true,
       calibration: true,
+      exposure: false,
       split: "all",
       allowHeldout: true,
       workflow: "v2",
@@ -97,6 +99,7 @@ describe("the argument parser", () => {
     });
     expect(parseParolArgs(["--selftest"]).selftest).toBe(true);
     expect(parseParolArgs(["--simulate"]).simulate).toBe(true);
+    expect(parseParolArgs(["--exposure"]).exposure).toBe(true);
     expect(parseParolArgs(["-h"]).help).toBe(true);
     expect(parseParolArgs(["--help", "--runs", "0"]).help).toBe(true);
   });

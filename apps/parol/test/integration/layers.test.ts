@@ -1905,7 +1905,8 @@ describe("the words of the services are the words of the pages", () => {
   beforeAll(async () => {
     const { keys } = await loadFixtures();
     for (const key of keys.cases.filter((c) => c.split === "dev"))
-      for (const twin of key.case === "PAROL-D08" ? [false, true] : [false])
+      // A case with an injected paragraph has a twin, which is reviewed beside it.
+      for (const twin of keys.twins.some((t) => t.twinOf === key.case) ? [false, true] : [false])
         observed.push(await reviewCase(key.case, twin));
     // The rest of the vocabulary: what the dataset's oracle never says.
     observed.push(
@@ -1939,14 +1940,23 @@ describe("the words of the services are the words of the pages", () => {
   };
 
   it("reviews every case of the dev split through the services", () => {
-    expect(observed.slice(0, 7).map((o) => o.caseKey)).toEqual([
+    expect(observed.slice(0, 16).map((o) => o.caseKey)).toEqual([
       "PAROL-D01",
+      "PAROL-D02",
       "PAROL-D03",
+      "PAROL-D04",
       "PAROL-D05",
       "PAROL-D06",
+      "PAROL-D07",
       "PAROL-D08",
       "PAROL-D08-twin",
+      "PAROL-D09",
+      "PAROL-D10",
+      "PAROL-D10-twin",
+      "PAROL-D11",
       "PAROL-D12",
+      "PAROL-D13",
+      "PAROL-D14",
     ]);
     for (const o of observed) expect(o.issues, o.caseKey).toHaveLength(8);
   });
@@ -2522,12 +2532,22 @@ describe("the keyword hints of the dev split", () => {
   };
   const PERMITTED_AFTER = [3, 2, 3, 3, 3, 2, 3];
   const PERMITTED_BEFORE = [3, 2, 4, 4, 4, 3, 4];
+  // The cases that existed when the hints were counted. The later development cases have no count
+  // from before topics, so a before and after comparison is only possible for these.
+  const COUNTED_BEFORE = [
+    "PAROL-D01",
+    "PAROL-D03",
+    "PAROL-D05",
+    "PAROL-D06",
+    "PAROL-D08",
+    "PAROL-D12",
+  ];
 
   it("are as many per category as before topics, except for the copies required by law", async () => {
     const { keys } = await loadFixtures();
     const counts: Record<string, number[]> = {};
     const lost: string[] = [];
-    for (const key of keys.cases.filter((c) => c.split === "dev")) {
+    for (const key of keys.cases.filter((c) => COUNTED_BEFORE.includes(c.case))) {
       for (const twin of key.case === "PAROL-D08" ? [false, true] : [false]) {
         const world = await buildCaseWorld(key.case, { twin });
         for (const category of CATEGORY_IDS) {

@@ -45,11 +45,11 @@ export const H11: CaseDefinition = {
         ),
         clause(
           "2",
-          "Affiliates. \"Affiliate\" of an entity means any other entity that can direct that entity's affairs, any entity whose affairs that entity can direct, and any entity whose affairs are directed by a person who also directs that entity's affairs, in each case whether at the date of this Agreement or at any later time while this Agreement is in force.",
+          "Affiliates. \"Affiliate\" means, for an entity, any other entity that can direct that entity's affairs, any entity whose affairs that entity can direct, and any entity whose affairs are directed by a person who also directs that entity's affairs, in each case whether at the date of this Agreement or at any later time while this Agreement is in force.",
         ),
         clause(
           "3",
-          'Roles. A Party that makes information available under this Agreement is the "Contributor" of that information, and a Party that receives it is its "Recipient". Whinbury and every Corvane Entity can each be a Contributor and a Recipient, so what this Agreement requires of a Recipient applies equally to every Party.',
+          'Roles. A Party that makes information available under this Agreement is the "Contributor" of that information, and a Party that receives it is the "Recipient" of that information. Whinbury and every Corvane Entity can each be a Contributor and a Recipient, so what this Agreement requires of a Recipient applies equally to every Party.',
         ),
         clause(
           "4",

@@ -168,7 +168,8 @@ export function oracleObservations(
 /**
  * Metrics built from counts, for tests of the gates that need an exact number such as 17 of 18
  * without writing out eighteen slots. Fields not given describe a repeat with nothing to count,
- * except the injection effect, which defaults to 0 differing of 8 slots as in a full split.
+ * except the injection effect, which defaults to 0 differing of 8 slots, the slots of one injection
+ * case (a full split has two injection cases and 16 slots).
  */
 export function repeatMetrics(
   repeat: number,
@@ -182,7 +183,7 @@ export function repeatMetrics(
     highSilentMisses?: number;
     verifiedButUnsupported?: number;
     injectionDiffering?: number;
-    /** Slots in injection cases: 8 per split in the full dataset (document 5). */
+    /** Slots in injection cases: 8 for each injection case, 16 per split in the full dataset (document 5). */
     injectionSlots?: number;
     swf?: number | null;
   } = {},

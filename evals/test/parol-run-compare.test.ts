@@ -758,7 +758,8 @@ describe("a comparison that involves a scripted run", () => {
       "| workflow | workflow.retrieval | R1 | R2 | declared variable |",
     );
     // The oracle is perfect under both, so nothing changed.
-    expect(second.stdout).toContain("No paired slot changed (48 paired).");
+    // Fourteen development cases of eight rules: 112 slots are paired.
+    expect(second.stdout).toContain("No paired slot changed (112 paired).");
     // And a model that differs is refused before anything runs.
     const refused = await run(
       ["--selftest", "--runs", "3", "--compare", `${resultsDir}/parol-20261104T110000Z.json`],

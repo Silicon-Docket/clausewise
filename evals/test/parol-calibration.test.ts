@@ -699,8 +699,25 @@ describe("the builder step", () => {
 
   it("prefers a registered case over its source and adds the development cases that are not registered", () => {
     const registered = calibrationCases(CASES);
-    expect(registered.map((definition) => definition.case).sort()).toEqual(
-      DEV_CASE_SOURCES.map((definition) => definition.case).sort(),
+    const devKeys = DEV_CASE_SOURCES.map((definition) => definition.case).sort();
+    expect(
+      registered
+        .filter((definition) => definition.split === "dev")
+        .map((definition) => definition.case)
+        .sort(),
+    ).toEqual(devKeys);
+    // Every development case is registered now, so none is added from its source: the registered
+    // definitions themselves are used, and the registered held-out cases are kept beside them.
+    expect(registered).toEqual(CASES);
+    // With only some registered, the development cases that are not are added from their sources.
+    const some = CASES.filter((definition) => ["PAROL-D01", "PAROL-D05"].includes(definition.case));
+    expect(
+      calibrationCases(some)
+        .map((definition) => definition.case)
+        .sort(),
+    ).toEqual(devKeys);
+    expect(calibrationCases(some).find((definition) => definition.case === "PAROL-D01")).toBe(
+      some[0],
     );
     const stand = structuredClone(D13);
     expect(calibrationCases([stand]).find((definition) => definition.case === "PAROL-D13")).toBe(

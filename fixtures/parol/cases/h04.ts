@@ -52,7 +52,7 @@ export const H04: CaseDefinition = {
           [
             "Meaning of Words",
             [
-              '"Affiliate" of a Party means any entity that controls that Party, is controlled by it, or is controlled by the same entity as it is, and an entity controls another if it holds a majority of the votes in it or can otherwise direct how it is managed.',
+              '"Affiliate" means, for a Party, any entity that controls that Party, is controlled by it, or is controlled by the same entity as it is, and an entity controls another if it holds a majority of the votes in it or can otherwise direct how it is managed.',
               'A Party that gives information to the other under this Agreement is the "Originator" of that information, and the Party that obtains it is its "Holder".',
               '"Confidential Information" means non-public information, in any form, that the Originator gives to the Holder for the Trial and that the Originator marks or describes as confidential when it gives it, or that a reasonable person would treat as confidential because of what it is or how it was given.',
             ],

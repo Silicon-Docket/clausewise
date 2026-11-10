@@ -35,7 +35,7 @@ export const H01: CaseDefinition = {
         heading("ARTICLE 1. DEFINITIONS"),
         clause(
           "1.1",
-          '"Affiliate" of a person means any other person that controls it, is controlled by it, or is controlled by the same person as it is, and one person controls another if it can determine how the other conducts its affairs, whether by holding a majority of the votes, by agreement or in some other way.',
+          '"Affiliate" means, for a person, any other person that controls it, is controlled by it, or is controlled by the same person as it is, and one person controls another if it can determine how the other conducts its affairs, whether by holding a majority of the votes, by agreement or in some other way.',
         ),
         clause(
           "1.2",

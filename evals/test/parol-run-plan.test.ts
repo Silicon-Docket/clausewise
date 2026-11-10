@@ -17,7 +17,7 @@ import {
   type ParolPlan,
 } from "../src/parol/plan.js";
 import { prepareCase, runStages, runnableCases, type ParsedFiles } from "../src/parol/runner.js";
-import { REPO_ROOT } from "../src/parol/testing-run.js";
+import { REPO_ROOT, committedRunShape } from "../src/parol/testing-run.js";
 
 let dataset: Dataset;
 let playbook: LoadedPlaybook;
@@ -122,18 +122,30 @@ describe("the plan of the dev split", () => {
       repeats: 3,
       assumedOutputTokens: 1500,
     });
-    // Six cases and the twin of PAROL-D08, eight rules each.
+    // Fourteen cases and the twins of PAROL-D08 and PAROL-D10, eight rules each.
     expect(plan.cases.map((c) => c.caseKey)).toEqual([
       "PAROL-D01",
+      "PAROL-D02",
       "PAROL-D03",
+      "PAROL-D04",
       "PAROL-D05",
       "PAROL-D06",
+      "PAROL-D07",
       "PAROL-D08",
       "PAROL-D08-twin",
+      "PAROL-D09",
+      "PAROL-D10",
+      "PAROL-D10-twin",
+      "PAROL-D11",
       "PAROL-D12",
+      "PAROL-D13",
+      "PAROL-D14",
     ]);
-    expect(plan.runsPerRepeat).toBe(7);
-    expect(plan.slotsPerRepeat).toBe(56);
+    const shape = committedRunShape("dev");
+    expect(shape).toMatchObject({ cases: 14, twins: 2, runs: 16, rules: 8 });
+    expect(plan.runsPerRepeat).toBe(shape.runs);
+    expect(plan.slotsPerRepeat).toBe(shape.runSlots);
+    expect(plan.slotsPerRepeat).toBe(128);
     for (const c of plan.cases) {
       expect(c.rules).toBe(8);
       expect(c.rulesOverBudget).toBe(0);
@@ -142,8 +154,8 @@ describe("the plan of the dev split", () => {
       expect(c.callsWithRepairs).toBe(17);
       expect(c.inputTokensWithRepairs).toBeGreaterThan(c.inputTokens);
     }
-    expect(plan.calls).toBe(7 * 9 * 3);
-    expect(plan.callsWithRepairs).toBe(7 * 17 * 3);
+    expect(plan.calls).toBe(shape.runs * 9 * 3);
+    expect(plan.callsWithRepairs).toBe(shape.runs * 17 * 3);
     expect(plan.outputTokens).toBe(plan.calls * 1500);
     expect(plan.inputTokens).toBe(plan.cases.reduce((t, c) => t + c.inputTokens, 0) * 3);
   });

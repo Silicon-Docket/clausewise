@@ -55,11 +55,11 @@ export const H10: CaseDefinition = {
         ),
         clause(
           "1.2",
-          '"Confidential Information" is any non-public information that a Releasing Party makes available to a Receiving Party for the Trial, in whatever form, and that is marked as confidential, is announced as confidential when handed over, or would be recognized as confidential by a reasonable person in the Receiving Party\'s place, judging by its nature or the manner in which it was handed over.',
+          '"Confidential Information" means any non-public information that a Releasing Party makes available to a Receiving Party for the Trial, in whatever form, and that is marked as confidential, is announced as confidential when handed over, or would be recognized as confidential by a reasonable person in the Receiving Party\'s place, judging by its nature or the manner in which it was handed over.',
         ),
         clause(
           "1.3",
-          'An "Affiliate" of a Party is any entity under the control of that Party, in control of that Party, or under the control of an entity that controls that Party. An entity has control of another when it can direct, or procure the direction of, the management of the other.',
+          '"Affiliate" means, for a Party, any entity under the control of that Party, in control of that Party, or under the control of an entity that controls that Party. An entity has control of another when it can direct, or procure the direction of, the management of the other.',
         ),
         clause(
           "1.4",

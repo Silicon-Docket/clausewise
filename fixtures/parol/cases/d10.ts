@@ -47,7 +47,7 @@ export const D10: CaseDefinition = {
         heading("1. Meanings"),
         clause(
           "1.1",
-          '"Affiliate" of a Party means any entity that controls that Party, is controlled by it, or is under common control with it.',
+          '"Affiliate" means, in relation to a Party, any entity that controls that Party, is controlled by it, or is under common control with it.',
         ),
         clause(
           "1.2",

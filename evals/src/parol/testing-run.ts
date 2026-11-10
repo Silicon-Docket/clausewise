@@ -7,13 +7,20 @@
  *
  * Everything a test fabricates is labelled as fabricated where it is made.
  */
+import { readFileSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AnthropicUsage, ObjectGenerator } from "@clausewise/llm";
 import type { SourceSpan } from "../../../apps/parol/src/contracts.js";
-import { splitHash, totalsOf, type BuiltFile } from "../../../fixtures/parol/build.js";
+import {
+  keyFileNames,
+  splitHash,
+  splitKeyParts,
+  totalsOf,
+  type BuiltFile,
+} from "../../../fixtures/parol/build.js";
 import type { AnswerKeyFile, Split, SplitsFile } from "../../../fixtures/parol/types.js";
 import { runParol, type ParolGeneratorRequest, type ParolIo } from "./cli.js";
 import { createKeyOracle } from "./oracle.js";
@@ -23,6 +30,46 @@ export const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
 /** A key that exists only so that the configuration loads. Every test injects its own model. */
 export const TEST_ENV = { ANTHROPIC_API_KEY: "sk-test-not-a-real-key" };
+
+/**
+ * What one repeat of a split of the committed dataset consists of, read from the answer keys: the
+ * cases and injection twins that are run, the rule slots they hold (the twins are run and scored
+ * with their original, so they count here) and the model calls of a scripted run, which makes one
+ * extract call and one analyze call for each rule. A test that checks a count a run must produce
+ * takes it from here, so it follows the dataset and does not repeat its size.
+ */
+export interface RunShape {
+  cases: number;
+  twins: number;
+  /** Cases and twins: the runs of one repeat. */
+  runs: number;
+  rules: number;
+  /** Rule slots of the cases alone, which is what the scores are over. */
+  slots: number;
+  /** Rule slots of the cases and the twins, which is what the plan counts. */
+  runSlots: number;
+  /** Model calls of one repeat. */
+  calls: number;
+}
+
+export function committedRunShape(split: Split, root: string = REPO_ROOT): RunShape {
+  const keys = JSON.parse(
+    readFileSync(join(root, "fixtures", "parol", "answer-keys.json"), "utf8"),
+  ) as AnswerKeyFile;
+  const cases = keys.cases.filter((entry) => entry.split === split).length;
+  const twins = keys.twins.filter((entry) => entry.split === split).length;
+  const rules = Object.keys(keys.playbook.rules).length;
+  const runs = cases + twins;
+  return {
+    cases,
+    twins,
+    runs,
+    rules,
+    slots: cases * rules,
+    runSlots: runs * rules,
+    calls: runs * (1 + rules),
+  };
+}
 
 export async function makeTempDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), "parol-evals-"));
@@ -73,42 +120,27 @@ export const filePath = (root: string, name: string): string =>
 
 /**
  * Rewrites splits.json to agree with the keys and files as they now are, so that a test can make
- * a change that the hashes do not catch (and see what else does).
+ * a change that the hashes do not catch (and see what else does). The files of a split are all the
+ * files its keys name: documents, the extra files of upload steps and the canary matters.
  */
 export async function rehash(root: string): Promise<void> {
   const keys = JSON.parse(await readFile(keysPath(root), "utf8")) as AnswerKeyFile;
   const splits = JSON.parse(await readFile(splitsPath(root), "utf8")) as SplitsFile;
   for (const split of ["dev", "heldout"] as Split[]) {
-    const cases = keys.cases.filter((c) => c.split === split);
-    const twins = keys.twins.filter((t) => t.split === split);
-    if (cases.length === 0) continue;
-    const names = [...new Set([...cases, ...twins].flatMap((c) => c.documents.map((d) => d.file)))];
+    const parts = splitKeyParts(keys, split);
+    if (parts.cases.length === 0) continue;
+    const names = keyFileNames(keys, split);
     const files: BuiltFile[] = [];
     for (const name of names) {
       files.push({ name, bytes: new Uint8Array(await readFile(filePath(root, name))) });
     }
     splits.splits[split] = {
-      ...totalsOf(cases, twins, (rule) => keys.playbook.rules[rule]?.severity ?? ""),
-      sha256: splitHash({ cases, twins }, files),
+      ...totalsOf(parts.cases, parts.twins, (rule) => keys.playbook.rules[rule]?.severity ?? ""),
+      sha256: splitHash(parts, files),
       files: names.length,
     };
   }
   await writeFile(splitsPath(root), `${JSON.stringify(splits, null, 2)}\n`);
-}
-
-/**
- * FABRICATED FOR A TEST: the dev cases relabelled as held-out cases, with splits.json rewritten to
- * match. The dataset has no held-out cases yet, and this lets the held-out paths be exercised. The
- * documents and the keys are the dev ones.
- */
-export async function relabelAsHeldout(root: string): Promise<void> {
-  await editJson<AnswerKeyFile>(keysPath(root), (keys) => {
-    for (const entry of [...keys.cases, ...keys.twins]) entry.split = "heldout";
-  });
-  await editJson<SplitsFile>(splitsPath(root), (splits) => {
-    delete splits.splits.dev;
-  });
-  await rehash(root);
 }
 
 export async function changeKey(

@@ -37,6 +37,8 @@ async function resolverFor(repeat: number, key: ScoringKey): Promise<AnchorResol
   for (const entry of [...key.cases, ...key.twins]) {
     const spans: SourceSpan[] = [];
     for (const doc of entry.documents) {
+      // A version that a later one replaces is not part of a run (D09 holds v1 and v2 of D1).
+      if (!doc.operative) continue;
       const bytes = new Uint8Array(readFileSync(join(DIR, "files", doc.file)));
       const paragraphs = doc.file.endsWith(".docx")
         ? (await parseDocx(bytes)).paragraphs
@@ -74,42 +76,44 @@ describe("an ideal pipeline scored against the committed key", () => {
     const run = await score(key);
     expect(run.repeats).toHaveLength(3);
     for (const m of run.repeats) {
-      expect(m.slots).toBe(48);
-      expect(m.statusAccuracy).toMatchObject({ numerator: 48, denominator: 48, value: 1 });
+      expect(m.slots).toBe(112);
+      expect(m.statusAccuracy).toMatchObject({ numerator: 112, denominator: 112, value: 1 });
       expect(m.slotScores.every((s) => s.failure === null)).toBe(true);
     }
   });
 
   it("scores 1 on every rate that has a denominator, and 0 on the rates that count faults", async () => {
     const [m] = (await score(key)).repeats;
-    // 6 expected flags, all found with a verified governing citation.
-    expect(m!.issues.recallStrict).toMatchObject({ numerator: 6, denominator: 6 });
-    expect(m!.issues.precisionStrict).toMatchObject({ numerator: 6, denominator: 6 });
+    // 18 expected flags, all found with a verified governing citation.
+    expect(m!.issues.recallStrict).toMatchObject({ numerator: 18, denominator: 18 });
+    expect(m!.issues.precisionStrict).toMatchObject({ numerator: 18, denominator: 18 });
     expect(m!.issues.recallLenient.value).toBe(1);
     expect(m!.issues.precisionLenient.value).toBe(1);
-    // 3 required escalations: D06 gov-1, D08 dur-1, D12 pty-1.
-    expect(m!.escalation.requiredRecall).toMatchObject({ numerator: 3, denominator: 3 });
-    // Every slot but those three says not_expected, and the oracle raises nothing there.
-    expect(m!.escalation.unnecessaryRate).toMatchObject({ numerator: 0, denominator: 45 });
-    // The twin of D08 answers like D08: no slot differs, out of 8.
-    expect(m!.injection.effect).toMatchObject({ numerator: 0, denominator: 8 });
+    // 6 required escalations: D02 gov-1, D06 gov-1, D08 dur-1, D12 pty-1, and D14 def-1 and gov-1.
+    expect(m!.escalation.requiredRecall).toMatchObject({ numerator: 6, denominator: 6 });
+    // Every slot but those six and the one that allows an escalation (D07 exc-1) says not_expected,
+    // and the oracle raises nothing there.
+    expect(m!.escalation.unnecessaryRate).toMatchObject({ numerator: 0, denominator: 105 });
+    // The twins of D08 and D10 answer like their originals: no slot differs, out of 16.
+    expect(m!.injection.effect).toMatchObject({ numerator: 0, denominator: 16 });
     expect(m!.silentMisses.total).toBe(0);
     expect(m!.support.verifiedButUnsupported.count).toBe(0);
     expect(m!.citations.model.value).toBe(1);
     expect(m!.citations.displayed.value).toBe(1);
     expect(m!.extraction.recall.value).toBe(1);
     expect(m!.extraction.precision.value).toBe(1);
-    // D03 has no required span for governing-law and none for return-destruction.
+    // D03 has no required span for governing-law and none for return-destruction, and no other
+    // development case has a category without one.
     expect(m!.extraction.notFoundAccuracy).toMatchObject({ numerator: 2, denominator: 2 });
     expect(m!.swf).toEqual({ weightedFailure: 0, maximum: m!.swf.maximum, value: 0 });
     // The weights of the eight rules of one case add up to 26 (two high rules at 5, five medium
-    // at 3, one low at 1), so six cases weigh 156, and the largest factor is 3.
-    expect(m!.swf.maximum).toBe(3 * 156);
+    // at 3, one low at 1), so fourteen cases weigh 364, and the largest factor is 3.
+    expect(m!.swf.maximum).toBe(3 * 364);
   });
 
   it("is stable, and passes every gate that a single split can be asked", async () => {
     const run = await score(key);
-    expect(run.stability).toMatchObject({ repeats: 3, slots: 48, meanAgreement: 1 });
+    expect(run.stability).toMatchObject({ repeats: 3, slots: 112, meanAgreement: 1 });
     const report = evaluateGates({ run });
     for (const id of ["G2", "G3", "G4", "G5", "G6", "G7", "G8", "G9", "G10", "G14"] as const) {
       expect(report.results.find((r) => r.id === id)!.outcome, id).toBe("pass");
@@ -215,13 +219,13 @@ describe("altering the answer key changes the score", () => {
     const altered = clone();
     altered.cases.find((c) => c.case === "PAROL-D05")!.expect["dur-1"]!.status = "compliant";
     const m = await against(altered);
-    expect(m.statusAccuracy.numerator).toBe(47);
+    expect(m.statusAccuracy.numerator).toBe(111);
     expect(
       m.slotScores.find((s) => s.caseKey === "PAROL-D05" && s.ruleKey === "dur-1")!.failure,
     ).toBe("false_alarm");
-    // The key now expects 5 flags, and the ideal pipeline's sixth is a false alarm.
-    expect(m.issues.recallStrict).toMatchObject({ numerator: 5, denominator: 5 });
-    expect(m.issues.precisionStrict).toMatchObject({ numerator: 5, denominator: 6 });
+    // The key now expects 17 flags, and the ideal pipeline's eighteenth is a false alarm.
+    expect(m.issues.recallStrict).toMatchObject({ numerator: 17, denominator: 17 });
+    expect(m.issues.precisionStrict).toMatchObject({ numerator: 17, denominator: 18 });
     expect(m.swf.value).toBeGreaterThan(0);
   });
 
@@ -232,7 +236,7 @@ describe("altering the answer key changes the score", () => {
       { doc: "D2", clause: "3", anchor: "Section 7.2 of the Agreement", paragraph: 4 },
     ];
     const m = await against(altered);
-    expect(m.issues.recallStrict).toMatchObject({ numerator: 5, denominator: 6 });
+    expect(m.issues.recallStrict).toMatchObject({ numerator: 17, denominator: 18 });
     expect(
       m.slotScores.find((s) => s.caseKey === "PAROL-D05" && s.ruleKey === "dur-1")!.failure,
     ).toBe("verified_unsupported");
@@ -247,7 +251,7 @@ describe("altering the answer key changes the score", () => {
     };
     expect((await against(unexpected)).escalation.unnecessaryRate).toMatchObject({
       numerator: 1,
-      denominator: 46,
+      denominator: 106,
     });
     const newlyRequired = clone();
     newlyRequired.cases.find((c) => c.case === "PAROL-D01")!.expect["gov-1"]!.escalation = {
@@ -255,7 +259,7 @@ describe("altering the answer key changes the score", () => {
       codes: ["playbook_escalation"],
     };
     const m = await against(newlyRequired);
-    expect(m.escalation.requiredRecall).toMatchObject({ numerator: 3, denominator: 4 });
+    expect(m.escalation.requiredRecall).toMatchObject({ numerator: 6, denominator: 7 });
     expect(
       m.slotScores.find((s) => s.caseKey === "PAROL-D01" && s.ruleKey === "gov-1")!.failure,
     ).toBe("required_escalation_missing");

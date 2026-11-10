@@ -37,9 +37,9 @@ export const H03: CaseDefinition = {
           [
             "What This Agreement Protects",
             [
-              'A Party that makes information available under this Agreement is the "Provider" of that information, and the Party that obtains it is its "Recipient".',
+              'A Party that makes information available under this Agreement is the "Provider" of that information, and the Party that obtains it is the "Recipient" of that information.',
               '"Confidential Information" means information, in any form, that the Provider makes available to the Recipient for the Discussions and that either the Provider identifies as confidential when it does so, or a reasonable person in the Recipient\'s position would regard as confidential in view of its nature or the manner of its disclosure.',
-              'The "Affiliates" of a Party are the entities that hold more than half of its voting rights, the entities in which it holds more than half of the voting rights, and the entities in which a holder of more than half of its voting rights also holds more than half of the voting rights.',
+              '"Affiliates" means, for a Party, the entities that hold more than half of its voting rights, the entities in which it holds more than half of the voting rights, and the entities in which a holder of more than half of its voting rights also holds more than half of the voting rights.',
             ],
           ],
           [

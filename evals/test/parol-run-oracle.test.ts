@@ -175,58 +175,84 @@ describe("the stages, driven as the application's runner drives them", () => {
     expect(RULE_CONCURRENCY).toBe(SERVICE_CONCURRENCY);
   });
 
-  it("gives the oracle a perfect score on the six dev cases and the twin, under both workflows", async () => {
-    for (const label of ["v1", "v2"]) {
-      const workflow = workflowFor(label);
-      const [group] = selectCases(dataset, "dev", []);
-      const parsed: ParsedFiles = new Map();
-      const observed: ObservedRun[] = [];
-      for (const runnable of runnableCases(group!)) {
-        const p = await prepareCase({ dataset, runnable, repeat: 1, playbook, workflow, parsed });
-        const generator = createKeyOracle({
-          caseKey: runnable.caseKey,
-          expect: runnable.expect,
-          spans: p.ingest.spans,
-          rules: playbook.rules,
+  // What a perfect oracle must score on each split of the committed dataset: the slots of its
+  // cases, the expected flags, the required escalations and the required spans (the totals of
+  // document 5, and the spans the keys name).
+  const PERFECT = {
+    dev: { split: "dev", slots: 112, flags: 18, required: 6, spans: 144, runs: 16 },
+    heldout: { split: "heldout", slots: 96, flags: 18, required: 4, spans: 195, runs: 14 },
+  } as const;
+
+  it.each(Object.values(PERFECT))(
+    "gives the oracle a perfect score on the $split split and its twins, under both workflows",
+    async (expected) => {
+      for (const label of ["v1", "v2"]) {
+        const workflow = workflowFor(label);
+        const [group] = selectCases(dataset, expected.split, []);
+        const parsed: ParsedFiles = new Map();
+        const observed: ObservedRun[] = [];
+        for (const runnable of runnableCases(group!)) {
+          const p = await prepareCase({ dataset, runnable, repeat: 1, playbook, workflow, parsed });
+          const generator = createKeyOracle({
+            caseKey: runnable.caseKey,
+            expect: runnable.expect,
+            spans: p.ingest.spans,
+            rules: playbook.rules,
+          });
+          const result = await runStages({
+            prepared: p,
+            playbook,
+            workflow,
+            generator,
+            signal: signal(),
+          });
+          // One extract call and one analyze call per rule, nothing repaired, nothing failed.
+          expect(generator.calls).toHaveLength(9);
+          expect(result.calls.every((c) => c.outcome === "ok")).toBe(true);
+          const seen = observeRun(p, result);
+          observed.push({
+            split: expected.split,
+            caseKey: runnable.caseKey,
+            repeat: 1,
+            slots: seen.slots,
+            extraction: seen.extraction,
+            spans: p.ingest.spans,
+          });
+        }
+        expect(observed, label).toHaveLength(expected.runs);
+        const scored = scoreGroup({
+          rules: dataset.keys.playbook.rules,
+          group: group!,
+          repeats: 1,
+          observed,
         });
-        const result = await runStages({
-          prepared: p,
-          playbook,
-          workflow,
-          generator,
-          signal: signal(),
+        const m = scored.run!.repeats[0]!;
+        expect(m.statusAccuracy, label).toMatchObject({
+          numerator: expected.slots,
+          denominator: expected.slots,
         });
-        // One extract call and one analyze call per rule, nothing repaired, nothing failed.
-        expect(generator.calls).toHaveLength(9);
-        expect(result.calls.every((c) => c.outcome === "ok")).toBe(true);
-        const seen = observeRun(p, result);
-        observed.push({
-          split: "dev",
-          caseKey: runnable.caseKey,
-          repeat: 1,
-          slots: seen.slots,
-          extraction: seen.extraction,
-          spans: p.ingest.spans,
+        expect(m.silentMisses.total, label).toBe(0);
+        expect(m.issues.recallStrict, label).toMatchObject({
+          numerator: expected.flags,
+          denominator: expected.flags,
         });
+        expect(m.escalation.requiredRecall, label).toMatchObject({
+          numerator: expected.required,
+          denominator: expected.required,
+        });
+        expect(m.extraction.recall, label).toMatchObject({
+          numerator: expected.spans,
+          denominator: expected.spans,
+        });
+        expect(m.injection.effect, label).toMatchObject({ numerator: 0, denominator: 16 });
+        expect(
+          m.slotScores.every((s) => s.failure === null),
+          label,
+        ).toBe(true);
       }
-      const scored = scoreGroup({
-        rules: dataset.keys.playbook.rules,
-        group: group!,
-        repeats: 1,
-        observed,
-      });
-      const m = scored.run!.repeats[0]!;
-      expect(m.statusAccuracy, label).toMatchObject({ numerator: 48, denominator: 48 });
-      expect(m.silentMisses.total, label).toBe(0);
-      expect(m.issues.recallStrict, label).toMatchObject({ numerator: 6, denominator: 6 });
-      expect(m.escalation.requiredRecall, label).toMatchObject({ numerator: 3, denominator: 3 });
-      expect(m.extraction.recall, label).toMatchObject({ numerator: 50, denominator: 50 });
-      expect(
-        m.slotScores.every((s) => s.failure === null),
-        label,
-      ).toBe(true);
-    }
-  });
+    },
+    120_000,
+  );
 
   it("leaves out a document that a later version replaces, as a run does", async () => {
     const { runnable } = await prepared("PAROL-D05");

@@ -6,6 +6,7 @@ import { createKeyOracle } from "../src/parol/oracle.js";
 import {
   REPO_ROOT,
   changeKey,
+  committedRunShape,
   copyRoot,
   editJson,
   filePath,
@@ -13,7 +14,6 @@ import {
   oracleFactory,
   readResults,
   rehash,
-  relabelAsHeldout,
   removeDir,
   run,
 } from "../src/parol/testing-run.js";
@@ -34,6 +34,9 @@ async function fresh(tamper = false): Promise<{ resultsDir: string; root: string
   return { resultsDir: `${base}/results`, root: tamper ? await copyRoot(base) : REPO_ROOT };
 }
 
+const DEV = committedRunShape("dev");
+const HELDOUT = committedRunShape("heldout");
+
 const NOW = (): Date => new Date("2026-11-04T10:00:00Z");
 const files = async (resultsDir: string): Promise<string[]> => readdir(resultsDir).catch(() => []);
 
@@ -49,7 +52,9 @@ describe("exit code 0", () => {
     expect(code).toBe(0);
     expect(stdout.startsWith("# Parol evaluation, SELFTEST")).toBe(true);
     expect(stderr).toContain("Selftest plan (no model will be called)");
-    expect(stderr).toContain("Model calls made to the scripted stand-in: 63");
+    // 14 cases and 2 twins, one extract call and eight analyze calls each.
+    expect(DEV.calls).toBe(144);
+    expect(stderr).toContain(`Model calls made to the scripted stand-in: ${DEV.calls}`);
     // The name is the start of the run in UTC, and a second run in the same second does not overwrite it.
     expect(await files(resultsDir)).toEqual(["parol-20261104T100000Z.json"]);
     await run(["--selftest"], { resultsDir, now: NOW });
@@ -169,12 +174,14 @@ describe("exit code 1", () => {
       expect(stderr).toContain("each candidate gets one held-out run");
     }
     expect(await files(resultsDir)).toEqual([]);
-    // The flag lifts the refusal. This dataset has no held-out cases yet, which is then the reason.
+    // The flag lifts the refusal: the dataset has a held-out split, and a selftest of it runs.
     const flagged = await run(["--selftest", "--split", "heldout", "--allow-heldout"], {
       resultsDir,
     });
-    expect(flagged.code).toBe(1);
-    expect(flagged.stderr).toContain("The heldout split has no cases in this dataset.");
+    expect(flagged.code, flagged.stderr).toBe(0);
+    expect(flagged.stderr).toContain("HELD-OUT SPLIT. The held-out set is sealed");
+    expect(flagged.stderr).toContain(`Model calls made to the scripted stand-in: ${HELDOUT.calls}`);
+    expect(flagged.stderr).not.toContain("has no cases in this dataset");
   });
 
   it("is the code of a case that is not in the split, a results file that exists, and a playbook that cannot be read", async () => {
@@ -271,7 +278,15 @@ describe("exit code 1", () => {
     });
     expect(code).toBe(1);
     expect(stderr).toContain("SELFTEST FAILED");
-    expect(stderr).toMatch(/status accuracy is 4[0-9] of 48, not all/);
+    // The oracle's dur-1 answers are wrong in every case whose key does not say compliant.
+    const keys = JSON.parse(
+      await readFile(`${REPO_ROOT}/fixtures/parol/answer-keys.json`, "utf8"),
+    ) as { cases: { split: string; expect: Record<string, { status: string }> }[] };
+    const wrong = keys.cases.filter(
+      (c) => c.split === "dev" && c.expect["dur-1"]!.status !== "compliant",
+    ).length;
+    expect(wrong).toBeGreaterThan(0);
+    expect(stderr).toContain(`status accuracy is ${DEV.slots - wrong} of ${DEV.slots}, not all`);
     expect(stderr).toMatch(/silent misses, not none/);
     // The results and the report are still produced, so the failure can be read.
     expect(stdout).toContain("# Parol evaluation, SELFTEST");
@@ -386,7 +401,7 @@ describe("exit code 3", () => {
     const { code, stderr, stdout } = await run([], { resultsDir, generatorFactory: forbidden });
     expect(code).toBe(3);
     expect(stderr).toContain("Evaluation plan (nothing has been sent yet)");
-    expect(stderr).toContain("Model calls in total: 63");
+    expect(stderr).toContain(`Model calls in total: ${DEV.calls}`);
     // The bound that is compared with --max-cost includes the repair call of every rule, and the
     // figure for one attempt per call is named for what it is. (Before, the smaller figure was
     // called "Cost upper bound" and the message said "cost at most" it.)
@@ -459,8 +474,9 @@ describe("exit code 130", () => {
         return {
           ...inner,
           generate: (call) => {
-            // The first case of the second repeat is the ninth case run: 7 per repeat, 9 calls each.
-            if (++calls === 7 * 9 + 5) controller.abort(new Error("Interrupted"));
+            // The first case of the second repeat starts after one whole repeat: 16 runs (14 cases
+            // and 2 twins) of 9 calls each. The run is stopped five calls into it.
+            if (++calls === DEV.calls + 5) controller.abort(new Error("Interrupted"));
             return inner.generate(call);
           },
         };
@@ -477,15 +493,57 @@ describe("exit code 130", () => {
     expect(results.sections[0]!.metrics!.repeats).toHaveLength(1);
     expect(results.sections[0]!.gates).toBeNull();
     expect(results.runs.filter((r) => r.outcome === "failed")).toHaveLength(1);
-    expect(results.runs.filter((r) => r.outcome === "succeeded")).toHaveLength(7);
+    expect(results.runs.filter((r) => r.outcome === "succeeded")).toHaveLength(DEV.runs);
   });
 });
 
 describe("both splits at once", () => {
   it("runs each split as its own section, with its own hash and gates, and refuses without --allow-heldout", async () => {
+    const resultsDir = `${dir}/${++n}/results`;
+    const refused = await run(["--selftest", "--split", "all"], { resultsDir });
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain("Refusing to run the held-out split without --allow-heldout.");
+    expect(await files(resultsDir)).toEqual([]);
+
+    const { code, stdout, stderr } = await run(
+      ["--selftest", "--split", "all", "--allow-heldout"],
+      { resultsDir },
+    );
+    expect(code, stderr).toBe(0);
+    const [name] = await files(resultsDir);
+    const results = await readResults(`${resultsDir}/${name}`);
+    expect(results.sections.map((s) => [s.split, s.caseKeys.length, s.completedRepeats])).toEqual([
+      ["dev", 14, 1],
+      ["heldout", 12, 1],
+    ]);
+    expect(Object.keys(results.pins.dataset.splits)).toEqual(["dev", "heldout"]);
+    expect(results.pins.split).toBe("all");
+    const keys = JSON.parse(
+      await readFile(`${REPO_ROOT}/fixtures/parol/answer-keys.json`, "utf8"),
+    ) as { cases: { case: string; split: string }[] };
+    expect(results.pins.cases).toEqual(keys.cases.map((c) => c.case));
+    expect(results.pins.cases).toHaveLength(26);
+    // Each split is scored on its own cases: 14 cases of 8 rules, and 12 cases of 8 rules.
+    expect(results.sections.map((s) => s.metrics!.repeats[0]!.statusAccuracy.denominator)).toEqual([
+      112, 96,
+    ]);
+    expect([DEV.slots, HELDOUT.slots]).toEqual([112, 96]);
+    expect(results.sections.every((s) => s.metrics!.repeats[0]!.statusAccuracy.value === 1)).toBe(
+      true,
+    );
+    // The two splits have their own hashes in the pins, and they differ.
+    const hashes = Object.values(results.pins.dataset.splits);
+    expect(new Set(hashes).size).toBe(2);
+    expect(stdout).toContain("## Split dev (SELFTEST)");
+    expect(stdout).toContain("## Split heldout (SELFTEST)");
+    expect(stdout).toContain("**Held-out set.** The held-out set is sealed");
+  });
+
+  it("runs a changed split against its own recorded hash, and the other split's hash is not consulted", async () => {
+    // Two cases moved between splits and splits.json rewritten to agree: both splits still run,
+    // each against its own hash and its own cases.
     const base = `${dir}/${++n}`;
     const root = await copyRoot(base);
-    // FABRICATED FOR A TEST: two of the dev cases relabelled as held-out, so that both splits exist.
     await changeKey(root, (keys) => {
       for (const entry of [...keys.cases, ...keys.twins]) {
         if (["PAROL-D05", "PAROL-D06"].includes(entry.case)) entry.split = "heldout";
@@ -493,51 +551,23 @@ describe("both splits at once", () => {
     });
     await rehash(root);
     const resultsDir = `${base}/results`;
-    const refused = await run(["--selftest", "--split", "all"], { resultsDir, root });
-    expect(refused.code).toBe(1);
-    expect(refused.stderr).toContain("Refusing to run the held-out split without --allow-heldout.");
-
-    const { code, stdout, stderr } = await run(
-      ["--selftest", "--split", "all", "--allow-heldout"],
-      {
-        resultsDir,
-        root,
-      },
-    );
+    const { code, stderr } = await run(["--selftest", "--split", "all", "--allow-heldout"], {
+      resultsDir,
+      root,
+    });
     expect(code, stderr).toBe(0);
     const [name] = await files(resultsDir);
     const results = await readResults(`${resultsDir}/${name}`);
-    expect(results.sections.map((s) => [s.split, s.caseKeys.length, s.completedRepeats])).toEqual([
-      ["dev", 4, 1],
-      ["heldout", 2, 1],
+    expect(results.sections.map((s) => [s.split, s.caseKeys.length])).toEqual([
+      ["dev", 12],
+      ["heldout", 14],
     ]);
-    expect(Object.keys(results.pins.dataset.splits)).toEqual(["dev", "heldout"]);
-    expect(results.pins.split).toBe("all");
-    expect(results.pins.cases).toEqual([
-      "PAROL-D01",
-      "PAROL-D03",
-      "PAROL-D05",
-      "PAROL-D06",
-      "PAROL-D08",
-      "PAROL-D12",
-    ]);
-    // Each split is scored on its own cases: 4 cases of 8 rules, and 2 cases of 8 rules.
-    expect(results.sections.map((s) => s.metrics!.repeats[0]!.statusAccuracy.denominator)).toEqual([
-      32, 16,
-    ]);
-    expect(results.sections.every((s) => s.metrics!.repeats[0]!.statusAccuracy.value === 1)).toBe(
-      true,
-    );
-    expect(stdout).toContain("## Split dev (SELFTEST)");
-    expect(stdout).toContain("## Split heldout (SELFTEST)");
-    expect(stdout).toContain("**Held-out set.** The held-out set is sealed");
   });
 });
 
 describe("a held-out run", () => {
   it("prints the seal warning, and a selftest of it does not count as an earlier run", async () => {
     const { resultsDir, root } = await fresh(true);
-    await relabelAsHeldout(root);
     const args = ["--selftest", "--split", "heldout", "--allow-heldout"];
     const first = await run(args, { resultsDir, root });
     expect(first.code).toBe(0);
@@ -546,5 +576,10 @@ describe("a held-out run", () => {
     // A selftest taught nothing about a model, so it does not contaminate anything.
     const [name] = await files(resultsDir);
     expect((await readResults(`${resultsDir}/${name}`)).contamination).toBeNull();
+    // The held-out split was run whole: twelve cases, and the twins of H07 and H09.
+    const results = await readResults(`${resultsDir}/${name}`);
+    expect(results.sections.map((s) => [s.split, s.caseKeys.length, s.twinKeys])).toEqual([
+      ["heldout", 12, ["PAROL-H07-twin", "PAROL-H09-twin"]],
+    ]);
   });
 });

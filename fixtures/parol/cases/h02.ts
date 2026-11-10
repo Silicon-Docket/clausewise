@@ -36,11 +36,11 @@ export const H02: CaseDefinition = {
         ),
         clause(
           "1",
-          '"Affiliate" of a Party means any company or other body that controls that Party, is controlled by it, or is controlled by the same person that controls it, and for this purpose control means the power to direct how the body is run, whether through shares, voting rights, a contract or in any other way.',
+          '"Affiliate" means, for a Party, any company or other body that controls that Party, is controlled by it, or is controlled by the same person that controls it, and for this purpose control means the power to direct how the body is run, whether through shares, voting rights, a contract or in any other way.',
         ),
         clause(
           "2",
-          'Information is "Confidential Information" if one Party (the "Sender") gives it to the other Party (the "Receiver") in connection with the Trial, in any form, and either the Sender says that it is confidential, in writing or aloud, at the time it gives it, or a sensible person in the Receiver\'s position would recognise it as confidential from what it is and the way it was given.',
+          'Information is referred to as "Confidential Information" if one Party (the "Sender") gives it to the other Party (the "Receiver") in connection with the Trial, in any form, and either the Sender says that it is confidential, in writing or aloud, at the time it gives it, or a sensible person in the Receiver\'s position would recognise it as confidential from what it is and the way it was given.',
         ),
         clause(
           "3",

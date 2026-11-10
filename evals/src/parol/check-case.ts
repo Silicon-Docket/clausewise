@@ -105,7 +105,15 @@ if (blind && !calibrationMode) {
   );
   process.exit(2);
 }
-if (calibrationMode) process.exit(await runCalibration());
+if (calibrationMode) {
+  const code = await runCalibration();
+  // process.exit() ends the process at once, and what is still queued for a pipe is lost: the
+  // blind listing is about 59 KB and was cut off when the reader was slow. Wait until everything
+  // written so far has been handed on, then exit.
+  await new Promise<void>((done) => process.stdout.write("", () => done()));
+  await new Promise<void>((done) => process.stderr.write("", () => done()));
+  process.exit(code);
+}
 
 if (files.length === 0) {
   console.error(

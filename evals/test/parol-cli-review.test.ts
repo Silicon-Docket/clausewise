@@ -15,7 +15,6 @@ import {
   makeTempDir,
   oracleFactory,
   readResults,
-  relabelAsHeldout,
   removeDir,
   run,
 } from "../src/parol/testing-run.js";
@@ -53,18 +52,26 @@ const liveEnv = (baseUrl?: string): Record<string, string> =>
 // ---------------------------------------------------------------------------------------------
 
 describe("the facts of the playbook rules in the answer key", () => {
+  // The recorded totals count the flags of high severity, so a change between high and another
+  // severity moves them and is caught by the totals (see below). The facts of a rule are the only
+  // thing that catches a change between medium and low, which moves no count.
   const edits: [string, (keys: AnswerKeyFile) => void][] = [
-    // exc-1 has no expected flag in the dev split, so the high-severity count does not move.
     [
-      "a severity that moves no flag count (exc-1, high to low)",
+      "a severity that moves no flag count (gov-1, medium to low)",
       (keys) => {
-        keys.playbook.rules["exc-1"]!.severity = "low";
+        keys.playbook.rules["gov-1"]!.severity = "low";
       },
     ],
     [
-      "a severity (gov-1, medium to low)",
+      "a severity that moves no flag count (pty-1, medium to low)",
       (keys) => {
-        keys.playbook.rules["gov-1"]!.severity = "low";
+        keys.playbook.rules["pty-1"]!.severity = "low";
+      },
+    ],
+    [
+      "a severity that moves no flag count (ret-1, low to medium)",
+      (keys) => {
+        keys.playbook.rules["ret-1"]!.severity = "medium";
       },
     ],
     [
@@ -105,22 +112,52 @@ describe("the facts of the playbook rules in the answer key", () => {
     const base = fresh();
     const root = await copyRoot(base);
     await changeKey(root, (keys) => {
-      keys.playbook.rules["exc-1"]!.severity = "low";
+      keys.playbook.rules["gov-1"]!.severity = "low";
     });
     const { stderr } = await run(["--selftest", "--out", `${base}/out.json`], {
       resultsDir: `${base}/results`,
       root,
     });
     expect(stderr).toContain(
-      "rule exc-1: the severity in the answer key differs from the playbook",
+      "rule gov-1: the severity in the answer key differs from the playbook",
     );
+  });
+
+  it("stops a severity edit that moves the high-severity flag count in the recorded totals, in both splits, before the facts are read", async () => {
+    // Every rule has an expected flag in the dev split now, and exc-1 and dur-1 have them in both,
+    // so a change between high and another severity moves a recorded total and the loader says so.
+    for (const [rule, severity] of [
+      ["exc-1", "low"],
+      ["dur-1", "medium"],
+    ] as const) {
+      const base = fresh();
+      const root = await copyRoot(base);
+      await changeKey(root, (keys) => {
+        keys.playbook.rules[rule]!.severity = severity;
+      });
+      const { code, stderr, stdout } = await run(["--selftest", "--out", `${base}/out.json`], {
+        resultsDir: `${base}/results`,
+        root,
+        generatorFactory: forbidden,
+      });
+      expect(code, rule).toBe(2);
+      expect(stderr).toContain("INTEGRITY FAILURE");
+      expect(stderr).toContain(
+        'split dev: the recorded total "highSeverityFlags" is not what the keys give',
+      );
+      expect(stderr).toContain(
+        'split heldout: the recorded total "highSeverityFlags" is not what the keys give',
+      );
+      expect(stdout).toBe("");
+      expect(await files(base)).not.toContain("out.json");
+    }
   });
 
   it("stops a live run the same way, before a plan or a call", async () => {
     const base = fresh();
     const root = await copyRoot(base);
     await changeKey(root, (keys) => {
-      keys.playbook.rules["exc-1"]!.severity = "low";
+      keys.playbook.rules["gov-1"]!.severity = "low";
     });
     const { code, stderr } = await run(["--yes", "--case", "PAROL-D01", "--max-cost", "5"], {
       resultsDir: `${base}/results`,
@@ -380,17 +417,15 @@ describe("the contamination note of the held-out split", () => {
     "heldout",
     "--allow-heldout",
     "--case",
-    "PAROL-D01",
+    "PAROL-H01",
     "--max-cost",
     "5",
     ...extra,
   ];
 
+  // A copy of the committed dataset, so that the run's ledger and results stay in the test's folder.
   async function heldoutRoot(base: string): Promise<string> {
-    const root = await copyRoot(base);
-    // FABRICATED FOR A TEST: the dev cases relabelled as held-out, because the dataset has none yet.
-    await relabelAsHeldout(root);
-    return root;
+    return copyRoot(base);
   }
 
   it("remembers a held-out run whose results were written elsewhere with --out", async () => {

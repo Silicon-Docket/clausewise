@@ -145,6 +145,9 @@ export async function buildCaseWorld(
   const files: CaseFile[] = [];
   const documents: IngestDocumentInput[] = [];
   for (const doc of key.documents) {
+    // A version that a later one replaces is stored but does not govern, so it is not part of a run
+    // (PAROL-D09 holds versions 1 and 2 of D1; only version 2 is operative).
+    if (doc.operative === false) continue;
     const mediaType = doc.file.endsWith(".docx") ? "docx" : "txt";
     const bytes = file(doc.file);
     const parsed = await parseDocument({ bytes, mediaType });

@@ -6,7 +6,8 @@ party, document and passage was written for this project. Never paste text from 
 
 | Path                                 | What it is                                                                    |
 | ------------------------------------ | ----------------------------------------------------------------------------- |
-| `cases.ts`                           | The cases, as code: documents, expectations, warnings. The source of truth.   |
+| `cases.ts`                           | The registry: every case, development first and then held-out, sorted by key. |
+| `cases/`                             | One file per case (`d01.ts` to `d14.ts`, `h01.ts` to `h12.ts`): the source.   |
 | `types.ts`                           | The case format and the built answer key.                                     |
 | `draft.ts`                           | Small constructors for writing a case.                                        |
 | `canary.ts`                          | The two canary matters, Bramblewick and Saltmarsh, and their strings.         |
@@ -18,6 +19,27 @@ party, document and passage was written for this project. Never paste text from 
 | `calibration/pairs.ts`               | The 40 (finding, evidence) pairs of the support calibration set.              |
 | `calibration.json`                   | Generated. The pairs with each quote resolved to a paragraph and pinned.      |
 | `../../tools/make-parol-fixtures.ts` | The command: `pnpm fixtures:parol`.                                           |
+
+## What is built
+
+All 26 planned cases: 14 development cases (`PAROL-D01` to `D14`) and 12 held-out cases
+(`PAROL-H01` to `H12`), 112 and 96 rule slots. Four cases carry an injected paragraph and so have a
+twin: `D08`, `D10`, `H07` and `H09`. `D09` and `H08` carry upload steps (duplicate versions, an
+identical file, a re-save), and `D10` and `H09` name a canary matter (Bramblewick and Saltmarsh).
+Each split is 20 files in `files/`. `splits.json` records the totals, the hash and the file count
+of each split, and the calibration entry. The build prints the totals table; document 5 compares it
+with the plan and explains the two rows where they differ (the injection rows in both splits and the
+held-out row for allowed alternatives).
+
+**The held-out split is sealed.** Its files are in the repository, and nothing stops anyone opening
+them, but a case that was read to fix something is no longer a measure of the fix. Do not use a
+held-out case to debug, and do not tune wording against it. The held-out hash is to be committed
+before the first baseline run; no baseline has been run.
+
+**What the selftest proves.** `pnpm eval:parol --selftest --split all --allow-heldout` runs every
+case and twin of both splits through the real parser, ingest and stages against an oracle that
+answers from the keys. It is perfect only if every anchor resolves in the real ingest and no check
+raises an escalation the key does not expect. It says nothing about any model.
 
 ## Building
 
@@ -52,7 +74,10 @@ every version and the steps a person takes).
 
 ## Adding a case
 
-Add an entry to `CASES` in `cases.ts`. Case keys are `PAROL-Dnn` for the development split and
+Write the case in a file of its own, `cases/<id>.ts`, exporting one constant named like `D02` or
+`H05`, and check it with `pnpm fixtures:parol:case fixtures/parol/cases/<id>.ts` until that exits 0. Then register
+it: import it in `cases.ts`, add it to `CASES` (development cases first, held-out after, each sorted
+by key), and run `pnpm fixtures:parol`. Case keys are `PAROL-Dnn` for the development split and
 `PAROL-Hnn` for the held-out split, and every file name starts with `parol-<nn>-`. A case lists:
 
 - `documents`: the NDA as `D1` and up to two amendments as `D2` and `D3`. Paragraphs are `title`,
@@ -69,6 +94,21 @@ Add an entry to `CASES` in `cases.ts`. Case keys are `PAROL-Dnn` for the develop
 
 A paragraph wrapped in `injected()` is the embedded instruction of an injection case. The builder
 also writes the same document without it, as `PAROL-Dnn-twin`, and no anchor may point into it.
+
+### Writing a definition the ingest can read
+
+The stages run a deterministic check on every quote a finding cites: a capitalised phrase that ends
+in a word such as Information, Party, Parties, Affiliate, Affiliates, Representatives, Recipient or
+Agreement is taken for a defined term, and if no span of the matter defines it the finding is
+escalated with `defined_term_unresolved`. For a case that is not about that, the oracle's selftest
+then shows the escalation as unnecessary. Ingest reads a definition only in one of these shapes:
+`(the "Receiving Party")` in brackets after definitional words, `is the "Recipient"`,
+`referred to as "X"` or `called "X"`, and `"X" means ...` (also `shall mean`, `has the meaning`,
+`refers to`, `includes`, `is defined as`), with nothing but a bracket of at most 60 characters
+between the quote and the verb. A definition such as `"Affiliate" of a Party means ...` or
+`"Confidential Information" is any ...` or `... is its "Recipient"` is a perfectly good definition to
+a lawyer and is not read as one: write `"Affiliate" means, for a Party, ...`. The development case
+`D07` and the held-out case `H06` are about defined terms on purpose and say so in their keys.
 
 ### Anchors
 
@@ -363,12 +403,13 @@ move when a pair does, and the other way round. A reader of `splits.json` that l
 the entry (`withCalibration` in `calibration.ts` does).
 
 The builder reads the development cases it needs from `calibration.ts` (`DEV_CASE_SOURCES`) as well
-as from the registry in `cases.ts`, so the set does not wait for a case to be registered. It never
+as from the registry in `cases.ts`, so the set did not have to wait for a case to be registered.
+All development cases are registered now, so a registered case is always the one used. It never
 imports a held-out case.
 
 ### Replaying a pair
 
-A runner step, not built yet, takes each pair: open the matter of `case`, find the span with
+A runner step, which is separate work from the dataset, takes each pair: open the matter of `case`, find the span with
 `findAnchor` from `(doc, clause, quote)`, render the rule from the playbook, send the checker the
 status, the discrepancy and that one span, and compare its verdict with the label. A verdict of
 `not_supported` or `insufficient` on an unsupported pair is a catch, and a verdict other than

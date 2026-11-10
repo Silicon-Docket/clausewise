@@ -57,7 +57,7 @@ export const H12: CaseDefinition = {
         heading("PART 1. THE MATERIAL AND THE PARTIES"),
         clause(
           "1.1",
-          '"Affiliate" of a Party means any entity that is under common ownership with it, owns it, or is owned by it, and one entity owns another if it holds more than half of the voting rights in that other, directly or through other entities.',
+          '"Affiliate" means, for a Party, any entity that is under common ownership with it, owns it, or is owned by it, and one entity owns another if it holds more than half of the voting rights in that other, directly or through other entities.',
         ),
         clause(
           "1.2",

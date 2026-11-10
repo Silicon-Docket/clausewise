@@ -6,6 +6,7 @@ import { loadDataset, selectCases } from "../src/parol/dataset.js";
 import { prepareCase, runnableCases } from "../src/parol/runner.js";
 import {
   REPO_ROOT,
+  committedRunShape,
   containsDocumentText,
   documentWindows,
   makeTempDir,
@@ -364,7 +365,8 @@ describe("a live run with a scripted model that reports usage", () => {
     ]);
     // A subset of the split: the gates are not a promotion result and the report says so.
     expect(section.fullSplit).toBe(false);
-    expect(section.casesInSplit).toBe(6);
+    expect(section.casesInSplit).toBe(committedRunShape("dev").cases);
+    expect(section.casesInSplit).toBe(14);
   });
 
   it("puts no document text in what it prints or writes", async () => {

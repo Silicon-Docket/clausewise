@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sha256Hex } from "../../apps/parol/src/canonical.js";
 import { getPrompt } from "../../apps/parol/src/prompts/registry.js";
 import { workflowFor } from "../../apps/parol/src/prompts/workflows.js";
-import type { SplitsFile } from "../../fixtures/parol/types.js";
+import type { AnswerKeyFile, SplitsFile } from "../../fixtures/parol/types.js";
 import { evaluationVersion } from "../src/parol/version.js";
 import {
   HELDOUT_SEAL_WARNING,
@@ -18,10 +18,23 @@ import {
   copyRoot,
   makeTempDir,
   readResults,
-  relabelAsHeldout,
   removeDir,
   run,
 } from "../src/parol/testing-run.js";
+
+// The dev split as the committed dataset holds it. The numbers a run of it must produce follow
+// from the keys: every case and every twin is run once per repeat, with one extract call and one
+// analyze call for each of the eight rules.
+const COMMITTED_KEYS = JSON.parse(
+  readFileSync(`${REPO_ROOT}/fixtures/parol/answer-keys.json`, "utf8"),
+) as AnswerKeyFile;
+const COMMITTED_SPLITS = JSON.parse(
+  readFileSync(`${REPO_ROOT}/fixtures/parol/splits.json`, "utf8"),
+) as SplitsFile;
+const DEV_CASES = COMMITTED_KEYS.cases.filter((c) => c.split === "dev").map((c) => c.case);
+const DEV_TWINS = COMMITTED_KEYS.twins.filter((t) => t.split === "dev").map((t) => t.case);
+const DEV_SLOTS = DEV_CASES.length * 8;
+const CALLS_PER_RUN = 9;
 
 let dir = "";
 let n = 0;
@@ -82,14 +95,8 @@ describe("the results file of a selftest", () => {
     expect(f.integrity.ok).toBe(true);
     expect(f.sections[0]!.splitSha256).toBe(splits.splits.dev!.sha256);
     expect(f.pins.split).toBe("dev");
-    expect(f.pins.cases).toEqual([
-      "PAROL-D01",
-      "PAROL-D03",
-      "PAROL-D05",
-      "PAROL-D06",
-      "PAROL-D08",
-      "PAROL-D12",
-    ]);
+    expect(f.pins.cases).toEqual(DEV_CASES);
+    expect(f.pins.cases).toHaveLength(14);
   });
 
   it("pins the playbook, the workflow with its prompts, the evaluation version and the code", async () => {
@@ -125,11 +132,21 @@ describe("the results file of a selftest", () => {
     expect(f.pins.prices).toBeNull();
     expect(f.sections[0]!.latency).toBeNull();
     expect(f.sections[0]!.cost).toBeNull();
-    expect(f.usage).toMatchObject({ available: false, total: null, costUsd: null, calls: 126 });
+    const runs = (DEV_CASES.length + DEV_TWINS.length) * 2;
+    expect(f.usage).toMatchObject({
+      available: false,
+      total: null,
+      costUsd: null,
+      calls: runs * CALLS_PER_RUN,
+    });
     expect(f.options).toMatchObject({ maxCostUsd: null, repeats: 2, split: "dev", workflow: "v1" });
-    // The per-run records are the plumbing's own counts: 14 runs, 9 calls each, all answered.
-    expect(f.runs).toHaveLength(14);
-    expect(f.runs.every((r) => r.outcome === "succeeded" && r.modelCalls === 9)).toBe(true);
+    // The per-run records are the plumbing's own counts: 14 cases and 2 twins at two repeats, 9
+    // calls each, all answered.
+    expect(f.runs).toHaveLength(runs);
+    expect(f.runs).toHaveLength(32);
+    expect(f.runs.every((r) => r.outcome === "succeeded" && r.modelCalls === CALLS_PER_RUN)).toBe(
+      true,
+    );
     expect(f.runs.every((r) => r.usage === null && r.costUsd === null)).toBe(true);
     // The time a stand-in takes is not recorded, because it is not a figure for any model.
     expect(f.runs.every((r) => r.totalMs === null && Object.keys(r.stagesMs).length === 0)).toBe(
@@ -141,26 +158,34 @@ describe("the results file of a selftest", () => {
     const section = selftest.file.sections[0]!;
     expect(section).toMatchObject({
       split: "dev",
-      casesInSplit: 6,
+      casesInSplit: DEV_CASES.length,
       fullSplit: true,
       completedRepeats: 2,
-      twinKeys: ["PAROL-D08-twin"],
+      twinKeys: DEV_TWINS,
     });
+    expect(DEV_TWINS).toEqual(["PAROL-D08-twin", "PAROL-D10-twin"]);
     const [m1, m2] = section.metrics!.repeats;
     for (const m of [m1!, m2!]) {
       expect(m.statusAccuracy).toEqual({
-        numerator: 48,
-        denominator: 48,
+        numerator: DEV_SLOTS,
+        denominator: DEV_SLOTS,
         value: 1,
         ci: expect.objectContaining({ high: 1 }),
       });
-      // The Wilson interval of 48 of 48 is [0.926, 1], not the degenerate [1, 1].
-      expect(m.statusAccuracy.ci!.low).toBeCloseTo(0.9259, 3);
-      expect(m.issues.recallStrict).toMatchObject({ numerator: 6, denominator: 6 });
+      // The Wilson interval of 112 of 112 is [0.967, 1], not the degenerate [1, 1].
+      expect(DEV_SLOTS).toBe(112);
+      expect(m.statusAccuracy.ci!.low).toBeCloseTo(0.9668, 3);
+      const flags = COMMITTED_SPLITS.splits.dev!.expectedFlags;
+      expect(flags).toBe(18);
+      expect(m.issues.recallStrict).toMatchObject({ numerator: flags, denominator: flags });
       expect(m.silentMisses.total).toBe(0);
-      expect(m.slotScores).toHaveLength(48);
+      expect(m.slotScores).toHaveLength(DEV_SLOTS);
     }
-    expect(section.metrics!.stability).toMatchObject({ repeats: 2, slots: 48, meanAgreement: 1 });
+    expect(section.metrics!.stability).toMatchObject({
+      repeats: 2,
+      slots: DEV_SLOTS,
+      meanAgreement: 1,
+    });
     const gates = section.gates!;
     // G14 can be evaluated with two repeats. G1 (exposure), G11 (calibration), G12 and G13 cannot
     // be, and are not assumed to pass.
@@ -340,8 +365,8 @@ describe("the contamination of the held-out split", () => {
 
   it("is written into the results of the next held-out run, printed in its report, and warned about before it starts", async () => {
     const base = `${dir}/flow-${++n}`;
+    // The held-out split is the committed one: twelve cases and two twins, run by the selftest.
     const root = await copyRoot(base);
-    await relabelAsHeldout(root);
     const resultsDir = `${base}/results`;
     const { mkdir } = await import("node:fs/promises");
     await mkdir(resultsDir, { recursive: true });
