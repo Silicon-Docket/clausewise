@@ -3,5 +3,5 @@
   "compilerOptions": {
     "allowImportingTsExtensions": false
   },
-  "include": ["*.ts", "../fixtures/*.ts", "../fixtures/parol/*.ts"]
+  "include": ["*.ts", "../fixtures/*.ts", "../fixtures/parol/*.ts", "../fixtures/parol/cases/*.ts"]
 }
