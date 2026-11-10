@@ -1,27 +1,15 @@
 import type { Context, Hono } from "hono";
-import { roleAllows } from "../../auth/actions.js";
 import { csrfToken } from "../../auth/csrf.js";
 import { readPrincipal } from "../../auth/identity.js";
-import type { AuthorizedMatter } from "../../auth/types.js";
 import type { AppDeps } from "../deps.js";
 import { formString, readForm } from "../http.js";
 import { defineMatterRoute, defineRoute } from "../matter-route.js";
-import {
-  FindingPage,
-  ISSUE_FILTERS,
-  MatterPage,
-  MattersPage,
-  MemosPage,
-  RunPage,
-  SignInPage,
-  runStatusPayload,
-} from "../pages/index.js";
+import { SignInPage, runStatusPayload } from "../pages/index.js";
 import { FIELDS } from "../pages/forms.js";
 import { WORKFLOW_FIELD } from "../pages/matter.js";
 import { urls } from "../urls.js";
-import type { DecisionDraft } from "../pages/finding.js";
 import { decisionFromForm, draftFromForm } from "./decision.js";
-import { refusalOf, uploadNotice, type Refusal } from "./notices.js";
+import { refusalOf, uploadNotice } from "./notices.js";
 import { addDocument, addVersion, createMatter, startRun, updateSettings } from "./operations.js";
 import {
   AddMemberInput,
@@ -34,13 +22,11 @@ import {
   UploadDocumentFields,
   UploadVersionFields,
 } from "./schemas.js";
+import { answerRefusal, createPageRenderers } from "./page-renderers.js";
 import {
   blankToNull,
   blankToUndefined,
-  exportBlockedReason,
-  mayDeleteMatter,
   memoDownloadHeaders,
-  pageChrome,
   readUpload,
   redirectWithNotice,
   sendPage,
@@ -57,48 +43,19 @@ const param = (c: Context, name: string): string => c.req.param(name) ?? "";
  * code (notices.ts). The target is always built here from the matter and ids the database
  * confirmed; none is taken from the request (no `next` field, no Referer), so no request can send a
  * person anywhere but a page of this application.
+ *
+ * A form that is refused is not redirected: it is answered with the page it was posted from, the
+ * status of the refusal and the reason in words (`answerInPlace`, page-renderers.ts). The words and
+ * the status are those of notices.ts and the shell; this file only chooses where they are shown.
  */
 export function registerPageRoutes(app: Hono, deps: AppDeps): void {
-  const { services, repo, config } = deps;
+  const { services, config } = deps;
   const { matters, runs, reviews } = services;
 
-  // A page that more than one route answers with: the matter's own, which is also what a refused
-  // upload shows again, and the finding's.
-  const matterPage = (c: Context, am: AuthorizedMatter, refusal?: Refusal): Response => {
-    const chrome = pageChrome(c, am.principal);
-    return sendPage(
-      c,
-      MatterPage({
-        chrome: refusal === undefined ? chrome : { ...chrome, notice: refusal.notice },
-        view: matters.view(am),
-        // Only the person who can add someone is shown the list of people to add.
-        users: roleAllows(am.role, "member.add") ? matters.users() : undefined,
-        canDelete: mayDeleteMatter(repo, am.principal, am.matterId),
-      }),
-      refusal?.status,
-    );
-  };
-
-  const findingPage = (
-    c: Context,
-    am: AuthorizedMatter,
-    findingId: string,
-    refusal?: Refusal,
-    draft?: DecisionDraft,
-  ): Response => {
-    const chrome = pageChrome(c, am.principal);
-    return sendPage(
-      c,
-      FindingPage({
-        chrome: refusal === undefined ? chrome : { ...chrome, notice: refusal.notice },
-        matterId: am.matterId,
-        finding: runs.finding(am, findingId),
-        matterName: matters.view(am).matter.name,
-        draft,
-      }),
-      refusal?.status,
-    );
-  };
+  // The pages that more than one route answers with (page-renderers.ts), and the helper that
+  // answers a refused matter form on the matter's own page.
+  const { matterPage, mattersPage, runPage, findingPage, memosPage, answerInPlace } =
+    createPageRenderers(deps);
 
   // --- the start and the list of matters ------------------------------------------------------
 
@@ -119,15 +76,7 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
             signInEnabled: config.demoIdentity,
           }),
         );
-      return sendPage(
-        c,
-        MattersPage({
-          chrome: pageChrome(c, principal),
-          matters: matters.list(principal),
-          playbooks: matters.playbooks(),
-          users: matters.users(),
-        }),
-      );
+      return mattersPage(c, principal);
     },
   });
 
@@ -135,16 +84,7 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
     method: "GET",
     path: urls.matters(),
     access: "principal",
-    handler: (c, principal) =>
-      sendPage(
-        c,
-        MattersPage({
-          chrome: pageChrome(c, principal),
-          matters: matters.list(principal),
-          playbooks: matters.playbooks(),
-          users: matters.users(),
-        }),
-      ),
+    handler: (c, principal) => mattersPage(c, principal),
   });
 
   defineRoute(app, {
@@ -153,14 +93,20 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
     access: "principal",
     handler: async (c, principal) => {
       const form = await readForm(c);
-      const input = CreateMatterInput.parse({
-        name: formString(form, FIELDS.name),
-        clientLegalName: formString(form, FIELDS.clientLegalName),
-        playbookVersionId: blankToNull(formString(form, FIELDS.playbookVersionId)),
-        reviewerUserId: blankToNull(formString(form, FIELDS.reviewerUserId)),
-      });
-      const created = createMatter(services, principal, input);
-      return redirectWithNotice(c, principal, urls.matter(created.id), "matter-created");
+      // A form the person can fix is answered on the list of matters, in words.
+      return answerRefusal(
+        () => {
+          const input = CreateMatterInput.parse({
+            name: formString(form, FIELDS.name),
+            clientLegalName: formString(form, FIELDS.clientLegalName),
+            playbookVersionId: blankToNull(formString(form, FIELDS.playbookVersionId)),
+            reviewerUserId: blankToNull(formString(form, FIELDS.reviewerUserId)),
+          });
+          const created = createMatter(services, principal, input);
+          return redirectWithNotice(c, principal, urls.matter(created.id), "matter-created");
+        },
+        (refusal) => mattersPage(c, principal, refusal),
+      );
     },
   });
 
@@ -179,12 +125,14 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
     action: "matter.update",
     handler: async (c, am) => {
       const form = await readForm(c);
-      const input = SettingsInput.parse({
-        clientLegalName: formString(form, FIELDS.clientLegalName),
-        playbookVersionId: blankToUndefined(formString(form, FIELDS.playbookVersionId)),
+      return answerInPlace(c, am, () => {
+        const input = SettingsInput.parse({
+          clientLegalName: formString(form, FIELDS.clientLegalName),
+          playbookVersionId: blankToUndefined(formString(form, FIELDS.playbookVersionId)),
+        });
+        updateSettings(services, am, input);
+        return redirectWithNotice(c, am.principal, urls.matter(am.matterId), "settings-saved");
       });
-      updateSettings(services, am, input);
-      return redirectWithNotice(c, am.principal, urls.matter(am.matterId), "settings-saved");
     },
   });
 
@@ -194,12 +142,14 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
     action: "member.add",
     handler: async (c, am) => {
       const form = await readForm(c);
-      const input = AddMemberInput.parse({
-        userId: formString(form, FIELDS.memberUserId),
-        role: formString(form, FIELDS.memberRole),
+      return answerInPlace(c, am, () => {
+        const input = AddMemberInput.parse({
+          userId: formString(form, FIELDS.memberUserId),
+          role: formString(form, FIELDS.memberRole),
+        });
+        matters.addMember(am, input);
+        return redirectWithNotice(c, am.principal, urls.matter(am.matterId), "member-added");
       });
-      matters.addMember(am, input);
-      return redirectWithNotice(c, am.principal, urls.matter(am.matterId), "member-added");
     },
   });
 
@@ -209,9 +159,11 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
     action: "matter.delete",
     handler: async (c, am) => {
       const form = await readForm(c);
-      ConfirmInput.parse({ confirm: formString(form, FIELDS.confirm) });
-      await matters.delete(am);
-      return redirectWithNotice(c, am.principal, urls.matters(), "matter-deleted");
+      return answerInPlace(c, am, async () => {
+        ConfirmInput.parse({ confirm: formString(form, FIELDS.confirm) });
+        await matters.delete(am);
+        return redirectWithNotice(c, am.principal, urls.matters(), "matter-deleted");
+      });
     },
   });
 
@@ -223,7 +175,8 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
     action: "document.write",
     handler: async (c, am) => {
       const form = await readForm(c);
-      try {
+      // A file the person can fix is answered on the matter's page, in words.
+      return answerInPlace(c, am, async () => {
         const fields = UploadDocumentFields.parse({
           title: formString(form, FIELDS.title),
           kind: formString(form, FIELDS.kind),
@@ -237,12 +190,7 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
           urls.matter(am.matterId),
           uploadNotice(result.warnings, "document-added"),
         );
-      } catch (error) {
-        // A file the person can fix is answered on the matter's page, in words.
-        const refusal = refusalOf(error);
-        if (refusal === null) throw error;
-        return matterPage(c, am, refusal);
-      }
+      });
     },
   });
 
@@ -252,7 +200,7 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
     action: "document.write",
     handler: async (c, am) => {
       const form = await readForm(c);
-      try {
+      return answerInPlace(c, am, async () => {
         const fields = UploadVersionFields.parse({
           statedDate: blankToNull(formString(form, FIELDS.statedDate)),
         });
@@ -264,11 +212,7 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
           urls.matter(am.matterId),
           uploadNotice(result.warnings, "version-added"),
         );
-      } catch (error) {
-        const refusal = refusalOf(error);
-        if (refusal === null) throw error;
-        return matterPage(c, am, refusal);
-      }
+      });
     },
   });
 
@@ -278,12 +222,14 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
     action: "document.write",
     handler: async (c, am) => {
       const form = await readForm(c);
-      const input = OperativeInput.parse({
-        documentId: param(c, "documentId"),
-        versionId: formString(form, FIELDS.versionId),
+      return answerInPlace(c, am, () => {
+        const input = OperativeInput.parse({
+          documentId: param(c, "documentId"),
+          versionId: formString(form, FIELDS.versionId),
+        });
+        matters.setOperative(am, input.documentId, input.versionId);
+        return redirectWithNotice(c, am.principal, urls.matter(am.matterId), "operative-saved");
       });
-      matters.setOperative(am, input.documentId, input.versionId);
-      return redirectWithNotice(c, am.principal, urls.matter(am.matterId), "operative-saved");
     },
   });
 
@@ -293,12 +239,14 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
     action: "document.write",
     handler: async (c, am) => {
       const form = await readForm(c);
-      const input = StatedDateInput.parse({
-        versionId: param(c, "versionId"),
-        statedDate: blankToNull(formString(form, FIELDS.statedDate)),
+      return answerInPlace(c, am, () => {
+        const input = StatedDateInput.parse({
+          versionId: param(c, "versionId"),
+          statedDate: blankToNull(formString(form, FIELDS.statedDate)),
+        });
+        matters.setStatedDate(am, input.versionId, input.statedDate);
+        return redirectWithNotice(c, am.principal, urls.matter(am.matterId), "date-saved");
       });
-      matters.setStatedDate(am, input.versionId, input.statedDate);
-      return redirectWithNotice(c, am.principal, urls.matter(am.matterId), "date-saved");
     },
   });
 
@@ -308,9 +256,11 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
     action: "document.write",
     handler: async (c, am) => {
       const form = await readForm(c);
-      ConfirmInput.parse({ confirm: formString(form, FIELDS.confirm) });
-      matters.removeDocument(am, param(c, "documentId"));
-      return redirectWithNotice(c, am.principal, urls.matter(am.matterId), "document-removed");
+      return answerInPlace(c, am, () => {
+        ConfirmInput.parse({ confirm: formString(form, FIELDS.confirm) });
+        matters.removeDocument(am, param(c, "documentId"));
+        return redirectWithNotice(c, am.principal, urls.matter(am.matterId), "document-removed");
+      });
     },
   });
 
@@ -322,11 +272,13 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
     action: "run.start",
     handler: async (c, am) => {
       const form = await readForm(c);
-      const input = StartRunInput.parse({
-        workflow: blankToUndefined(formString(form, WORKFLOW_FIELD)),
+      return answerInPlace(c, am, () => {
+        const input = StartRunInput.parse({
+          workflow: blankToUndefined(formString(form, WORKFLOW_FIELD)),
+        });
+        startRun(services, am, input);
+        return redirectWithNotice(c, am.principal, urls.matter(am.matterId), "review-started");
       });
-      startRun(services, am, input);
-      return redirectWithNotice(c, am.principal, urls.matter(am.matterId), "review-started");
     },
   });
 
@@ -334,57 +286,31 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
     method: "POST",
     path: "/matters/:matterId/runs/:runId/resume",
     action: "run.resume",
-    handler: (c, am) => {
-      try {
+    // A page made before the model was changed offers a button that can only fail, and "reload and
+    // try again" cannot help; the matter's page, with the reason in words, can.
+    handler: (c, am) =>
+      answerInPlace(c, am, () => {
         runs.resume(am, param(c, "runId"));
-      } catch (error) {
-        // The page that offered the button was made before the model was changed. "Reload and try
-        // again" cannot help; the matter's page, with the reason in words, can.
-        const refusal = refusalOf(error);
-        if (refusal === null || refusal.code !== "run_model_changed") throw error;
-        return matterPage(c, am, refusal);
-      }
-      return redirectWithNotice(c, am.principal, urls.matter(am.matterId), "review-resumed");
-    },
+        return redirectWithNotice(c, am.principal, urls.matter(am.matterId), "review-resumed");
+      }),
   });
 
   defineMatterRoute(app, {
     method: "POST",
     path: "/matters/:matterId/runs/:runId/cancel",
     action: "run.start",
-    handler: (c, am) => {
-      runs.cancel(am, param(c, "runId"));
-      return redirectWithNotice(c, am.principal, urls.matter(am.matterId), "review-cancelled");
-    },
+    handler: (c, am) =>
+      answerInPlace(c, am, () => {
+        runs.cancel(am, param(c, "runId"));
+        return redirectWithNotice(c, am.principal, urls.matter(am.matterId), "review-cancelled");
+      }),
   });
 
   defineMatterRoute(app, {
     method: "GET",
     path: "/matters/:matterId/runs/:runId",
     action: "run.read",
-    handler: (c, am) => {
-      // A run of another matter, or none at all, is a 404 here, before anything is listed.
-      const run = runs.get(am, param(c, "runId"));
-      const view = matters.view(am);
-      const issues = runs.issues(am, run.id);
-      const wanted = c.req.query("finding");
-      const asked = wanted !== undefined && wanted !== "";
-      const chosen = asked ? issues.find((issue) => issue.findingId === wanted) : undefined;
-      return sendPage(
-        c,
-        RunPage({
-          chrome: pageChrome(c, am.principal),
-          matter: view.matter,
-          run,
-          issues,
-          selected: chosen === undefined ? null : runs.finding(am, chosen.findingId),
-          selectionMissing: asked && chosen === undefined,
-          filter: ISSUE_FILTERS.find((name) => name === c.req.query("filter")) ?? "all",
-          warnings: view.warnings,
-          documents: view.documents,
-        }),
-      );
-    },
+    handler: (c, am) => runPage(c, am, param(c, "runId")),
   });
 
   // What /assets/parol.js polls (the page puts this URL in `data-status-url`).
@@ -444,22 +370,7 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
     method: "GET",
     path: "/matters/:matterId/memos",
     action: "memo.read",
-    handler: (c, am) => {
-      const view = matters.view(am);
-      return sendPage(
-        c,
-        MemosPage({
-          chrome: pageChrome(c, am.principal),
-          matter: view.matter,
-          memos: reviews.listMemos(am),
-          canExport: roleAllows(am.role, "memo.export", {
-            relaxedSegregation: view.segregationRelaxed,
-          }),
-          exportBlockedReason: exportBlockedReason(view),
-          currentRunId: view.currentRun?.id ?? null,
-        }),
-      );
-    },
+    handler: (c, am) => memosPage(c, am),
   });
 
   defineMatterRoute(app, {

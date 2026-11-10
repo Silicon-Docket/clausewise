@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { FIELDS } from "../../src/server/pages/forms.js";
 import { urls } from "../../src/server/urls.js";
 import type { FindingView, IssueRow, MatterView } from "../../src/services/views.js";
+import { urlEncoded } from "../integration/layers-support.js";
 import { all, attr, first, hasAttr, parseHtml, readable } from "../pages/html.js";
 import {
   IDS,
@@ -161,13 +162,31 @@ describe("the story of the worked example, with a marker in everything", () => {
     ])
       await note(response);
 
-    // A form with a blank client name, which the store refuses.
+    // A form with a blank client name, which the store refuses. Like the refused file above it is
+    // answered on the matter's page, so the answer cannot go through the check on error bodies
+    // below (the page holds the matter's own name, which carries the marker): it is held to the
+    // stricter one. It is the page that was asked from, byte for byte, with the one fixed notice
+    // added, so nothing of the request is in it.
+    const beforeSettings = await associate.page(urls.matter(matterId));
+    const blank = await associate.submit(beforeSettings, urls.matterSettings(matterId), {
+      set: { [FIELDS.clientLegalName]: "" },
+    });
+    expect(blank.status).toBe(400);
+    const blankHtml = await blank.text();
+    expect(readable(parseHtml(problem.exec(blankHtml)?.[0] ?? ""))).toBe(
+      "Problem That request was not valid. Check the form and try again.",
+    );
+    expect(blankHtml.replace(problem, "")).toBe(beforeSettings.html);
+    // The shell's own page for a refused form, which no matter is behind: an identity that does not
+    // exist, named with the marker.
     await note(
-      await associate.submit(
-        await associate.page(urls.matter(matterId)),
-        urls.matterSettings(matterId),
-        { set: { [FIELDS.clientLegalName]: "" } },
-      ),
+      await site.anonymous().send("POST", urls.session(), {
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: urlEncoded([
+          [FIELDS.intent, "sign-in"],
+          [FIELDS.userId, TYPED],
+        ]),
+      }),
     );
 
     // The run.
