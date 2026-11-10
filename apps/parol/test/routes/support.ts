@@ -3,11 +3,13 @@ import type { GenerateObjectRequest } from "@clausewise/llm";
 import type { Hono } from "hono";
 import { expect } from "vitest";
 import type { MatterRole } from "../../src/contracts.js";
+import { createComparisonSource, type ComparisonSource } from "../../src/evaluations/index.js";
 import { describeRoutes } from "../../src/server/matter-route.js";
 import { createApp } from "../../src/server/app.js";
 import type { AppConfig, AppDeps } from "../../src/server/deps.js";
 import { renderErrorPage } from "../../src/server/pages/index.js";
 import { registerRoutes } from "../../src/server/routes/index.js";
+import { createEvaluationService } from "../../src/services/evaluations.js";
 import { DEMO_USER_IDS } from "../../src/store/index.js";
 import { formFields, urlEncoded, type SubmitOptions } from "../integration/layers-support.js";
 import { WORDS, baselineAnswer } from "../integration/pipeline.js";
@@ -104,6 +106,11 @@ export interface SiteOptions {
   maxUploadBytes?: number;
   /** Default true. With false nobody can be signed in. */
   demoIdentity?: boolean;
+  /**
+   * Where the evaluation comparison page reads its published comparisons: the folder they are in
+   * (`<data folder>/evaluations`), or a source of the test's own. Without it the page has none.
+   */
+  evaluations?: string | ComparisonSource;
 }
 
 export function makeSite(options: SiteOptions = {}): Site {
@@ -123,7 +130,15 @@ export function makeSite(options: SiteOptions = {}): Site {
     maxUploadBytes: options.maxUploadBytes ?? 1024 * 1024,
     ...(options.relaxed === true ? { relaxedSegregation: true } : {}),
   };
-  const deps: AppDeps = { repo: w.repo, services: w.services, config, now: w.deps.now };
+  const evaluations =
+    typeof options.evaluations === "string"
+      ? createComparisonSource(options.evaluations)
+      : options.evaluations;
+  const services =
+    evaluations === undefined
+      ? w.services
+      : { ...w.services, evaluations: createEvaluationService(evaluations) };
+  const deps: AppDeps = { repo: w.repo, services, config, now: w.deps.now };
   const app = createApp(deps, { log: (line) => logs.push(line), renderError: renderErrorPage });
   registerRoutes(app, deps);
   return {

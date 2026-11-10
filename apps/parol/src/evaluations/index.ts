@@ -4,11 +4,44 @@
  * only thing that crosses is a file in the data folder, read through a `ComparisonSource`.
  */
 export {
+  CHANGE_KINDS,
+  DECISION_OUTCOMES,
+  FAILURE_KINDS,
+  GATE_IDS,
+  GATE_OUTCOMES,
+  MAX_PAGE_BYTES,
+  PAGE_FORMAT,
+  PAGE_KIND,
+  RUN_MODES,
+  SPLIT_NAMES,
+  isPageId,
+  pageFileName,
+  pageIdOf,
+  parseComparisonPage,
+  sealComparisonPage,
+  type ChangeKind,
+  type ChangeView,
+  type ComparisonBody,
+  type ComparisonPage,
+  type DecisionOutcome,
+  type FailureKind,
+  type GateId,
+  type GateOutcome,
+  type GateView,
+  type PageProblem,
+  type ParsedPage,
+  type PassageView,
+  type RunMode,
+  type SectionView,
+  type SideFacts,
+  type SplitName,
+} from "./document.js";
+export { draftPromotionRecord } from "./draft.js";
+export {
   EMPTY_SOURCE,
   createComparisonSource,
-  type ComparisonPage,
   type ComparisonSource,
   type ComparisonSourceOptions,
-  type PageProblem,
   type SourceEntry,
 } from "./source.js";
+export * from "./words.js";

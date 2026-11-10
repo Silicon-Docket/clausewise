@@ -1536,3 +1536,90 @@ kbd {
     overflow: visible;
   }
 }
+
+/* ---------------------------------------------------------------------------------------- */
+/* Evaluation comparison page (every class here starts with eval-, so none restyles another page) */
+/* ---------------------------------------------------------------------------------------- */
+
+/* The two commands of the empty list. They wrap, so the box never needs sideways scrolling. */
+.eval-commands {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  font-family: var(--mono);
+  font-size: 0.875rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A line under a value in a table cell: counts, a reason, a rule's title. */
+.eval-cell-sub {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/* Why a gate was not evaluated, or what it counted. Always shown, never inside a disclosure. */
+.eval-gate-reason {
+  margin: 0.35rem 0 0;
+  max-width: 30rem;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+/* The split switch. The chosen one is bold and heavily underlined as well as marked current. */
+.eval-splits .nav-list {
+  gap: 1.25rem;
+}
+
+.eval-splits a[aria-current="page"] {
+  font-weight: 700;
+  text-decoration-thickness: 3px;
+}
+
+/* A paragraph of a case document, with the words the key or a finding points at marked. */
+.eval-passage {
+  margin: 0 0 1rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--rule);
+  border-left: 0.35rem solid var(--accent);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.eval-passage-meta {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+/* The trail of one side of a slot, and of one repeat inside it. */
+.eval-trail {
+  margin: 1rem 0 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--rule);
+}
+
+.eval-trail-repeat {
+  margin: 0.75rem 0 0;
+  padding: 0.25rem 0 0.25rem 0.9rem;
+  border-left: 3px solid var(--rule);
+}
+
+/* The draft promotion record: plain text in a read-only box, in a fixed-width face. */
+.eval-draft-text {
+  display: block;
+  width: 100%;
+  max-width: none;
+  min-height: 20rem;
+  font-family: var(--mono);
+  font-size: 0.875rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+@media (forced-colors: active) {
+  .eval-passage {
+    border: 1px solid CanvasText;
+  }
+}

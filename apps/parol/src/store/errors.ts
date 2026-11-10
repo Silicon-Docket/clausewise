@@ -45,7 +45,8 @@ export type EntityKind =
   | "evidence"
   | "memo"
   | "eval dataset"
-  | "eval run";
+  | "eval run"
+  | "evaluation comparison";
 
 export class NotFoundError extends StoreError {
   override name = "NotFoundError";
