@@ -21,6 +21,9 @@ describe("the argument parser", () => {
     expect(parseParolArgs([])).toEqual({
       selftest: false,
       simulate: false,
+      replay: undefined,
+      record: true,
+      calibration: false,
       split: "dev",
       allowHeldout: false,
       workflow: "v1",
@@ -53,6 +56,7 @@ describe("the argument parser", () => {
         "--case",
         "PAROL-D08",
         "--yes",
+        "--calibration",
         "--max-cost",
         "7.5",
         "--assumed-output-tokens",
@@ -73,6 +77,9 @@ describe("the argument parser", () => {
     ).toEqual({
       selftest: false,
       simulate: false,
+      replay: undefined,
+      record: true,
+      calibration: true,
       split: "all",
       allowHeldout: true,
       workflow: "v2",
@@ -96,7 +103,7 @@ describe("the argument parser", () => {
 
   it("refuses the choices it cannot make sense of", () => {
     expect(bad(["--split", "test"])).toBe("--split must be dev, heldout or all.");
-    expect(bad(["--workflow", "v9"])).toContain("--workflow must be one of: v1, v2.");
+    expect(bad(["--workflow", "v9"])).toContain("--workflow must be one of: v1, v2, v3.");
     expect(bad(["--runs", "0"])).toBe("--runs must be a positive whole number.");
     expect(bad(["--runs", "2.5"])).toBe("--runs must be a positive whole number.");
     expect(bad(["--runs", "-1"])).toContain("--runs");
@@ -181,5 +188,24 @@ describe("--allow-differences", () => {
     } catch (error) {
       expect((error as Error).message).not.toContain("my-secret-looking-token");
     }
+  });
+
+  it("reads --replay and --no-record, and refuses a replay that is mixed with a live or scripted run", () => {
+    expect(parseParolArgs(["--replay", "r.responses.jsonl"])).toMatchObject({
+      replay: "r.responses.jsonl",
+      record: true,
+    });
+    expect(parseParolArgs(["--no-record"])).toMatchObject({ replay: undefined, record: false });
+    expect(bad(["--replay", "r.jsonl", "--selftest"])).toMatch(/cannot be used with/);
+    expect(bad(["--replay", "r.jsonl", "--simulate"])).toMatch(/cannot be used with/);
+    expect(bad(["--replay", "r.jsonl", "--yes"])).toMatch(/sends nothing and spends nothing/);
+    expect(bad(["--replay"])).toMatch(/--replay/);
+    expect(bad(["--replay", ""])).toMatch(/needs a value/);
+    expect(bad(["--calibration", "--selftest"])).toMatch(/needs a live run or a replay/);
+    expect(bad(["--calibration", "--simulate"])).toMatch(/needs a live run or a replay/);
+    expect(parseParolArgs(["--calibration", "--replay", "r.jsonl"])).toMatchObject({
+      calibration: true,
+      replay: "r.jsonl",
+    });
   });
 });

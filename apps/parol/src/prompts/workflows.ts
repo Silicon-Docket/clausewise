@@ -10,6 +10,14 @@ import type { RegisteredWorkflow } from "../module-contracts.js";
  * v2 is v1 with one change, the retrieval policy. That is the controlled revision of the
  * improvement cycle (docs/parol/05-evaluation.md): prompts and checks are held fixed so that any
  * effect on the results is attributable to retrieval.
+ *
+ * v3 is v2 with two more things switched on: the model support check (prompt support.p1, which
+ * reads only the cited passages and says whether they back the claim) and the deterministic
+ * supersession check C2. It is a candidate for the evaluation and is not shipped with the
+ * application (boot/register.ts registers v1 and v2), so a matter cannot be reviewed with it until
+ * a promotion decision says so. Its effect cannot be split between the support check and C2: they
+ * are changed together on purpose, to see what the full set of checks does to the gates that need
+ * them (G5 and G11). A later version can separate them if the result calls for it.
  */
 const BASE = {
   prompts: { extract: "extract.p1", analyze: "analyze.p1", support: null },
@@ -24,12 +32,16 @@ const freezeList = (items: readonly string[]): string[] => Object.freeze([...ite
  * Registered workflows are shared by every caller, so they are frozen: a manifest that someone
  * changed in place would no longer match the hash recorded beside it.
  */
-function register(label: string, retrieval: WorkflowManifest["retrieval"]): RegisteredWorkflow {
+function register(
+  label: string,
+  retrieval: WorkflowManifest["retrieval"],
+  change: { support?: string; checks?: readonly string[] } = {},
+): RegisteredWorkflow {
   const manifest: WorkflowManifest = Object.freeze({
     label,
-    prompts: Object.freeze({ ...BASE.prompts }),
+    prompts: Object.freeze({ ...BASE.prompts, support: change.support ?? BASE.prompts.support }),
     retrieval,
-    checks: freezeList(BASE.checks),
+    checks: freezeList(change.checks ?? BASE.checks),
     budgetTokens: BASE.budgetTokens,
     repairAttempts: BASE.repairAttempts,
   });
@@ -39,6 +51,7 @@ function register(label: string, retrieval: WorkflowManifest["retrieval"]): Regi
 export const WORKFLOWS: Record<string, RegisteredWorkflow> = Object.freeze({
   v1: register("v1", "R1"),
   v2: register("v2", "R2"),
+  v3: register("v3", "R2", { support: "support.p1", checks: ["C1", "C2"] }),
 });
 
 /** Throws for a label that is not registered, so a typo cannot silently select no workflow. */

@@ -3,12 +3,23 @@
  * not as plumbing. Nothing here has behaviour that a case could depend on without seeing it: each
  * helper returns plain data in the shapes of types.ts.
  */
-import type { DocLabel, EscalationCode } from "../../apps/parol/src/contracts.js";
 import type {
+  DocLabel,
+  DocumentKind,
+  EscalationCode,
+  WarningCode,
+} from "../../apps/parol/src/contracts.js";
+import type {
+  AddDocumentStep,
+  AddVersionStep,
   AnchorRef,
   EscalationExpectation,
+  ExtraFile,
   RuleExpectationSpec,
   SourceParagraph,
+  UploadAnswer,
+  UploadRefusal,
+  UploadRefusalAnswer,
 } from "./types.js";
 
 // ---------------------------------------------------------------------------------------------
@@ -104,4 +115,104 @@ export const notApplicable = (spec: WithoutStatus): RuleExpectationSpec => ({
 export const undetermined = (spec: WithoutStatus): RuleExpectationSpec => ({
   status: "undetermined",
   ...spec,
+});
+
+// ---------------------------------------------------------------------------------------------
+// Uploads
+// ---------------------------------------------------------------------------------------------
+
+/** `file` is the bytes of the document file `of` under another name. */
+export const identicalCopyOf = (of: string, file: string): ExtraFile => ({
+  file,
+  kind: "identical_copy",
+  of,
+});
+/** `file` has the text of the document file `of` in other bytes, as a program saving it again would. */
+export const resaveOf = (of: string, file: string): ExtraFile => ({ file, kind: "resave", of });
+
+/** The person adds a document: the label they mean it to have, and what they enter about it. */
+export const addDocument = (
+  file: string,
+  entered: { label: DocLabel; title: string; kind: DocumentKind; statedDate: string | null },
+  expect: UploadAnswer | UploadRefusalAnswer,
+): AddDocumentStep => ({ action: "addDocument", file, ...entered, expect });
+
+/** The person adds a version to the document that has `label`. */
+export const addVersion = (
+  file: string,
+  label: DocLabel,
+  statedDate: string | null,
+  expect: UploadAnswer | UploadRefusalAnswer,
+): AddVersionStep => ({ action: "addVersion", file, label, statedDate, expect });
+
+interface AnswerOptions {
+  /** Warnings ingest raises for the file, such as `instruction_like_text`. */
+  warnings?: WarningCode[];
+}
+type Version = { label: DocLabel; versionNo: number };
+
+/** A new document: version 1, operative. With `sameTextAs` when its text is that of a stored version. */
+export const newDocument = (
+  label: DocLabel,
+  options: AnswerOptions & { sameTextAs?: Version } = {},
+): UploadAnswer => ({
+  effect: "new_document",
+  label,
+  versionNo: 1,
+  operative: true,
+  warnings: [
+    ...(options.sameTextAs === undefined ? [] : (["near_duplicate_version"] as const)),
+    ...(options.warnings ?? []),
+  ],
+  ...(options.sameTextAs === undefined ? {} : { sameTextAs: options.sameTextAs }),
+});
+
+/** Other text as the next version of a document: operative at once, and the version before it stops governing. */
+export const newVersion = (
+  label: DocLabel,
+  versionNo: number,
+  options: AnswerOptions = {},
+): UploadAnswer => ({
+  effect: "new_version",
+  label,
+  versionNo,
+  operative: true,
+  warnings: [...(options.warnings ?? [])],
+});
+
+/** Other bytes with the text of the stored version `sameTextAs`: stored as the next version and not operative. */
+export const sameText = (
+  label: DocLabel,
+  versionNo: number,
+  sameTextAs: Version,
+  options: AnswerOptions = {},
+): UploadAnswer => ({
+  effect: "same_text",
+  label,
+  versionNo,
+  operative: false,
+  warnings: ["near_duplicate_version", ...(options.warnings ?? [])],
+  sameTextAs,
+});
+
+/**
+ * The bytes of a stored version, uploaded again: nothing is stored. The answer names the stored
+ * version, and `operative` says whether that version governs once the step is done.
+ */
+export const identicalFile = (
+  label: DocLabel,
+  versionNo: number,
+  operative: boolean,
+): UploadAnswer => ({
+  effect: "identical_file",
+  label,
+  versionNo,
+  operative,
+  warnings: ["duplicate_document"],
+});
+
+/** The application refuses the upload with this code and changes nothing. */
+export const refused = (code: UploadRefusal): UploadRefusalAnswer => ({
+  effect: "refused",
+  code,
 });

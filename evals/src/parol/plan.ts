@@ -33,6 +33,7 @@ import type { Split } from "../../../fixtures/parol/types.js";
 import { decide, int, plain, usd, type Decision } from "../guard.js";
 import { boundTokens, costCeiling, costUpperBound, type Plan } from "../plan.js";
 import { PRICE_WARNING, type Price } from "../prices.js";
+import type { PreparedPair } from "./calibration-run.js";
 import type { Dataset } from "./dataset.js";
 import { prepareCase, type ParsedFiles, type RunnableCase } from "./runner.js";
 
@@ -55,8 +56,17 @@ export interface CasePlan {
   inputTokensWithRepairs: number;
 }
 
+/** The calibration set's share of a plan: one call per pair, once per run and not per repeat. */
+export interface CalibrationPlan {
+  calls: number;
+  /** Upper bound on the input tokens of those calls. */
+  inputTokens: number;
+}
+
 export interface ParolPlan {
   repeats: number;
+  /** Absent or null when the calibration set is not part of the run. */
+  calibration?: CalibrationPlan | null;
   assumedOutputTokens: number;
   cases: CasePlan[];
   /** Case and twin runs in one repeat. */
@@ -95,6 +105,8 @@ export async function buildParolPlan(args: {
   workflow: RegisteredWorkflow;
   repeats: number;
   assumedOutputTokens: number;
+  /** The pairs of the calibration set, prepared. They add one support call each, once. */
+  calibration?: readonly PreparedPair[];
 }): Promise<ParolPlan> {
   const { playbook, workflow } = args;
   const wm = workflow.manifest;
@@ -226,18 +238,45 @@ export async function buildParolPlan(args: {
 
   const sum = (pick: (c: CasePlan) => number): number =>
     cases.reduce((total, c) => total + pick(c), 0) * args.repeats;
-  const calls = sum((c) => c.calls);
-  const callsWithRepairs = sum((c) => c.callsWithRepairs);
+
+  // The calibration pairs are sent once, with the support prompt of the workflow, each with its own
+  // paragraph and discrepancy. They are bounded by the prompts the checker would really build.
+  let calibration: CalibrationPlan | null = null;
+  if (args.calibration !== undefined && args.calibration.length > 0) {
+    if (prompts.support === null) {
+      throw new Error("the calibration set needs a workflow that pins a support prompt");
+    }
+    const schemaTokens = boundTokens(JSON.stringify(toJSONSchema(prompts.support.schema)));
+    let inputTokens = 0;
+    for (const item of args.calibration) {
+      const text = renderPrompt(prompts.support.definition, {
+        contractBlock: renderContractBlock([item.span]),
+        rule: renderRule(item.rule),
+        status: item.draft.status,
+        discrepancy: item.draft.discrepancy === "" ? "(none)" : item.draft.discrepancy,
+      });
+      inputTokens +=
+        boundTokens(prompts.support.definition.system) + boundTokens(text) + schemaTokens;
+    }
+    calibration = { calls: args.calibration.length, inputTokens };
+  }
+  const extra = {
+    calls: calibration?.calls ?? 0,
+    inputTokens: calibration?.inputTokens ?? 0,
+  };
+  const calls = sum((c) => c.calls) + extra.calls;
+  const callsWithRepairs = sum((c) => c.callsWithRepairs) + extra.calls;
   return {
     repeats: args.repeats,
+    calibration,
     assumedOutputTokens: args.assumedOutputTokens,
     cases,
     runsPerRepeat: cases.length,
     slotsPerRepeat: cases.reduce((total, c) => total + c.rules, 0),
     calls,
     callsWithRepairs,
-    inputTokens: sum((c) => c.inputTokens),
-    inputTokensWithRepairs: sum((c) => c.inputTokensWithRepairs),
+    inputTokens: sum((c) => c.inputTokens) + extra.inputTokens,
+    inputTokensWithRepairs: sum((c) => c.inputTokensWithRepairs) + extra.inputTokens,
     outputTokens: calls * args.assumedOutputTokens,
     outputTokensWithRepairs: callsWithRepairs * args.assumedOutputTokens,
   };
@@ -331,7 +370,7 @@ export function decideSpend(args: {
 // ---------------------------------------------------------------------------------------------
 
 export interface PlanDescription {
-  mode: "selftest" | "simulated" | "live";
+  mode: "selftest" | "simulated" | "live" | "replay";
   datasetLabel: string;
   splitLabel: string;
   workflowLabel: string;
@@ -363,14 +402,16 @@ export function describeParolPlan(plan: ParolPlan, context: PlanDescription): st
   const widths = header.map((title, i) =>
     Math.max(title.length, ...body.map((cells) => cells[i]?.length ?? 0)),
   );
-  const scripted = context.mode !== "live";
+  const scripted = context.mode !== "live"; // no request is sent, so there is no cost to bound
   const cases = plan.cases.filter((c) => c.twinOf === null).length;
   const lines = [
     context.mode === "selftest"
       ? "Selftest plan (no model will be called)"
       : context.mode === "simulated"
         ? "Simulated plan (the scripted simulated reader answers; no model will be called)"
-        : "Evaluation plan (nothing has been sent yet)",
+        : context.mode === "replay"
+          ? "Replay plan (recorded answers are re-scored; no model will be called and nothing is sent)"
+          : "Evaluation plan (nothing has been sent yet)",
     `  Dataset: ${plain(context.datasetLabel)}, split ${plain(context.splitLabel)}`,
     `  Workflow: ${plain(context.workflowLabel)} (retrieval ${plain(context.retrieval)})`,
     `  Model: ${plain(context.model)} (${plain(context.provider)})`,
@@ -379,7 +420,7 @@ export function describeParolPlan(plan: ParolPlan, context: PlanDescription): st
     row(header, widths),
     ...body.map((cells) => row(cells, widths)),
     "",
-    `  Model calls in total: ${int(plan.calls)}`,
+    `  Model calls in total: ${int(plan.calls)}${plan.calibration == null ? "" : ` (${int(plan.calibration.calls)} of them the support checker's calibration pairs, sent once for the run)`}`,
   ];
   if (scripted) return `${lines.join("\n")}\n`;
 

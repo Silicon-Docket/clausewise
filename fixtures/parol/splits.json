@@ -16,5 +16,18 @@
       "sha256": "2b939141050cb5b92f42b66bba7d5be8d81c4e1a1d65e1deec609583ef55497a",
       "files": 9
     }
+  },
+  "calibration": {
+    "sha256": "53d879d97a19f30cdd363929622606072bfbcefe78570a2e774db57050f311b8",
+    "pairs": 40,
+    "supported": 20,
+    "unsupported": 20,
+    "byKind": {
+      "superseded": 4,
+      "overlooked_exception": 4,
+      "other_party_obligation": 4,
+      "definition_as_duty": 4,
+      "wrong_frame": 4
+    }
   }
 }

@@ -98,9 +98,17 @@ export function expandDocument(
 // TXT
 // ---------------------------------------------------------------------------------------------
 
-/** One paragraph per block, blank lines between, a final newline. UTF-8 without a mark. */
-export function renderTxt(paragraphs: readonly ExpandedParagraph[]): Uint8Array {
-  return new TextEncoder().encode(`${paragraphs.map((p) => p.text).join("\n\n")}\n`);
+/**
+ * One paragraph per block, blank lines between, a final newline. UTF-8 without a mark. A re-save
+ * (`resave`) has the same paragraphs with Windows line endings, which is what an editor on another
+ * system does to a text file: other bytes, and the parser reads the same paragraphs back.
+ */
+export function renderTxt(
+  paragraphs: readonly ExpandedParagraph[],
+  options: { resave?: boolean } = {},
+): Uint8Array {
+  const text = `${paragraphs.map((p) => p.text).join("\n\n")}\n`;
+  return new TextEncoder().encode(options.resave === true ? text.replace(/\n/g, "\r\n") : text);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -114,11 +122,16 @@ const DOS_DATE = ((2026 - 1980) << 9) | (1 << 5) | 1;
 const DOS_TIME = 0;
 
 const CREATOR = "Parol fixtures";
+/** What a re-saved Word file says about itself: another editor, a later save, the next revision. */
+const RESAVE_EDITOR = "Parol fixtures (saved again)";
+const RESAVE_ISO = "2026-01-02T00:00:00.000Z";
 
 const escapeXml = (value: string): string =>
   value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-function coreProperties(title: string): string {
+function coreProperties(title: string, resave: boolean): string {
+  const editor = resave ? RESAVE_EDITOR : CREATOR;
+  const modified = resave ? RESAVE_ISO : FIXED_ISO;
   return (
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
     '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" ' +
@@ -126,9 +139,9 @@ function coreProperties(title: string): string {
     'xmlns:dcmitype="http://purl.org/dc/dcmitype/" ' +
     'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">' +
     `<dc:title>${escapeXml(title)}</dc:title><dc:creator>${CREATOR}</dc:creator>` +
-    `<cp:lastModifiedBy>${CREATOR}</cp:lastModifiedBy><cp:revision>1</cp:revision>` +
+    `<cp:lastModifiedBy>${editor}</cp:lastModifiedBy><cp:revision>${resave ? 2 : 1}</cp:revision>` +
     `<dcterms:created xsi:type="dcterms:W3CDTF">${FIXED_ISO}</dcterms:created>` +
-    `<dcterms:modified xsi:type="dcterms:W3CDTF">${FIXED_ISO}</dcterms:modified>` +
+    `<dcterms:modified xsi:type="dcterms:W3CDTF">${modified}</dcterms:modified>` +
     "</cp:coreProperties>"
   );
 }
@@ -219,10 +232,14 @@ function wordParagraph(paragraph: SourceParagraph): Paragraph | Table {
   }
 }
 
-/** A Word file for the document. Same input, same bytes. */
+/**
+ * A Word file for the document. Same input, same bytes. A re-save (`resave`) has the same
+ * paragraphs and other properties (editor, save date and revision number), so the bytes differ and
+ * the text a reader extracts does not.
+ */
 export async function renderDocx(
   doc: Pick<CaseDocument, "paragraphs" | "title">,
-  options: { omitInjected?: boolean } = {},
+  options: { omitInjected?: boolean; resave?: boolean } = {},
 ): Promise<Uint8Array> {
   const children = doc.paragraphs
     .filter((paragraph) => !(paragraph.injected === true && options.omitInjected === true))
@@ -233,7 +250,7 @@ export async function renderDocx(
     sections: [{ children }],
   });
   const packed = await Packer.toBuffer(document, undefined, [
-    { path: "docProps/core.xml", data: coreProperties(doc.title) },
+    { path: "docProps/core.xml", data: coreProperties(doc.title, options.resave === true) },
   ]);
   return pinZipTimestamps(packed);
 }

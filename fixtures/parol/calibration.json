@@ -1,0 +1,803 @@
+{
+  "format": 1,
+  "dataset": "parol-calibration v1",
+  "playbook": {
+    "slug": "parol-nda-recipient",
+    "version": "1.0.1",
+    "sha256": "19ad95165bb5e930444f0375bbc192f817f8a023a7b3361d6cb0a3a3bd77a739"
+  },
+  "counts": {
+    "pairs": 40,
+    "supported": 20,
+    "unsupported": 20,
+    "byKind": {
+      "superseded": 4,
+      "overlooked_exception": 4,
+      "other_party_obligation": 4,
+      "definition_as_duty": 4,
+      "wrong_frame": 4
+    }
+  },
+  "pairs": [
+    {
+      "id": "CAL-01",
+      "case": "PAROL-D13",
+      "rule": "def-1",
+      "label": "supported",
+      "claim": {
+        "status": "compliant",
+        "discrepancy": "",
+        "explanation": "The definition covers non-public information disclosed for the Project, whether or not it is marked or identified as confidential. That is the playbook's fallback and not the unacceptable definition of all information of any kind."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "1.2",
+        "quote": "non-public information that one Party (the \"Disclosing Party\") discloses to the other Party",
+        "paragraph": 5
+      },
+      "note": "The claim reads the definition with its limits, non-public information disclosed for the Project, which makes it the fallback. D13 key def-1 is compliant at the fallback. Same paragraph as the unsupported pair that overlooks those limits.",
+      "paragraphSha256": "3ecdedd390c4b7cbd84fd8c9db19ac437a901b1132ee5df4a5317ad76514e9ae"
+    },
+    {
+      "id": "CAL-02",
+      "case": "PAROL-D05",
+      "rule": "dur-1",
+      "label": "unsupported",
+      "kind": "superseded",
+      "claim": {
+        "status": "compliant",
+        "discrepancy": "",
+        "explanation": "Section 6.1 limits the obligations of each Receiving Party to two years from the date of each disclosure of Confidential Information. That is within the three year standard and counted from each disclosure, which meets the rule."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "6.1",
+        "quote": "two (2) years from the date of each disclosure",
+        "paragraph": 19
+      },
+      "note": "Clause 2 of Amendment No. 1 deletes Section 6.1 in its entirety, so the quoted term no longer exists and dur-1 is a deviation (the D05 key lists this paragraph as superseded). The finding cites the original clause alone and the paragraph does not show the deletion, which the checker is not shown either. This is the one pair that no reading of the cited paragraph can catch. It is in the set on purpose: docs/parol/05 names it as the limit of the isolation.",
+      "paragraphSha256": "f0f376f50b05d711a4193d727f9e1ae5413ebffaa5f7d0b9995bb24bc617138e"
+    },
+    {
+      "id": "CAL-03",
+      "case": "PAROL-D02",
+      "rule": "ret-1",
+      "label": "supported",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "The Recipient must return or destroy all Confidential Information within five days of the request and must permanently erase every copy held on any backup, archival or disaster recovery system. The standard allows at least 30 days and lets the recipient keep routine backups.",
+        "explanation": "Both the five day deadline and the duty to purge routine backups are listed as unacceptable. The officer's certificate in Section 8.2 is not a deviation on its own."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "8.1",
+        "quote": "and shall permanently erase every copy held on any backup, archival or disaster recovery system",
+        "paragraph": 25
+      },
+      "note": "Section 8.1 sets a five day deadline and requires erasure of every backup copy, and the claim says both. It does not say who chooses between return and destruction. D02 key ret-1 is a deviation. Same paragraph as the unsupported pair that gives the Discloser's election to the Recipient.",
+      "paragraphSha256": "33b7c7208aa1bb85c8c8966216036c6745449f434064ef261468377f9938a0c7"
+    },
+    {
+      "id": "CAL-04",
+      "case": "PAROL-D14",
+      "rule": "pds-2",
+      "label": "supported",
+      "claim": {
+        "status": "compliant",
+        "discrepancy": "",
+        "explanation": "Section 4.2 allows disclosure to the extent that law or an order requires, with prompt notice where permitted and practicable. The Disclosing Party seeks any protective order at its own cost, so the Receiving Party has no duty to resist or pay."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "4.2",
+        "quote": "so that the Disclosing Party may seek a protective order at its own cost",
+        "paragraph": 15
+      },
+      "note": "The cost of a protective order is the Disclosing Party's, and the Receiving Party's only condition is notice where it is permitted and practicable. The claim puts the cost where the paragraph puts it. D14 key pds-2 is compliant.",
+      "paragraphSha256": "ef8c7c60e3527fc4f8a2aa98acc70bad0e9390a955e3148a42e53b814fc83a84"
+    },
+    {
+      "id": "CAL-05",
+      "case": "PAROL-D06",
+      "rule": "gov-1",
+      "label": "unsupported",
+      "kind": "superseded",
+      "claim": {
+        "status": "compliant",
+        "discrepancy": "",
+        "explanation": "Amendment No. 1 confirms that the Agreement remains in full force and effect, so Section 7.1 continues to apply: the Agreement is governed by the laws of the State of Delaware and the Delaware courts have exclusive jurisdiction, both on the approved list."
+      },
+      "evidence": {
+        "doc": "D2",
+        "clause": "5",
+        "quote": "the Agreement remains in full force and effect",
+        "paragraph": 6
+      },
+      "note": "The paragraph begins 'Except as amended by this Amendment'. Clauses 2 and 4 of the same amendment each amend Section 7.1, to New York and to California, so the Delaware clause no longer stands and gov-1 is undetermined (D06 key). The finding keeps the replaced Section 7.1 alive by citing the savings clause, and the quoted words leave out the words that make it conditional.",
+      "paragraphSha256": "1b234e11ada1648612adf07b985b2fe7a4f8ef1f006b7e3d17197937d98078e3"
+    },
+    {
+      "id": "CAL-06",
+      "case": "PAROL-D02",
+      "rule": "dur-1",
+      "label": "supported",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "The Recipient's obligations continue in perpetuity, have no expiry date and survive the end of the Agreement and of any discussions between the parties.",
+        "explanation": "There is no stated end and no limit to trade secrets, so this is the perpetual case that the playbook lists as unacceptable and not a finite period longer than five years."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "7.1",
+        "quote": "continue in perpetuity",
+        "paragraph": 23
+      },
+      "note": "Section 7.1 says the obligations continue in perpetuity with no expiry date, and the claim says the same. D02 key dur-1 is a deviation.",
+      "paragraphSha256": "17f5f8f9c4703b877f9ec16161f58bc1e5aa83d84df2534d31ef72a4603c9afe"
+    },
+    {
+      "id": "CAL-07",
+      "case": "PAROL-D09",
+      "rule": "dur-1",
+      "label": "unsupported",
+      "kind": "definition_as_duty",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "Confidential Information is defined as information in any form given for the Trial, with no limit on how long it stays protected, so the Recipient's duties never end.",
+        "explanation": "The definition has no time limit and applies to information whatever its form, so the duty to keep it confidential has no stated end. That is the perpetual case that the playbook lists as unacceptable."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "1.2",
+        "quote": "means information, in any form, that one Party (the \"Provider\") gives to the other Party",
+        "paragraph": 5
+      },
+      "note": "Section 1.2 defines the term and says nothing about duration. A definition without a time limit is not a statement that the duty is unlimited; the perpetual duty is in Section 5.1 (D09 key dur-1). The status is right, but the cited definition does not support the discrepancy.",
+      "paragraphSha256": "33f876e7bfe3d826fa2d6da69159868c7f777fc39e69de18fd3eb024fd1ee8ff"
+    },
+    {
+      "id": "CAL-08",
+      "case": "PAROL-D14",
+      "rule": "gov-1",
+      "label": "supported",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "The exclusive forum is the state and federal courts located in Harris County, Texas, which is not in Delaware, New York or England and Wales.",
+        "explanation": "New York law in Section 7.1 is on the approved list, but the exclusive forum is outside it. The playbook treats a forum outside the list as a business decision for the responsible attorney."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "7.2",
+        "quote": "exclusive jurisdiction of the state and federal courts located in Harris County, Texas",
+        "paragraph": 22
+      },
+      "note": "Section 7.2 gives the courts of Harris County, Texas exclusive jurisdiction, and Texas is not Delaware, New York or England and Wales. The claim is about the forum only and follows from the paragraph. D14 key gov-1 is a deviation.",
+      "paragraphSha256": "9f26b24b08dde88e43c4df71f32f77ae38e93c4c609b8e438350d1d6dab2b94e"
+    },
+    {
+      "id": "CAL-09",
+      "case": "PAROL-D11",
+      "rule": "pds-2",
+      "label": "unsupported",
+      "kind": "overlooked_exception",
+      "claim": {
+        "status": "compliant",
+        "discrepancy": "",
+        "explanation": "Clause 7 is a dedicated clause on disclosure required by law. If a law, regulation, subpoena or order requires it, the Recipient may make the disclosure, so the standard is met."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "7",
+        "quote": "the Recipient to disclose Confidential Information, the Recipient may make that disclosure only if",
+        "paragraph": 13
+      },
+      "note": "The sentence ends 'only if:' and the conditions are in items (a) and (b). Item (b) makes the disclosure depend on the Discloser's prior written consent, which it may withhold in its sole discretion. The finding reads the right without its condition. D11 key pds-2 is a deviation.",
+      "paragraphSha256": "b4e20599f6a8aec9dc708ed054487145f5f5b587675c36ed2c18094c983d5aaa"
+    },
+    {
+      "id": "CAL-10",
+      "case": "PAROL-D01",
+      "rule": "gov-1",
+      "label": "supported",
+      "claim": {
+        "status": "compliant",
+        "discrepancy": "",
+        "explanation": "Section 7.1 chooses the laws of the State of New York and gives the state and federal courts in New York County, New York exclusive jurisdiction. Both are on the approved list."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "7.1",
+        "quote": "This Agreement is governed by the laws of the State of New York",
+        "paragraph": 20
+      },
+      "note": "One paragraph states both the governing law and the exclusive forum, and both are approved. D01 key gov-1 is compliant.",
+      "paragraphSha256": "9deaf5e8f4cf81360d90a2effee57b0b126928b853b28d5db11b577f3fdc3a43"
+    },
+    {
+      "id": "CAL-11",
+      "case": "PAROL-D06",
+      "rule": "ret-1",
+      "label": "unsupported",
+      "kind": "wrong_frame",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "The period for return or destruction is ten days, which is shorter than the 30 days the standard requires.",
+        "explanation": "Clause 3 of Amendment No. 1 sets a period of ten days. The standard requires at least 30 days for return or destruction, so the amended deadline is too short."
+      },
+      "evidence": {
+        "doc": "D2",
+        "clause": "3",
+        "quote": "within ten (10) days after the date of this Amendment",
+        "paragraph": 4
+      },
+      "note": "The ten days are the time within which each Party gives the other a contact person for notices, counted from the date of the Amendment. They are not a return or destruction deadline. The return deadline is thirty days in Section 6.1 and ret-1 is compliant (D06 key). The finding takes a number from one frame as a number in another.",
+      "paragraphSha256": "0c8206ba306252f9ea9beebc5f78366fd2c8a30ebbd449eb6c60bd53ca9dadac"
+    },
+    {
+      "id": "CAL-12",
+      "case": "PAROL-D10",
+      "rule": "dur-1",
+      "label": "supported",
+      "claim": {
+        "status": "compliant",
+        "discrepancy": "",
+        "explanation": "Corrimar's duties for each item end three years after Pindlebury first gave it that item, which meets the standard. Duties for a trade secret continue for as long as it remains a trade secret, which the standard accepts."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "6.1",
+        "quote": "for an item of Confidential Information end three (3) years after Pindlebury first gave Corrimar that item",
+        "paragraph": 22
+      },
+      "note": "Three years counted from the first giving of each item, with the trade secret exception that the standard accepts. D10 key dur-1 is compliant.",
+      "paragraphSha256": "024aa6cd8484b2e707ee49d5a2fa05d0cebf322f4db6d831e1a42430280d67f5"
+    },
+    {
+      "id": "CAL-13",
+      "case": "PAROL-D02",
+      "rule": "ret-1",
+      "label": "unsupported",
+      "kind": "other_party_obligation",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "The Recipient must return or destroy all Confidential Information within five days of the request, with the choice between returning and destroying left to the Recipient, and must also erase every copy held on any backup, archival or disaster recovery system.",
+        "explanation": "The five day deadline and the duty to erase backup copies are both unacceptable under the playbook. The Recipient decides whether to return or to destroy, but it must do one of them within five days."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "8.1",
+        "quote": "Within five (5) days after the Discloser's written request, the Recipient shall return to the Discloser",
+        "paragraph": 25
+      },
+      "note": "The paragraph says 'or at the Discloser's election destroy': the choice between return and destruction is the Discloser's, the other party's, not the Recipient's. The deadline and the backup erasure are stated correctly and the flag is right (D02 key ret-1 is a deviation), but the discrepancy gives the Discloser's election to the client, so the claim as proposed does not follow from the paragraph.",
+      "paragraphSha256": "33b7c7208aa1bb85c8c8966216036c6745449f434064ef261468377f9938a0c7"
+    },
+    {
+      "id": "CAL-14",
+      "case": "PAROL-D01",
+      "rule": "pds-2",
+      "label": "supported",
+      "claim": {
+        "status": "compliant",
+        "discrepancy": "",
+        "explanation": "Clause 4.2 allows the Recipient to disclose what a law, regulation or court or government order requires, with prompt notice where the law allows and it is practicable. That is the standard."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "4.2",
+        "quote": "if it gives the Discloser prompt notice where the law allows and it is practicable",
+        "paragraph": 13
+      },
+      "note": "The notice duty is qualified in the paragraph itself, where the law allows and it is practicable, and the claim keeps the qualifier. D01 key pds-2 is compliant. Same paragraph as the unsupported pair that turns the Discloser's step into the Recipient's duty.",
+      "paragraphSha256": "cef84900f56251870b0f97ed53e9fb6f299e5ad20465dd4e7ba084f8145bbc54"
+    },
+    {
+      "id": "CAL-15",
+      "case": "PAROL-D08",
+      "rule": "dur-1",
+      "label": "supported",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "The obligations continue until seven years after the date on which the Agreement terminates or expires, which is longer than the five years after the end of the agreement that the fallback allows.",
+        "explanation": "The period is finite, so it is not the perpetual case, but it counts from the end of the Agreement and exceeds both the standard and the fallback. That makes it a business decision for an attorney."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "5.1",
+        "quote": "until seven (7) years after the date on which this Agreement terminates or expires",
+        "paragraph": 15
+      },
+      "note": "The paragraph counts seven years from termination or expiry of the Agreement, and the claim says exactly that. Seven years after the agreement ends is longer than the five year fallback. D08 key dur-1 is a deviation. Same paragraph as the unsupported pair that reads the seven years from each disclosure.",
+      "paragraphSha256": "cb3ba64871bd5b68098746d7d30238019a6e7a2764c4a99628b6f6571293d0f5"
+    },
+    {
+      "id": "CAL-16",
+      "case": "PAROL-D14",
+      "rule": "pds-1",
+      "label": "supported",
+      "claim": {
+        "status": "compliant",
+        "discrepancy": "",
+        "explanation": "Section 4.1 permits disclosure to the employees, officers, contractors and professional advisers of the Receiving Party and its Affiliates who need to know it for the Purpose and are bound by equally protective duties. That is the standard."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "4.1",
+        "quote": "employees, officers, contractors and professional advisers of itself and its Affiliates",
+        "paragraph": 14
+      },
+      "note": "The clause itself grants the permission, with the need to know and the equal confidentiality condition. D14 key pds-1 is compliant. Compare the unsupported pds-1 pairs, which read a definition as the clause that grants or imposes it.",
+      "paragraphSha256": "3af926a8a1cd51b2a4fc29a774cbc91a4e45905987b99398869721fb85420044"
+    },
+    {
+      "id": "CAL-17",
+      "case": "PAROL-D04",
+      "rule": "pds-2",
+      "label": "unsupported",
+      "kind": "other_party_obligation",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "The Receiving Party must obtain a protective order or other remedy at its own cost before it can make a legally required disclosure, which is a duty to resist disclosure at the recipient's own cost.",
+        "explanation": "Clause 5.1 ties a legally required disclosure to prompt notice so that a protective order can be sought, and the Receiving Party carries the cost and the effort of seeking it."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "5.1",
+        "quote": "so that the Sharing Party may seek a protective order or other remedy at its own cost",
+        "paragraph": 20
+      },
+      "note": "The Sharing Party, the other party, may seek the order and bears its own cost. The Receiving Party may disclose to the extent required once it has given notice where permitted and practicable. The finding turns the Sharing Party's option into the Receiving Party's duty. D04 key pds-2 is compliant.",
+      "paragraphSha256": "3d557ee356b90325d6588af0c199df90709a33222424745a0fe1b5a191f31259"
+    },
+    {
+      "id": "CAL-18",
+      "case": "PAROL-D08",
+      "rule": "dur-1",
+      "label": "unsupported",
+      "kind": "wrong_frame",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "The obligations continue until seven years after the date of each disclosure of Confidential Information, which is longer than the five years from disclosure that the fallback allows.",
+        "explanation": "Section 5.1 runs the obligations for seven years from each disclosure. That is finite, so it is not the perpetual case, but it exceeds both the standard and the fallback and is a business decision for an attorney."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "5.1",
+        "quote": "of each Receiving Party under this Agreement shall continue until seven (7) years after",
+        "paragraph": 15
+      },
+      "note": "The seven years run from the date on which the Agreement terminates or expires, not from each disclosure. The status is right (D08 key dur-1), but the discrepancy states the number in the wrong frame. Same paragraph as the supported dur-1 pair of D08.",
+      "paragraphSha256": "cb3ba64871bd5b68098746d7d30238019a6e7a2764c4a99628b6f6571293d0f5"
+    },
+    {
+      "id": "CAL-19",
+      "case": "PAROL-D03",
+      "rule": "exc-1",
+      "label": "supported",
+      "claim": {
+        "status": "compliant",
+        "discrepancy": "",
+        "explanation": "Clause 2.1 lists all four exclusions: information that is public through no fault of the Receiving Party, already known without a duty of confidence, independently developed, and received from a third party with no duty of confidence. None needs written records."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "2.1",
+        "quote": "the Receiving Party develops independently without using the Disclosing Party's information",
+        "paragraph": 7
+      },
+      "note": "All four exclusions are in the one paragraph and none requires proof by records. D03 key exc-1 is compliant.",
+      "paragraphSha256": "8d0f288f5ba6de964243678ee3d13cc394adac1131b777626481b5a50512d12b"
+    },
+    {
+      "id": "CAL-20",
+      "case": "PAROL-D10",
+      "rule": "pds-2",
+      "label": "unsupported",
+      "kind": "other_party_obligation",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "Corrimar must give Pindlebury prompt written notice and bear the cost of any protective order sought in response to a legally required disclosure, which puts the cost of resisting disclosure on the recipient.",
+        "explanation": "The playbook lists a duty to resist a legally required disclosure at the recipient's own cost as unacceptable, and Section 5.1 makes Corrimar responsible for that cost, which makes it a deviation."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "5.1",
+        "quote": "so that Pindlebury may seek a protective order at its own cost",
+        "paragraph": 20
+      },
+      "note": "In the sentence it is Pindlebury, the other party, that may seek a protective order and that bears its own cost. Corrimar's only duty is notice where the law allows and it is practicable, and it may disclose to the extent required. The finding gives Pindlebury's cost to the client. D10 key pds-2 is compliant.",
+      "paragraphSha256": "4015a7444ddae2ec5e2a3e3d670936372cc8294164cb0ccfdf24aaabb406cd62"
+    },
+    {
+      "id": "CAL-21",
+      "case": "PAROL-D02",
+      "rule": "def-1",
+      "label": "supported",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "Section 1.2 defines Confidential Information as all information of any kind and in any form, whether or not it is marked or identified as confidential, and extends it to notes and analyses that the Recipient prepares itself.",
+        "explanation": "The definition has no requirement that the information be marked, identified or reasonably understood to be confidential, which is the all-information definition that the playbook lists as unacceptable. It also sweeps in the Recipient's own work product."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "1.2",
+        "quote": "whether or not it is marked or identified as confidential",
+        "paragraph": 5
+      },
+      "note": "The paragraph defines the term as all information of any kind and in any form, marked or not, and adds the Recipient's own notes and analyses. Nothing in it narrows the scope, so the claim follows from the paragraph alone. D02 key def-1 is a deviation.",
+      "paragraphSha256": "dc4fe369f34220da71d06a7e3a125e480efde5c6cee91ced9c851ef719fb8560"
+    },
+    {
+      "id": "CAL-22",
+      "case": "PAROL-D05",
+      "rule": "ret-1",
+      "label": "unsupported",
+      "kind": "superseded",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "The deadline for return or destruction is ten business days after the Disclosing Party's written request, which is shorter than the 30 days the standard requires.",
+        "explanation": "Amendment No. 1 refers to a period of ten business days in Section 7.2. Ten business days is fewer than thirty days, and the carve-out for copies required by law and routine backups does not cure the deadline."
+      },
+      "evidence": {
+        "doc": "D2",
+        "clause": "3",
+        "quote": "Section 7.2 of the Agreement is amended by replacing \"ten (10) business days\"",
+        "paragraph": 4
+      },
+      "note": "Clause 3 amends Section 7.2 by replacing ten (10) business days with thirty (30) days, so the quoted words are the ones the amendment removes and the deadline is thirty days. D05 key ret-1 is compliant through this clause. The paragraph shows the replacement, so the claim can be tested against what it says.",
+      "paragraphSha256": "725c8e7e5b56a118c81c35a25a34d7adc77a69b5a4525d11abbc30463e3a3b48"
+    },
+    {
+      "id": "CAL-23",
+      "case": "PAROL-D01",
+      "rule": "pds-2",
+      "label": "unsupported",
+      "kind": "other_party_obligation",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "The Recipient must ask a court for protection before it may make a legally required disclosure, which is a duty to resist disclosure.",
+        "explanation": "Section 4.2 conditions disclosure on notice so that protection can be sought from a court, and it is the Recipient that has to go to court. The playbook lists a duty to resist a legally required disclosure as unacceptable."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "4.2",
+        "quote": "so that the Discloser can ask a court for protection at the Discloser's expense",
+        "paragraph": 13
+      },
+      "note": "The Discloser, the other party, may ask a court for protection at its own expense. The Recipient's duty is notice where the law allows and it is practicable. The finding gives the Discloser's step to the Recipient. D01 key pds-2 is compliant.",
+      "paragraphSha256": "cef84900f56251870b0f97ed53e9fb6f299e5ad20465dd4e7ba084f8145bbc54"
+    },
+    {
+      "id": "CAL-24",
+      "case": "PAROL-D12",
+      "rule": "pds-2",
+      "label": "supported",
+      "claim": {
+        "status": "compliant",
+        "discrepancy": "",
+        "explanation": "Section 4.2 allows disclosure to the extent that law, regulation or an order requires, on prompt notice where legally permitted and reasonably practicable. That is the standard for a dedicated clause on legally required disclosure."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "4.2",
+        "quote": "to the extent required by law, regulation or order of a court or governmental authority",
+        "paragraph": 13
+      },
+      "note": "A dedicated clause with notice where permitted and practicable. D12 key pds-2 is compliant.",
+      "paragraphSha256": "8b2d61def50a7ce2f90493d541b72e610de0aa5f5f6767d01094fc027d43db3c"
+    },
+    {
+      "id": "CAL-25",
+      "case": "PAROL-D02",
+      "rule": "pds-1",
+      "label": "supported",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "The Recipient may not disclose Confidential Information to any person, including its own directors, officers, employees, contractors, professional advisers and Affiliates, unless the Discloser has first given written consent to that particular disclosure.",
+        "explanation": "Every onward disclosure needs the Discloser's prior written consent, even a disclosure to the Recipient's own staff and advisers. The playbook lists a requirement of prior written consent for each disclosure as unacceptable."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "5.1",
+        "quote": "unless the Discloser has first given its written consent to that particular disclosure",
+        "paragraph": 18
+      },
+      "note": "Section 5.1 names directors, officers, employees, contractors, professional advisers and Affiliates and lets none of them receive Confidential Information without consent to that disclosure. The claim restates it. D02 key pds-1 is a deviation.",
+      "paragraphSha256": "56081ba02316af56d9ab74e550a8d63eba802ce3189e38a686a4c267d5a3ae4e"
+    },
+    {
+      "id": "CAL-26",
+      "case": "PAROL-D04",
+      "rule": "ret-1",
+      "label": "unsupported",
+      "kind": "overlooked_exception",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "The Receiving Party must return or destroy all of the Sharing Party's Confidential Information within sixty days of the request, with no right to keep copies that the law requires or copies held in routine backups.",
+        "explanation": "Clause 7.1 contains no carve-out for routine backup copies, so it requires them to be purged within the sixty days. The playbook lists a duty to purge routine backups as unacceptable."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "7.1",
+        "quote": "the Receiving Party shall return or destroy the Sharing Party's Confidential Information",
+        "paragraph": 25
+      },
+      "note": "The same sentence continues 'save that it may keep copies that the law requires it to keep and copies held in its routine backup systems', and the copies kept in that way remain subject to the Agreement. The finding overlooks the exception. D04 key ret-1 is compliant at sixty days.",
+      "paragraphSha256": "1491f12bcef9d8163d3ad1b865dfaecd2ff3b7f0b57f24a62808823b145230f0"
+    },
+    {
+      "id": "CAL-27",
+      "case": "PAROL-D13",
+      "rule": "ret-1",
+      "label": "supported",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "The deadline for return or destruction is ten days after the Disclosing Party's written request, which is shorter than the 30 days the standard requires.",
+        "explanation": "The carve-out for copies required by law and for routine backups is present and those copies remain subject to the Agreement, so the ten day deadline is the only departure from the standard."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "6.1",
+        "quote": "Within ten (10) days after the Disclosing Party's written request",
+        "paragraph": 20
+      },
+      "note": "Section 6.1 gives ten days from the written request, and the claim states the period in that frame. The carve-out for law and routine backups is in the same paragraph and the claim does not contradict it. D13 key ret-1 is a deviation.",
+      "paragraphSha256": "721df87d5491cabe6c9cb1255136c05a2a8b3f3e9f6e8859d0efd1a3b2072b76"
+    },
+    {
+      "id": "CAL-28",
+      "case": "PAROL-D09",
+      "rule": "dur-1",
+      "label": "supported",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "The Recipient's duties continue in perpetuity, are not limited to any number of years, and cover all Confidential Information whether or not it is a trade secret.",
+        "explanation": "Version 2 makes the duties permanent and removes the trade secret limit that the standard accepts, so they have no stated end for information that is not a trade secret."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "5.1",
+        "quote": "they cover all Confidential Information whether or not it is a trade secret",
+        "paragraph": 17
+      },
+      "note": "Section 5.1 of the operative version says the duties continue in perpetuity, are not limited to any number of years and cover trade secrets or not. D09 key dur-1 is a deviation.",
+      "paragraphSha256": "fa874a5275b11d84bdd7cdced5c2b858ecdc774754621672428570288382920f"
+    },
+    {
+      "id": "CAL-29",
+      "case": "PAROL-D10",
+      "rule": "pds-1",
+      "label": "supported",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "Corrimar may not give Confidential Information to any lawyer, accountant, auditor or other professional adviser, whether the adviser is engaged by Corrimar or by one of its Affiliates and whether or not the adviser owes a duty of confidence.",
+        "explanation": "Clause 4.1 lets Corrimar share with the employees, officers and contractors of itself and its Affiliates, but Clause 4.2 bars every professional adviser outright. The playbook lists the exclusion of advisers as unacceptable."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "4.2",
+        "quote": "Corrimar shall not give Confidential Information to any lawyer, accountant, auditor or other professional adviser",
+        "paragraph": 17
+      },
+      "note": "Section 4.2 is an outright bar on professional advisers, with no condition. The claim follows from the paragraph alone. D10 key pds-1 is a deviation.",
+      "paragraphSha256": "49b93fc31617c8560eff85e04b00a3f0a0ab9ab4e0a4bc1f2d91902b514136e1"
+    },
+    {
+      "id": "CAL-30",
+      "case": "PAROL-D11",
+      "rule": "pds-1",
+      "label": "unsupported",
+      "kind": "definition_as_duty",
+      "claim": {
+        "status": "compliant",
+        "discrepancy": "",
+        "explanation": "Clause 3 requires the Recipient to ensure that every Affiliate it shares Confidential Information with is bound by the Agreement, which meets the standard's condition that representatives be bound by equal duties."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "3",
+        "quote": "means any entity that directly or indirectly controls, is controlled by, or is under common control with a party",
+        "paragraph": 5
+      },
+      "note": "Clause 3 defines Affiliate and controls nothing: it requires nothing of the Recipient. The permission to share with representatives, and the condition that they be bound, are in clause 6 (D11 key pds-1). The finding reads a definition as the clause that imposes the duty.",
+      "paragraphSha256": "334369c025474cdb73e0344f5de4f937788fc96a25a9c97d68b51993c49decc0"
+    },
+    {
+      "id": "CAL-31",
+      "case": "PAROL-D13",
+      "rule": "ret-1",
+      "label": "unsupported",
+      "kind": "wrong_frame",
+      "claim": {
+        "status": "compliant",
+        "discrepancy": "",
+        "explanation": "The Agreement gives thirty days' written notice, which meets the 30 day minimum for return or destruction under the standard. The deadline is not shorter than thirty days, so ret-1 is compliant."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "5.1",
+        "quote": "the other thirty (30) days' written notice",
+        "paragraph": 17
+      },
+      "note": "The thirty days are the notice that either Party gives to end the Agreement early. The return deadline is in Section 6.1 and is ten days, so ret-1 is a deviation (D13 key). The finding reads thirty days in the wrong frame and so misses the real deadline.",
+      "paragraphSha256": "4586712783debf7cc39096512386894eb5cbfaae24decfdb21cbf0f6d3aef8f9"
+    },
+    {
+      "id": "CAL-32",
+      "case": "PAROL-D05",
+      "rule": "pds-1",
+      "label": "unsupported",
+      "kind": "overlooked_exception",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "The Receiving Party may not disclose Confidential Information to any person, so it cannot share it with its employees, officers, contractors or professional advisers.",
+        "explanation": "Section 4.2 is a flat prohibition on disclosure to any person, with no right to share with representatives such as employees, officers, contractors or advisers, which the playbook treats as unacceptable."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "4.2",
+        "quote": "The Receiving Party shall not disclose Confidential Information to any person",
+        "paragraph": 12
+      },
+      "note": "The sentence ends 'except as Section 5 permits', and Section 5.1 permits disclosure to employees, officers, contractors and professional advisers who need to know it. The finding reads the prohibition without its exception. D05 key pds-1 is compliant.",
+      "paragraphSha256": "d31af864783cef88c0e8abd0b8841261966e4eb80f606d1a1132cface1f809b3"
+    },
+    {
+      "id": "CAL-33",
+      "case": "PAROL-D04",
+      "rule": "dur-1",
+      "label": "supported",
+      "claim": {
+        "status": "compliant",
+        "discrepancy": "",
+        "explanation": "Clause 6.1 continues the obligations for each item for thirty-six months from the relevant disclosure of that item and then ends them. Thirty-six months counted from each disclosure is three years, which is the standard."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "6.1",
+        "quote": "continue for thirty-six months from the relevant disclosure of that item, and then end",
+        "paragraph": 22
+      },
+      "note": "Thirty-six months from the disclosure of each item is three years in the standard's own frame, and the paragraph says so itself. D04 key dur-1 is compliant. Same paragraph as the unsupported pair that counts the months from the end of the discussions.",
+      "paragraphSha256": "de6c9f762e2eb662bc0a7d81aecbe0d1d52ebaf70dfa8cf78353d2de41a6609d"
+    },
+    {
+      "id": "CAL-34",
+      "case": "PAROL-D13",
+      "rule": "def-1",
+      "label": "unsupported",
+      "kind": "overlooked_exception",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "Confidential Information is defined without any requirement that it be marked or identified as confidential, which is the position that the playbook lists as unacceptable.",
+        "explanation": "The definition applies whether or not the information is marked or identified as confidential, so protection no longer depends on the discloser marking it. The playbook's standard requires information that is marked, identified or reasonably understood to be confidential."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "1.2",
+        "quote": "whether or not that information is marked or identified as confidential",
+        "paragraph": 5
+      },
+      "note": "The paragraph limits the definition to non-public information that one Party discloses to the other for the Project. That is the playbook's fallback, not the unacceptable definition of all information of any kind. The finding overlooks those limits. D13 key def-1 is compliant at the fallback.",
+      "paragraphSha256": "3ecdedd390c4b7cbd84fd8c9db19ac437a901b1132ee5df4a5317ad76514e9ae"
+    },
+    {
+      "id": "CAL-35",
+      "case": "PAROL-D07",
+      "rule": "ret-1",
+      "label": "supported",
+      "claim": {
+        "status": "compliant",
+        "discrepancy": "",
+        "explanation": "Clause 6.1 gives forty-five days after the written request, which is longer than the 30 day minimum, and allows the Recipient to keep copies required by law and copies held in routine backup systems, which remain subject to the Agreement."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "6.1",
+        "quote": "Within forty-five (45) days after the Discloser's written request, the Recipient shall return or destroy the Discloser's Confidential Information",
+        "paragraph": 20
+      },
+      "note": "Forty-five days is longer than thirty, with the same carve-outs. D07 key ret-1 is compliant.",
+      "paragraphSha256": "8eb7e44c8f24565ec48d61c794ea681574cdf48e4ecdea55094085dcdd3ebe4d"
+    },
+    {
+      "id": "CAL-36",
+      "case": "PAROL-D02",
+      "rule": "dur-1",
+      "label": "unsupported",
+      "kind": "definition_as_duty",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "Confidential Information is defined to include everything that the Discloser or its Affiliates disclose at any time and by any means, so the Recipient's duties attach to it with no end date.",
+        "explanation": "The definition reaches information disclosed at any time and takes in the Recipient's own notes and analyses, so the duty to protect it has no stated end for information that is not a trade secret."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "1.2",
+        "quote": "makes available to the Recipient at any time and by any means",
+        "paragraph": 5
+      },
+      "note": "Section 1.2 is a definition. 'At any time and by any means' says when and how the disclosure may be made, not how long the Recipient's duties last; the period is in Section 7.1 (perpetuity). The status is right, but the finding reads the definition as a duty with a duration. Same paragraph as the supported def-1 pair of D02.",
+      "paragraphSha256": "dc4fe369f34220da71d06a7e3a125e480efde5c6cee91ced9c851ef719fb8560"
+    },
+    {
+      "id": "CAL-37",
+      "case": "PAROL-D01",
+      "rule": "ret-1",
+      "label": "supported",
+      "claim": {
+        "status": "compliant",
+        "discrepancy": "",
+        "explanation": "Section 6.1 requires return or destruction within thirty days of the written request and allows the Recipient to keep copies that the law requires and copies held in routine backup systems, which stay subject to the Agreement. That meets the standard."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "6.1",
+        "quote": "except that it may keep copies that the law requires it to keep",
+        "paragraph": 18
+      },
+      "note": "The paragraph has thirty days, the written request and the carve-outs for law and routine backups with continued protection, and the claim reads the exception as the paragraph states it. Compare the unsupported ret-1 pair that reads such an exception as absent. D01 key ret-1 is compliant.",
+      "paragraphSha256": "2b250386686b14d38c065ce83f81008220934c9025f36a14030b616e6fd3ff77"
+    },
+    {
+      "id": "CAL-38",
+      "case": "PAROL-D07",
+      "rule": "pds-1",
+      "label": "unsupported",
+      "kind": "definition_as_duty",
+      "claim": {
+        "status": "compliant",
+        "discrepancy": "",
+        "explanation": "Section 1.3 requires the Recipient to confine disclosure to its Personnel, meaning the employees, officers, contractors and professional advisers of a Party and of its Affiliates, which is the representative regime the standard describes."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "1.3",
+        "quote": "means the employees, officers, contractors and professional advisers of a Party and of its Affiliates",
+        "paragraph": 6
+      },
+      "note": "Section 1.3 defines Personnel and nothing more. It imposes no duty to confine disclosure and says nothing about need to know or equal confidentiality duties; the duty and its conditions are in Section 4.1 (D07 key pds-1). The status is right, but the finding reads a definition as the clause that imposes the duty, so the cited paragraph does not support it.",
+      "paragraphSha256": "e1b685a7302abbf5984dce3e86f67377be118e483b9064416aa6eb3e655933a0"
+    },
+    {
+      "id": "CAL-39",
+      "case": "PAROL-D04",
+      "rule": "dur-1",
+      "label": "unsupported",
+      "kind": "wrong_frame",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "The obligations continue for thirty-six months after the discussions end, so information disclosed early is protected for longer than the three years from disclosure that the standard allows.",
+        "explanation": "Clause 6.1 runs the thirty-six months from the end of the discussions and not from each disclosure, so the obligations can outlast three years from the date an item was disclosed."
+      },
+      "evidence": {
+        "doc": "D1",
+        "clause": "6.1",
+        "quote": "obligations in respect of an item of Confidential Information continue for thirty-six months",
+        "paragraph": 22
+      },
+      "note": "Clause 6.1 counts the thirty-six months from the relevant disclosure of each item, which is three years from each disclosure, the standard (D04 key dur-1 is compliant, and clause 6.2 leaves the period unchanged when the discussions end). The finding counts from the end of the discussions, the wrong frame, and flags a deviation that is not there.",
+      "paragraphSha256": "de6c9f762e2eb662bc0a7d81aecbe0d1d52ebaf70dfa8cf78353d2de41a6609d"
+    },
+    {
+      "id": "CAL-40",
+      "case": "PAROL-D05",
+      "rule": "ret-1",
+      "label": "unsupported",
+      "kind": "superseded",
+      "claim": {
+        "status": "deviation",
+        "discrepancy": "Amendment No. 1 leaves the Agreement in full force and effect, so the deadline in Section 7.2 stays at ten business days after the written request, which is shorter than the 30 days the standard requires.",
+        "explanation": "The Amendment does not restate the return period, and its savings clause keeps Section 7.2 in force as written. Ten business days is below the 30 day minimum, so ret-1 is a deviation."
+      },
+      "evidence": {
+        "doc": "D2",
+        "clause": "4",
+        "quote": "Except as amended by this Amendment, the Agreement remains in full force and effect",
+        "paragraph": 5
+      },
+      "note": "Clause 3 of the same amendment replaces ten (10) business days in Section 7.2 with thirty (30) days, so the deadline is thirty days and ret-1 is compliant (D05 key). The finding relies on the replaced period through the savings clause, whose first words are 'Except as amended by this Amendment'. The gov-1 pair of D06 makes the same mistake with the same kind of savings clause and quotes less of it.",
+      "paragraphSha256": "affa342703da8d74bb4246b2f5647c2a777676fe7ae2e8131559a330c200f5d7"
+    }
+  ]
+}

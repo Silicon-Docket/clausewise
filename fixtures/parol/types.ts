@@ -125,6 +125,160 @@ export interface RuleExpectation {
   note: string;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Uploads: what a person does with the files of a case, and what the application does about it
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * A file of a case that is not one of its documents. The builder writes it next to the documents,
+ * names it in the answer key and counts it in the hash of the split.
+ *
+ * - `identical_copy`: the bytes of `of` under another name. Uploading it after `of` is a
+ *   duplicate and stores nothing.
+ * - `resave`: the text of `of` in other bytes, the way a program saving the file again changes
+ *   it. Uploading it after `of` is a near duplicate: it is stored and does not govern. The bytes
+ *   differ in a fixed way, so the same case always gives the same file (a Word file gets another
+ *   revision number and editor in its properties, a text file gets Windows line endings).
+ */
+export type ExtraFileKind = "identical_copy" | "resave";
+
+export interface ExtraFile {
+  /** A new name, starting with the case prefix. Same extension as `of`. */
+  file: string;
+  kind: ExtraFileKind;
+  /** The `file` of a document of the case. */
+  of: string;
+}
+
+/**
+ * What the application does with an uploaded file, in the words of apps/parol/src/services/
+ * uploads.ts:
+ *
+ * - `new_document`: `addDocument` stored a new document. Its first version is operative.
+ * - `new_version`: `addVersion` stored a file with other text as the next version. It is operative
+ *   at once and the version that governed stops governing.
+ * - `same_text`: `addVersion` was given other bytes with the text of a stored version. It is
+ *   stored as the next version, it is not operative, the version that governed keeps governing,
+ *   and the answer carries `near_duplicate_version`.
+ * - `identical_file`: the bytes are those of a stored version. Nothing is stored and nothing
+ *   changes. The answer names the stored version and carries `duplicate_document`.
+ * - `refused`: the application refuses the upload with a code and changes nothing.
+ */
+export const UPLOAD_EFFECTS = [
+  "new_document",
+  "new_version",
+  "same_text",
+  "identical_file",
+  "refused",
+] as const;
+export type UploadEffect = (typeof UPLOAD_EFFECTS)[number];
+
+/** The refusals a step may expect: the `code` of the error the application raises. */
+export const UPLOAD_REFUSALS = [
+  "nda_first",
+  "nda_exists",
+  "duplicate_stated_date",
+  "document_limit",
+] as const;
+export type UploadRefusal = (typeof UPLOAD_REFUSALS)[number];
+
+/** What the answer to an upload names, and the state of that version once the step is done. */
+export interface UploadAnswer {
+  effect: Exclude<UploadEffect, "refused">;
+  /**
+   * The document and version the answer names: the one just stored, or for an identical file the
+   * stored version it matches (which may belong to another document than the one uploaded to).
+   */
+  label: DocLabel;
+  versionNo: number;
+  /** Whether that version is operative once the step is done. */
+  operative: boolean;
+  /**
+   * The codes of the warnings the answer carries (`UploadResult.warnings`), in any order. They are
+   * `duplicate_document` for an identical file, `near_duplicate_version` when the text is that of
+   * a stored version, and the warnings ingest raises for the file (`instruction_like_text` and so
+   * on).
+   */
+  warnings: WarningCode[];
+  /** Required with `near_duplicate_version`: the stored version whose text this is. */
+  sameTextAs?: { label: DocLabel; versionNo: number };
+}
+
+export interface UploadRefusalAnswer {
+  effect: "refused";
+  code: UploadRefusal;
+}
+
+export type UploadExpectation = UploadAnswer | UploadRefusalAnswer;
+
+interface UploadStepBase {
+  /** The `file` of a document of the case, or of an extra file. */
+  file: string;
+  /** The date entered with the upload, or null. Stored with the version. */
+  statedDate: string | null;
+  expect: UploadExpectation;
+}
+
+/**
+ * The person adds a document (`MatterService.addDocument`). The application gives it the smallest
+ * free label, and `label` is the one the person means it to have: when the file is stored, the two
+ * must agree. Title and kind are entered by the person.
+ */
+export interface AddDocumentStep extends UploadStepBase {
+  action: "addDocument";
+  label: DocLabel;
+  title: string;
+  kind: DocumentKind;
+}
+
+/**
+ * The person adds a version to a document that is already in the matter
+ * (`MatterService.addVersion`). The application takes neither a title nor a kind for it.
+ */
+export interface AddVersionStep extends UploadStepBase {
+  action: "addVersion";
+  label: DocLabel;
+}
+
+export type UploadStep = AddDocumentStep | AddVersionStep;
+
+/** The uploads of a case, in the order a person makes them. */
+export interface CaseUploads {
+  /** Files that are not documents of the case. */
+  files?: ExtraFile[];
+  steps: UploadStep[];
+}
+
+// ---------------------------------------------------------------------------------------------
+// Canary matters (docs/parol/05-evaluation.md, "Canary matters")
+// ---------------------------------------------------------------------------------------------
+
+export const CANARY_MATTER_IDS = ["bramblewick", "saltmarsh"] as const;
+export type CanaryMatterId = (typeof CANARY_MATTER_IDS)[number];
+
+/**
+ * A synthetic matter that sits in the same store as the case while it runs, so that a leak from
+ * one matter into another can be seen. It holds one NDA with strings that cannot occur by chance
+ * (`CANARY-<NAME>-<12 hex>`) and one distinctive fact that is not secret. The data is in
+ * fixtures/parol/canary.ts.
+ */
+export interface CanaryMatter {
+  id: CanaryMatterId;
+  /** The matter's name as people say it, such as "Bramblewick". */
+  name: string;
+  /** A canary matter belongs to one split and only cases of that split may name it. */
+  split: Split;
+  clientLegalName: string;
+  /** The one NDA of the matter. Label D1, kind nda, file `parol-canary-<id>-...`. */
+  document: CaseDocument;
+  /** At least three, each in the format above and each occurring once in the document. */
+  strings: readonly string[];
+  /** Words of the document that state a distinctive fact, once. Not secret. */
+  fact: string;
+}
+
+// ---------------------------------------------------------------------------------------------
+
 export interface CaseDefinition {
   /** `PAROL-D05`. */
   case: string;
@@ -135,8 +289,24 @@ export interface CaseDefinition {
   documents: CaseDocument[];
   /** One entry per rule of the pinned playbook, no more and no fewer. */
   expect: Record<string, RuleExpectationSpec>;
-  /** The warnings ingest should raise for the documents. */
+  /**
+   * The warnings the case should show. Without `uploads` these are the warnings ingest raises for
+   * the documents. With `uploads` they are every code any upload returns together with the codes
+   * ingest raises for the documents that govern at the end.
+   */
   warnings: WarningCode[];
+  /**
+   * What the person uploads, in order, and what the application does with each file. Absent for a
+   * case whose documents are simply uploaded once each in label order. With it, the steps decide
+   * which versions exist, and `documents` must agree with them (label, version number, stated date
+   * and whether the version is operative at the end).
+   */
+  uploads?: CaseUploads;
+  /**
+   * The canary matters that sit in the same store while the case runs. A matter of the other
+   * split is refused.
+   */
+  canaryMatters?: CanaryMatterId[];
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -157,6 +327,25 @@ export interface KeyDocument {
   paragraphs: number;
 }
 
+/** An extra file as the key records it. */
+export interface KeyExtraFile extends ExtraFile {
+  /** Of the file bytes as written to fixtures/parol/files. */
+  sha256: string;
+}
+
+/**
+ * The uploads of a case as the key records them: the extra files with their hashes, and the steps
+ * as written. To replay them, create the matter with the case's intake, then for each step read
+ * the file named in `documents` or `files` from fixtures/parol/files and call `addDocument`
+ * (title, kind, file name, bytes, stated date) or `addVersion` on the document that has the step's
+ * label. Compare the answer with `expect` and, at the end, the operative version of each label
+ * with the `documents` entries that are operative.
+ */
+export interface KeyUploads {
+  files: KeyExtraFile[];
+  steps: UploadStep[];
+}
+
 export interface AnswerKeyCase {
   case: string;
   split: Split;
@@ -165,6 +354,10 @@ export interface AnswerKeyCase {
   documents: KeyDocument[];
   expect: Record<string, RuleExpectation>;
   warnings: WarningCode[];
+  /** Only for a case with upload steps. */
+  uploads?: KeyUploads;
+  /** Only for a case that names canary matters. */
+  canaryMatters?: CanaryMatterId[];
 }
 
 /**
@@ -178,12 +371,31 @@ export interface AnswerKeyTwin {
   split: Split;
   intake: { clientLegalName: string };
   documents: KeyDocument[];
+  /** The same canary matters as the original, when it names any. */
+  canaryMatters?: CanaryMatterId[];
 }
 
 export interface PlaybookRuleFacts {
   category: CategoryId;
   severity: Severity;
   required: boolean;
+}
+
+/**
+ * A canary matter as the key records it: what the evaluation scans for, and the file that holds
+ * the matter's NDA. Present only for the matters that a case names.
+ */
+export interface CanaryKeyMatter {
+  id: CanaryMatterId;
+  name: string;
+  split: Split;
+  clientLegalName: string;
+  /** The matter's one NDA, with the hash of its file. */
+  document: KeyDocument;
+  /** The strings that must never leave the matter. Upper case name, 12 lower case hex digits. */
+  strings: string[];
+  /** Words of the document that state a distinctive fact that is not secret. */
+  fact: string;
 }
 
 export interface AnswerKeyFile {
@@ -197,6 +409,8 @@ export interface AnswerKeyFile {
   };
   cases: AnswerKeyCase[];
   twins: AnswerKeyTwin[];
+  /** Only when a case names a canary matter, so a dataset without any is byte for byte as before. */
+  canary?: { matters: CanaryKeyMatter[] };
 }
 
 export interface SplitTotals {
@@ -230,4 +444,109 @@ export interface SplitsFile {
   dataset: string;
   /** Only splits that have cases. A split with no cases has no hash to commit. */
   splits: Partial<Record<Split, SplitEntry>>;
+  /**
+   * The support calibration set (fixtures/parol/calibration.json): its hash and its counts. A
+   * separate optional entry, outside every split, so it never changes the hash of a split.
+   */
+  calibration?: CalibrationEntry;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The support calibration set (docs/parol/05-evaluation.md, "Support calibration set")
+// ---------------------------------------------------------------------------------------------
+
+export const CALIBRATION_LABELS = ["supported", "unsupported"] as const;
+/** The author's label. An unsupported pair has a valid quote that does not support the claim. */
+export type CalibrationLabel = (typeof CALIBRATION_LABELS)[number];
+
+/**
+ * The five ways an unsupported pair fails on substance although its quote is valid. Four pairs of
+ * each kind, and a supported pair has none.
+ *
+ * - `superseded`: the finding relies on text that an amendment replaced or deleted.
+ * - `overlooked_exception`: the clause cited states an exception, qualifier or condition ("except
+ *   as provided in Section 8") that the finding overlooks.
+ * - `other_party_obligation`: the clause cited puts a duty, cost or choice on the other party and
+ *   the finding reads it as the client's.
+ * - `definition_as_duty`: a definition is read as if it imposed a duty or a period.
+ * - `wrong_frame`: a number is read in the wrong frame (three years from termination for three
+ *   years from disclosure, thirty days' notice for a thirty day return deadline).
+ */
+export const CALIBRATION_KINDS = [
+  "superseded",
+  "overlooked_exception",
+  "other_party_obligation",
+  "definition_as_duty",
+  "wrong_frame",
+] as const;
+export type CalibrationKind = (typeof CALIBRATION_KINDS)[number];
+
+/**
+ * The claim a finding makes, as a model would write it. The support check runs only for a
+ * determined status, and the checker is shown the status and the discrepancy, not the explanation
+ * (apps/parol/src/services/support-checker.ts). A compliant claim has an empty discrepancy, as the
+ * analysis schema says.
+ */
+export interface CalibrationClaim {
+  status: "compliant" | "deviation";
+  discrepancy: string;
+  explanation: string;
+}
+
+/** The one passage the finding cites: a document label, a clause number and words copied from it. */
+export interface CalibrationEvidence {
+  doc: DocLabel;
+  /** The clause number as typed, or null for a paragraph outside any numbered clause. */
+  clause: string | null;
+  /** Occurs exactly once in the clause, in the operative document of that label. */
+  quote: string;
+}
+
+/** What the author writes for one pair. */
+export interface CalibrationPairSpec {
+  /** `CAL-01` and up. Carries no information about the label, the kind or the case. */
+  id: string;
+  /** A development case, such as `PAROL-D05`. */
+  case: string;
+  /** A rule of the pinned playbook. */
+  rule: string;
+  label: CalibrationLabel;
+  /** Required for an unsupported pair, and absent for a supported one. */
+  kind?: CalibrationKind;
+  claim: CalibrationClaim;
+  evidence: CalibrationEvidence;
+  /** Why the label is right. Not shown to a blind reader. */
+  note: string;
+}
+
+/** A pair as calibration.json records it: the evidence resolved, the clause text pinned. */
+export interface CalibrationKeyPair extends Omit<CalibrationPairSpec, "evidence"> {
+  evidence: CalibrationEvidence & {
+    /** The index of the paragraph the quote was found in, in the operative document. */
+    paragraph: number;
+  };
+  /** SHA-256 of the text of that paragraph, so a case edited under a pair changes the hash. */
+  paragraphSha256: string;
+}
+
+export interface CalibrationCounts {
+  pairs: number;
+  supported: number;
+  unsupported: number;
+  /** The unsupported pairs of each kind. */
+  byKind: Record<CalibrationKind, number>;
+}
+
+/** fixtures/parol/calibration.json. */
+export interface CalibrationFile {
+  format: 1;
+  dataset: string;
+  playbook: { slug: string; version: string; sha256: string };
+  counts: CalibrationCounts;
+  pairs: CalibrationKeyPair[];
+}
+
+/** What splits.json records: the hash of calibration.json (as canonical JSON) and the counts. */
+export interface CalibrationEntry extends CalibrationCounts {
+  sha256: string;
 }

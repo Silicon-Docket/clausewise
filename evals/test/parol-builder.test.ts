@@ -15,8 +15,10 @@ import {
   caseSlug,
   filePrefix,
   formatTotals,
+  keyFileNames,
   readPlaybookFacts,
   splitHash,
+  splitKeyParts,
   totalsOf,
   twinFileOf,
   twinKeyOf,
@@ -689,6 +691,76 @@ describe("split hashes", () => {
 });
 
 // ---------------------------------------------------------------------------------------------
+
+describe("the optional fields for uploads and canary matters", () => {
+  // The six cases that were registered before the fields existed. Their key, their files and the
+  // hash of the split they make must not move because of them.
+  const ORIGINAL = ["PAROL-D01", "PAROL-D03", "PAROL-D05", "PAROL-D06", "PAROL-D08", "PAROL-D12"];
+
+  it("are absent from the key of every case and twin that does not use them, and from the file when no case does", () => {
+    for (const key of dataset.answerKeys.cases) {
+      const definition = CASES.find((c) => c.case === key.case)!;
+      expect("uploads" in key, key.case).toBe(definition.uploads !== undefined);
+      expect("canaryMatters" in key, key.case).toBe(definition.canaryMatters !== undefined);
+    }
+    for (const twin of dataset.answerKeys.twins) {
+      const original = CASES.find((c) => c.case === twin.twinOf)!;
+      expect("canaryMatters" in twin, twin.case).toBe(original.canaryMatters !== undefined);
+    }
+    expect("canary" in dataset.answerKeys).toBe(CASES.some((c) => c.canaryMatters !== undefined));
+  });
+
+  it("leave the development hash of the original six cases exactly as it was", async () => {
+    const original = await buildDataset({
+      cases: CASES.filter((c) => ORIGINAL.includes(c.case)),
+      playbookYaml: YAML,
+      playbookSlug: PLAYBOOK_SLUG,
+    });
+    expect(original.splits.splits.dev!.sha256).toBe(
+      "2b939141050cb5b92f42b66bba7d5be8d81c4e1a1d65e1deec609583ef55497a",
+    );
+    expect(original.splits.splits.dev!.files).toBe(9);
+    for (const key of original.answerKeys.cases) {
+      expect(Object.keys(key), key.case).toEqual([
+        "case",
+        "split",
+        "phenomenon",
+        "intake",
+        "documents",
+        "expect",
+        "warnings",
+      ]);
+    }
+    expect(Object.keys(original.answerKeys)).toEqual(["format", "playbook", "cases", "twins"]);
+  }, 60_000);
+
+  it("are covered by the two helpers that recompute a split hash from the committed keys and files", () => {
+    for (const split of ["dev", "heldout"] as const) {
+      const recorded = dataset.splits.splits[split];
+      if (recorded === undefined) continue;
+      const names = keyFileNames(dataset.answerKeys, split);
+      expect(names.length, split).toBe(recorded.files);
+      const built = names.map((name) => {
+        const file = dataset.files.find((f) => f.name === name);
+        expect(file, name).toBeDefined();
+        return { name, bytes: file!.bytes };
+      });
+      expect(splitHash(splitKeyParts(dataset.answerKeys, split), built), split).toBe(
+        recorded.sha256,
+      );
+    }
+  });
+
+  it("leave splitHash with the same value when it is called as it was before they existed", () => {
+    const keys = splitKeyParts(dataset.answerKeys, "dev");
+    const named = dataset.files.filter((f) =>
+      keyFileNames(dataset.answerKeys, "dev").includes(f.name),
+    );
+    expect(splitHash({ cases: keys.cases, twins: keys.twins }, named)).toBe(
+      splitHash({ cases: keys.cases, twins: keys.twins, canary: [] }, named),
+    );
+  });
+});
 
 describe("traceability: every rule fails loudly", () => {
   it("accepts the six cases as they are", () => {

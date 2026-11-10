@@ -8,7 +8,20 @@
  * score of a model.
  */
 import { GATES, GATE_IDS } from "./gates.js";
-import { NA, dollars, md, rateCell, ratio, seconds, shortSha, table, whole } from "./format.js";
+import {
+  NA,
+  countsText,
+  dollars,
+  intervalText,
+  md,
+  rateCell,
+  ratio,
+  seconds,
+  shortSha,
+  table,
+  whole,
+} from "./format.js";
+import type { Rate } from "./stats.js";
 import {
   CALL_OUTCOME_MEANINGS,
   HELDOUT_SEAL_WARNING,
@@ -54,6 +67,9 @@ function subjectOf(file: ResultsFile): string {
   // Where the requests went is part of what the scores are of: the same model name answers
   // differently from a gateway or a stub than from the provider's own API.
   const endpoint = file.pins.model.endpoint ?? null;
+  if (file.mode === "replay") {
+    return `${md(file.pins.model.requested)} (${md(file.pins.model.provider)}${endpoint === null ? "" : `, at ${md(endpoint)}`}), as recorded in an earlier live run and re-scored`;
+  }
   return `${md(file.pins.model.requested)} (${md(file.pins.model.provider)}${endpoint === null ? "" : `, at ${md(endpoint)}`})`;
 }
 
@@ -167,6 +183,77 @@ function countRows(run: RunMetrics): string {
   );
 }
 
+/** One count over its denominator with the 95 percent interval, from a single pass. */
+const singleRate = (rate: Rate): string =>
+  `${countsText(rate)} (${rate.value === null ? NA : ratio(rate.value)}; 95% interval ${intervalText(rate.ci)})`;
+
+/**
+ * The exposure suites and the calibration set, whose counts are the evidence of gates G1 and G11.
+ * Said plainly: the exposure suites test the application and not the model, and the calibration
+ * set is a small set of labelled pairs, so its rates carry wide intervals.
+ */
+export function suiteLines(file: ResultsFile): string[] {
+  const { exposure, calibration } = file.suites;
+  const lines: string[] = ["## Supplementary suites", ""];
+  if (exposure === null && calibration === null) {
+    lines.push(
+      "Neither the exposure suites nor the support checker's calibration set was run, so gates G1 and G11 are not evaluated and not assumed to pass.",
+      "",
+    );
+    return lines;
+  }
+  if (exposure === null) {
+    lines.push("The exposure suites were not run, so gate G1 is not evaluated.", "");
+  } else {
+    const found =
+      exposure.probesAnsweredWithData + exposure.canaryHits + exposure.foreignSpanIdHits;
+    lines.push(
+      "**Exposure (gate G1).** These suites test the application's handling of matters: the authorization probes and the scans for canary strings and span ids from another matter. They do not test any model.",
+      "",
+      table(
+        ["Count", "Value"],
+        [
+          ["Authorization probes run", whole(exposure.probesRun)],
+          ["Prompts, answers, response bodies and memos scanned", whole(exposure.artefactsScanned)],
+          [
+            "Probes answered with data they should not return",
+            whole(exposure.probesAnsweredWithData),
+          ],
+          ["Canary strings found", whole(exposure.canaryHits)],
+          ["Span ids of another matter found", whole(exposure.foreignSpanIdHits)],
+          ["Total found (G1 requires 0)", whole(found)],
+        ].map((row) => row.map((cell) => md(String(cell)))),
+      ),
+      "",
+    );
+    for (const suite of exposure.suites) lines.push(`- ${md(suite, 400)}`);
+    if (exposure.suites.length > 0) lines.push("");
+  }
+  if (calibration === null) {
+    lines.push("The calibration set was not run, so gate G11 is not evaluated.", "");
+  } else {
+    const { result } = calibration;
+    lines.push(
+      `**Support checker calibration (gate G11).** ${whole(calibration.unsupportedPairs)} unsupported and ${whole(calibration.supportedPairs)} supported pairs, sent to the model of this run with prompt ${md(calibration.prompt.id)} (${shortSha(calibration.prompt.sha256)}). The set is small: read each rate with its interval. A pair whose call returned no verdict counts against the checker on both sides, as not caught if it is unsupported and as flagged if it is supported (${whole(calibration.failedPairs)} here).`,
+      "",
+      table(
+        ["Measure", "Rate"],
+        [
+          ["Unsupported pairs caught", singleRate(result.catchRate)],
+          ["Supported pairs flagged (false alarms)", singleRate(result.falseAlarmRate)],
+          ...Object.entries(result.catchByKind).map(([kind, r]) => [
+            `Caught, ${kind}`,
+            singleRate(r),
+          ]),
+        ].map((row) => row.map((cell) => md(String(cell)))),
+      ),
+      "",
+    );
+    if (calibration.note !== null) lines.push(`Note: ${md(calibration.note, 600)}`, "");
+  }
+  return lines;
+}
+
 function gatesTable(section: SplitSection, file: ResultsFile): string[] {
   const lines: string[] = [];
   if (section.gates === null) {
@@ -204,7 +291,7 @@ function gatesTable(section: SplitSection, file: ResultsFile): string[] {
   );
   if (open.includes("G1")) {
     lines.push(
-      "G1 needs the authorization probes and the canary scan, which this runner does not perform yet, so it is not evaluated and not assumed to be 0.",
+      "G1 needs the authorization probes and the canary scan, which were not run, so it is not evaluated and not assumed to be 0.",
     );
   }
   if (open.some((id) => id === "G3" || id === "G4" || id === "G5")) {
@@ -213,7 +300,7 @@ function gatesTable(section: SplitSection, file: ResultsFile): string[] {
     );
   }
   if (open.includes("G11")) {
-    lines.push("G11 needs the support checker's calibration set, which has not been run.");
+    lines.push("G11 needs the support checker's calibration set, which was not run.");
   }
   if (open.includes("G12") || open.includes("G13")) {
     lines.push(
@@ -479,7 +566,9 @@ export function renderReport(file: ResultsFile): string {
   const lines: string[] = [
     scripted
       ? `# Parol evaluation, ${file.mode === "selftest" ? "SELFTEST" : "SIMULATED"}`
-      : "# Parol evaluation",
+      : file.mode === "replay"
+        ? "# Parol evaluation, REPLAY"
+        : "# Parol evaluation",
     "",
     ...banner(file),
   ];
@@ -503,6 +592,7 @@ export function renderReport(file: ResultsFile): string {
   for (const note of file.notes) lines.push(`Note: ${md(note, 600)}`, "");
   for (const section of file.sections) lines.push(...renderSection(file, section));
 
+  lines.push(...suiteLines(file));
   lines.push(...healthLines(runHealth(file)));
   lines.push("## Usage", "");
   if (scripted) {

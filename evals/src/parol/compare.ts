@@ -25,6 +25,7 @@ import { GATES, evaluateGates, type GateId, type GateReport } from "./gates.js";
 import {
   NOT_CLEAN,
   SELFTEST_BANNER,
+  REPLAY_BANNER,
   SIMULATED_BANNER,
   gateSubjectOf,
   isScripted,
@@ -768,8 +769,9 @@ export function renderComparison(
 ): string {
   const lines: string[] = [];
   const scripted = [comparison.baselineMode, comparison.candidateMode].filter(
-    (mode): mode is "selftest" | "simulated" => mode !== "live",
+    (mode): mode is "selftest" | "simulated" => mode === "selftest" || mode === "simulated",
   );
+  const replayed = comparison.baselineMode === "replay" || comparison.candidateMode === "replay";
   lines.push(
     `# Comparison: baseline ${md(labels.baseline)} against candidate ${md(labels.candidate)}`,
     "",
@@ -779,6 +781,12 @@ export function renderComparison(
       `**THIS COMPARISON INVOLVES A ${[...new Set(scripted)].map((m) => m.toUpperCase()).join(" AND A ")} RUN. THE NUMBERS BELOW ARE NOT SCORES OF ANY MODEL.**`,
       "",
       ...[...new Set(scripted)].flatMap((m) => [`**${BANNERS[m]}**`, ""]),
+    );
+  }
+  if (replayed) {
+    lines.push(
+      `**${REPLAY_BANNER}** A comparison with a replay is a comparison of re-scored answers: it adds no repeat to the live run it came from.`,
+      "",
     );
   }
   for (const [side, health] of [

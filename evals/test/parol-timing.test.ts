@@ -185,6 +185,18 @@ describe("support checker calibration", () => {
     expect(result.catchByKind["other_party"]).toMatchObject({ numerator: 1, denominator: 1 });
   });
 
+  it("counts a call that returned no verdict against the checker on both sides", () => {
+    const result = scoreCalibration([
+      pair("unsupported", "failed"),
+      pair("unsupported", "not_supported"),
+      pair("supported", "failed"),
+      pair("supported", "supported"),
+    ]);
+    // The failed call on the unsupported pair is not a catch, and on the supported pair it is an alarm.
+    expect(result.catchRate).toMatchObject({ numerator: 1, denominator: 2 });
+    expect(result.falseAlarmRate).toMatchObject({ numerator: 1, denominator: 2 });
+  });
+
   it("has no rate for a half that is empty", () => {
     const result = scoreCalibration([pair("supported", "supported")]);
     expect(result.catchRate.value).toBeNull();

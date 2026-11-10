@@ -62,10 +62,26 @@ import {
   selectCases,
   type CaseGroup,
 } from "./dataset.js";
+import {
+  CalibrationSetError,
+  loadCalibrationSet,
+  prepareCalibration,
+  runCalibration,
+  type PreparedPair,
+} from "./calibration-run.js";
 import { ORACLE_MODEL, ORACLE_PROVIDER, createKeyOracle } from "./oracle.js";
 import { buildParolPlan, costBounds, decideSpend, describeParolPlan } from "./plan.js";
 import { renderReport } from "./report.js";
 import { reportingFetch } from "./reported-model.js";
+import {
+  RecordingWriter,
+  loadRecording,
+  recordingGenerator,
+  recordingPathFor,
+  replayGenerator,
+  replayRefusal,
+  type Recording,
+} from "./replay.js";
 import {
   HELDOUT_SEAL_WARNING,
   NOT_CLEAN,
@@ -86,7 +102,9 @@ import {
   type ObservedRun,
   type Pins,
   type ResultsFile,
+  type RecordingNote,
   type RunMode,
+  type SuiteRecords,
   type RunRecord,
 } from "./results.js";
 import {
@@ -101,6 +119,7 @@ import {
   type ParsedFiles,
   type PreparedCase,
 } from "./runner.js";
+import { getPrompt } from "../../../apps/parol/src/prompts/registry.js";
 import { selftestFailures } from "./selftest.js";
 
 export const EXIT_INTEGRITY = 2;
@@ -119,6 +138,12 @@ export type SplitChoice = "dev" | "heldout" | "all";
 export interface ParolOptions {
   selftest: boolean;
   simulate: boolean;
+  /** Re-score the answers recorded by an earlier live run. Sends nothing. */
+  replay: string | undefined;
+  /** Write a recording of a live run's answers next to its results file. On unless --no-record. */
+  record: boolean;
+  /** Also send the support checker's calibration pairs through the model, for gate G11. */
+  calibration: boolean;
   split: SplitChoice;
   allowHeldout: boolean;
   workflow: string;
@@ -150,11 +175,23 @@ Options:
                                about any model.
   --simulate                   Run against the demo's scripted simulated reader (apps/parol/src/demo).
                                Results are labelled SIMULATED and are not a measurement of any model.
+  --replay <file>              Re-score the model answers recorded by an earlier live run (the file next
+                               to its results ending in .responses.jsonl) instead of calling a model. It
+                               needs no key and no --yes, sends nothing and spends nothing. It can be
+                               run with a changed answer key or scoring, with the same workflow and
+                               playbook. It is labelled a replay, is not a new repeat, and records no
+                               latency or cost. A request that is not in the recording stops the run.
+  --calibration                Also send the support checker's 40 calibration pairs through the model, once
+                               for the run, for gate G11. The workflow must pin a support prompt (v3).
+                               Not for --selftest or --simulate: a scripted stand-in is not the checker.
+  --no-record                  Do not write a recording of a live run's answers. By default a live run
+                               writes them to <results>.responses.jsonl (git ignores the folder).
   --split dev|heldout|all      The cases to run. Default: dev. The held-out set is sealed: see
                                --allow-heldout.
   --allow-heldout              Allow a run that touches the held-out split. Read the warning that is
                                printed: each candidate gets one held-out run.
-  --workflow v1|v2             The workflow version. Default: v1.
+  --workflow v1|v2|v3          The workflow version. Default: v1. v3 is v2 with the support check and
+                               check set C2 on: a candidate, not shipped with the application.
   --runs <k>                   Repeats of every case, to measure stability. Default: 1. The gates of
                                document 5 are written for 3.
   --case <key>                 Run only this case, such as PAROL-D05. Repeat for several. The injection
@@ -212,6 +249,9 @@ export function parseParolArgs(args: readonly string[]): ParolOptions {
       options: {
         selftest: { type: "boolean" },
         simulate: { type: "boolean" },
+        replay: { type: "string" },
+        calibration: { type: "boolean" },
+        "no-record": { type: "boolean" },
         split: { type: "string" },
         "allow-heldout": { type: "boolean" },
         workflow: { type: "string" },
@@ -240,6 +280,9 @@ export function parseParolArgs(args: readonly string[]): ParolOptions {
   const defaults: ParolOptions = {
     selftest: false,
     simulate: false,
+    replay: undefined,
+    record: true,
+    calibration: false,
     split: "dev",
     allowHeldout: false,
     workflow: "v1",
@@ -269,7 +312,15 @@ export function parseParolArgs(args: readonly string[]): ParolOptions {
     }
     seen.add(token.name);
   }
-  for (const name of ["split", "workflow", "prices", "out", "compare", "playbook"] as const) {
+  for (const name of [
+    "split",
+    "workflow",
+    "prices",
+    "out",
+    "compare",
+    "playbook",
+    "replay",
+  ] as const) {
     if (values[name] === "") throw new UsageError(`Option --${name} needs a value.`);
   }
   const cases = values.case ?? [];
@@ -288,12 +339,28 @@ export function parseParolArgs(args: readonly string[]): ParolOptions {
   if (values.selftest === true && values.simulate === true) {
     throw new UsageError("--selftest and --simulate cannot be used together.");
   }
+  if (values.replay !== undefined && (values.selftest === true || values.simulate === true)) {
+    throw new UsageError("--replay cannot be used with --selftest or --simulate.");
+  }
+  if (values.replay !== undefined && values.yes === true) {
+    throw new UsageError(
+      "--replay sends nothing and spends nothing, so --yes has no meaning with it.",
+    );
+  }
+  if (values.calibration === true && (values.selftest === true || values.simulate === true)) {
+    throw new UsageError(
+      "--calibration needs a live run or a replay. A scripted stand-in is not the support checker, so its verdicts say nothing about it.",
+    );
+  }
   const maxCost = values["max-cost"];
   const assumed = values["assumed-output-tokens"];
   return {
     ...defaults,
     selftest: values.selftest === true,
     simulate: values.simulate === true,
+    replay: values.replay,
+    record: values["no-record"] !== true,
+    calibration: values.calibration === true,
     split,
     allowHeldout: values["allow-heldout"] === true,
     workflow,
@@ -415,13 +482,31 @@ interface ModelSetup {
   model: string;
   /** The demo's simulated model, for a simulated run. */
   simulated?: SimulatedModelModule;
+  /** The recording a replay answers from. */
+  recording?: Recording;
 }
 
 async function prepareModel(
   options: ParolOptions,
   io: ParolIo,
   mode: RunMode,
+  recording?: Recording,
 ): Promise<ModelSetup> {
+  if (mode === "replay" && recording !== undefined) {
+    const recorded = recording.header.pins;
+    return {
+      mode,
+      config: undefined,
+      price: null,
+      priceSha256: null,
+      usageAvailable: false,
+      usageNote:
+        "A replay sends no request, so there are no tokens and no cost. The usage of the recorded run is in its own results file.",
+      provider: recorded.model.provider,
+      model: recorded.model.requested,
+      recording,
+    };
+  }
   if (mode === "selftest") {
     return {
       mode,
@@ -507,6 +592,9 @@ const temperatureOf = (provider: LlmConfig["provider"]): number | null =>
   provider === "openai-compatible" ? 0 : null;
 
 function modelNote(setup: ModelSetup): string {
+  if (setup.mode === "replay") {
+    return "Read from the recording of the earlier live run: the models its provider named in its responses, when it named any.";
+  }
   if (setup.mode !== "live") return "A scripted stand-in reports no model.";
   return setup.config?.provider === "anthropic"
     ? "Read from the model field of the provider's responses, which names the snapshot an alias resolved to. Empty when no response named one."
@@ -558,7 +646,13 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
     io.stdout(USAGE);
     return 0;
   }
-  const mode: RunMode = options.selftest ? "selftest" : options.simulate ? "simulated" : "live";
+  const mode: RunMode = options.selftest
+    ? "selftest"
+    : options.simulate
+      ? "simulated"
+      : options.replay !== undefined
+        ? "replay"
+        : "live";
   const root = io.root ?? DEFAULT_ROOT;
   const now = io.now ?? ((): Date => new Date());
   const clock = io.clock ?? ((): number => performance.now());
@@ -621,7 +715,19 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
     return EXIT_INTEGRITY;
   }
   const workflow = workflowFor(options.workflow);
-  const setup = await prepareModel(options, io, mode);
+  // A replay is checked against what the recording was made with before anything else is done.
+  let recording: Recording | undefined;
+  if (mode === "replay") {
+    recording = await loadRecording(resolve(options.replay as string));
+    const refusal = replayRefusal({
+      recording,
+      workflowSha256: workflow.sha256,
+      workflowLabel: workflow.manifest.label,
+      playbookSha256: playbook.sha256,
+    });
+    if (refusal !== null) throw new EvalError(`${refusal} Nothing was run.`);
+  }
+  const setup = await prepareModel(options, io, mode, recording);
 
   const git = await (io.gitInfo ?? ((): Promise<GitInfo> => readGitInfo(root)))();
   const resultsDir = io.resultsDir ?? DEFAULT_RESULTS_DIR;
@@ -647,23 +753,30 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
       provider: setup.provider,
       requested: setup.model,
       endpoint:
-        setup.config === undefined
-          ? null
-          : endpointHost(setup.config.provider, setup.config.baseUrl),
-      reported,
+        setup.recording !== undefined
+          ? (setup.recording.header.pins.model.endpoint ?? null)
+          : setup.config === undefined
+            ? null
+            : endpointHost(setup.config.provider, setup.config.baseUrl),
+      reported:
+        setup.recording !== undefined
+          ? (setup.recording.trailer?.reported ?? setup.recording.header.pins.model.reported)
+          : reported,
       reportedNote: modelNote(setup),
     },
     generation:
-      setup.config === undefined
-        ? null
-        : {
-            maxOutputTokens: setup.config.maxOutputTokens,
-            effort: setup.config.effort ?? null,
-            maxRetries: setup.config.maxRetries,
-            ruleConcurrency: RULE_CONCURRENCY,
-            temperature: temperatureOf(setup.config.provider),
-            fallback: setup.config.fallback ?? null,
-          },
+      setup.recording !== undefined
+        ? setup.recording.header.pins.generation
+        : setup.config === undefined
+          ? null
+          : {
+              maxOutputTokens: setup.config.maxOutputTokens,
+              effort: setup.config.effort ?? null,
+              maxRetries: setup.config.maxRetries,
+              ruleConcurrency: RULE_CONCURRENCY,
+              temperature: temperatureOf(setup.config.provider),
+              fallback: setup.config.fallback ?? null,
+            },
     prices:
       setup.price === null || setup.priceSha256 === null
         ? null
@@ -739,6 +852,43 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
     if (contamination !== null) io.stderr(`${contamination.note}\n`);
   }
 
+  // ---- The calibration set, when it was asked for. It is read as the run reads the documents.
+  let calibrationPairs: PreparedPair[] | undefined;
+  let calibrationSet: Awaited<ReturnType<typeof loadCalibrationSet>> | undefined;
+  if (options.calibration) {
+    if (workflow.manifest.prompts.support === null) {
+      throw new EvalError(
+        `--calibration needs a workflow that pins a support prompt, and ${workflow.manifest.label} has the support check off, so there is nothing to calibrate. Use --workflow v3.`,
+      );
+    }
+    calibrationSet = await loadCalibrationSet(dataset);
+    if (!calibrationSet.ok) {
+      if (calibrationSet.reason === "absent") {
+        throw new EvalError(
+          "--calibration was asked for, and the dataset has no calibration set (splits.json records none). Build it with pnpm fixtures:parol.",
+        );
+      }
+      io.stderr(
+        `INTEGRITY FAILURE: the calibration set is not the one that was committed. Nothing was run and nothing was sent.\n${calibrationSet.problems.map((p) => `  ${p}`).join("\n")}\n`,
+      );
+      return EXIT_INTEGRITY;
+    }
+    try {
+      calibrationPairs = await prepareCalibration({
+        set: calibrationSet.set,
+        dataset,
+        playbook,
+        workflow,
+      });
+    } catch (error) {
+      if (error instanceof CalibrationSetError) {
+        io.stderr(`INTEGRITY FAILURE: ${error.message}. Nothing was run and nothing was sent.\n`);
+        return EXIT_INTEGRITY;
+      }
+      throw error;
+    }
+  }
+
   // ---- 4. The plan and the spend guard. Nothing has called a model up to the end of this block.
   const plan = await buildParolPlan({
     dataset,
@@ -747,6 +897,7 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
     workflow,
     repeats: options.runs,
     assumedOutputTokens: options.assumedOutputTokens,
+    ...(calibrationPairs === undefined ? {} : { calibration: calibrationPairs }),
   });
   const bounds =
     setup.price === null || setup.config === undefined
@@ -806,6 +957,28 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
     } catch (error) {
       throw new EvalError(
         `Refusing to run the held-out split: this run cannot be recorded in the results folder (${(error as NodeJS.ErrnoException).code ?? "an error"}), and a later run could then not warn that the split was used. Nothing was sent.`,
+      );
+    }
+  }
+
+  // A live run writes down the model's answers as they arrive, so that a change of scoring or of
+  // an answer key can be applied to what was already paid for. Not being able to is not worth
+  // spending money to find out later.
+  let writer: RecordingWriter | undefined;
+  let recordPath: string | undefined;
+  if (mode === "live" && options.record) {
+    recordPath = recordingPathFor(outPath);
+    try {
+      writer = await RecordingWriter.create(recordPath, {
+        kind: "parol-eval-recording",
+        format: 1,
+        recordedAt: startedAt.toISOString(),
+        results: basename(outPath),
+        pins: buildPins(null),
+      });
+    } catch (error) {
+      throw new EvalError(
+        `Cannot write the recording of the model's answers (${(error as NodeJS.ErrnoException).code ?? "an error"}), so the run would not be replayable. Nothing was sent. Choose another --out, or run without a recording with --no-record.`,
       );
     }
   }
@@ -883,6 +1056,11 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
     } else if (mode === "simulated") {
       shared ??= setup.simulated!.createSimulatedModel();
       base = shared;
+    } else if (mode === "replay") {
+      shared ??= replayGenerator(setup.recording!, {
+        onMiss: (miss) => controller.abort(miss),
+      });
+      base = shared;
     } else {
       shared ??= createObjectGenerator(
         setup.config!,
@@ -890,6 +1068,7 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
       );
       base = shared;
     }
+    if (writer !== undefined) base = recordingGenerator(base, writer);
     if (!disclosed) {
       disclosed = true;
       io.stderr(
@@ -936,6 +1115,9 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
   const reportedModels = (): string[] | null =>
     meter.reportedModels.size === 0 ? null : [...meter.reportedModels].sort();
 
+  // What the supplementary suites found. Filled in as each finishes.
+  const suites: SuiteRecords = { exposure: null, calibration: null };
+
   // Scoring failures must not lose a run that was paid for. If scoring cannot be done, the file
   // is still written, without scores, and says why.
   let scoringFailure: unknown;
@@ -955,6 +1137,8 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
       usage: usageOf(),
       priced: price !== null && setup.usageAvailable,
       contamination,
+      suites,
+      recording: recordingNote(),
       notes,
     };
     try {
@@ -969,6 +1153,41 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
       });
     }
   };
+
+  const recordingNote = (): RecordingNote | null => {
+    if (writer !== undefined && recordPath !== undefined) {
+      return { role: "recorded", file: basename(recordPath), calls: writer.written };
+    }
+    if (setup.recording === undefined) return null;
+    const recorded = setup.recording.header.pins;
+    const now = buildPins(null).dataset;
+    const changed =
+      recorded.dataset.answerKeysSha256 !== now.answerKeysSha256 ||
+      recorded.dataset.splitsFileSha256 !== now.splitsFileSha256 ||
+      Object.entries(now.splits).some(([name, sha]) => recorded.dataset.splits[name] !== sha);
+    return {
+      role: "replayed",
+      file: basename(options.replay as string),
+      calls: meter.totalCalls,
+      recordedAt: setup.recording.header.recordedAt,
+      recordedResults: setup.recording.header.results,
+      recordedCommit: recorded.code.commit,
+      datasetChanged: changed,
+    };
+  };
+  if (setup.recording !== undefined) {
+    if (setup.recording.trailer === null || !setup.recording.trailer.complete) {
+      notes.push(
+        "The recording is of a run that did not finish, so it holds the answers of the cases that did and nothing for the rest.",
+      );
+    }
+    const recordedCommit = setup.recording.header.pins.code.commit;
+    if (recordedCommit !== null && recordedCommit !== git.commit) {
+      notes.push(
+        `The recording was made at commit ${recordedCommit.slice(0, 12)} and this replay is scored at ${git.commit === null ? "an unknown commit" : git.commit.slice(0, 12)}. The prompts are the recorded ones; the scoring, the answer keys and the gates are this code's.`,
+      );
+    }
+  }
 
   const partialPath = `${outPath}.partial`;
   const checkpoint = async (): Promise<void> => {
@@ -1064,6 +1283,23 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
         }
       }
     }
+    if (calibrationPairs !== undefined && calibrationSet?.ok === true) {
+      controller.signal.throwIfAborted();
+      io.stderr(
+        `Running the support checker's calibration set: ${calibrationPairs.length} pairs.\n`,
+      );
+      suites.calibration = await runCalibration({
+        set: calibrationSet.set,
+        prepared: calibrationPairs,
+        prompt: getPrompt(workflow.manifest.prompts.support as string),
+        generator: await generatorFor(calibrationPairs[0]!.prepared),
+        signal: controller.signal,
+      });
+      notes.push(
+        `The ${calibrationPairs.length} calls of the calibration set are in the usage total and in no run's cost or latency: they belong to the checker, not to a case.`,
+      );
+      if (mode === "live") await checkpoint();
+    }
   } catch (error) {
     const reason: unknown = controller.signal.aborted ? controller.signal.reason : undefined;
     if (reason instanceof BudgetExceeded) {
@@ -1085,6 +1321,12 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
 
   // ---- 6. What came of it.
   await reporter.settle();
+  if (writer !== undefined) {
+    writer.finish({ complete: stopped === undefined, reported: reportedModels() });
+    await writer.settle().catch((error: unknown) => {
+      notes.push(describeParolError(error));
+    });
+  }
   const results = assemble(stopped === undefined, stopped?.reason ?? null);
   let exitCode = stopped?.exitCode ?? 0;
   if (scoringFailure instanceof AnchorResolutionError) {
@@ -1105,9 +1347,18 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
         ? `${stopped === undefined ? "Spent" : "Spent so far"}: ${meter.total.inputTokens} input, ${meter.total.outputTokens} output, ${meter.total.cacheReadTokens} cache read and ${meter.total.cacheWriteTokens} cache write tokens over ${meter.totalCalls} calls, which is ${usd(costOf(meter.total, price))}.\n`
         : `Model calls made: ${meter.totalCalls}. ${setup.usageNote ?? ""}\n`,
     );
+  } else if (mode === "replay") {
+    io.stderr(
+      `Answers replayed from the recording: ${meter.totalCalls}. No model was called and nothing was sent anywhere.\n`,
+    );
   } else {
     io.stderr(
       `Model calls made to the scripted stand-in: ${meter.totalCalls}. Nothing was sent anywhere.\n`,
+    );
+  }
+  if (writer !== undefined && recordPath !== undefined) {
+    io.stderr(
+      `Model answers recorded to ${recordPath} (${writer.written} calls). Replay them with --replay.\n`,
     );
   }
   const health = runHealth(results);

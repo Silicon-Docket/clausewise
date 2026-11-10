@@ -46,6 +46,13 @@ export async function copyRoot(into: string): Promise<string> {
   for (const name of ["answer-keys.json", "splits.json"]) {
     await cp(join(REPO_ROOT, "fixtures", "parol", name), join(root, "fixtures", "parol", name));
   }
+  // The calibration set, when the dataset has one: splits.json records its hash.
+  await cp(
+    join(REPO_ROOT, "fixtures", "parol", "calibration.json"),
+    join(root, "fixtures", "parol", "calibration.json"),
+  ).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") throw error;
+  });
   await cp(
     join(REPO_ROOT, "apps", "parol", "playbooks", "parol-nda-recipient.yaml"),
     join(root, "apps", "parol", "playbooks", "parol-nda-recipient.yaml"),

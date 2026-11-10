@@ -32,6 +32,7 @@ import type { UsageTotals } from "../usage.js";
 import { createResolver } from "./anchors.js";
 import type { CaseGroup, SplitIntegrity } from "./dataset.js";
 import { evaluateGates, type GateReport, type GateSubject } from "./gates.js";
+import type { CalibrationResult, ExposureResult } from "./suites.js";
 import {
   FAILURE_FACTORS,
   computeStability,
@@ -59,7 +60,7 @@ const execFileAsync = promisify(execFile);
 export const RESULTS_FORMAT = 1 as const;
 export const RESULTS_KIND = "parol-eval-results" as const;
 
-export type RunMode = "selftest" | "simulated" | "live";
+export type RunMode = "selftest" | "simulated" | "live" | "replay";
 
 /** The words that head every report, table and comparison of a scripted run. */
 export const SELFTEST_BANNER =
@@ -67,10 +68,83 @@ export const SELFTEST_BANNER =
 export const SIMULATED_BANNER =
   "SIMULATED RUN. THE ANSWERS BELOW COME FROM THE SCRIPTED SIMULATED READER OF THE DEMO, NOT FROM A LANGUAGE MODEL. THESE SCORES ARE NOT A MEASUREMENT OF ANY MODEL.";
 
-export const bannerOf = (mode: RunMode): string | null =>
-  mode === "selftest" ? SELFTEST_BANNER : mode === "simulated" ? SIMULATED_BANNER : null;
+export const REPLAY_BANNER =
+  "REPLAY. THE ANSWERS BELOW WERE RECORDED FROM AN EARLIER LIVE RUN AND RE-SCORED. NO MODEL WAS CALLED. THIS IS NOT A NEW MEASUREMENT AND NOT A NEW REPEAT, AND NO LATENCY OR COST WAS INCURRED.";
 
-export const isScripted = (mode: RunMode): boolean => mode !== "live";
+export const bannerOf = (mode: RunMode): string | null =>
+  mode === "selftest"
+    ? SELFTEST_BANNER
+    : mode === "simulated"
+      ? SIMULATED_BANNER
+      : mode === "replay"
+        ? REPLAY_BANNER
+        : null;
+
+/** A stand-in answered. The scores are not those of any model. A replay is not scripted. */
+export const isScripted = (mode: RunMode): boolean => mode === "selftest" || mode === "simulated";
+
+/** Only a live run has a latency and a cost of its own. */
+export const isLive = (mode: RunMode): boolean => mode === "live";
+
+/**
+ * Where a run's answers came from, when they were recorded or replayed. A live run records them
+ * by default, and a replay reads them back.
+ */
+export interface RecordingNote {
+  role: "recorded" | "replayed";
+  /** The base name of the recording file. */
+  file: string;
+  /** Calls written (role recorded) or answered from the recording (role replayed). */
+  calls: number;
+  /** Replay only: when the recording was made. */
+  recordedAt?: string;
+  /** Replay only: the results file of the run that made it. */
+  recordedResults?: string;
+  /** Replay only: the commit the recording was made at, or null. */
+  recordedCommit?: string | null;
+  /** Replay only: true when the answer keys or the case files differ from those it was made with. */
+  datasetChanged?: boolean;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The supplementary suites
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * What the exposure suites found, with a plain sentence for each suite that fed it. It is a test
+ * of the application's handling of matters and not of any model, so a scripted run records it too.
+ * The counts are those of gate G1; the sentences say what was probed and scanned.
+ */
+export interface ExposureRecord extends ExposureResult {
+  suites: string[];
+}
+
+/**
+ * The support checker's calibration set, run through the model of the run. Null when the set was
+ * not run, in which case gate G11 is not evaluated.
+ */
+export interface CalibrationRecord {
+  result: CalibrationResult;
+  /** SHA-256 of the calibration set as the builder wrote it. */
+  setSha256: string;
+  /** The support prompt the pairs were sent with, by id and hash. */
+  prompt: { id: string; sha256: string };
+  supportedPairs: number;
+  unsupportedPairs: number;
+  /** Pairs whose call returned no verdict. Each counts against the checker on both sides, and none is left out. */
+  failedPairs: number;
+  /** Calls made, retries of the provider's client not included. */
+  modelCalls: number;
+  /** Why the numbers may not mean what they appear to, or null. */
+  note: string | null;
+}
+
+export interface SuiteRecords {
+  exposure: ExposureRecord | null;
+  calibration: CalibrationRecord | null;
+}
+
+export const NO_SUITES: SuiteRecords = Object.freeze({ exposure: null, calibration: null });
 
 // ---------------------------------------------------------------------------------------------
 // The record
@@ -211,7 +285,7 @@ export interface ResultsFile {
   mode: RunMode;
   selftest: boolean;
   simulated: boolean;
-  /** The banner of a scripted run, in capitals. Null for a live run. */
+  /** The banner of a scripted or replayed run, in capitals. Null for a live run. */
   banner: string | null;
   startedAt: string;
   finishedAt: string;
@@ -239,6 +313,10 @@ export interface ResultsFile {
     costUsd: number | null;
   };
   contamination: Contamination | null;
+  /** The exposure suites and the calibration set, which feed gates G1 and G11. */
+  suites: SuiteRecords;
+  /** Whether the run wrote a recording of the model's answers, or read one. */
+  recording: RecordingNote | null;
   /** Plain sentences the report prints under its heading. */
   notes: string[];
 }
@@ -368,9 +446,12 @@ export function gateSubjectOf(
   run: RunMetrics,
   latency: LatencySummary | null,
   cost: CostSummary | null,
+  suites: SuiteRecords = NO_SUITES,
 ): GateSubject {
   return {
     run,
+    ...(suites.exposure === null ? {} : { exposure: suites.exposure }),
+    ...(suites.calibration === null ? {} : { calibration: suites.calibration.result }),
     ...(latency === null ? {} : { latency }),
     ...(cost === null ? {} : { cost }),
   };
@@ -386,6 +467,7 @@ export function buildSection(args: {
   complete: boolean;
   splitSha256: string;
   priced: boolean;
+  suites?: SuiteRecords;
 }): SplitSection {
   const { group, mode } = args;
   const scored = scoreGroup(args);
@@ -393,7 +475,7 @@ export function buildSection(args: {
 
   // A figure from a scripted stand-in is not a figure for any model, and an unfinished run has
   // timings of a different set of cases from the one its gates ask about.
-  const measure = !isScripted(mode) && args.complete && mine.length > 0;
+  const measure = isLive(mode) && args.complete && mine.length > 0;
   const latencyRecords: LatencyRecord[] = mine.flatMap((r) =>
     r.totalMs === null
       ? []
@@ -447,7 +529,7 @@ export function buildSection(args: {
     gates:
       scored.run === null || !args.complete
         ? null
-        : evaluateGates(gateSubjectOf(scored.run, latency, cost)),
+        : evaluateGates(gateSubjectOf(scored.run, latency, cost, args.suites)),
     latency,
     cost,
   };
@@ -672,6 +754,8 @@ export async function findContamination(args: {
       file.runs.some((run) => run.split === "heldout") ||
       file.sections.some((section) => section.split === "heldout");
     if (!sameWorkflow || !touchedHeldout) continue;
+    // A replay re-scored answers an earlier run had already got: it taught nothing new.
+    if (file.mode === "replay") continue;
     if (isScripted(file.mode)) {
       scripted += 1;
       continue;
@@ -858,7 +942,7 @@ const price = z.object({
   cacheWrite: num,
 });
 const split = z.enum(["dev", "heldout"]);
-const mode = z.enum(["selftest", "simulated", "live"]);
+const mode = z.enum(["selftest", "simulated", "live", "replay"]);
 
 const pins = z.object({
   dataset: z.object({
@@ -944,6 +1028,52 @@ const runRecord = z.object({
   costUsd: nullableNum,
 });
 
+const rateSchema = z.object({
+  numerator: num,
+  denominator: num,
+  value: nullableNum,
+  ci: z.object({ low: num, high: num }).nullable(),
+});
+
+const exposureRecord = z.object({
+  probesRun: num,
+  artefactsScanned: num,
+  probesAnsweredWithData: num,
+  canaryHits: num,
+  foreignSpanIdHits: num,
+  suites: z.array(text),
+});
+
+const calibrationRecord = z.object({
+  result: z.object({
+    catchRate: rateSchema,
+    falseAlarmRate: rateSchema,
+    catchByKind: z.record(z.string(), rateSchema),
+  }),
+  setSha256: sha,
+  prompt: z.object({ id: text, sha256: sha }),
+  supportedPairs: num,
+  unsupportedPairs: num,
+  failedPairs: num,
+  modelCalls: num,
+  note: text.nullable(),
+});
+
+const recordingNote = z.object({
+  role: z.enum(["recorded", "replayed"]),
+  file: text,
+  calls: num,
+  recordedAt: text.optional(),
+  recordedResults: text.optional(),
+  recordedCommit: text.nullable().optional(),
+  datasetChanged: z.boolean().optional(),
+});
+
+const suitesSchema = z.object({
+  exposure: exposureRecord.nullable(),
+  calibration: calibrationRecord.nullable(),
+});
+
 const resultsSchema = z.object({
   format: z.literal(RESULTS_FORMAT),
   kind: z.literal(RESULTS_KIND),
@@ -976,6 +1106,9 @@ const resultsSchema = z.object({
     costUsd: nullableNum,
   }),
   contamination: z.unknown(),
+  // Files written before the suites existed have none, and none is what they recorded.
+  suites: suitesSchema.default({ exposure: null, calibration: null }),
+  recording: recordingNote.nullable().default(null),
   notes: z.array(z.string()),
 });
 
@@ -1037,6 +1170,9 @@ export interface AssembleInput {
   /** Whether a price was applied, so that a cost aggregate can be made. */
   priced: boolean;
   contamination: Contamination | null;
+  /** Left out, the suites were not run and gates G1 and G11 are not evaluated. */
+  suites?: SuiteRecords;
+  recording?: RecordingNote | null;
   notes: readonly string[];
 }
 
@@ -1071,11 +1207,14 @@ export function assembleResults(input: AssembleInput): ResultsFile {
         complete: input.complete,
         splitSha256: hashOfSplit(group.split),
         priced: input.priced,
+        suites: input.suites ?? NO_SUITES,
       }),
     ),
     runs: [...input.runs],
     usage: input.usage,
     contamination: input.contamination,
+    suites: input.suites ?? NO_SUITES,
+    recording: input.recording ?? null,
     notes: [...input.notes],
   };
 }

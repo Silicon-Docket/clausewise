@@ -171,11 +171,9 @@ describe("the report of a run", () => {
   it("names what is not evaluated and why, and does not call the exposure gate zero", () => {
     const text = selftestReport;
     expect(text).toContain(
-      "G1 needs the authorization probes and the canary scan, which this runner does not perform yet, so it is not evaluated and not assumed to be 0.",
+      "G1 needs the authorization probes and the canary scan, which were not run, so it is not evaluated and not assumed to be 0.",
     );
-    expect(text).toContain(
-      "G11 needs the support checker's calibration set, which has not been run.",
-    );
+    expect(text).toContain("G11 needs the support checker's calibration set, which was not run.");
     expect(text).toMatch(/\| G1 \| Unauthorized-data exposure \| 0 \| not evaluated \|/);
   });
 
@@ -283,5 +281,57 @@ describe("the style of the output", () => {
     ]) {
       expect(text).not.toMatch(DASHES);
     }
+  });
+});
+
+describe("the supplementary suites in the report", () => {
+  const exposure = {
+    probesRun: 1008,
+    artefactsScanned: 41,
+    probesAnsweredWithData: 0,
+    canaryHits: 0,
+    foreignSpanIdHits: 0,
+    suites: ["Authorization probes: 36 routes as 7 callers, in 2 modes."],
+  };
+  const calibration = {
+    result: {
+      catchRate: rate(19, 20),
+      falseAlarmRate: rate(1, 20),
+      catchByKind: { wrong_clause: rate(4, 4) },
+    },
+    setSha256: "a".repeat(64),
+    prompt: { id: "support.p1", sha256: "b".repeat(64) },
+    supportedPairs: 20,
+    unsupportedPairs: 20,
+    failedPairs: 0,
+    modelCalls: 40,
+    note: null,
+  };
+
+  it("says neither was run when neither was, and does not assume a pass", () => {
+    const text = renderReport(clone());
+    expect(text).toContain("## Supplementary suites");
+    expect(text).toContain("so gates G1 and G11 are not evaluated and not assumed to pass");
+  });
+
+  it("prints the counts of the exposure suite and what it does not test", () => {
+    const file = clone();
+    file.suites = { exposure, calibration: null };
+    const text = renderReport(file);
+    expect(text).toContain("They do not test any model.");
+    expect(text).toMatch(/\| Authorization probes run \| 1,008 \|/);
+    expect(text).toMatch(/\| Total found \(G1 requires 0\) \| 0 \|/);
+    expect(text).toContain("The calibration set was not run, so gate G11 is not evaluated.");
+  });
+
+  it("prints the calibration rates with their counts and intervals", () => {
+    const file = clone();
+    file.suites = { exposure: null, calibration };
+    const text = renderReport(file);
+    expect(text).toContain("The set is small: read each rate with its interval.");
+    expect(text).toMatch(
+      /\| Unsupported pairs caught \| 19 of 20 \(0\.950; 95% interval 0\.76 to 0\.99\) \|/,
+    );
+    expect(text).toContain("Caught, wrong_clause");
   });
 });

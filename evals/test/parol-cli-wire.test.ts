@@ -423,7 +423,11 @@ describe("the runner with the real Anthropic adapter", () => {
     reset();
     const resultsDir = `${dir}/partial`;
     await run(["--yes", "--case", "PAROL-D01", "--max-cost", "5"], { resultsDir, env: env() });
-    const names = await readdir(resultsDir);
+    const all = await readdir(resultsDir);
+    // The results, and the recording of the answers beside them. No checkpoint.
+    expect(all).toHaveLength(2);
+    expect(all.filter((name) => name.endsWith(".responses.jsonl"))).toHaveLength(1);
+    const names = all.filter((name) => !name.endsWith(".responses.jsonl"));
     expect(names).toHaveLength(1);
     expect(names[0]).toMatch(/^parol-\d{8}T\d{6}Z\.json$/);
     const text = await readFile(`${resultsDir}/${names[0]}`, "utf8");

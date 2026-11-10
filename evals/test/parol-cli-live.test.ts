@@ -299,7 +299,8 @@ describe("a live run with a scripted model that reports usage", () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(seen).toContain("checkpoint.json.partial");
     const names = await readdir(resultsDir);
-    expect(names).toEqual(["checkpoint.json"]);
+    // The recording of the model's answers sits beside the results, and the checkpoint is gone.
+    expect(names).toEqual(["checkpoint.json", "checkpoint.responses.jsonl"]);
   });
 
   it("names the models the provider reports for the attempts of a fallback, and otherwise says it did not", async () => {
@@ -403,6 +404,9 @@ describe("a live run with a scripted model that reports usage", () => {
       expect(containsDocumentText(out.stderr, windows)).toBe(false);
     }
     for (const name of await readdir(resultsDir)) {
+      // A recording of the model's answers holds the prompts by design, so that a replay can find
+      // them again. It is not a results file, and git ignores the folder it is written to.
+      if (name.endsWith(".responses.jsonl")) continue;
       expect(containsDocumentText(await readFile(`${resultsDir}/${name}`, "utf8"), windows)).toBe(
         false,
       );

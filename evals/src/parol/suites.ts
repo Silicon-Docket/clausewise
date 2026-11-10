@@ -11,7 +11,11 @@ import { mean, rate, type Rate } from "./stats.js";
 // Support checker calibration (20 supported and 20 unsupported pairs)
 // ---------------------------------------------------------------------------------------------
 
-export type CheckerVerdict = "supported" | "not_supported" | "insufficient";
+/**
+ * What the checker said. `failed` is a call that returned no usable verdict (the checker answers
+ * so when the call fails): it is neither a catch nor a pass.
+ */
+export type CheckerVerdict = "supported" | "not_supported" | "insufficient" | "failed";
 
 export interface CalibrationPair {
   /** The author's label. An unsupported pair has valid quotes that do not support the claim. */
@@ -22,9 +26,9 @@ export interface CalibrationPair {
 }
 
 export interface CalibrationResult {
-  /** Unsupported pairs the checker marked not_supported or insufficient. */
+  /** Unsupported pairs the checker marked not_supported or insufficient. A failed call is not a catch. */
   catchRate: Rate;
-  /** Supported pairs the checker did not mark supported. */
+  /** Supported pairs the checker did not mark supported. A failed call counts as a false alarm. */
   falseAlarmRate: Rate;
   /** The catch rate of each kind of unsupported pair that was labelled. */
   catchByKind: Record<string, Rate>;
@@ -33,11 +37,15 @@ export interface CalibrationResult {
 export function scoreCalibration(pairs: readonly CalibrationPair[]): CalibrationResult {
   const unsupported = pairs.filter((p) => p.label === "unsupported");
   const supported = pairs.filter((p) => p.label === "supported");
-  const caught = (p: CalibrationPair): boolean => p.verdict !== "supported";
+  // A failure counts against the checker on both sides: it caught nothing, and it did not clear the
+  // pair. Counting it as a catch would raise the catch rate with calls that said nothing.
+  const flagged = (p: CalibrationPair): boolean => p.verdict !== "supported";
+  const caught = (p: CalibrationPair): boolean =>
+    p.verdict === "not_supported" || p.verdict === "insufficient";
   const kinds = [...new Set(unsupported.flatMap((p) => (p.kind === undefined ? [] : [p.kind])))];
   return {
     catchRate: rate(unsupported.filter(caught).length, unsupported.length),
-    falseAlarmRate: rate(supported.filter(caught).length, supported.length),
+    falseAlarmRate: rate(supported.filter(flagged).length, supported.length),
     catchByKind: Object.fromEntries(
       kinds.sort().map((kind) => {
         const ofKind = unsupported.filter((p) => p.kind === kind);
