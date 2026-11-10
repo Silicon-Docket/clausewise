@@ -49,7 +49,7 @@ export const CALIBRATION_PAIRS: readonly CalibrationPairSpec[] = [
       quote:
         'non-public information that one Party (the "Disclosing Party") discloses to the other Party',
     },
-    note: "The claim reads the definition with its limits, non-public information disclosed for the Project, which makes it the fallback. D13 key def-1 is compliant at the fallback. Same paragraph as the unsupported pair that overlooks those limits.",
+    note: "The claim reads the definition with its limits, non-public information disclosed for the Project, which makes it the fallback. D13 key def-1 is compliant at the fallback.",
   },
   {
     id: "CAL-02",
@@ -68,7 +68,7 @@ export const CALIBRATION_PAIRS: readonly CalibrationPairSpec[] = [
       clause: "6.1",
       quote: "two (2) years from the date of each disclosure",
     },
-    note: "Clause 2 of Amendment No. 1 deletes Section 6.1 in its entirety, so the quoted term no longer exists and dur-1 is a deviation (the D05 key lists this paragraph as superseded). The finding cites the original clause alone and the paragraph does not show the deletion, which the checker is not shown either. This is the one pair that no reading of the cited paragraph can catch. It is in the set on purpose: docs/parol/05 names it as the limit of the isolation.",
+    note: "Clause 2 of Amendment No. 1 deletes Section 6.1 in its entirety, so the quoted term no longer exists and dur-1 is a deviation (the D05 key lists this paragraph as superseded). The finding cites the original clause alone and the paragraph does not show the deletion, which the checker is not shown either. This is the one pair that no reading of the cited paragraph can catch. It is in the set on purpose: docs/parol/05 names it as the limit of the isolation. The deleted term is also cited through the clause that deletes it, in the other superseded pair of D05 on dur-1, where the paragraph does show it.",
   },
   {
     id: "CAL-03",
@@ -88,7 +88,7 @@ export const CALIBRATION_PAIRS: readonly CalibrationPairSpec[] = [
       quote:
         "and shall permanently erase every copy held on any backup, archival or disaster recovery system",
     },
-    note: "Section 8.1 sets a five day deadline and requires erasure of every backup copy, and the claim says both. It does not say who chooses between return and destruction. D02 key ret-1 is a deviation. Same paragraph as the unsupported pair that gives the Discloser's election to the Recipient.",
+    note: "Section 8.1 sets a five day deadline and requires erasure of every backup copy, and the claim says both. It does not say who chooses between return and destruction. D02 key ret-1 is a deviation.",
   },
   {
     id: "CAL-04",
@@ -118,14 +118,14 @@ export const CALIBRATION_PAIRS: readonly CalibrationPairSpec[] = [
       status: "compliant",
       discrepancy: "",
       explanation:
-        "Amendment No. 1 confirms that the Agreement remains in full force and effect, so Section 7.1 continues to apply: the Agreement is governed by the laws of the State of Delaware and the Delaware courts have exclusive jurisdiction, both on the approved list.",
+        "Section 7.1 chooses the laws of the State of Delaware and gives the state and federal courts located in Delaware exclusive jurisdiction. Amendment No. 1 refers to Section 7.1 but leaves that choice as it was, so both the law and the forum stay on the approved list.",
     },
     evidence: {
       doc: "D2",
-      clause: "5",
-      quote: "the Agreement remains in full force and effect",
+      clause: "4",
+      quote: "4. Section 7.1 of the Agreement is amended so that",
     },
-    note: "The paragraph begins 'Except as amended by this Amendment'. Clauses 2 and 4 of the same amendment each amend Section 7.1, to New York and to California, so the Delaware clause no longer stands and gov-1 is undetermined (D06 key). The finding keeps the replaced Section 7.1 alive by citing the savings clause, and the quoted words leave out the words that make it conditional.",
+    note: "Clause 4 amends Section 7.1 so that the governing law is that of California and the exclusive forum is Santa Clara County, and clause 2 amends the same section to New York, so the Delaware clause the finding relies on no longer stands and gov-1 is undetermined (D06 key). The cited paragraph says that Section 7.1 is amended and names a law and a forum that are not Delaware and not on the approved list, so the claim can be tested against what it says. The quote starts at the clause number because the same words open clause 2 and the quote must occur once in the document. The paragraph has no exception wording, so the pair cannot be read as an overlooked exception.",
   },
   {
     id: "CAL-06",
@@ -266,24 +266,24 @@ export const CALIBRATION_PAIRS: readonly CalibrationPairSpec[] = [
   },
   {
     id: "CAL-13",
-    case: "PAROL-D02",
-    rule: "ret-1",
+    case: "PAROL-D12",
+    rule: "pds-2",
     label: "unsupported",
     kind: "other_party_obligation",
     claim: {
       status: "deviation",
       discrepancy:
-        "The Recipient must return or destroy all Confidential Information within five days of the request, with the choice between returning and destroying left to the Recipient, and must also erase every copy held on any backup, archival or disaster recovery system.",
+        "The Receiving Party must give the Disclosing Party prompt notice of a legally required disclosure and must bear the cost of the protective order that is sought, so it carries the cost of resisting the disclosure.",
       explanation:
-        "The five day deadline and the duty to erase backup copies are both unacceptable under the playbook. The Recipient decides whether to return or to destroy, but it must do one of them within five days.",
+        "Section 4.2 lets the Receiving Party disclose only if it gives notice so that a protective order can be sought, and it leaves the cost of that order with the Receiving Party. The playbook lists a duty to resist a legally required disclosure at the recipient's own cost as unacceptable.",
     },
     evidence: {
       doc: "D1",
-      clause: "8.1",
+      clause: "4.2",
       quote:
-        "Within five (5) days after the Discloser's written request, the Recipient shall return to the Discloser",
+        "where legally permitted and reasonably practicable, it gives the Disclosing Party prompt notice",
     },
-    note: "The paragraph says 'or at the Discloser's election destroy': the choice between return and destruction is the Discloser's, the other party's, not the Recipient's. The deadline and the backup erasure are stated correctly and the flag is right (D02 key ret-1 is a deviation), but the discrepancy gives the Discloser's election to the client, so the claim as proposed does not follow from the paragraph.",
+    note: "The same sentence goes on 'so that the Disclosing Party may seek a protective order at its own cost': the other party seeks the order and bears its own cost, and the Receiving Party may disclose to the extent required once it has given notice where permitted and practicable. The finding gives the Disclosing Party's cost to the client. D12 key pds-2 is compliant. Same paragraph as the supported pds-2 pair of D12.",
   },
   {
     id: "CAL-14",
@@ -498,7 +498,7 @@ export const CALIBRATION_PAIRS: readonly CalibrationPairSpec[] = [
       quote:
         "to the extent required by law, regulation or order of a court or governmental authority",
     },
-    note: "A dedicated clause with notice where permitted and practicable. D12 key pds-2 is compliant.",
+    note: "A dedicated clause with notice where permitted and practicable. D12 key pds-2 is compliant. Same paragraph as the unsupported pair that gives the Disclosing Party's cost of a protective order to the Receiving Party.",
   },
   {
     id: "CAL-25",
@@ -654,9 +654,10 @@ export const CALIBRATION_PAIRS: readonly CalibrationPairSpec[] = [
     evidence: {
       doc: "D1",
       clause: "4.2",
-      quote: "The Receiving Party shall not disclose Confidential Information to any person",
+      quote:
+        "The Receiving Party shall not disclose Confidential Information to any person except as Section 5 permits",
     },
-    note: "The sentence ends 'except as Section 5 permits', and Section 5.1 permits disclosure to employees, officers, contractors and professional advisers who need to know it. The finding reads the prohibition without its exception. D05 key pds-1 is compliant.",
+    note: "The sentence ends 'except as Section 5 permits', and Section 5.1 permits disclosure to employees, officers, contractors and professional advisers who need to know it. The finding reads the prohibition without its exception, although the quote includes it. D05 key pds-1 is compliant.",
   },
   {
     id: "CAL-33",
@@ -680,22 +681,22 @@ export const CALIBRATION_PAIRS: readonly CalibrationPairSpec[] = [
   {
     id: "CAL-34",
     case: "PAROL-D13",
-    rule: "def-1",
+    rule: "exc-1",
     label: "unsupported",
     kind: "overlooked_exception",
     claim: {
       status: "deviation",
       discrepancy:
-        "Confidential Information is defined without any requirement that it be marked or identified as confidential, which is the position that the playbook lists as unacceptable.",
+        "Exclusion (a) takes out of protection all information that is or becomes generally available to the public, with no exception for information that became public through the Receiving Party's own breach, so it is wider than the standard.",
       explanation:
-        "The definition applies whether or not the information is marked or identified as confidential, so protection no longer depends on the discloser marking it. The playbook's standard requires information that is marked, identified or reasonably understood to be confidential.",
+        "The standard allows the public information exclusion only where the information is or becomes public through no fault of the recipient. Section 2.1(a) states no such limit, so the exclusion is wider than the playbook allows.",
     },
     evidence: {
       doc: "D1",
-      clause: "1.2",
-      quote: "whether or not that information is marked or identified as confidential",
+      clause: "2.1",
+      quote: "is or becomes generally available to the public",
     },
-    note: "The paragraph limits the definition to non-public information that one Party discloses to the other for the Project. That is the playbook's fallback, not the unacceptable definition of all information of any kind. The finding overlooks those limits. D13 key def-1 is compliant at the fallback.",
+    note: "The same sentence continues 'other than through a breach of this Agreement by the Receiving Party', which is the limit the standard asks for, and the claim says that limit is missing. The finding reads the exclusion without its exception. D13 key exc-1 is compliant: all four exclusions are present and none needs written records.",
   },
   {
     id: "CAL-35",
@@ -798,21 +799,20 @@ export const CALIBRATION_PAIRS: readonly CalibrationPairSpec[] = [
   {
     id: "CAL-40",
     case: "PAROL-D05",
-    rule: "ret-1",
+    rule: "dur-1",
     label: "unsupported",
     kind: "superseded",
     claim: {
-      status: "deviation",
-      discrepancy:
-        "Amendment No. 1 leaves the Agreement in full force and effect, so the deadline in Section 7.2 stays at ten business days after the written request, which is shorter than the 30 days the standard requires.",
+      status: "compliant",
+      discrepancy: "",
       explanation:
-        "The Amendment does not restate the return period, and its savings clause keeps Section 7.2 in force as written. Ten business days is below the 30 day minimum, so ret-1 is a deviation.",
+        "Amendment No. 1 deals with Section 6.1 but keeps the limit it sets, so the obligations of each Receiving Party still end two years after each disclosure. Two years counted from each disclosure is inside the three year standard.",
     },
     evidence: {
       doc: "D2",
-      clause: "4",
-      quote: "Except as amended by this Amendment, the Agreement remains in full force and effect",
+      clause: "2",
+      quote: "Section 6.1 of the Agreement is deleted in its entirety",
     },
-    note: "Clause 3 of the same amendment replaces ten (10) business days in Section 7.2 with thirty (30) days, so the deadline is thirty days and ret-1 is compliant (D05 key). The finding relies on the replaced period through the savings clause, whose first words are 'Except as amended by this Amendment'. The gov-1 pair of D06 makes the same mistake with the same kind of savings clause and quotes less of it.",
+    note: "The cited paragraph deletes Section 6.1, so the two year limit the finding relies on no longer exists and dur-1 is a deviation (D05 key). The finding reads a deletion as if it kept the term. Unlike the pair that cites the original Section 6.1, this paragraph shows the deletion, so the claim can be tested against what it says.",
   },
 ];

@@ -144,6 +144,8 @@ export interface ParolOptions {
   record: boolean;
   /** Also send the support checker's calibration pairs through the model, for gate G11. */
   calibration: boolean;
+  /** Also run the exposure suites against the application, for gate G1. Sends nothing to a model. */
+  exposure: boolean;
   split: SplitChoice;
   allowHeldout: boolean;
   workflow: string;
@@ -184,6 +186,10 @@ Options:
   --calibration                Also send the support checker's 40 calibration pairs through the model, once
                                for the run, for gate G11. The workflow must pin a support prompt (v3).
                                Not for --selftest or --simulate: a scripted stand-in is not the checker.
+  --exposure                   Also run the exposure suites for gate G1: the authorization probes, the canary
+                               scan and the replay of upload steps, against the real application with a
+                               scripted stand-in for the model. It sends nothing and costs nothing, takes a
+                               few seconds, and tests the application and not any model.
   --no-record                  Do not write a recording of a live run's answers. By default a live run
                                writes them to <results>.responses.jsonl (git ignores the folder).
   --split dev|heldout|all      The cases to run. Default: dev. The held-out set is sealed: see
@@ -251,6 +257,7 @@ export function parseParolArgs(args: readonly string[]): ParolOptions {
         simulate: { type: "boolean" },
         replay: { type: "string" },
         calibration: { type: "boolean" },
+        exposure: { type: "boolean" },
         "no-record": { type: "boolean" },
         split: { type: "string" },
         "allow-heldout": { type: "boolean" },
@@ -283,6 +290,7 @@ export function parseParolArgs(args: readonly string[]): ParolOptions {
     replay: undefined,
     record: true,
     calibration: false,
+    exposure: false,
     split: "dev",
     allowHeldout: false,
     workflow: "v1",
@@ -361,6 +369,7 @@ export function parseParolArgs(args: readonly string[]): ParolOptions {
     replay: values.replay,
     record: values["no-record"] !== true,
     calibration: values.calibration === true,
+    exposure: values.exposure === true,
     split,
     allowHeldout: values["allow-heldout"] === true,
     workflow,
@@ -983,6 +992,26 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
     }
   }
 
+  // The exposure suites send nothing to a model and cost nothing, so they run before the run: a
+  // suite that cannot run, or finds the application disagreeing with its own key, stops the
+  // evaluation before any model is paid for.
+  const suites: SuiteRecords = { exposure: null, calibration: null };
+  if (options.exposure) {
+    io.stderr("Running the exposure suites against the application (nothing is sent).\n");
+    // Loaded here so that a run without --exposure does not load the application's pages.
+    const { runExposureSuite } = await import("./exposure/index.js");
+    suites.exposure = await runExposureSuite({
+      root,
+      dataset,
+      playbook,
+      signal: io.signal ?? new AbortController().signal,
+      splits: [...new Set(groups.map((group) => group.split))],
+    });
+    io.stderr(
+      `  ${suites.exposure.probesRun} authorization probes and ${suites.exposure.artefactsScanned} artefacts scanned.\n`,
+    );
+  }
+
   // ---- 5. The run.
   const controller = new AbortController();
   const relay = (): void => controller.abort(io.signal?.reason);
@@ -1114,9 +1143,6 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
   });
   const reportedModels = (): string[] | null =>
     meter.reportedModels.size === 0 ? null : [...meter.reportedModels].sort();
-
-  // What the supplementary suites found. Filled in as each finishes.
-  const suites: SuiteRecords = { exposure: null, calibration: null };
 
   // Scoring failures must not lose a run that was paid for. If scoring cannot be done, the file
   // is still written, without scores, and says why.

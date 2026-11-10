@@ -3,6 +3,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEMO_PLAYBOOK_SLUG } from "../../src/boot/index.js";
 import { DEFAULT_DATA_DIR, DEFAULT_HOST, DEFAULT_PORT } from "../../src/main.js";
+import { WORKFLOW_LABELS } from "../../src/boot/register.js";
 import { WORKFLOWS } from "../../src/prompts/workflows.js";
 import { ROOT, loadDemoPlaybook } from "../integration/pipeline.js";
 
@@ -153,18 +154,22 @@ describe("the settings in the README", () => {
 });
 
 describe("the claims about what is built", () => {
-  it("says the model support check is off, and neither workflow version pins a support prompt", () => {
+  it("says the model support check is off, and neither version the application ships pins a support prompt", () => {
     expect(README).toMatch(/Model support check\s*\|\s*Wired but off by default/);
-    for (const [label, workflow] of Object.entries(WORKFLOWS))
-      expect(workflow.manifest.prompts.support, label).toBeNull();
+    for (const label of WORKFLOW_LABELS)
+      expect(WORKFLOWS[label]!.manifest.prompts.support, label).toBeNull();
+    // v3 pins it, and is a candidate that only the evaluation runner can select.
+    expect(WORKFLOWS["v3"]!.manifest.prompts.support).toBe("support.p1");
+    expect(README).toMatch(/Workflow v3 pins it, in the evaluation only/);
   });
 
-  it("says v1 and v2 use the check set C1 and that no registered version turns C2 on", () => {
-    for (const [label, workflow] of Object.entries(WORKFLOWS))
-      expect([label, workflow.manifest.checks]).toEqual([label, ["C1"]]);
+  it("says v1 and v2 use the check set C1 and that neither shipped version turns C2 on", () => {
+    for (const label of WORKFLOW_LABELS)
+      expect([label, WORKFLOWS[label]!.manifest.checks]).toEqual([label, ["C1"]]);
     expect(WORKFLOWS["v1"]!.manifest.retrieval).toBe("R1");
     expect(WORKFLOWS["v2"]!.manifest.retrieval).toBe("R2");
-    expect(README).toMatch(/no registered workflow version turns it on/);
+    expect(WORKFLOWS["v3"]!.manifest.checks).toEqual(["C1", "C2"]);
+    expect(README).toMatch(/neither version the application ships turns it on/);
   });
 
   it("lists what is deferred, each as not built", () => {
@@ -238,8 +243,8 @@ describe("the walk-through", () => {
     // The support check is off, so the checks panel says so.
     expect(folded).toContain("Support not checked");
     expect(source("server", "views", "labels.ts")).toContain("Support not checked");
-    for (const workflow of Object.values(WORKFLOWS))
-      expect(workflow.manifest.prompts.support).toBeNull();
+    for (const label of WORKFLOW_LABELS)
+      expect(WORKFLOWS[label]!.manifest.prompts.support).toBeNull();
     // A new amendment version is not something the reader can read.
     expect(folded).toMatch(/1:02 uploads a new amendment version/);
     expect(folded).toMatch(/edited paragraph of either document, makes it decline every rule/);

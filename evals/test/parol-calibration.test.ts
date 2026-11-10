@@ -243,13 +243,13 @@ describe("the shipped calibration set", () => {
         pair.claim.explanation,
         pair.evidence.quote,
       ].join("\n");
-      expect(/[‐-―−]/.test(text), pair.id).toBe(false);
+      expect(/[\u2010-\u2015\u2212]/.test(text), pair.id).toBe(false);
       for (const field of [pair.note, pair.claim.discrepancy, pair.claim.explanation]) {
         expect(field.includes("\n"), pair.id).toBe(false);
       }
     }
     const source = readFileSync(join(FIXTURES, "calibration", "pairs.ts"), "utf8");
-    expect(/[‐-―−]/.test(source)).toBe(false);
+    expect(/[\u2010-\u2015\u2212]/.test(source)).toBe(false);
   });
 
   it("does not give the label away by the length of the quote", () => {

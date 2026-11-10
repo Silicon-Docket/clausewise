@@ -14,6 +14,7 @@ import { WORDS, baselineAnswer } from "../integration/pipeline.js";
 import { all, attr, first, parseHtml, type El } from "../pages/html.js";
 import { checkInvariants } from "../pages/invariants.js";
 import { Client, SECRET, addUser } from "../server/support-app.js";
+import { multipart, type UploadFile } from "./probes.js";
 import {
   baseWorld,
   cleanup,
@@ -150,22 +151,9 @@ export function csrfOf(page: Pick<Page, "root">): string {
   return attr(input, "value") ?? "";
 }
 
-export interface UploadFile {
-  /** The name the browser sends. Only its extension is read. */
-  name: string;
-  bytes: Uint8Array;
-  /** The field the file is in. Default `file`. */
-  field?: string;
-}
-
-/** The pairs as multipart, with a file. */
-export function multipart(pairs: [string, string][], file?: UploadFile): FormData {
-  const body = new FormData();
-  for (const [name, value] of pairs) body.append(name, value);
-  if (file !== undefined)
-    body.set(file.field ?? "file", new File([new Uint8Array(file.bytes)], file.name));
-  return body;
-}
+// The multipart builder is shared with the evaluation's exposure suite (see probes.ts).
+export { multipart };
+export type { UploadFile };
 
 /**
  * A browser: it keeps cookies, reads pages as a person would, and submits the forms it finds in

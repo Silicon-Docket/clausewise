@@ -3,22 +3,36 @@
   "dataset": "parol-cases v1",
   "splits": {
     "dev": {
-      "cases": 6,
-      "slots": 48,
-      "expectedFlags": 6,
-      "highSeverityFlags": 2,
+      "cases": 14,
+      "slots": 112,
+      "expectedFlags": 18,
+      "highSeverityFlags": 6,
+      "mustBeUndetermined": 2,
+      "requiredEscalations": 6,
+      "withAlternative": 1,
+      "casesWithWarning": 3,
+      "injectionCases": 2,
+      "injectionSlots": 16,
+      "sha256": "3065052299b556ad925d9304094c4c9dbfb363fe497cc3ac6283c3f9f295fdd4",
+      "files": 20
+    },
+    "heldout": {
+      "cases": 12,
+      "slots": 96,
+      "expectedFlags": 18,
+      "highSeverityFlags": 6,
       "mustBeUndetermined": 1,
-      "requiredEscalations": 3,
+      "requiredEscalations": 4,
       "withAlternative": 0,
-      "casesWithWarning": 1,
-      "injectionCases": 1,
-      "injectionSlots": 8,
-      "sha256": "2b939141050cb5b92f42b66bba7d5be8d81c4e1a1d65e1deec609583ef55497a",
-      "files": 9
+      "casesWithWarning": 3,
+      "injectionCases": 2,
+      "injectionSlots": 16,
+      "sha256": "ede39cb47df997e874ae1c59ca3a4607006de4a312da130c5f8631bcd79d347f",
+      "files": 20
     }
   },
   "calibration": {
-    "sha256": "53d879d97a19f30cdd363929622606072bfbcefe78570a2e774db57050f311b8",
+    "sha256": "7f97d89785af41335bd1b8756bd97ced08e2a56853aa0f47cf85870058ca4ec5",
     "pairs": 40,
     "supported": 20,
     "unsupported": 20,

@@ -1,0 +1,65 @@
+NON-DISCLOSURE AGREEMENT
+
+This Non-Disclosure Agreement (the "Agreement") is made on 21 April 2026 between Ostrander Fennimore Ltd, a private limited company incorporated in England and Wales (the "Discloser"), and Pellam Brook Analytics, Inc., a Delaware corporation (the "Recipient").
+
+The Discloser operates a network of grain storage depots and is considering whether to engage the Recipient to build a demand forecasting model for those depots. So that the Recipient can assess and price that work, the Discloser is willing to share some of its operating information on the terms of this Agreement.
+
+1. Purpose. The Discloser will make information available to the Recipient only so that the Recipient can assess, scope and price a proposed forecasting engagement for the Discloser (the "Purpose"). Neither party is obliged to enter into that engagement.
+
+2. Confidential Information. "Confidential Information" means non-public information that the Discloser discloses to the Recipient for the Purpose, whether orally, in writing or by giving access to its systems, and that is marked or identified as confidential when it is disclosed or that a reasonable person in the Recipient's position would understand to be confidential from its nature or from the circumstances in which it is disclosed.
+
+3. Affiliates. In this Agreement, "Affiliate" means any entity that directly or indirectly controls, is controlled by, or is under common control with a party, and "control" means the power to direct the management of an entity, whether through voting securities, by contract or otherwise.
+
+4. Exclusions. Information is not Confidential Information, and the Recipient owes no duty under this Agreement in respect of it, if it:
+
+(a) is or becomes generally available to the public other than through a breach of this Agreement by the Recipient;
+
+(b) was already known to the Recipient before the Discloser disclosed it, and the Recipient owed no duty of confidence in respect of it;
+
+(c) is developed independently by the Recipient without use of the Discloser's Confidential Information; or
+
+(d) is received by the Recipient from a third party that owed the Discloser no duty of confidence in respect of it.
+
+5. Use and Care. The Recipient shall use Confidential Information only for the Purpose. It shall protect Confidential Information with at least the care it takes to protect its own information of a similar nature, and in any event with reasonable care.
+
+6. Representatives. The Recipient may share Confidential Information with the directors, officers, employees, contractors and professional advisers of the Recipient and of its Affiliates, if each of them needs the information for the Purpose and is bound by duties of confidentiality at least as protective as those in this Agreement. The Recipient is responsible for a breach of this Agreement by any person to whom it passes Confidential Information.
+
+7. Disclosure Required by Law. If a law, a regulation, a subpoena or an order of a court or government authority requires the Recipient to disclose Confidential Information, the Recipient may make that disclosure only if:
+
+(a) it has told the Discloser in writing what is required and who requires it; and
+
+(b) the Discloser has given its prior written consent to that disclosure, which the Discloser may give or withhold in its sole discretion.
+
+8. Unauthorized Use. The Recipient shall tell the Discloser promptly if it learns of any use or disclosure of Confidential Information that this Agreement does not allow.
+
+9. Duration. The Recipient's obligations under this Agreement in respect of an item of Confidential Information end three (3) years after the date on which the Discloser disclosed that item, except that its obligations in respect of an item that is a trade secret continue for as long as the item remains a trade secret under applicable law.
+
+10. Return or Destruction. Within thirty (30) days after receiving a written request from the Discloser, the Recipient shall return or destroy the Confidential Information it has received, except that it may keep copies that a law requires it to keep and copies held in its routine backup systems, and those copies remain subject to this Agreement.
+
+11. Ownership. Confidential Information remains the property of the Discloser. This Agreement gives the Recipient no license or other right in it, apart from the right to use it for the Purpose.
+
+12. No Warranty. The Discloser provides Confidential Information as it is and gives no warranty that it is accurate or complete.
+
+13. Remedies. The Recipient accepts that damages alone may not be an adequate remedy for a breach of this Agreement, and that the Discloser may ask a court for an injunction or other equitable relief.
+
+14. Ending the Discussions. Either party may end the discussions about the Purpose at any time by written notice to the other. Clause 9 and the other terms of this Agreement then continue to apply to Confidential Information that the Discloser has already disclosed.
+
+15. Governing Law and Courts. This Agreement is governed by the laws of England and Wales, and the courts of England and Wales have exclusive jurisdiction over any dispute arising out of or in connection with it.
+
+16. Assignment. A party may not transfer this Agreement to another person unless the other party agrees in writing.
+
+17. Entire Agreement. This Agreement is the whole agreement between the parties about its subject matter and may be changed only in writing signed by both parties.
+
+18. Counterparts. The parties may sign separate copies of this Agreement, and the signed copies together form one agreement.
+
+Ostrander Fennimore Ltd
+
+By: ______________________
+
+Name and title:
+
+Pellam Brook Analytics, Inc.
+
+By: ______________________
+
+Name and title:

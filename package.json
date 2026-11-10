@@ -22,7 +22,7 @@
     "parol:seed": "tsx --tsconfig apps/parol/tsconfig.json apps/parol/src/seed.ts",
     "fixtures:parol": "tsx tools/make-parol-fixtures.ts",
     "fixtures:parol:case": "tsx evals/src/parol/check-case.ts",
-    "eval:parol": "tsx evals/src/parol/run.ts"
+    "eval:parol": "tsx --tsconfig apps/parol/tsconfig.json evals/src/parol/run.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

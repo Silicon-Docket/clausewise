@@ -7,7 +7,9 @@
  * The check recomputes, with the builder's own `splitHash`, what splits.json records for each
  * split, and separately compares each file with the hash its answer key holds. It catches a
  * changed key entry, a changed byte of a document, a missing or added file, and a splits file
- * edited to say something else. It cannot catch an attacker who changes the key, the files and the
+ * edited to say something else. The files it reads are all the files the keys name: the documents
+ * of the cases and twins, the extra files of upload steps (identical copies and re-saves) and the
+ * documents of the canary matters, because the hash of a split covers every one of them. It cannot catch an attacker who changes the key, the files and the
  * splits file together, which is why the held-out hash is committed to the repository's history
  * before the first baseline (docs/parol/05).
  *
@@ -16,7 +18,13 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { sha256Hex } from "../../../apps/parol/src/canonical.js";
-import { splitHash, totalsOf, type BuiltFile } from "../../../fixtures/parol/build.js";
+import {
+  keyFileNames,
+  splitHash,
+  splitKeyParts,
+  totalsOf,
+  type BuiltFile,
+} from "../../../fixtures/parol/build.js";
 import {
   SPLITS,
   type AnswerKeyCase,
@@ -49,7 +57,7 @@ export interface Dataset {
   label: string;
   keys: AnswerKeyFile;
   splits: SplitsFile;
-  /** Every file the keys name, by file name. */
+  /** Every file the keys name (documents, extra files of upload steps, canary documents), by file name. */
   files: ReadonlyMap<string, Uint8Array>;
   /** Of answer-keys.json and splits.json exactly as read. */
   answerKeysSha256: string;
@@ -78,10 +86,6 @@ async function readJson(path: string, name: string, problems: string[]) {
     return undefined;
   }
 }
-
-/** The named documents of a case or a twin, in key order. */
-const documentFiles = (entry: AnswerKeyCase | AnswerKeyTwin): string[] =>
-  entry.documents.map((document) => document.file);
 
 export async function loadDataset(root: string): Promise<DatasetLoad> {
   const dir = join(root, DATASET_DIR);
@@ -115,38 +119,49 @@ export async function loadDataset(root: string): Promise<DatasetLoad> {
     };
   }
 
-  // Every file the keys name, read once.
-  const files = new Map<string, Uint8Array>();
+  // Every file the keys name, read once: the documents of cases and twins, the extra files of
+  // upload steps and the documents of canary matters. Each is checked against the hash its own
+  // key entry records.
+  const named: { where: string; file: unknown; sha256: unknown }[] = [];
   for (const entry of [...keys.cases, ...keys.twins]) {
     if (!isObject(entry) || !Array.isArray(entry.documents)) {
       problems.push("answer-keys.json holds an entry without documents");
       continue;
     }
     const where = String(entry.case);
-    for (const file of documentFiles(entry)) {
-      if (typeof file !== "string" || !SAFE_FILE.test(file)) {
-        problems.push(`${where}: a document has a file name that is not a plain name`);
-        continue;
-      }
-      if (files.has(file)) continue;
-      try {
-        files.set(file, new Uint8Array(await readFile(join(dir, "files", file))));
-      } catch {
-        problems.push(`${where} ${file}: the file is missing`);
-      }
+    for (const document of entry.documents) {
+      named.push({ where, file: document.file, sha256: document.sha256 });
+    }
+    // Only a case has upload steps; a twin never does.
+    for (const extra of (entry as Partial<AnswerKeyCase>).uploads?.files ?? []) {
+      named.push({ where, file: extra.file, sha256: extra.sha256 });
     }
   }
-
-  // Each file against the hash its own key entry records.
-  for (const entry of [...keys.cases, ...keys.twins]) {
-    if (!Array.isArray(entry.documents)) continue;
-    for (const document of entry.documents) {
-      const bytes = files.get(document.file);
-      if (bytes !== undefined && sha256Hex(bytes) !== document.sha256) {
-        problems.push(
-          `${entry.case} ${document.file}: the file differs from the hash in the answer key`,
-        );
+  for (const matter of keys.canary?.matters ?? []) {
+    named.push({
+      where: `canary matter ${matter.id}`,
+      file: matter.document.file,
+      sha256: matter.document.sha256,
+    });
+  }
+  const files = new Map<string, Uint8Array>();
+  for (const { where, file, sha256 } of named) {
+    if (typeof file !== "string" || !SAFE_FILE.test(file)) {
+      problems.push(`${where}: a document has a file name that is not a plain name`);
+      continue;
+    }
+    let bytes = files.get(file);
+    if (bytes === undefined) {
+      try {
+        bytes = new Uint8Array(await readFile(join(dir, "files", file)));
+        files.set(file, bytes);
+      } catch {
+        problems.push(`${where} ${file}: the file is missing`);
+        continue;
       }
+    }
+    if (sha256Hex(bytes) !== sha256) {
+      problems.push(`${where} ${file}: the file differs from the hash in the answer key`);
     }
   }
 
@@ -154,8 +169,8 @@ export async function loadDataset(root: string): Promise<DatasetLoad> {
   const integrity: SplitIntegrity[] = [];
   const severity = (ruleKey: string): string => keys.playbook.rules[ruleKey]?.severity ?? "";
   for (const split of SPLITS) {
-    const cases = keys.cases.filter((entry) => entry.split === split);
-    const twins = keys.twins.filter((entry) => entry.split === split);
+    const parts = splitKeyParts(keys, split);
+    const { cases, twins } = parts;
     const recorded = splits.splits[split];
     if (recorded === undefined) {
       if (cases.length > 0) {
@@ -167,7 +182,7 @@ export async function loadDataset(root: string): Promise<DatasetLoad> {
       problems.push(`split ${split}: splits.json records a hash but the answer keys hold no cases`);
       continue;
     }
-    const names = [...new Set([...cases, ...twins].flatMap(documentFiles))];
+    const names = keyFileNames(keys, split);
     const built: BuiltFile[] = [];
     let complete = true;
     for (const name of names) {
@@ -177,7 +192,7 @@ export async function loadDataset(root: string): Promise<DatasetLoad> {
     }
     // With a file missing there is nothing sound to hash. The file is already a problem.
     if (!complete) continue;
-    const sha256 = splitHash({ cases, twins }, built);
+    const sha256 = splitHash(parts, built);
     const matches = sha256 === recorded.sha256;
     integrity.push({ split, sha256, recorded: recorded.sha256, matches });
     if (!matches) {
