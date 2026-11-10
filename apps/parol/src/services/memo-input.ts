@@ -126,6 +126,9 @@ export function buildMemoInput(args: {
     findings: memoFindings,
     ruleSeverities: Object.fromEntries(rules.map((r) => [r.key, r.severity])),
     ruleTitles: Object.fromEntries(rules.map((r) => [r.key, r.title])),
+    ruleFlags: Object.fromEntries(
+      rules.map((r) => [r.key, { kind: r.kind, required: r.required }]),
+    ),
     exportedBy: repo.getUser(args.exporterId)?.displayName ?? "(unknown user)",
     exportedAt: args.exportedAt,
     segregationRelaxed: sameAsAssociate,

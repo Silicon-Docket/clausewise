@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   CATEGORY_IDS,
+  DETERMINED_STATUSES,
   DOCUMENT_KINDS,
   DOC_LABELS,
   ESCALATION_CODES,
@@ -177,6 +178,8 @@ export const VerifiedFindingSchema = z.object({
   ),
   escalations: z.array(z.object({ code: z.enum(ESCALATION_CODES), detail: z.string() })),
   verificationState: z.enum(["verified", "escalated_by_system"]),
+  /** The status the workflow stated, kept when code settled it to another one. */
+  modelStatus: z.enum(DETERMINED_STATUSES).nullable().optional(),
   contentSha256: sha256,
 });
 

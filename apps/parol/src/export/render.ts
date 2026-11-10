@@ -106,10 +106,14 @@ function headingText(view: FindingView): string {
  * all argue the original status, and a section that printed them unmarked under the reviewer's
  * status would contradict its own heading. Null when the status is the workflow's.
  */
-const writtenForOriginal = (view: FindingView): string | null =>
-  view.statusEdited
-    ? `written by the workflow for the original status, ${STATUS_LABEL[view.proposedStatus]}`
-    : null;
+const writtenForOriginal = (view: FindingView): string | null => {
+  if (!view.statusEdited) return null;
+  // When the playbook settled the status before the reviewer changed it, the workflow wrote its
+  // text for the status it stated, which is not the one it was settled to.
+  return view.modelStatus !== null
+    ? `written by the workflow for the status it stated, ${STATUS_LABEL[view.modelStatus]}`
+    : `written by the workflow for the original status, ${STATUS_LABEL[view.proposedStatus]}`;
+};
 
 /** A label for text the workflow wrote, marked when the reviewer's status is not the one it argues. */
 function workflowLabel(view: FindingView, label: string): string {
@@ -372,6 +376,13 @@ function findingSection(view: FindingView): Paragraph[] {
       `${STATUS_LABEL[view.status]}${view.statusEdited ? " (edited by the reviewer)." : "."}`,
     ),
   );
+  if (view.modelStatus !== null) {
+    out.push(
+      note(
+        `Status settled by the playbook: the workflow stated ${STATUS_LABEL[view.modelStatus]}${view.settlementReason === null ? "" : `; ${view.settlementReason}`}. The discrepancy, explanation, cited passages and proposed language below were written for the status the workflow stated and have not been revised to match.`,
+      ),
+    );
+  }
   if (view.statusEdited) {
     out.push(note(`Original before edit: ${STATUS_LABEL[view.proposedStatus]}.`));
     out.push(
@@ -417,7 +428,7 @@ function findingSection(view: FindingView): Paragraph[] {
         [
           bold(
             view.statusEdited
-              ? `Cited passages (cited by the workflow for the original status, ${STATUS_LABEL[view.proposedStatus]}):`
+              ? `Cited passages (cited by the workflow for the ${view.modelStatus !== null ? `status it stated, ${STATUS_LABEL[view.modelStatus]}` : `original status, ${STATUS_LABEL[view.proposedStatus]}`}):`
               : "Cited passages:",
           ),
         ],

@@ -1,7 +1,42 @@
 -- Parol schema, version 4: usage recorded by the application, the spend ledger, settled statuses.
 --
--- PLACEHOLDER (contract commit CC1). Owner: W2.x. The body is a comment on purpose: the loader
--- refuses a gap in the numbers and a changed file that was already applied, so the number is
--- reserved now and the owner replaces this body with the real SQL. No database exists outside the
--- tests, so editing the placeholder before release is safe. If the package is cut, this file stays
--- as a no-op and the numbering never has a hole.
+-- Additive to 001 to 003, so their checksums stay valid, apart from one trigger that is dropped
+-- and created again under the same name, because SQLite cannot alter a trigger. The file is one
+-- migration with one part for each of three pieces of work; each part is complete on its own.
+--
+-- Part 1 (settled statuses). The verify stage settles the model's status against the rule's
+-- flags (apps/parol/src/settlement.ts): a missing clause on a rule that is not required is not
+-- applicable, and a required rule that no clause covers is missing. The status the model stated
+-- is kept next to the settled one, so a reviewer can see that code changed it, and it is part of
+-- the finding's content hash whenever it is set.
+--
+-- Parts 2 and 3 (usage on a call and the spend ledger) follow below when they are written.
+
+-- 1. The model's own status, kept when code settled it to another one.
+--    NULL means the status is the one the model stated (or that no status was stated). It is never
+--    backfilled: no finding stored before this migration was settled.
+ALTER TABLE findings ADD COLUMN model_status TEXT
+  CHECK (model_status IS NULL
+         OR model_status IN ('compliant','deviation','missing','not_applicable'));
+
+-- A model status is kept only when code changed the status, so it is never equal to the status.
+-- (A forcing escalation that turns a settled status into undetermined leaves it different too.)
+CREATE TRIGGER findings_model_status_differs BEFORE INSERT ON findings
+WHEN NEW.model_status IS NOT NULL AND NEW.model_status = NEW.status
+BEGIN SELECT RAISE(ABORT, 'parol: a model status is kept only when code changed the status'); END;
+
+-- The content trigger of 002 lists every immutable column; model_status joins it. It is replaced
+-- under the same name and is otherwise the trigger of 002, word for word.
+DROP TRIGGER findings_content_immutable;
+CREATE TRIGGER findings_content_immutable BEFORE UPDATE ON findings
+WHEN NEW.id IS NOT OLD.id OR NEW.run_id IS NOT OLD.run_id OR NEW.matter_id IS NOT OLD.matter_id
+  OR NEW.playbook_rule_id IS NOT OLD.playbook_rule_id OR NEW.rule_key IS NOT OLD.rule_key
+  OR NEW.category IS NOT OLD.category OR NEW.severity IS NOT OLD.severity
+  OR NEW.status IS NOT OLD.status OR NEW.discrepancy IS NOT OLD.discrepancy
+  OR NEW.explanation IS NOT OLD.explanation OR NEW.fallback_language IS NOT OLD.fallback_language
+  OR NEW.fallback_basis IS NOT OLD.fallback_basis OR NEW.escalations_json IS NOT OLD.escalations_json
+  OR NEW.verification_state IS NOT OLD.verification_state
+  OR NEW.content_sha256 IS NOT OLD.content_sha256
+  OR NEW.conflict IS NOT OLD.conflict OR NEW.abstain_reason IS NOT OLD.abstain_reason
+  OR NEW.model_status IS NOT OLD.model_status
+BEGIN SELECT RAISE(ABORT, 'parol: finding content is immutable'); END;

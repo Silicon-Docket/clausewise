@@ -8,6 +8,7 @@ import type { Severity } from "@clausewise/playbook";
 import type {
   CategoryId,
   CheckResult,
+  DeterminedStatus,
   DocLabel,
   DocumentKind,
   Escalation,
@@ -191,6 +192,17 @@ export interface IssueRow {
   category: CategoryId;
   severity: Severity;
   status: Status;
+  /**
+   * The status the workflow stated, set only when the playbook's flags settled it to another one
+   * (`settleStatus`). Undefined for every other finding (and so left out of the JSON), and
+   * optional so that a page fixture built before settlement existed still fits.
+   */
+  modelStatus?: DeterminedStatus | null | undefined;
+  /**
+   * Why the rule settles the status as it does, as a fixed clause (for example "the rule is not
+   * required"). Set together with `modelStatus` and never from a document.
+   */
+  settlementReason?: string | null | undefined;
   validity: "current" | "stale";
   verificationState: "verified" | "escalated_by_system";
   escalations: Escalation[];

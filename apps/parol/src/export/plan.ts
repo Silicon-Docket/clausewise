@@ -1,5 +1,6 @@
 import type { Severity } from "@clausewise/playbook";
 import {
+  DETERMINED_STATUSES,
   EVIDENCE_ROLES,
   STATUSES,
   type CategoryId,
@@ -9,6 +10,7 @@ import {
 } from "../contracts.js";
 import type { MemoFinding, MemoInput } from "../module-contracts.js";
 import { verifyQuote } from "../quotes.js";
+import { settlementReason } from "../settlement.js";
 import { formatUtcDate, parseUtcInstant } from "./dates.js";
 import { MemoGateError } from "./errors.js";
 import {
@@ -73,6 +75,10 @@ export interface FindingView {
   status: Status;
   proposedStatus: Status;
   statusEdited: boolean;
+  /** The status the workflow stated, when the playbook's flags settled it to another one. */
+  modelStatus: Status | null;
+  /** Why the rule settles it so (one of three fixed texts), or null when the input gave no flags. */
+  settlementReason: string | null;
   discrepancy: string;
   discrepancyEdited: boolean;
   discrepancyOriginal: string;
@@ -457,6 +463,22 @@ export function planMemo(input: MemoInput): MemoPlan {
       }
     }
 
+    // The status the workflow stated, kept when the playbook's flags settled it to another one.
+    // Anything but a determined status (or nothing) is a defect of the input, not a thing to print.
+    const rawModelStatus: unknown = (finding as { modelStatus?: unknown }).modelStatus;
+    if (
+      rawModelStatus !== undefined &&
+      rawModelStatus !== null &&
+      !(DETERMINED_STATUSES as readonly unknown[]).includes(rawModelStatus)
+    ) {
+      invalid(`Rule ${id} has an unknown model status.`, [key]);
+    }
+    const modelStatus = (rawModelStatus ?? null) as Status | null;
+    const flags =
+      modelStatus !== null && input.ruleFlags !== undefined && has(input.ruleFlags, key)
+        ? input.ruleFlags[key]
+        : undefined;
+
     let status: Status = finding.status;
     const editedStatus = editValue("status");
     if (editedStatus !== undefined) {
@@ -578,6 +600,14 @@ export function planMemo(input: MemoInput): MemoPlan {
       status,
       proposedStatus: finding.status,
       statusEdited,
+      modelStatus,
+      settlementReason:
+        flags === undefined
+          ? null
+          : settlementReason({
+              kind: flags.kind === "absence" ? "absence" : "presence",
+              required: flags.required === true,
+            }),
       discrepancy,
       discrepancyEdited,
       discrepancyOriginal: originalDiscrepancy,

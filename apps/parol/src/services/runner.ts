@@ -9,6 +9,7 @@ import type {
   VerifiedFinding,
 } from "../contracts.js";
 import { getPrompt } from "../prompts/registry.js";
+import { SETTLEMENT_VERSION } from "../settlement.js";
 import { runAnalyze } from "../stages/analyze.js";
 import { runExtract } from "../stages/extract.js";
 import { buildBundles } from "../stages/retrieve.js";
@@ -602,6 +603,10 @@ export function createRunEngine(deps: ServiceDeps) {
           bundle: hashOf(bundle),
           checks: wm.checks,
           support: prompts.support?.sha256 ?? null,
+          // A verify output made before status settlement existed, or under another version of
+          // its rule, is not reused: it would show the model's status where the playbook now
+          // settles it. No model call is repeated for it unless the workflow has a support check.
+          settle: SETTLEMENT_VERSION,
         });
         const saved = reusable("verify", bundle.ruleKey, input);
         if (saved !== undefined) {

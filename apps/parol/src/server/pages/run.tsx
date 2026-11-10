@@ -18,6 +18,7 @@ import {
   runErrorMeaning,
   runStatusLabel,
   isActiveRun,
+  statusLabel,
 } from "../views/labels.js";
 import {
   Chip,
@@ -194,6 +195,11 @@ function IssueTable(props: {
                 </th>
                 <td>
                   <StatusChip status={row.status} />
+                  {row.modelStatus === undefined || row.modelStatus === null ? null : (
+                    <span class="row-sub" data-settled-row="">
+                      Settled by the playbook; the workflow stated {statusLabel(row.modelStatus)}
+                    </span>
+                  )}
                 </td>
                 <td>
                   <ReviewChip

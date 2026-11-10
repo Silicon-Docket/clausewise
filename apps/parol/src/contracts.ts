@@ -33,6 +33,15 @@ export const STATUSES = [
 ] as const;
 export type Status = (typeof STATUSES)[number];
 
+/** A status the workflow stated, as opposed to `undetermined`, which is the absence of one. */
+export type DeterminedStatus = Exclude<Status, "undetermined">;
+export const DETERMINED_STATUSES = [
+  "compliant",
+  "deviation",
+  "missing",
+  "not_applicable",
+] as const satisfies readonly DeterminedStatus[];
+
 export const EVIDENCE_ROLES = [
   "governing",
   "supporting",
@@ -385,7 +394,16 @@ export interface VerifiedFinding {
   checks: CheckResult[];
   escalations: Escalation[];
   verificationState: "verified" | "escalated_by_system";
-  /** Over status, texts, evidence and escalations. See `findingContentSha256` in canonical.ts. */
+  /**
+   * The status the workflow stated, kept when the playbook's flags settled it to another one (see
+   * `settleStatus` in settlement.ts), and absent or null otherwise. It is never the same as
+   * `status`. Optional so that a finding built before settlement existed still fits.
+   */
+  modelStatus?: DeterminedStatus | null;
+  /**
+   * Over status, texts, evidence and escalations, and over `modelStatus` when it is set. See
+   * `findingContentSha256` in canonical.ts.
+   */
   contentSha256: string;
 }
 

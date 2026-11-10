@@ -200,6 +200,7 @@ export const CHECK_LABEL = {
   instruction_like_text: "Cited paragraphs do not read like an instruction to software",
   support: "A second check agrees the cited passages support the conclusion",
   model_abstained: "The workflow stated a status",
+  status_settled: "The status was settled by the playbook",
   status_forced: "The status was kept as the workflow stated it",
   fallback_basis: "Where the suggested wording comes from",
 } as const satisfies Record<string, string>;

@@ -183,7 +183,11 @@ export interface VerifyResult {
   finding: VerifiedFinding;
   calls: CallRecord[];
 }
-/** `verifyFinding` in src/stages/verify.ts. Never throws for bad model output. */
+/**
+ * `verifyFinding` in src/stages/verify.ts. Never throws for bad model output. It settles the
+ * draft's status against the rule's flags before any check (`settleStatus`), for every workflow
+ * version, and keeps the status the model stated in `VerifiedFinding.modelStatus`.
+ */
 export type VerifyFinding = (args: VerifyArgs) => Promise<VerifyResult>;
 
 /**
@@ -278,6 +282,12 @@ export interface MemoInput {
    * under the name of its category.
    */
   ruleTitles?: Record<string, string>;
+  /**
+   * The flags of each rule that decide how a status is settled (`kind` and `required`), by rule
+   * key. Optional like `ruleTitles`: without them a settled finding is still marked as settled but
+   * the memo does not say why.
+   */
+  ruleFlags?: Record<string, { kind: "presence" | "absence"; required: boolean }>;
   exportedBy: string;
   /** ISO 8601. The memo says this date, so it is an input and not read from the clock. */
   exportedAt: string;

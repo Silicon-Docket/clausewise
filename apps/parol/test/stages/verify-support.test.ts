@@ -225,12 +225,17 @@ describe("the model support check", () => {
   });
 
   describe("when it is not called", () => {
-    const notCalled = async (d: ReturnType<typeof draft>, fullDocument = false) => {
+    const notCalled = async (
+      d: ReturnType<typeof draft>,
+      fullDocument = false,
+      ruleOf: ReturnType<typeof rule> = rule(),
+    ) => {
       const { checker, generator, inputs } = scriptedChecker("supported");
       const { finding, calls } = await verify(d, {
         supportChecker: checker,
         generator,
         fullDocument,
+        rule: ruleOf,
       });
       expect(inputs).toEqual([]);
       expect(calls).toEqual([]);
@@ -240,9 +245,12 @@ describe("the model support check", () => {
     it.each(["missing", "not_applicable", "undetermined"] as const)(
       "for status %s",
       async (status) => {
+        // The status is the playbook's to settle: not_applicable is only left alone on a rule that
+        // is not required, and missing only on one that is.
         const finding = await notCalled(
           draft({ status, ...(status === "undetermined" ? { abstainReason: "unclear" } : {}) }),
           true,
+          rule({ required: status !== "not_applicable" }),
         );
         expect(check(finding, "support")).toMatchObject({
           kind: "model",

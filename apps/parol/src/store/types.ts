@@ -1,5 +1,6 @@
 import type {
   CheckResult,
+  DeterminedStatus,
   DocLabel,
   DocumentKind,
   Escalation,
@@ -251,6 +252,8 @@ export interface FindingRecord extends Omit<VerifiedFinding, "evidence"> {
   checks: CheckResult[];
   escalations: Escalation[];
   fallbackBasis: FallbackBasis;
+  /** The status the workflow stated, when code settled it to another one; null otherwise. */
+  modelStatus: DeterminedStatus | null;
   validity: "current" | "stale";
   staleReason: string | null;
   rule: StoredRule;
