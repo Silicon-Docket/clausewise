@@ -356,10 +356,7 @@ export function classifyListing(args: {
 }): Verdict {
   const { expected, observed } = args;
   const reasons: ExposureReason[] = [];
-  if (
-    expected.kind === "refused" &&
-    ((observed.status >= 200 && observed.status < 300) || observed.letIn)
-  )
+  if (expected.kind === "refused" && observed.status >= 200 && observed.status < 300)
     reasons.push("handler_answered");
   if (observed.stateChanged) reasons.push("changed_state");
   if (containsAny(observed.body, args.forbidden)) reasons.push("carried_data");
@@ -550,12 +547,29 @@ export interface AuthorizationResult {
   sentence: string;
 }
 
+/**
+ * The groups of cells: the `matrix`, the bodies that change the store sent to refused callers in
+ * the matrix (`effects`), the `forged` ids and the `lists`.
+ */
+export type AuthorizationGroup = "matrix" | "effects" | "forged" | "lists";
+export const AUTHORIZATION_GROUPS: readonly AuthorizationGroup[] = [
+  "matrix",
+  "effects",
+  "forged",
+  "lists",
+];
+
 export interface AuthorizationArgs {
   dataset: Dataset;
   root: string;
   playbook: LoadedPlaybook;
   signal: AbortSignal;
   hooks?: SiteHooks;
+  /**
+   * For the suite's own tests, which plant one fault and need only the cells that find it. The
+   * command never passes this; the default is every group.
+   */
+  groups?: readonly AuthorizationGroup[];
 }
 
 /** Findings kept for the report. The counts are exact whatever this is. */
@@ -603,15 +617,16 @@ export async function runAuthorizationProbes(
     callers: ACTORS.length,
     modes: 2,
     writeRoutes: MATTER_PROBES.filter((probe) => probe.method !== "GET").length,
-    writesWithEffect: MATTER_PROBES.filter(
-      (probe) => probe.method !== "GET" && effectOf(probe, DUMMY_SCRATCH) !== null,
-    ).length,
+    writesWithEffect: 0,
     tableDrift: tableDrift().length,
     exposed: [],
     mismatched: [],
     sentence: "",
   };
 
+  const groups = new Set(args.groups ?? AUTHORIZATION_GROUPS);
+  /** The write routes whose body was shown to change the store, and in how many modes. */
+  const proven = new Map<string, number>();
   for (const relaxed of [false, true]) {
     signal.throwIfAborted();
     const oracle = await createCaseOracle({ key, files, playbook: args.playbook });
@@ -622,11 +637,13 @@ export async function runAuthorizationProbes(
       ...(args.hooks === undefined ? {} : { hooks: args.hooks }),
     });
     try {
-      await runMode({ site, key, files, relaxed, result, signal });
+      await runMode({ site, key, files, relaxed, result, signal, groups, proven });
     } finally {
       site.close();
     }
   }
+  // Counted only where the body was seen to change the store in both modes, not where it was assumed to.
+  result.writesWithEffect = [...proven.values()].filter((modes) => modes === result.modes).length;
 
   result.sentence = sentenceOf(result);
   return result;
@@ -648,6 +665,39 @@ export function sentenceOf(result: Omit<AuthorizationResult, "sentence">): strin
       ? `, ${result.letInNotReached} of them cells whose caller should have been let in and was not, ` +
         "which did not reach their handler and so tested nothing past the guard"
       : ", and every cell whose caller should have been let in reached its handler";
+  const matrix =
+    result.matrixCells === 0
+      ? ""
+      : `${result.matrixCells} for ${result.routes} routes that name a matter as ${result.callers} ` +
+        `callers (${CALLER_KINDS}) in ${result.modes} modes, ${result.shouldBeLetIn} of which should be let in ` +
+        `and ${result.mustBeRefused} refused, with ${result.comparedWithMissing} refusals compared with the ` +
+        "answer for a matter and records that exist nowhere";
+  const forged =
+    result.forgedCells === 0
+      ? ""
+      : `${result.forgedCells} in which a member of the matter named a record of another matter in each of ` +
+        `${result.forgedRequests} places (a path, a body or a query string), which must be answered as an id of ` +
+        "no record is and change no row";
+  const lists =
+    result.listCells === 0
+      ? ""
+      : `${result.listCells} in which the ${result.listRoutes} routes that name no matter and only read were ` +
+        "read as every caller, which must hold no title or id of a matter the caller has no part in";
+  const groups = [matrix, forged, lists].filter((part) => part !== "");
+  const cells =
+    groups.length === 0
+      ? ""
+      : ` The cells: ${groups.slice(0, -1).join("; ")}${groups.length > 1 ? "; and " : ""}${groups[groups.length - 1]}.`;
+  const effects =
+    result.matrixCells === 0
+      ? ""
+      : " Changes were found by comparing a hash of every row of every table before and after each cell" +
+        (result.writesWithEffect > 0
+          ? `, and callers who must be refused were sent a body that changes the store for a caller who is let in on ` +
+            `${result.writesWithEffect} of ${result.writeRoutes} write routes (the others, such as resuming a ` +
+            "finished run, are answered the same whoever sends them and cannot change it)."
+          : `, but the bodies sent to callers who must be refused change nothing even if they get through ` +
+            `(none of the ${result.writeRoutes} write routes was sent one).`);
   return (
     `Authorization probes: sent ${result.probesRun} cells to the application running in process ` +
     `on synthetic matters that a scripted key oracle, which is not a language model, had reviewed. ` +
@@ -656,19 +706,9 @@ export function sentenceOf(result: Omit<AuthorizationResult, "sentence">): strin
     `${result.byReason.carried_data} carried data of a matter, ${result.byReason.refusal_differs} ` +
     `answered differently from a matter or record that does not exist, ${result.byReason.changed_state} ` +
     `changed a row of the store); ${result.mismatches} answered differently from the expected answer ` +
-    `without exposing anything${unreached}. ` +
-    `The cells: ${result.matrixCells} for ${result.routes} routes that name a matter as ${result.callers} ` +
-    `callers (${CALLER_KINDS}) in ${result.modes} modes, ${result.shouldBeLetIn} of which should be let in ` +
-    `and ${result.mustBeRefused} refused, with ${result.comparedWithMissing} refusals compared with the ` +
-    `answer for a matter and records that exist nowhere; ${result.forgedCells} in which a member of the ` +
-    `matter sent ${result.forgedRequests} requests that name a record of another matter (in a path, a body or ` +
-    `a query string), which must be answered as an id of no record is and change no row; and ` +
-    `${result.listCells} in which the ${result.listRoutes} routes that name no matter and only read were read ` +
-    `as every caller, which must hold no title or id of a matter the caller has no part in. ` +
-    `Changes were found by comparing a hash of every row of every table before and after each cell, ` +
-    `and callers who must be refused were sent a body that changes the store for a caller who is let in on ` +
-    `${result.writesWithEffect} of ${result.writeRoutes} write routes (the others, such as resuming a ` +
-    `finished run, are answered the same whoever sends them and cannot change it).` +
+    `without exposing anything${unreached}.` +
+    cells +
+    effects +
     drift +
     (result.exposed.length > 0 ? ` First exposed: ${named(result.exposed)}.` : "")
   );
@@ -689,6 +729,8 @@ async function loadedFiles(
 }
 
 interface Mode {
+  groups: ReadonlySet<AuthorizationGroup>;
+  proven: Map<string, number>;
   site: ExposureSite;
   key: Parameters<typeof createCaseMatter>[0]["key"];
   files: (name: string) => Uint8Array;
@@ -706,7 +748,7 @@ interface Wire {
 }
 
 async function runMode(mode: Mode): Promise<void> {
-  const { site, key, files, relaxed, result, signal } = mode;
+  const { site, key, files, relaxed, result, signal, groups } = mode;
   await site.preflight();
 
   // The probe table must be the application's routes: a route that names a matter and has no
@@ -853,10 +895,10 @@ async function runMode(mode: Mode): Promise<void> {
   // read by a stranger.
   const entitled = { title: false, text: false, ids: false };
   const entitledLists = { own: false, second: false };
-  const entitledSecond = { title: false, ids: false };
-  /** The writes whose body is shown to change the store for a caller who is let in. */
+  const entitledSecond = { ids: false };
+  /** The writes whose body is shown to change the store, and those that a caller let in sent without effect. */
   const shown = new Set<string>();
-  const effectKeys: string[] = [];
+  const ineffective = new Set<string>();
 
   // --- 1. the matrix ---------------------------------------------------------------------------
 
@@ -904,27 +946,22 @@ async function runMode(mode: Mode): Promise<void> {
     return scratch;
   }
 
-  for (const probe of MATTER_PROBES) {
+  for (const probe of groups.has("matrix") ? MATTER_PROBES : []) {
     const key_ = probeKeyOf(probe);
     let scratch: Scratch | null = null;
     // A route that has a body meant to change the store sends it to the callers who must be refused.
-    const shape = probe.method === "GET" ? null : effectOf(probe, DUMMY_SCRATCH);
-    const hasEffect = shape !== null;
-    if (hasEffect) effectKeys.push(key_);
+    const shape =
+      probe.method === "GET" || !groups.has("effects") ? null : effectOf(probe, DUMMY_SCRATCH);
     for (const actor of ACTORS) {
       signal.throwIfAborted();
       const expected = expectedFor(probe, actor, relaxed);
       let cellIds: ProbeIds = ids;
       let body: ProbeBody = probe.body;
       // A request that changes the matter for good runs on a matter made for it.
-      if (probe.fresh === true) {
-        cellIds = { ...ids, matterId: freshMatter(site) };
-      }
+      if (probe.fresh === true) cellIds = { ...ids, matterId: freshMatter(site) };
       if (shape !== null && expected.kind === "refused") {
         if (shape.target === "scratch") {
-          if (scratch === null) {
-            scratch = await makeScratch(shape.needs);
-          }
+          scratch ??= await makeScratch(shape.needs);
           const effect = effectOf(probe, scratch)!;
           body = effect.body;
           cellIds = effect.ids(scratch, ids);
@@ -965,38 +1002,38 @@ async function runMode(mode: Mode): Promise<void> {
         if (containsAny(text, tokens.windows)) entitled.text = true;
         if (containsAny(text, tokens.ids)) entitled.ids = true;
       }
-      // The deletion of a matter made for the request is its own proof: it is let in, answered with a
-      // success, and the matter is gone.
-      if (
-        shape?.target === "fresh" &&
-        expected.kind === "let_in" &&
-        verdict.verdict === "expected" &&
-        changed
-      )
-        shown.add(key_);
+      if (shape !== null && changed) {
+        // The deletion of a matter made for the request is its own proof: let in, answered with a
+        // success, and the matter is gone. A body that a refused caller got through with has changed
+        // the store, which proves that it can (and the cell is counted as an exposure).
+        if (shape.target === "fresh" ? expected.kind === "let_in" : expected.kind === "refused")
+          shown.add(key_);
+      }
       result.matrixCells += 1;
       record(verdict, { probe: probeName(probe), actor }, expected.kind === "let_in");
     }
 
     // The proof that the body sent to the refused callers changes the store when a caller who is
-    // let in sends it, on the matter they were sent to. Without it a clean count says nothing.
+    // let in sends it, on the matter they were sent to. Without it a clean count says nothing. A
+    // request that the guard did not let in proves nothing either way: that cell is counted apart.
     if (shape?.target === "scratch" && scratch !== null) {
       const effect = effectOf(probe, scratch)!;
       const role = DOCUMENTED_ROLES[probe.action][0] ?? "associate";
       const letInActor: Actor = probe.action === "matter.delete" ? "associate" : role;
       const before = watch.take();
-      await send(
+      const sent = await send(
         letInActor,
         wireOf(probe, pathFor(probe.template, effect.ids(scratch, ids)), effect.body),
       );
       await settle();
       if (watch.changedSince(before)) shown.add(key_);
+      else if (sent.letIn && !shown.has(key_)) ineffective.add(key_);
     }
   }
 
   // --- 2. the forged ids -----------------------------------------------------------------------
 
-  for (const forged of FORGED_PROBES) {
+  for (const forged of groups.has("forged") ? FORGED_PROBES : []) {
     signal.throwIfAborted();
     // The caller holds the role that the route needs in this matter, and nothing in the other.
     const actor = (DOCUMENTED_ROLES[forged.action][0] ?? "associate") as Actor;
@@ -1027,7 +1064,7 @@ async function runMode(mode: Mode): Promise<void> {
     first: actor === "associate" || actor === "reviewer" || actor === "viewer",
     second: actor === "stranger",
   });
-  for (const probe of LIST_PROBES) {
+  for (const probe of groups.has("lists") ? LIST_PROBES : []) {
     for (const actor of ACTORS) {
       signal.throwIfAborted();
       const expected = expectedList(probe, actor);
@@ -1061,43 +1098,45 @@ async function runMode(mode: Mode): Promise<void> {
 
   // --- the controls ----------------------------------------------------------------------------
 
-  // The data check of the forged ids has to be able to see the second matter's title and ids, where its member reads them.
-  for (const path of [
-    `/api/matters/${createdB.matterId}`,
-    `/api/matters/${createdB.matterId}/runs/${reviewedB.runId}/findings`,
-  ]) {
-    const body = await (await clients.get("stranger")!.get(path)).text();
-    if (containsAny(body, [tokensB.title])) entitledSecond.title = true;
-    if (containsAny(body, tokensB.ids)) entitledSecond.ids = true;
+  if (groups.has("forged")) {
+    // The data check of the forged ids has to be able to see the second matter's ids, where its
+    // member reads them (its title is looked for in the list its member reads, above).
+    for (const path of [
+      `/api/matters/${createdB.matterId}`,
+      `/api/matters/${createdB.matterId}/runs/${reviewedB.runId}/findings`,
+      `/api/matters/${createdB.matterId}/findings/${reviewedB.findingId}`,
+    ]) {
+      const body = await (await clients.get("stranger")!.get(path)).text();
+      if (containsAny(body, tokensB.ids)) entitledSecond.ids = true;
+    }
   }
 
-  const blind = (Object.keys(entitled) as (keyof typeof entitled)[]).filter(
-    (name) => !entitled[name],
-  );
-  if (blind.length > 0)
-    throw new ExposureControlFailure(
-      `The authorization probes could not find the matter's ${blind.join(" and ")} in any answer a member is entitled to, ` +
-        "so the check for matter data in a refusal could not tell data from nothing. No count can be trusted.",
+  if (groups.has("matrix")) {
+    const blind = (Object.keys(entitled) as (keyof typeof entitled)[]).filter(
+      (name) => !entitled[name],
     );
-  const blindSecond = (Object.keys(entitledSecond) as (keyof typeof entitledSecond)[]).filter(
-    (name) => !entitledSecond[name],
-  );
-  if (blindSecond.length > 0)
+    if (blind.length > 0)
+      throw new ExposureControlFailure(
+        `The authorization probes could not find the matter's ${blind.join(" and ")} in any answer a member is entitled to, ` +
+          "so the check for matter data in a refusal could not tell data from nothing. No count can be trusted.",
+      );
+  }
+  if (groups.has("forged") && !entitledSecond.ids)
     throw new ExposureControlFailure(
-      `The authorization probes could not find the second matter's ${blindSecond.join(" and ")} in any answer its member reads, ` +
+      "The authorization probes could not find the second matter's ids in any answer its member reads, " +
         "so the check for the data of another matter in a forged request could not tell data from nothing. No count can be trusted.",
     );
-  if (!entitledLists.own || !entitledLists.second)
+  if (groups.has("lists") && (!entitledLists.own || !entitledLists.second))
     throw new ExposureControlFailure(
       "The authorization probes could not find a matter's title in the list its member reads, " +
         "so the check of the lists could not tell data from nothing. No count can be trusted.",
     );
-  const unproven = effectKeys.filter((name) => !shown.has(name));
-  if (unproven.length > 0)
+  if (ineffective.size > 0)
     throw new ExposureControlFailure(
-      `A body meant to change the store did not change it when a caller who is let in sent it (${unproven.join(", ")}), ` +
+      `A body meant to change the store did not change it when a caller who is let in sent it (${[...ineffective].join(", ")}), ` +
         "so a clean check for changes made by a refused caller could not tell a change from nothing. No count can be trusted.",
     );
+  for (const name of shown) mode.proven.set(name, (mode.proven.get(name) ?? 0) + 1);
 }
 
 /** Stands in for a matter when the question is only whether a route has a body that changes the store. */

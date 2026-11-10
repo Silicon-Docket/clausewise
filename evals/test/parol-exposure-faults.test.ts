@@ -6,6 +6,7 @@ import { DEMO_USER_IDS } from "../../apps/parol/src/store/index.js";
 import { BRAMBLEWICK_STRINGS } from "../../fixtures/parol/canary.js";
 import {
   runAuthorizationProbes,
+  type AuthorizationGroup,
   type AuthorizationResult,
 } from "../src/parol/exposure/authorization.js";
 import {
@@ -38,8 +39,20 @@ beforeAll(async () => {
 const common = () => ({ dataset, root: ROOT, playbook, signal: never() });
 const canary = (hooks?: CanaryHooks): Promise<CanaryResult> =>
   runCanaryScan({ ...common(), ...(hooks === undefined ? {} : { hooks }) });
-const authorization = (hooks?: SiteHooks): Promise<AuthorizationResult> =>
-  runAuthorizationProbes({ ...common(), ...(hooks === undefined ? {} : { hooks }) });
+/**
+ * The faults below are found by the matrix (the cells of the routes that name a matter), so they
+ * ask for it alone; the forged ids, the lists and the bodies that change the store have their own
+ * faults in parol-exposure-authz-faults.test.ts, and the whole suite runs in the test of the record.
+ */
+const authorization = (
+  hooks?: SiteHooks,
+  groups: readonly AuthorizationGroup[] = ["matrix"],
+): Promise<AuthorizationResult> =>
+  runAuthorizationProbes({
+    ...common(),
+    ...(hooks === undefined ? {} : { hooks }),
+    groups,
+  });
 
 /** A generator that is the given one with its `generate` replaced. */
 function wrap(
@@ -366,7 +379,7 @@ describe("(d) an application built with a planted authorization hole", () => {
     expect(result.byReason.carried_data).toBe(8);
     // The members who are let in by the hand-made route are not what the table expects (the guard did not log them).
     expect(result.mismatches).toBeGreaterThan(0);
-    expect(result.probesRun).toBe(504);
+    expect(result.matrixCells).toBe(504);
   });
 
   it("counts a guard that wrongly takes one person for a member, on every route", async () => {
@@ -499,7 +512,7 @@ describe("the record of all three sub-suites with faults planted", () => {
         },
       },
     );
-    expect(record.probesRun).toBe(504);
+    expect(record.probesRun).toBeGreaterThan(504);
     expect(record.artefactsScanned).toBeGreaterThan(100);
     expect(record.probesAnsweredWithData).toBeGreaterThan(0);
     expect(record.canaryHits).toBeGreaterThan(0);

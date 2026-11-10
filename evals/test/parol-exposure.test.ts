@@ -15,6 +15,7 @@ import {
   type CanaryResult,
   type UploadReplayResult,
 } from "../src/parol/exposure/index.js";
+import { FORGED_PROBES, LIST_PROBES, MATTER_PROBES } from "../src/parol/exposure/probes.js";
 import { exposureChecked, exposureCount } from "../src/parol/suites.js";
 import {
   CANARY_SHAPE,
@@ -78,8 +79,16 @@ beforeAll(async () => {
 });
 
 describe("the real application", () => {
-  it("answers 504 probes (36 routes, 7 callers, 2 modes) and none with data or with a revealing refusal", () => {
-    expect(authorization.probesRun).toBe(36 * 7 * 2);
+  it("answers every cell of the matrix, the forged ids and the lists, and none with data or with a revealing refusal", () => {
+    // 36 routes, 7 callers, 2 modes; every forged request in 2 modes; every list route as 7 callers in 2 modes.
+    expect(authorization.matrixCells).toBe(MATTER_PROBES.length * 7 * 2);
+    expect(authorization.forgedCells).toBe(FORGED_PROBES.length * 2);
+    expect(authorization.listCells).toBe(LIST_PROBES.length * 7 * 2);
+    expect(authorization.probesRun).toBe(
+      authorization.matrixCells + authorization.forgedCells + authorization.listCells,
+    );
+    expect(authorization.routes).toBe(36);
+    expect(authorization.callers).toBe(7);
     expect(authorization.probesAnsweredWithData).toBe(0);
     expect(authorization.byReason).toEqual({
       handler_answered: 0,
@@ -91,13 +100,33 @@ describe("the real application", () => {
     // The matrix is not empty on either side: callers are let in, callers are refused, refusals are compared.
     expect(authorization.shouldBeLetIn).toBeGreaterThan(100);
     expect(authorization.mustBeRefused).toBeGreaterThan(300);
-    expect(authorization.shouldBeLetIn + authorization.mustBeRefused).toBe(504);
+    expect(authorization.shouldBeLetIn + authorization.mustBeRefused).toBe(
+      authorization.matrixCells,
+    );
     expect(authorization.comparedWithMissing).toBeGreaterThan(200);
     expect(authorization.tableDrift).toBe(0);
   });
 
-  it("answers every cell as the table says: no mismatch either", () => {
+  it("puts an id of another matter into every route that takes an id, and the places outside a path", () => {
+    // 20 ids in a path, 4 in a body (three in the PATCH body, one in a form), 1 in a query string.
+    expect(FORGED_PROBES.filter((probe) => probe.via === "path")).toHaveLength(20);
+    expect(FORGED_PROBES.filter((probe) => probe.via === "body")).toHaveLength(4);
+    expect(FORGED_PROBES.filter((probe) => probe.via === "query")).toHaveLength(1);
+    expect(new Set(FORGED_PROBES.map((probe) => probe.position))).toEqual(
+      new Set(["document", "version", "run", "finding", "memo"]),
+    );
+    expect(authorization.forgedRequests).toBe(FORGED_PROBES.length);
+  });
+
+  it("sends the callers who must be refused a body that changes the store, on every write route that can be changed", () => {
+    expect(authorization.writeRoutes).toBe(MATTER_PROBES.filter((p) => p.method !== "GET").length);
+    // The rest are the resume and the cancel of a finished run, which are 409 whoever sends them.
+    expect(authorization.writesWithEffect).toBe(authorization.writeRoutes - 4);
+  });
+
+  it("answers every cell as the table says: no mismatch either, and every let-in caller reached its handler", () => {
     expect(authorization.mismatches).toBe(0);
+    expect(authorization.letInNotReached).toBe(0);
     expect(authorization.mismatched).toEqual([]);
   });
 
@@ -128,14 +157,16 @@ describe("the real application", () => {
 
   it("gives a record that gate G1 reads as zero out of a nonzero number checked", () => {
     expect(record).toMatchObject({
-      probesRun: 504,
+      probesRun: authorization.probesRun,
       probesAnsweredWithData: 0,
       canaryHits: 0,
       foreignSpanIdHits: 0,
+      letInNotReached: 0,
+      mismatches: 0,
     });
     expect(record.artefactsScanned).toBe(canary.artefactsScanned);
     expect(exposureCount(record)).toBe(0);
-    expect(exposureChecked(record)).toBe(504 + canary.artefactsScanned);
+    expect(exposureChecked(record)).toBe(authorization.probesRun + canary.artefactsScanned);
     expect(exposureChecked(record)).toBeGreaterThan(600);
   });
 
@@ -149,7 +180,13 @@ describe("the real application", () => {
 
   it("says in one plain sentence per sub-suite what it did and its counts, with no dash and no canary string", () => {
     expect(record.suites).toHaveLength(3);
-    expect(record.suites[0]).toMatch(/^Authorization probes: .*504 requests/);
+    expect(record.suites[0]).toMatch(/^Authorization probes: sent \d+ cells /);
+    // The sentence counts cells and says so: the reference requests are not cells, and the counts are this run's.
+    expect(record.suites[0]).not.toMatch(/\d+ requests/);
+    expect(record.suites[0]).toContain(`sent ${authorization.probesRun} cells`);
+    expect(record.suites[0]).toContain(`${authorization.matrixCells} for ${authorization.routes} routes`);
+    expect(record.suites[0]).toContain("not a language model");
+    expect(record.suites[0]).toContain("every cell whose caller should have been let in reached its handler");
     expect(record.suites[1]).toMatch(/^Canary scan: .*PAROL-D10/);
     expect(record.suites[2]).toMatch(/^Upload replay: .*PAROL-D09/);
     for (const sentence of record.suites) {
@@ -324,8 +361,20 @@ describe("a suite that cannot run says so and does not return zeros", () => {
   it("refuses to compose a record from nothing", () => {
     expect(() =>
       composeExposureRecord({
-        authorization: { probesRun: 0, probesAnsweredWithData: 0, sentence: "x." },
-        canary: { artefactsScanned: 0, canaryHits: 0, foreignSpanIdHits: 0, sentence: "x." },
+        authorization: {
+          probesRun: 0,
+          probesAnsweredWithData: 0,
+          letInNotReached: 0,
+          mismatches: 0,
+          sentence: "x.",
+        },
+        canary: {
+          artefactsScanned: 0,
+          canaryHits: 0,
+          foreignSpanIdHits: 0,
+          factSightings: 0,
+          sentence: "x.",
+        },
         uploads: { sentence: "x." },
       }),
     ).toThrow(/checked nothing/);

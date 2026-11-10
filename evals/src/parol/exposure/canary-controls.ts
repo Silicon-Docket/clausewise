@@ -20,16 +20,17 @@ export const squash = (text: string): string => text.replace(/\s+/g, " ").trim()
 
 /** How much of a clause is looked for: enough to tell it from any other text. */
 const NEEDLE_LENGTH = 30;
+const QUOTE_NEEDLE_LENGTH = 40;
 
 /**
  * The beginnings of the texts that are long enough to be told from other text, squashed. A page, a
  * prompt or a memo that holds one of them holds text of the case.
  */
-export function needlesOf(texts: readonly string[]): string[] {
+export function needlesOf(texts: readonly string[], length = NEEDLE_LENGTH): string[] {
   return texts
     .map((text) => squash(text))
-    .filter((text) => text.length >= NEEDLE_LENGTH)
-    .map((text) => text.slice(0, NEEDLE_LENGTH).trim());
+    .filter((text) => text.length >= length)
+    .map((text) => text.slice(0, length).trim());
 }
 
 /** Whether any view of `text` holds any of `needles` (which are squashed). */
@@ -49,6 +50,22 @@ const utf8 = (bytes: Uint8Array): string => Buffer.from(bytes).toString("utf8");
 // The model boundary
 // ---------------------------------------------------------------------------------------------
 
+/** The schemas whose prompts show the case's clauses inside <contract> tags. */
+const CLAUSE_PROMPTS: ReadonlySet<string> = new Set(["locate_passages", "analyze_rule"]);
+
+/**
+ * What a prompt shows of the case. The system prompt, the rule and the playbook's wording can say
+ * what a clause says, so for a prompt that shows clauses (extract and analyze) only the text inside
+ * its <contract> tags counts; for any other prompt, all of it.
+ */
+function shownOfCase(request: { text: string; schemaName: string | undefined }): string {
+  if (request.schemaName === undefined || !CLAUSE_PROMPTS.has(request.schemaName))
+    return request.text;
+  return [...request.text.matchAll(/<contract>\n([\s\S]*?)\n<\/contract>/g)]
+    .map((match) => match[1]!)
+    .join("\n");
+}
+
 /**
  * Every prompt holds text of the case, and a prompt for one rule names a rule of the playbook. A
  * prompt that lost its clauses cannot show a retrieval leak, whatever the scan finds in it.
@@ -63,7 +80,7 @@ export function checkPrompts(args: {
   if (needles.length === 0)
     throw new EvalError(`${caseKey}: the case has no clause long enough to check a prompt for.`);
   const rules = new Set(args.ruleKeys.map((key) => key.toLowerCase()));
-  const empty = requests.filter((request) => !holdsAny(request.text, needles)).length;
+  const empty = requests.filter((request) => !holdsAny(shownOfCase(request), needles)).length;
   const unnamed = requests.filter((request) => {
     if (request.schemaName !== "analyze_rule") return false;
     const rule = /^rule id: (\S+)$/m.exec(request.text.toLowerCase())?.[1];
@@ -222,7 +239,8 @@ export async function checkMemo(args: {
   const names = args.names.map((name) => squash(name));
   if (!holdsAll(document.text, names))
     throw fail("does not hold the case's matter name and client");
-  const quotes = needlesOf(args.quotes);
+  // Longer than a name, so that a memo that holds only the names is not taken for one that quotes.
+  const quotes = needlesOf(args.quotes, QUOTE_NEEDLE_LENGTH);
   if (quotes.length > 0 && !holdsAny(document.text, quotes))
     throw fail("quotes none of the passages the key names");
 }

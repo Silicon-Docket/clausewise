@@ -87,7 +87,7 @@ const NAMED_ENTITIES: Readonly<Record<string, string>> = {
 };
 
 /** Characters that show nothing: soft hyphen, zero width, bidi marks and isolates, the byte order mark. */
-const INVISIBLE = /[­​-‏‪-‮⁠-⁤﻿]/g;
+const INVISIBLE = /[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]/g;
 
 const codePoint = (value: number, whole: string): string => {
   try {
@@ -119,19 +119,24 @@ const decodePercent = (text: string): string =>
     String.fromCharCode(Number.parseInt(hex, 16)),
   );
 
-/** The text without markup and decoded: JSON escapes, tags, entities, percent escapes, invisible characters. */
+/** The text decoded: JSON escapes, entities, percent escapes, and invisible characters taken out. */
+const decoded = (text: string): string =>
+  decodePercent(decodeEntities(unescapeJson(text))).replace(INVISIBLE, "");
+
+/** The text without markup, and decoded. */
 export const plainTextOf = (text: string): string =>
   decodePercent(decodeEntities(stripTags(unescapeJson(text)))).replace(INVISIBLE, "");
 
 /**
- * The views a text is searched in, in lower case: as written; with the tags taken out; and plain
- * (see `plainTextOf`). A token counts if any view holds it. Views that equal an earlier one are
- * left out.
+ * The views a text is searched in, in lower case: as written; decoded (an id in a link is percent
+ * encoded, a JSON writer may escape a colon); with the tags taken out (the mark element around a
+ * quoted passage cuts a string in two); and both. A token counts if any view holds it. Views that
+ * equal an earlier one are left out.
  */
 export function textViewsOf(text: string): string[] {
-  const views = [text];
-  if (text.includes("<")) views.push(stripTags(text));
-  views.push(plainTextOf(text));
+  const views = [text, decoded(text)];
+  if (text.includes("<") || views[1]!.includes("<"))
+    views.push(stripTags(text), plainTextOf(text), stripTags(views[1]!));
   return [...new Set(views.map((view) => view.toLowerCase()))];
 }
 
@@ -367,7 +372,7 @@ export async function runControl(scanner: Scanner, forbid: TokenSet): Promise<vo
   );
   await attempt(
     "canary string with a soft hyphen",
-    `${clean} ${first.slice(0, half(first))}­${first.slice(half(first))}`,
+    `${clean} ${first.slice(0, half(first))}\u00ad${first.slice(half(first))}`,
     "http_body",
     [{ token: "canary", index: 0 }],
   );

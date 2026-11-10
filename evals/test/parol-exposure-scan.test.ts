@@ -11,7 +11,12 @@ import { createCapturingGenerator } from "../src/parol/exposure/model.js";
 import {
   createLedger,
   createScanner,
+  maximalIds,
+  plainTextOf,
+  plantedDocx,
   runControl,
+  textViewsOf,
+  zipMethod,
   type ScanTarget,
   type Scanner,
   type TokenSet,
@@ -39,7 +44,16 @@ const target = (
   forbid,
 });
 
-async function docx(paragraphs: string[], runLength: number): Promise<Uint8Array> {
+/**
+ * A Word package like the one the application writes: DEFLATE compressed, so that a scanner that
+ * does not inflate reads nothing of it. `compression` "STORE" makes the stored kind the old tests
+ * used, to show what it could not tell apart.
+ */
+async function docx(
+  paragraphs: string[],
+  runLength: number,
+  compression: "DEFLATE" | "STORE" = "DEFLATE",
+): Promise<Uint8Array> {
   const zip = new JSZip();
   const runs = (text: string): string =>
     (text.match(new RegExp(`.{1,${runLength}}`, "gs")) ?? [])
@@ -53,7 +67,25 @@ async function docx(paragraphs: string[], runLength: number): Promise<Uint8Array
     "docProps/core.xml",
     "<cp:coreProperties><dc:title>Synthetic</dc:title></cp:coreProperties>",
   );
-  return zip.generateAsync({ type: "uint8array" });
+  return zip.generateAsync({ type: "uint8array", compression });
+}
+
+/** The bytes of a Word package with one entry's compressed data damaged in a way that cannot be inflated. */
+function withBrokenEntry(bytes: Uint8Array, entry: string): Uint8Array {
+  const out = Uint8Array.from(bytes);
+  const view = new DataView(out.buffer);
+  let offset = 0;
+  while (offset + 30 < out.length && view.getUint32(offset, true) === 0x04034b50) {
+    const compressed = view.getUint32(offset + 18, true);
+    const nameLength = view.getUint16(offset + 26, true);
+    const extraLength = view.getUint16(offset + 28, true);
+    const name = Buffer.from(out.subarray(offset + 30, offset + 30 + nameLength)).toString("utf8");
+    const data = offset + 30 + nameLength + extraLength;
+    // The first byte of a DEFLATE stream: final block, block type 3, which does not exist.
+    if (name === entry) out[data] = 0x07;
+    offset = data + compressed;
+  }
+  return out;
 }
 
 describe("the scanner", () => {
@@ -119,10 +151,121 @@ describe("the scanner", () => {
     expect(await scanner.scan(target(await docx(["Clean."], 3), "memo"))).toEqual([]);
   });
 
-  it("reads bytes that are not a Word package as text, and a broken package as the bytes it is", async () => {
+  it("reads bytes that are not a Word package as text", async () => {
     expect(await scanner.scan(target(new TextEncoder().encode(`x ${CANARY} y`)))).toHaveLength(1);
-    const broken = new Uint8Array([0x50, 0x4b, 0x03, 0x04, ...new TextEncoder().encode(CANARY)]);
-    expect(await scanner.scan(target(broken))).toHaveLength(1);
+    // Binary that is not a zip, and a zip signature that is not at the start, are text.
+    const binary = new Uint8Array([
+      0x00,
+      0xff,
+      0x50,
+      0x4b,
+      0x03,
+      0x04,
+      ...new TextEncoder().encode(CANARY),
+    ]);
+    expect(await scanner.scan(target(binary))).toHaveLength(1);
+  });
+
+  it("stops, and does not call it clean, when a Word package cannot be read", async () => {
+    // The memo is DEFLATE compressed, so a search of its bytes finds nothing even where it holds a leak.
+    const memo = await docx(["Plain paragraph.", CANARY], 5);
+    expect(Buffer.from(memo).toString("latin1")).not.toContain(CANARY);
+    expect((await scanner.scan(target(memo, "memo"))).map((hit) => hit.token)).toEqual(["canary"]);
+
+    expect(zipMethod(await plantedDocx({ document: [CANARY] }))).toBe(8);
+    expect(memo.length).toBeLessThan((await docx(["Plain paragraph.", CANARY], 5, "STORE")).length);
+    const damaged: [string, Uint8Array][] = [
+      ["a signature with nothing after it", new Uint8Array([0x50, 0x4b, 0x03, 0x04])],
+      ["a package cut in two", memo.slice(0, Math.floor(memo.length / 2))],
+      ["a package cut just before its directory", memo.slice(0, memo.length - 30)],
+      [
+        "a package with one entry that cannot be inflated",
+        withBrokenEntry(memo, "docProps/core.xml"),
+      ],
+      [
+        "a package whose first entry cannot be inflated",
+        withBrokenEntry(memo, "word/document.xml"),
+      ],
+    ];
+    for (const [what, bytes] of damaged) {
+      const failure = await scanner.scan(target(bytes, "memo")).catch((error: unknown) => error);
+      expect(failure, what).toBeInstanceOf(ExposureControlFailure);
+      expect(failure, what).toMatchObject({ name: "ExposureControlFailure", exitCode: 2 });
+      expect((failure as Error).message, what).toMatch(
+        /could not be read, so no count can be trusted/,
+      );
+      expect((failure as Error).message, what).not.toContain("CANARY");
+      expect((failure as Error).message, what).not.toContain(SPAN);
+    }
+  });
+
+  it("stops when the checksum of an entry is wrong, even if the entry reads", async () => {
+    const stored = await docx(["Plain paragraph.", CANARY], 5, "STORE");
+    // Change one letter of the document part: stored, so it still reads, but the checksum says no.
+    const text = Buffer.from(stored).toString("latin1");
+    const at = text.indexOf("Plain");
+    const bytes = Uint8Array.from(stored);
+    bytes[at] = "X".charCodeAt(0);
+    await expect(scanner.scan(target(bytes, "memo"))).rejects.toMatchObject({
+      name: "ExposureControlFailure",
+    });
+  });
+
+  it("finds a string that markup cuts in two, as the mark element around a quoted passage does", async () => {
+    const cut = `<p>${CANARY.slice(0, 14)}</span><mark class="quote">${CANARY.slice(14)}</mark> more</p>`;
+    expect(cut).not.toContain(CANARY);
+    expect((await scanner.scan(target(cut))).map((hit) => hit.token)).toEqual(["canary"]);
+    // The same, with the cut inside an id.
+    const idCut = `<a href="/x">${SPAN.slice(0, 10)}<b>${SPAN.slice(10)}</b></a>`;
+    expect((await scanner.scan(target(idCut))).map((hit) => hit.token)).toEqual(["id"]);
+  });
+
+  it("finds a string that is written as entities, escapes or with invisible characters", async () => {
+    const encoded = [
+      "<p>CANARY&#45;TESTMATTER-0123456789ab</p>",
+      "<p>&#x43;ANARY-TESTMATTER-0123456789ab</p>",
+      // Escapes as a JSON writer may write them, as text.
+      String.raw`CANARY-TEST\u004dATTER-0123456789ab`,
+      String.raw`CANARY-TESTM\u00adATTER-0123456789ab`,
+      String.raw`CANARY-TEST\u200bMATTER-0123456789ab`,
+      // The characters themselves: a soft hyphen and a zero width space.
+      "CANARY-TEST\u00adMATTER-0123456789ab",
+      "CANARY-TEST\u200bMATTER-0123456789ab",
+    ];
+    for (const text of encoded)
+      expect(
+        (await scanner.scan(target(text))).map((hit) => hit.index),
+        text,
+      ).toEqual([0]);
+    // An id in a link, percent encoded; in JSON with its colon escaped; and as an entity.
+    for (const text of [
+      '<a href="/matters?x=ver_00000000feedface%3Ap17">',
+      String.raw`{"spanId":"ver_00000000feedface\u003ap17"}`,
+      "ver_00000000feedface&#58;p17",
+    ])
+      expect(
+        (await scanner.scan(target(text))).map((hit) => hit.token),
+        text,
+      ).toEqual(["id"]);
+  });
+
+  it("does not find a token in text that only looks a little like it", async () => {
+    for (const text of [
+      "<p>CANARY</span><mark>TESTMATTER</mark> 0123456789ab</p>",
+      "ver_00000000feedface p17 and ver_00000000feedface-p17",
+      "CANARY&#45;TESTMATTER&#45;0123456789ac",
+      "100%25 of the 5%3 text &amp; &lt;tag&gt;",
+    ])
+      expect(await scanner.scan(target(text)), text).toEqual([]);
+  });
+
+  it("gives the views a text is searched in", () => {
+    expect(textViewsOf("plain")).toEqual(["plain"]);
+    const views = textViewsOf("<b>A&amp;B</b> C%3Ad");
+    expect(views).toContain("<b>a&amp;b</b> c%3ad");
+    expect(views).toContain("a&amp;b c%3ad");
+    expect(views).toContain("a&b c:d");
+    expect(plainTextOf("<b>A&amp;B</b> C%3Ad \u00e9")).toBe("A&B C:d \u00e9");
   });
 
   it("reports a place and a position, and nothing that was found", async () => {
@@ -169,6 +312,110 @@ describe("the control", () => {
       scan: async (t) => (await real.scan(t)).filter((hit) => hit.token !== "id"),
     };
     await expect(runControl(noIds, forbid)).rejects.toThrow(/id it was given/);
+  });
+
+  describe("with a scanner that has a fault", () => {
+    const real = createScanner();
+
+    /** Reads every part of a package as it is stored, without inflating it. */
+    const neverInflates: Scanner = {
+      async scan(t) {
+        if (typeof t.content === "string") return real.scan(t);
+        const zip = await JSZip.loadAsync(t.content);
+        const parts = Object.values(zip.files)
+          .filter((entry) => !entry.dir)
+          .map((entry) => {
+            const data = (entry as unknown as { _data: { compressedContent: Uint8Array } })._data;
+            return Buffer.from(data.compressedContent).toString("latin1");
+          });
+        return real.scan({ ...t, content: parts.join("\n") });
+      },
+    };
+
+    /** Reads a package without one of its parts. */
+    const withoutPart = (part: string): Scanner => ({
+      async scan(t) {
+        if (typeof t.content === "string") return real.scan(t);
+        const zip = await JSZip.loadAsync(t.content);
+        zip.remove(part);
+        const content = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
+        return real.scan({ ...t, content });
+      },
+    });
+
+    it("throws for a scanner that never inflates a Word file, which the old stored control could not tell", async () => {
+      // It reads a stored package, so a control that planted a stored package would have passed it ...
+      const stored = await docx(["Plain paragraph.", CANARY], 200, "STORE");
+      expect((await neverInflates.scan(target(stored, "memo"))).map((hit) => hit.token)).toEqual([
+        "canary",
+      ]);
+      // ... and it reads nothing of the compressed package that the application writes.
+      const deflated = await docx(["Plain paragraph.", CANARY], 200);
+      expect(await neverInflates.scan(target(deflated, "memo"))).toEqual([]);
+      await expect(runControl(neverInflates, forbid)).rejects.toThrow(/Word file/);
+    });
+
+    it("throws for a scanner that skips the header part, or the document properties, of a package", async () => {
+      for (const part of ["word/header1.xml", "docProps/core.xml", "word/document.xml"]) {
+        const failure = await runControl(withoutPart(part), forbid).catch(
+          (error: unknown) => error,
+        );
+        expect(failure, part).toBeInstanceOf(ExposureControlFailure);
+        expect((failure as Error).message, part).toMatch(/Word file/);
+      }
+    });
+
+    it("throws for a scanner that looks for the first id only, or the first string only", async () => {
+      const firstIdOnly: Scanner = {
+        scan: (t) => real.scan({ ...t, forbid: { ...t.forbid, ids: t.forbid.ids.slice(0, 1) } }),
+      };
+      await expect(runControl(firstIdOnly, forbid)).rejects.toThrow(/id it was given/);
+      const firstStringOnly: Scanner = {
+        scan: (t) =>
+          real.scan({ ...t, forbid: { ...t.forbid, canary: t.forbid.canary.slice(0, 1) } }),
+      };
+      await expect(runControl(firstStringOnly, forbid)).rejects.toThrow(/canary it was given/);
+    });
+
+    it("throws for a scanner that searches the text as written only", async () => {
+      const asWritten: Scanner = {
+        async scan(t) {
+          const text =
+            typeof t.content === "string" ? t.content : Buffer.from(t.content).toString("utf8");
+          const hits: Awaited<ReturnType<Scanner["scan"]>> = [];
+          t.forbid.canary.forEach((value, index) => {
+            if (text.toLowerCase().includes(value.toLowerCase()))
+              hits.push({ kind: t.kind, label: t.label, token: "canary", index });
+          });
+          t.forbid.ids.forEach((value, index) => {
+            if (text.toLowerCase().includes(value.toLowerCase()))
+              hits.push({ kind: t.kind, label: t.label, token: "id", index });
+          });
+          return hits;
+        },
+      };
+      // It finds what is in the text as it is, and fails at the first token that markup cuts or an escape hides.
+      await expect(runControl(asWritten, forbid)).rejects.toThrow(/mark element|entity|Word file/);
+    });
+  });
+
+  it("plants every string and every id, in a package that is compressed as the application's memo is", async () => {
+    const bytes = await plantedDocx({ document: [CANARY, OTHER, SPAN] });
+    expect(zipMethod(bytes)).toBe(8);
+    expect(Buffer.from(bytes).toString("latin1")).not.toContain(CANARY);
+    const hits = await createScanner().scan(target(bytes, "memo"));
+    expect(hits.map((hit) => `${hit.token}${hit.index}`).sort()).toEqual([
+      "canary0",
+      "canary1",
+      "id0",
+    ]);
+  });
+
+  it("knows which ids a full set reports: those that are not a part of a longer id", () => {
+    expect(
+      maximalIds(["ver_aaaaaaaa", "ver_aaaaaaaa:p1", "mat_bbbbbbbb", "VER_AAAAAAAA:P2"]),
+    ).toEqual([1, 2, 3]);
+    expect(maximalIds([])).toEqual([]);
   });
 
   it("refuses a token too short to mean anything, and a token set with nothing to plant", async () => {

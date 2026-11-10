@@ -580,14 +580,18 @@ async function scanCase(
         path: pathFor(probe.template, caseIds(reviewed.findingIds[0]!)),
         public: probe.access === "public",
       }));
+    /**
+     * One read. `load`: the reader must be let in, so anything but 200 stops the suite. `shape`: the
+     * body of such a read must also hold something and, for JSON, parse (the case's own readers and
+     * the strangers are the reference channel for this; the canary matter's readers are checked for
+     * status only, because their channel is the same fetch). `own`: collects what the pages hold.
+     */
     const read = (
       client: SiteClient,
       label: string,
       path: string,
       forbid: TokenSet,
-      mustLoad: boolean,
-      withFacts: boolean,
-      own?: OwnPages,
+      how: { load?: boolean; shape?: boolean; facts?: boolean; own?: OwnPages } = {},
     ) =>
       fetchAndAdd({
         client,
@@ -595,9 +599,10 @@ async function scanCase(
         label,
         path,
         forbid,
-        facts: withFacts ? facts : [],
-        mustLoad,
-        ...(own === undefined ? {} : { own }),
+        facts: how.facts === false ? [] : facts,
+        mustLoad: how.load === true,
+        shape: how.shape ?? how.load === true,
+        ...(how.own === undefined ? {} : { own: how.own }),
       });
 
     for (const [role, user] of [
@@ -608,9 +613,14 @@ async function scanCase(
       const client = await site.signIn(user);
       const own = ownPages({ caseKey: key.case, names, needles: clauseNeedles });
       for (const target of caseTargets)
-        await read(client, `${role} ${target.label}`, target.path, foreignToCase, true, true, own);
+        await read(client, `${role} ${target.label}`, target.path, foreignToCase, {
+          load: true,
+          own,
+        });
       for (const route of otherRoutes())
-        await read(client, `${role} GET ${route.template}`, route.path, foreignToCase, true, true);
+        await read(client, `${role} GET ${route.template}`, route.path, foreignToCase, {
+          load: true,
+        });
       own.require(`the case's ${role}`);
       // The case's people reading the canary matters' routes: no part in them, nothing to see.
       for (const side of sides)
@@ -620,8 +630,6 @@ async function scanCase(
             `${role} on canary ${side.matter.id} ${target.label}`,
             target.path,
             readingCanaryRoutes(side),
-            false,
-            true,
           );
     }
 
@@ -639,8 +647,6 @@ async function scanCase(
             `${side.matter.id} ${who} on case ${target.label}`,
             target.path,
             canaryUserOnCaseRoutes(side),
-            false,
-            true,
           );
         for (const target of canaryTargets(side))
           await read(
@@ -648,8 +654,7 @@ async function scanCase(
             `${side.matter.id} ${who} ${target.label}`,
             target.path,
             caseIdsForCanarySide,
-            false,
-            false,
+            { facts: false },
           );
         for (const route of otherRoutes())
           await read(
@@ -657,8 +662,7 @@ async function scanCase(
             `${side.matter.id} ${who} GET ${route.template}`,
             route.path,
             caseIdsForCanarySide,
-            true,
-            false,
+            { load: true, shape: false, facts: false },
           );
       }
     }
@@ -674,23 +678,11 @@ async function scanCase(
     for (const [who, client] of strangers) {
       const signedIn = who !== "anonymous";
       for (const route of otherRoutes())
-        await read(
-          client,
-          `${who} GET ${route.template}`,
-          route.path,
-          nobodyOnLists,
-          signedIn || route.public,
-          true,
-        );
+        await read(client, `${who} GET ${route.template}`, route.path, nobodyOnLists, {
+          load: signedIn || route.public,
+        });
       for (const target of caseTargets)
-        await read(
-          client,
-          `${who} on case ${target.label}`,
-          target.path,
-          nobodyOnCaseRoutes,
-          false,
-          true,
-        );
+        await read(client, `${who} on case ${target.label}`, target.path, nobodyOnCaseRoutes);
       for (const side of sides)
         for (const target of canaryTargets(side))
           await read(
@@ -698,8 +690,6 @@ async function scanCase(
             `${who} on canary ${side.matter.id} ${target.label}`,
             target.path,
             nobodyOnCanaryRoutes(side),
-            false,
-            true,
           );
     }
     const anonymous = site.anonymous();
@@ -709,8 +699,7 @@ async function scanCase(
         `anonymous GET ${probe.template}`,
         pathFor(probe.template, caseIds(reviewed.findingIds[0]!)),
         nobodyOnLists,
-        true,
-        true,
+        { load: true },
       );
 
     // 9. The exported memo, as the application stores it.
@@ -813,6 +802,8 @@ async function fetchAndAdd(args: {
    * a body that is empty, or a JSON body that does not parse, would make it empty too.
    */
   mustLoad: boolean;
+  /** Also require that the body of a page that loaded is not empty and that JSON parses. */
+  shape: boolean;
   /** Collects what the member's own pages hold, for the real-data control. */
   own?: OwnPages;
 }): Promise<void> {
@@ -831,7 +822,7 @@ async function fetchAndAdd(args: {
   args.own?.note(routeOf(args.label), Buffer.from(bytes).toString("utf8"));
   // A body that holds something forbidden is a count, whatever else is wrong with it. One that holds
   // nothing forbidden must not be an empty or a damaged body, or its zero would mean nothing.
-  if (args.ledger.canaryHits + args.ledger.idHits === found)
+  if (args.shape && args.ledger.canaryHits + args.ledger.idHits === found)
     checkBody({
       label: args.label,
       contentType: response.headers.get("content-type") ?? "",
