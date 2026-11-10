@@ -243,6 +243,23 @@ describe("distinct-button-names", () => {
     expect(rulesOf(form("a", "a"))).toEqual([]);
   });
 
+  it("tells two submit inputs of the same value apart by the action of their forms", () => {
+    const html =
+      '<form method="post" action="/documents/a/remove"><input type="submit" value="Remove"></form>' +
+      '<form method="post" action="/documents/b/remove"><input type="submit" value="Remove"></form>';
+    const found = audit(html).filter((v) => v.rule === "distinct-button-names");
+    expect(found).toHaveLength(1);
+    expect(found[0]?.detail).toContain('2 buttons named "remove"');
+    expect(rulesOf(html)).toEqual(["distinct-button-names"]);
+    // The same two inputs in two forms to one action do the same thing and may share the name.
+    expect(
+      rulesOf(
+        '<form method="post" action="/r"><input type="submit" value="Remove"></form>' +
+          '<form method="post" action="/r"><input type="submit" value="Remove"></form>',
+      ),
+    ).toEqual([]);
+  });
+
   it("lets two forms to one action share a name", () => {
     expect(
       rulesOf(
@@ -352,6 +369,29 @@ describe("form-without-submit", () => {
       rulesOf(
         '<form id="a" method="post" action="/a"><button type="submit" form="b">Go</button></form>' +
           '<form id="b" method="post" action="/b"><button type="submit">Send</button></form>',
+      ),
+    ).toEqual(["form-without-submit"]);
+  });
+
+  it("does not count a submit control whose form attribute names an element that is not a form", () => {
+    // Outside the form: it belongs to no form at all.
+    expect(
+      rulesOf(
+        '<form method="post" action="/x"><input type="text" name="a" aria-label="A"></form>' +
+          '<div id="d"></div><button type="submit" form="d">Go</button>',
+      ),
+    ).toEqual(["form-without-submit"]);
+    // Inside the form: the attribute wins over the place, and a div is no form, so it belongs to none.
+    expect(
+      rulesOf(
+        '<div id="d"></div><form method="post" action="/x"><input type="text" name="a" aria-label="A">' +
+          '<button type="submit" form="d">Go</button></form>',
+      ),
+    ).toEqual(["form-without-submit"]);
+    // An id that no element has is no form either.
+    expect(
+      rulesOf(
+        '<form method="post" action="/x"><button type="submit" form="missing">Go</button></form>',
       ),
     ).toEqual(["form-without-submit"]);
   });
@@ -519,6 +559,19 @@ describe("tabStops", () => {
     ).toEqual(["in-legend"]);
   });
 
+  it("skips a control that is itself hidden or inert, as well as one inside a hidden or inert box", () => {
+    expect(stopIds('<button id="b" type="button" hidden>B</button>')).toEqual([]);
+    expect(stopIds('<button id="b" type="button" hidden="">B</button>')).toEqual([]);
+    expect(stopIds('<button id="b" type="button" inert>B</button>')).toEqual([]);
+    expect(stopIds('<button id="b" type="button" inert="">B</button>')).toEqual([]);
+    // The next control is not affected by the one before it.
+    expect(
+      stopIds(
+        '<button id="b" type="button" hidden>B</button><button id="c" type="button">C</button>',
+      ),
+    ).toEqual(["c"]);
+  });
+
   it("reads tabindex as a number: a bad value is ignored, a negative one removes the stop", () => {
     expect(stopIds('<div id="d" tabindex="abc"></div>')).toEqual([]);
     expect(stopIds('<button id="b" type="button" tabindex="abc">B</button>')).toEqual(["b"]);
@@ -535,6 +588,27 @@ describe("tabStops", () => {
       expect(stopIds(radio("a", "g") + radio("b", "g", " checked") + radio("c", "g"))).toEqual([
         "b",
       ]);
+    });
+
+    it("keep the last of several checked radios as the stop, as a browser does", () => {
+      expect(stopIds(radio("a", "g", " checked") + radio("b", "g", " checked"))).toEqual(["b"]);
+      expect(
+        stopIds(
+          radio("a", "g", " checked") +
+            radio("b", "g") +
+            radio("c", "g", " checked") +
+            radio("d", "g"),
+        ),
+      ).toEqual(["c"]);
+      // The rule is per group: another group keeps its own last checked radio.
+      expect(
+        stopIds(
+          radio("a", "g", " checked") +
+            radio("b", "g", " checked") +
+            radio("c", "h", " checked") +
+            radio("d", "h", " checked"),
+        ),
+      ).toEqual(["b", "d"]);
     });
 
     it("are every radio when grouping is turned off", () => {
@@ -624,6 +698,35 @@ describe("accessibleName", () => {
     expect(nameOf('<label>Colour <select id="c"><option>Red</option></select></label>', "c")).toBe(
       "Colour",
     );
+  });
+
+  it("does not take an implicit label whose for points at another element, and gives that name to the other", () => {
+    // The wrapped control is not what the label is for, so it has no name of its own...
+    expect(
+      nameOf(
+        '<label for="other">Colour <input id="c" type="text"></label><input id="other" type="text">',
+        "c",
+      ),
+    ).toBe("");
+    // ...and the control the label points at gets the text, without the wrapped control's.
+    expect(
+      nameOf(
+        '<label for="other">Colour <input id="c" type="text"></label><input id="other" type="text">',
+        "other",
+      ),
+    ).toBe("Colour");
+    // A for that points at nothing names nothing either.
+    expect(nameOf('<label for="missing">Colour <input id="c" type="text"></label>', "c")).toBe("");
+    // A for that points at the wrapped control itself is a label for it.
+    expect(nameOf('<label for="c">Colour <input id="c" type="text"></label>', "c")).toBe("Colour");
+  });
+
+  it("reports a control wrapped in a label that is for another element as unnamed", () => {
+    expect(
+      rulesOf(
+        '<label for="other">Colour <input id="c" type="text"></label><input id="other" type="text">',
+      ),
+    ).toEqual(["focusable-unnamed"]);
   });
 
   it("names a landmark only from its labels, never from its content", () => {

@@ -418,12 +418,18 @@ describe("the primary navigation", () => {
         const root = parseHtml(
           render(Layout({ title: "t", chrome: buildChrome({ globalRole: role }) })),
         );
-        expect(links(root), role).toEqual(["Matters", ...SEES[role]]);
+        expect(links(root), role).toEqual([
+          ...navItemsFor(role, original).map((item) => item.label),
+          ...SEES[role],
+        ]);
       }
       const visitor = parseHtml(
         render(Layout({ title: "t", chrome: buildChrome({ userName: null }) })),
       );
-      expect(links(visitor)).toEqual(["Matters", "Everyone"]);
+      expect(links(visitor)).toEqual([
+        ...navItemsFor(undefined, original).map((item) => item.label),
+        "Everyone",
+      ]);
     } finally {
       items.splice(0, items.length, ...original);
     }
