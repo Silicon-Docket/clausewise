@@ -129,7 +129,9 @@ if (!noRender) {
           inspection: parsed.inspection,
         });
         if (showDocs) {
-          console.log(`\n=== ${scope} ${doc.label} ${doc.title} (${doc.file}) ===`);
+          console.log(
+            `\n=== ${scope} ${doc.label} ${doc.title} (${doc.file}; ${doc.kind}; stated date ${doc.statedDate ?? "none"}; client entered at intake: ${definition.intake.clientLegalName}) ===`,
+          );
           parsed.paragraphs.forEach((paragraph, index) => {
             console.log(`p${index}\t${paragraph.text}`);
           });
