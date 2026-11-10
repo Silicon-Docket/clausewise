@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
  * these read the code, so a forbidden construct cannot hide in a state no test renders.
  */
 const APP = join(import.meta.dirname, "../..");
-const OWNED = ["src/server/views", "src/server/pages", "public", "test/pages"];
+const OWNED = ["src/server/views", "src/server/pages", "public", "test/pages", "test/a11y"];
 
 function files(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
