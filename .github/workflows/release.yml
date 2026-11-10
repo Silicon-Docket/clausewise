@@ -1,0 +1,199 @@
+name: release
+
+# Publishes the server image when a version tag (v1.2.3, or v1.2.3-rc.1) is pushed on a commit
+# that is on main. The image is built from that commit with no cache and pushed to GitHub
+# Container Registry, with BuildKit's SBOM and provenance attached. GitHub artifact attestations,
+# signed with Sigstore, then bind its digest to this workflow, this commit and the SBOM of the
+# packages bundled into it. A GitHub release names the digest, which is what firms deploy.
+#
+# Actions are pinned to the commit of the release named beside each, so a moved tag upstream
+# cannot change what runs here with permission to publish.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  server-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # the GitHub release
+      packages: write # the image, on ghcr.io
+      id-token: write # signing the attestations with Sigstore
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the tag
+        id: release
+        run: |
+          if ! [[ "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::The tag is not a version such as v1.2.3 or v1.2.3-rc.1."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME is not on main. Releases are made only from main."
+            exit 1
+          fi
+          version="${GITHUB_REF_NAME#v}"
+          {
+            echo "version=$version"
+            echo "image=ghcr.io/${GITHUB_REPOSITORY,,}/server"
+            if [[ "$version" == *-* ]]; then echo "prerelease=true"; else echo "prerelease=false"; fi
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Sign in to GitHub Container Registry
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse to publish a version twice
+        env:
+          IMAGE: ${{ steps.release.outputs.image }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          if docker buildx imagetools inspect "$IMAGE:$VERSION" > /dev/null 2>&1; then
+            echo "::error::$IMAGE:$VERSION is already published. Each version is published once; tag a new one."
+            exit 1
+          fi
+
+      - name: Work out the image's tags and labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ steps.release.outputs.image }}
+          # Deployments name a digest; a "latest" tag would only invite deploying something else.
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+          labels: |
+            org.opencontainers.image.title=Clausewise server
+            org.opencontainers.image.description=Clausewise web app, review worker and database migrations, for Azure Container Apps
+
+      - name: Build and push the image
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          pull: true
+          no-cache: true
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: CLAUSEWISE_VERSION=${{ steps.release.outputs.version }}
+          sbom: true
+          provenance: mode=max
+
+      # The npm packages are folded into the bundles, where a scanner cannot find them from their
+      # files, so the bundle step lists them in /app/sbom.cdx.json. BuildKit's scanner reads that
+      # file into the SBOM it attaches; this also attests it on its own, taken from the image that
+      # was pushed rather than from a second build.
+      - name: Take the bundled packages' SBOM from the published image
+        env:
+          REF: ${{ steps.release.outputs.image }}@${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          docker pull --quiet --platform linux/amd64 "$REF"
+          container=$(docker create "$REF")
+          docker cp "$container:/app/sbom.cdx.json" sbom.cdx.json
+          docker rm "$container" > /dev/null
+          test "$(jq -r .metadata.component.version sbom.cdx.json)" = "$VERSION"
+          echo "$(jq '.components | length' sbom.cdx.json) bundled packages listed."
+
+      - name: Attest the build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.release.outputs.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest the bundled packages' SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.release.outputs.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: sbom.cdx.json
+          push-to-registry: true
+
+      - name: Verify both attestations, as a firm would
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ steps.release.outputs.image }}@${{ steps.build.outputs.digest }}
+        run: |
+          gh attestation verify "oci://$REF" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+            --source-ref "$GITHUB_REF" --deny-self-hosted-runners
+          gh attestation verify "oci://$REF" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+            --source-ref "$GITHUB_REF" --deny-self-hosted-runners \
+            --predicate-type https://cyclonedx.org/bom
+
+      # A firm's registry pulls through its cache rule without credentials, which works only once
+      # the package is public. GitHub creates it private, and only an owner can change that.
+      - name: Check the image can be pulled without signing in
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          repository="${GITHUB_REPOSITORY,,}/server"
+          token=$(curl -fsS "https://ghcr.io/token?scope=repository:$repository:pull" | jq -r .token)
+          if curl -fsS -o /dev/null -H "Authorization: Bearer $token" \
+            -H "Accept: application/vnd.oci.image.index.v1+json" \
+            "https://ghcr.io/v2/$repository/manifests/$DIGEST"; then
+            echo "The image is public."
+          else
+            echo "::warning::The image is not public, so firms' registries cannot pull it. An organization owner must make the package public once (package settings, Change visibility)."
+          fi
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ steps.release.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.release.outputs.version }}
+          PRERELEASE: ${{ steps.release.outputs.prerelease }}
+        run: |
+          cat > notes.md <<EOF
+          ## Server image
+
+          Deploy this release by its digest, as \`imageDigest\` (deploy/azure/README.md):
+
+              $DIGEST
+
+          The image is \`$IMAGE@$DIGEST\`, also tagged \`$VERSION\`. A tag can be moved to other
+          content; the digest cannot.
+
+          Check that it was built from this repository, at this tag, by the release workflow:
+
+              gh attestation verify oci://$IMAGE@$DIGEST --repo $GITHUB_REPOSITORY --source-ref $GITHUB_REF
+
+          The npm packages bundled into it are listed in \`sbom.cdx.json\`, attached here and attested
+          on the image (\`--predicate-type https://cyclonedx.org/bom\`). The SBOM BuildKit attached to
+          the image lists those and the base image's packages.
+          EOF
+          flags=()
+          if [[ "$PRERELEASE" == "true" ]]; then flags+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "Clausewise $VERSION" \
+            --notes-file notes.md --generate-notes "${flags[@]}" sbom.cdx.json
+          cat notes.md >> "$GITHUB_STEP_SUMMARY"
