@@ -16,6 +16,10 @@
  *     neither matter may change.
  *  3. The routes that name no matter and only read (the lists, the start page, the session), read
  *     as every caller, because a list can show a person the title of a matter they have no part in.
+ *     A page that only some global roles may open (a probe with a `globalAction`) is expected to
+ *     answer 403 to a signed-in caller whose global role the hand-written table does not list for
+ *     it (`DOCUMENTED_GLOBAL_ROLES`, `GLOBAL_ROLE_OF`): a member of a matter has no more right to
+ *     it than a person with no matter. A page that answers such a caller is an exposure.
  *  4. The URLs that no route owns: a matter's pages and API with segments after them that no route
  *     has, each probed route under every method the table does not probe on it, and the path of
  *     every wildcard route (at any prefix) that is not the shell's own middleware, sent by a
@@ -24,7 +28,8 @@
  *     tell a wildcard that hands on from one that answers, and this can.
  *
  * What each matrix cell should get is written out below from the documented table of roles
- * (docs/parol/03 and 06), and is checked to be the table the application uses (`MATTER_ACTIONS`).
+ * (docs/parol/03 and 06), and is checked to be the table the application uses (`MATTER_ACTIONS`, and
+ * `GLOBAL_ACTIONS` for the pages that name no matter).
  * If the two ever differ, the cells where the application lets in a role the documentation refuses
  * are counted as exposures by the ordinary rule, so a widened table is found and not trusted.
  *
@@ -59,9 +64,9 @@
  * Nothing here prints a body. A finding names the route template, the caller and the mode.
  */
 import { createHash } from "node:crypto";
-import type { MatterAction } from "../../../../apps/parol/src/auth/actions.js";
-import { MATTER_ACTIONS } from "../../../../apps/parol/src/auth/actions.js";
-import type { MatterRole } from "../../../../apps/parol/src/contracts.js";
+import type { GlobalAction, MatterAction } from "../../../../apps/parol/src/auth/actions.js";
+import { GLOBAL_ACTIONS, MATTER_ACTIONS } from "../../../../apps/parol/src/auth/actions.js";
+import type { GlobalRole, MatterRole } from "../../../../apps/parol/src/contracts.js";
 import {
   describeRoutes,
   findMatterUrlsWithoutGuard,
@@ -81,6 +86,7 @@ import {
   MATTER_PROBES,
   NO_MATTER,
   NO_RECORD,
+  OTHER_PROBES,
   effectOf,
   initFor,
   isApi,
@@ -145,6 +151,22 @@ const ROLE_OF: Partial<Record<Actor, MatterRole>> = {
   reviewer: "reviewer",
   viewer: "viewer",
 };
+/**
+ * The global role each caller holds, written out by hand: the demo associate and reviewer and the
+ * suite's own users (viewer, outsider, stranger, inserted by `site.addUser`) are members, the
+ * administrator is the administrator, and a visitor has no role. The suite checks it against the
+ * users in the store before it sends a request (`checkGlobalRoles`), so that a changed seed cannot
+ * make the expected answers of the routes that need a global role mean something else.
+ */
+export const GLOBAL_ROLE_OF: Record<Actor, GlobalRole | null> = {
+  associate: "member",
+  reviewer: "member",
+  viewer: "member",
+  outsider: "member",
+  stranger: "member",
+  admin: "admin",
+  anonymous: null,
+};
 
 const NO_SUCH_MATTER = NO_MATTER;
 const MATTER_NAME = "Lanternfish / Corvane NDA (exposure probes)";
@@ -181,12 +203,44 @@ const RELAXED_EXTRA: Partial<Record<MatterAction, readonly MatterRole[]>> = {
   "memo.export": ["associate"],
 };
 
-/** The (action, role) pairs on which the application's table and the documented one differ. */
+/**
+ * Who may open a page or route that names no matter, written out by hand from docs/parol/06 and
+ * the designs of the packages that add them (the evaluation comparison, the pilot measures, the
+ * audit log, the trainer's key), and not read from `GLOBAL_ACTIONS`, so that a wrong edit to
+ * either shows up. A member of a matter has no more right to these pages than a person with no
+ * matter: a global role belongs to the person.
+ */
+export const DOCUMENTED_GLOBAL_ROLES: Record<GlobalAction, readonly GlobalRole[]> = {
+  "evaluation.read": ["legal_engineer", "admin"],
+  "pilot.read": ["legal_engineer", "admin"],
+  "pilot.manage": ["legal_engineer", "admin"],
+  "audit.read": ["admin"],
+  "training.key": ["legal_engineer", "admin"],
+};
+
+/**
+ * The (action, role) pairs on which the application's tables and the documented ones differ: the
+ * matter roles (`MATTER_ACTIONS`) and the global roles (`GLOBAL_ACTIONS`). A global pair is named
+ * with the action and the role in the same way as a matter pair.
+ */
 export function tableDrift(): string[] {
   const out: string[] = [];
   for (const action of Object.keys(DOCUMENTED_ROLES) as MatterAction[]) {
     const documented = new Set<string>(DOCUMENTED_ROLES[action]);
     const code = new Set<string>(MATTER_ACTIONS[action]);
+    for (const role of new Set([...documented, ...code]))
+      if (documented.has(role) !== code.has(role)) out.push(`${action} ${role}`);
+  }
+  // An action that only one of the two tables holds differs in every role it lists, so an action
+  // added to the application and not documented (or documented and not built) is found as well.
+  const rolesOf = (table: object, action: string): readonly string[] =>
+    Object.hasOwn(table, action) ? (table as Record<string, readonly string[]>)[action]! : [];
+  for (const action of new Set([
+    ...Object.keys(DOCUMENTED_GLOBAL_ROLES),
+    ...Object.keys(GLOBAL_ACTIONS),
+  ])) {
+    const documented = new Set<string>(rolesOf(DOCUMENTED_GLOBAL_ROLES, action));
+    const code = new Set<string>(rolesOf(GLOBAL_ACTIONS, action));
     for (const role of new Set([...documented, ...code]))
       if (documented.has(role) !== code.has(role)) out.push(`${action} ${role}`);
   }
@@ -234,14 +288,27 @@ export function expectedFor(probe: Probe, actor: Actor, relaxed: boolean): Expec
 
 /**
  * What a read of a route that names no matter should get: everyone is answered by a public route,
- * a signed-in person by the others, and a visitor is told to sign in (a script is told, a page
- * sends the visitor to the start page).
+ * a visitor is told to sign in by the others (a script is told, a page sends the visitor to the
+ * start page), and a signed-in person is answered, unless the route names a global action that the
+ * documented table does not list for the person's global role: that person is refused with 403.
+ * The order is the guard's: the person first, then the role.
  */
 export function expectedList(probe: OtherProbe, actor: Actor): Expected {
-  if (probe.access === "public" || actor !== "anonymous") return { kind: "let_in", status: 200 };
-  return isApi(probe.template)
-    ? { kind: "refused", status: 401, caller: "visitor" }
-    : { kind: "refused", status: 303, caller: "visitor", location: urls.home() };
+  if (probe.access === "public") return { kind: "let_in", status: 200 };
+  if (actor === "anonymous")
+    return isApi(probe.template)
+      ? { kind: "refused", status: 401, caller: "visitor" }
+      : { kind: "refused", status: 303, caller: "visitor", location: urls.home() };
+  if (probe.globalAction !== undefined) {
+    if (!Object.hasOwn(DOCUMENTED_GLOBAL_ROLES, probe.globalAction))
+      throw new ExposureSuiteUnavailable(
+        `The probe for ${probe.method} ${probe.template} names a global action that the documented table does not list.`,
+      );
+    const role = GLOBAL_ROLE_OF[actor];
+    if (role === null || !DOCUMENTED_GLOBAL_ROLES[probe.globalAction].includes(role))
+      return { kind: "refused", status: 403, caller: "role" };
+  }
+  return { kind: "let_in", status: 200 };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -944,6 +1011,7 @@ async function runMode(mode: Mode): Promise<void> {
   site.addUser(STRANGER, "Synthetic exposure stranger");
   site.addUser(OTHER_REVIEWER, "Synthetic reviewer of the second matter");
   site.addUser(INVITEE, "Synthetic person to be added");
+  checkGlobalRoles(site);
 
   // The matter the matrix goes to, reviewed and exported.
   const people = {
@@ -1094,6 +1162,7 @@ async function runMode(mode: Mode): Promise<void> {
   // --- 1. the matrix ---------------------------------------------------------------------------
 
   async function makeScratch(level: ScratchLevel): Promise<Scratch> {
+    requireScratchLevelBuilt(level);
     if (level === "documents") return textScratch(site);
     const made = await createCaseMatter({
       site,
@@ -1398,6 +1467,25 @@ async function runMode(mode: Mode): Promise<void> {
   for (const name of shown) mode.proven.set(name, (mode.proven.get(name) ?? 0) + 1);
 }
 
+/** The levels `makeScratch` builds. */
+const SCRATCH_LEVELS_BUILT: readonly ScratchLevel[] = ["documents", "run", "decided"];
+
+/**
+ * Stops the suite for a body that needs a scratch matter that `makeScratch` cannot build yet. The
+ * level `exported` (a matter with a memo) is part of the type for the package that probes a route
+ * that needs one, and that package adds the branch to `makeScratch` and removes this refusal for
+ * it. Until then the level is refused here, before any matter is made, and not served as the next
+ * level down: a body that the suite sends to a matter that lacks what it needs would show a
+ * refused caller nothing and the let-in caller a conflict, and the proof that it changes the store
+ * would be missing for the wrong reason.
+ */
+export function requireScratchLevelBuilt(level: ScratchLevel): void {
+  if (!SCRATCH_LEVELS_BUILT.includes(level))
+    throw new ExposureSuiteUnavailable(
+      `A body that changes the store needs a scratch matter taken to the level "${level}", which the authorization probes cannot build yet. Nothing was sent for it.`,
+    );
+}
+
 /** Stands in for a matter when the question is only whether a route has a body that changes the store. */
 const DUMMY_SCRATCH: Scratch = {
   matterId: "mat_0000000000000000",
@@ -1464,6 +1552,25 @@ function freshMatter(site: ExposureSite, name = "A matter made for one request")
 }
 
 /**
+ * Stops the suite when a caller holds another global role in the store than `GLOBAL_ROLE_OF` says:
+ * the answer expected of a route that needs a global role is derived from that table, so a table
+ * that did not match the users would make the cells of those routes mean something else. The
+ * message names the kind of caller, never a user.
+ */
+export function checkGlobalRoles(site: Pick<ExposureSite, "principal">): void {
+  const wrong: string[] = [];
+  for (const actor of ACTORS) {
+    const user = USER_OF[actor];
+    if (user === null) continue;
+    if (site.principal(user).globalRole !== GLOBAL_ROLE_OF[actor]) wrong.push(actor);
+  }
+  if (wrong.length > 0)
+    throw new ExposureControlFailure(
+      `The authorization probes hold another global role for ${wrong.join(" and ")} than the store gives that caller, so the answers expected of the routes that need a global role could not be trusted. No count can be trusted.`,
+    );
+}
+
+/**
  * Every route that can name a matter has a probe, and no route is let through on its path alone.
  *
  *  - A route made with `defineMatterRoute` must be in the table with the action it checks.
@@ -1518,6 +1625,34 @@ function checkCoverage(site: ExposureSite): string[] {
   if (staleLists.length > 0)
     throw new ExposureSuiteUnavailable(
       `The list of routes that name no matter has routes the application does not have: ${staleLists.join(", ")}.`,
+    );
+
+  // A route that names no matter and is only for some global roles has to name the same global
+  // action as its probe: the cells derive who is let in from the probe's, so a route that checks
+  // another action (or none) would be held to an answer it was never built to give.
+  const otherProbes = new Map(
+    OTHER_PROBES.map((probe) => [key(probe.method, probe.template), probe]),
+  );
+  const wrongGlobal = described
+    .filter((route) => route.kind === "principal" && otherProbes.has(key(route.method, route.path)))
+    .filter(
+      (route) =>
+        (route.globalAction ?? null) !==
+        (otherProbes.get(key(route.method, route.path))!.globalAction ?? null),
+    )
+    .map((route) => key(route.method, route.path));
+  if (wrongGlobal.length > 0)
+    throw new ExposureSuiteUnavailable(
+      `The probe table names another global action than the application checks for: ${wrongGlobal.join(", ")}.`,
+    );
+  const unknownGlobal = OTHER_PROBES.filter(
+    (probe) =>
+      probe.globalAction !== undefined &&
+      !Object.hasOwn(DOCUMENTED_GLOBAL_ROLES, probe.globalAction),
+  ).map((probe) => key(probe.method, probe.template));
+  if (unknownGlobal.length > 0)
+    throw new ExposureSuiteUnavailable(
+      `The probe table names a global action that the documented table does not list: ${unknownGlobal.join(", ")}.`,
     );
 
   // A route that names no matter and only reads can still list matters, so it is read as every caller.

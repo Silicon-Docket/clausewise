@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { MATTER_ACTIONS } from "../../src/auth/actions.js";
-import { describeRoutes } from "../../src/server/matter-route.js";
+import { defineRoute, describeRoutes } from "../../src/server/matter-route.js";
 import {
   MATTER_PROBES,
   OTHER_PROBES,
@@ -129,46 +129,155 @@ describe("every route that changes something refuses a request without its own t
   }
 });
 
-describe("the routes that name no matter refuse them too", () => {
-  const unsafe = OTHER_PROBES.filter((p) => UNSAFE(p.method));
+/**
+ * The browser a probe is sent from: signed in for a route that needs a person, with a cookie only
+ * otherwise. A route that names a global action is signed in as the administrator, who is in
+ * every list (a member would be refused by the role before the request were let in, and the
+ * check is of the token); any other route that needs a person is the associate's.
+ */
+async function browserFor(probe: OtherProbe, on: Site = site): Promise<Browser> {
+  if (probe.access !== "principal") return on.anonymous();
+  return on.as(probe.globalAction === undefined ? IDS.associate : IDS.admin);
+}
 
-  /** A browser for the probe: signed in for a route that needs a person, with a cookie otherwise. */
-  async function browserFor(probe: OtherProbe): Promise<Browser> {
-    return probe.access === "principal" ? site.as(IDS.associate) : site.anonymous();
-  }
+/**
+ * The checks of the routes that name no matter and change something, over the probes it is given
+ * and the site they are on. The guard's order is the person, then the token, then the global role,
+ * so a request with a bad token is refused with 403 whoever sends it, and one with the right token
+ * is let in only by someone the role lets in.
+ */
+function otherRoutesBlock(title: string, unsafe: readonly OtherProbe[], siteOf: () => Site) {
+  describe(title, () => {
+    for (const probe of unsafe) {
+      describe(`${probe.method} ${probe.template}`, () => {
+        for (const variant of VARIANTS) {
+          it(`refuses ${variant.name} with 403 and changes nothing`, async () => {
+            const on = siteOf();
+            const self = await browserFor(probe, on);
+            // The browser needs its own cookie before another session's token can be said to differ.
+            const own = await self.apiToken();
+            const before = fingerprint(on);
+            const token = await variant.token(self);
+            expect(token).not.toBe(own);
+            const response = await self.send(probe.method, probe.template, initFor(probe, token));
+            expect(response.status).toBe(403);
+            expect(fingerprint(on)).toEqual(before);
+            // A refused sign-in did not sign anyone in.
+            if (probe.template === "/session") {
+              const session = (await (await self.get("/api/session")).json()) as { user: unknown };
+              expect(session.user).toBeNull();
+            }
+          });
+        }
 
-  for (const probe of unsafe) {
-    describe(`${probe.method} ${probe.template}`, () => {
-      for (const variant of VARIANTS) {
-        it(`refuses ${variant.name} with 403 and changes nothing`, async () => {
-          const self = await browserFor(probe);
-          // The browser needs its own cookie before another session's token can be said to differ.
-          const own = await self.apiToken();
-          const before = fingerprint(site);
-          const token = await variant.token(self);
-          expect(token).not.toBe(own);
-          const response = await self.send(probe.method, probe.template, initFor(probe, token));
-          expect(response.status).toBe(403);
-          expect(fingerprint(site)).toEqual(before);
-          // A refused sign-in did not sign anyone in.
-          if (probe.template === "/session") {
-            const session = (await (await self.get("/api/session")).json()) as { user: unknown };
-            expect(session.user).toBeNull();
-          }
+        it("lets the same request in with the right token", async () => {
+          const self = await browserFor(probe, siteOf());
+          const response = await self.send(
+            probe.method,
+            probe.template,
+            initFor(probe, await self.apiToken()),
+          );
+          expect([200, 201, 303]).toContain(response.status);
         });
-      }
-
-      it("lets the same request in with the right token", async () => {
-        const self = await browserFor(probe);
-        const response = await self.send(
-          probe.method,
-          probe.template,
-          initFor(probe, await self.apiToken()),
-        );
-        expect([200, 201, 303]).toContain(response.status);
       });
+    }
+  });
+}
+
+describe("the routes that name no matter refuse them too", () => {
+  otherRoutesBlock(
+    "on the application's own routes",
+    OTHER_PROBES.filter((p) => UNSAFE(p.method)),
+    () => site,
+  );
+});
+
+/**
+ * A write that exists for this test alone, on a site of its own, for the global action
+ * `pilot.manage`, so that the browser of a route that names a global action is shown to be signed
+ * in as someone the role lets in, and the token to be checked before the role. It is a JSON route,
+ * because the answer to a script names the kind of refusal (`csrf` or `forbidden`), which is what
+ * tells the two apart.
+ */
+const SYNTHETIC_WRITE: OtherProbe = {
+  method: "POST",
+  template: "/api/synthetic/calendar",
+  access: "principal",
+  body: { kind: "json", json: { startDate: "2026-11-09" } },
+  globalAction: "pilot.manage",
+};
+
+const refusalKind = async (response: Response): Promise<string> =>
+  ((await response.json()) as { error: { kind: string } }).error.kind;
+
+describe("a write that names a global action", () => {
+  let synthetic: Site;
+  beforeAll(() => {
+    synthetic = makeSite();
+    defineRoute(synthetic.app, {
+      method: SYNTHETIC_WRITE.method,
+      path: SYNTHETIC_WRITE.template,
+      access: "principal",
+      globalAction: "pilot.manage",
+      handler: (c) => c.json({ saved: true }),
     });
-  }
+  });
+
+  otherRoutesBlock(
+    "refuses the token variants and lets the right one in",
+    [SYNTHETIC_WRITE],
+    () => synthetic,
+  );
+
+  it("signs the browser of such a probe in as the administrator, the browser of any other that needs a person as the associate, and a public one in as nobody", async () => {
+    type Who = { user: { userId: string; globalRole: string } | null };
+    const whoIs = async (browser: Browser): Promise<Who> =>
+      (await (await browser.get("/api/session")).json()) as Who;
+    expect((await whoIs(await browserFor(SYNTHETIC_WRITE, synthetic))).user).toMatchObject({
+      userId: IDS.admin,
+      globalRole: "admin",
+    });
+    const plain = OTHER_PROBES.find(
+      (p) => p.access === "principal" && p.globalAction === undefined,
+    )!;
+    expect((await whoIs(await browserFor(plain, synthetic))).user).toMatchObject({
+      userId: IDS.associate,
+      globalRole: "member",
+    });
+    expect(
+      (await whoIs(await browserFor({ ...plain, access: "public" }, synthetic))).user,
+    ).toBeNull();
+  });
+
+  it("is refused by the token before the role, and by the role after the token, for a member", async () => {
+    const member = await synthetic.as(IDS.associate);
+    const before = fingerprint(synthetic);
+    const send = async (token: string | null): Promise<Response> =>
+      member.send(
+        SYNTHETIC_WRITE.method,
+        SYNTHETIC_WRITE.template,
+        initFor(SYNTHETIC_WRITE, token),
+      );
+    // No token, and a wrong one: the token is checked first, whoever the person is.
+    for (const token of [null, "not-a-token-0123456789abcdefghijklmnopqrstuv"]) {
+      const bad = await send(token);
+      expect(bad.status).toBe(403);
+      expect(await refusalKind(bad)).toBe("csrf");
+    }
+    // The right token: the role refuses, with the same status and another kind of refusal.
+    const right = await send(await member.apiToken());
+    expect(right.status).toBe(403);
+    expect(await refusalKind(right)).toBe("forbidden");
+    expect(fingerprint(synthetic)).toEqual(before);
+    // And the same request, with the right token, from the administrator is let in.
+    const admin = await synthetic.as(IDS.admin);
+    const letIn = await admin.send(
+      SYNTHETIC_WRITE.method,
+      SYNTHETIC_WRITE.template,
+      initFor(SYNTHETIC_WRITE, await admin.apiToken()),
+    );
+    expect(letIn.status).toBe(200);
+  });
 });
 
 describe("the rest of the rule", () => {

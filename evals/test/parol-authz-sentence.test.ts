@@ -1,9 +1,11 @@
 import { readdir, readFile } from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { MATTER_ACTIONS } from "../../apps/parol/src/auth/actions.js";
+import { MATTER_ROLES } from "../../apps/parol/src/contracts.js";
 import type { Dataset } from "../src/parol/dataset.js";
 import {
   AUTHORIZATION_SENTENCE_BUDGET,
+  DOCUMENTED_ROLES,
   runAuthorizationProbes,
   sentenceOf,
   type AuthorizationResult,
@@ -110,8 +112,8 @@ describe("a run that finds an exposure and has two more things to say", () => {
   async function widened<T>(body: () => Promise<T>): Promise<T> {
     const table = MATTER_ACTIONS as unknown as Record<string, readonly string[]>;
     const before = { decide: table["review.decide"], exportMemo: table["memo.export"] };
-    table["review.decide"] = ["associate", "reviewer", "viewer"];
-    table["memo.export"] = ["associate", "reviewer", "viewer"];
+    table["review.decide"] = [...MATTER_ROLES];
+    table["memo.export"] = [...MATTER_ROLES];
     try {
       return await body();
     } finally {
@@ -141,7 +143,13 @@ describe("a run that finds an exposure and has two more things to say", () => {
         },
       }),
     );
-    expect(result.tableDrift).toBe(4);
+    // Each of the two actions was opened to every role: the roles the table did not name for it are the drift.
+    const opened = ["review.decide", "memo.export"] as const;
+    const drift = opened.reduce(
+      (sum, action) => sum + (MATTER_ROLES.length - DOCUMENTED_ROLES[action].length),
+      0,
+    );
+    expect(result.tableDrift).toBe(drift);
     expect(result.probesAnsweredWithData).toBeGreaterThan(0);
     expect(result.letInNotReached).toBeGreaterThan(0);
     expect(result.exposed.length).toBeGreaterThanOrEqual(3);
@@ -152,7 +160,9 @@ describe("a run that finds an exposure and has two more things to say", () => {
     expect(sentence).toContain(
       `${result.letInNotReached} of them cells whose caller should have been let in and was not`,
     );
-    expect(sentence).toContain("The action table differs from the documented one in 4 places.");
+    expect(sentence).toContain(
+      `The action table differs from the documented one in ${drift} places.`,
+    );
     expect(sentence).toContain("First exposed: ");
     expect(sentence).toContain("Not seen: ");
     expect(sentence).not.toMatch(DASHES);

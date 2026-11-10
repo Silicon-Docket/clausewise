@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { readPrincipal } from "../../apps/parol/src/auth/identity.js";
 import type { Dataset } from "../src/parol/dataset.js";
-import { textWindows } from "../src/parol/exposure/authorization.js";
+import { ACTORS, textWindows } from "../src/parol/exposure/authorization.js";
 import { composeExposureRecord } from "../src/parol/exposure/index.js";
 import {
   LIST_PROBES,
@@ -73,7 +73,7 @@ describe("a control request that is stopped before the guard", () => {
     expect(result.mismatches).toBeGreaterThanOrEqual(result.letInNotReached);
     expect(result.probesAnsweredWithData).toBe(0);
     // The suite still ran every cell: the control request is not a cell, so it is not counted among them.
-    expect(result.matrixCells).toBe(MATTER_PROBES.length * 7 * 2);
+    expect(result.matrixCells).toBe(MATTER_PROBES.length * ACTORS.length * 2);
     expect(result.probesRun).toBe(result.matrixCells);
     // The record carries both numbers, which is what gate G1 reads to leave the gate not evaluated.
     const record = recordOf(result);
@@ -321,8 +321,8 @@ describe("a list route that answers 500 to everyone", () => {
       ["lists"],
     );
     // Six callers are to be let in, in two modes; the visitor is told to sign in and gets a 500 instead.
-    expect(result.letInNotReached).toBe(6 * 2);
-    expect(result.mismatches).toBe(7 * 2);
+    expect(result.letInNotReached).toBe((ACTORS.length - 1) * 2);
+    expect(result.mismatches).toBe(ACTORS.length * 2);
     expect(result.mismatches).toBeGreaterThan(result.letInNotReached);
     expect(result.probesAnsweredWithData).toBe(0);
     expect(result.sentence).toContain("cells whose caller should have been let in and was not");

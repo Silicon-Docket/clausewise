@@ -1,10 +1,19 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { MATTER_ACTIONS, type MatterAction } from "../../src/auth/actions.js";
-import type { MatterRole } from "../../src/contracts.js";
-import { describeRoutes } from "../../src/server/matter-route.js";
+import { DOCUMENTED_GLOBAL_ROLES } from "../../../../evals/src/parol/exposure/authorization.js";
+import { MATTER_ACTIONS, type GlobalAction, type MatterAction } from "../../src/auth/actions.js";
+import type { GlobalRole, MatterRole } from "../../src/contracts.js";
+import { defineRoute, describeRoutes } from "../../src/server/matter-route.js";
 import { urls } from "../../src/server/urls.js";
 import { EXPECTED_ROLES, snapshot } from "../server/support-app.js";
-import { MATTER_PROBES, OTHER_PROBES, initFor, isApi, pathFor, type Probe } from "./probes.js";
+import {
+  MATTER_PROBES,
+  OTHER_PROBES,
+  initFor,
+  isApi,
+  pathFor,
+  type OtherProbe,
+  type Probe,
+} from "./probes.js";
 import {
   IDS,
   OTHER_ASSOCIATE,
@@ -225,6 +234,20 @@ describe("the matrix covers the routes the application has", () => {
     ).toEqual([]);
   });
 
+  it("has a probe that names the global action the route checks, and none for a route that checks none", () => {
+    // `probe.globalAction` is what the exposure suite derives the answer for each caller from, so
+    // a route that checks another action (or none) would be held to an answer it never gave.
+    const probes = new Map(OTHER_PROBES.map((p) => [key(p.method, p.template), p]));
+    for (const route of routes.filter((r) => r.kind !== "matter"))
+      expect(
+        probes.get(key(route.method, route.path))?.globalAction ?? null,
+        key(route.method, route.path),
+      ).toBe(route.globalAction);
+    // Only a route for a signed-in person can name one.
+    for (const route of routes.filter((r) => r.kind === "public"))
+      expect(route.globalAction, key(route.method, route.path)).toBeNull();
+  });
+
   it("registers a read on GET only for an action that reads", () => {
     const reads = new Set<MatterAction>(["matter.read", "run.read", "finding.read", "memo.read"]);
     for (const route of routes)
@@ -260,5 +283,165 @@ describe("the routes that do not name a matter", () => {
     for (const path of ["/", "/healthz", "/assets/parol.css", "/api/session"]) {
       expect((await anonymous.get(path)).status, path).toBe(200);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The routes that name no matter and only some global roles may open
+// ---------------------------------------------------------------------------------------------
+
+type GlobalProbe = OtherProbe & { globalAction: GlobalAction };
+const hasGlobalAction = (probe: OtherProbe): probe is GlobalProbe =>
+  probe.globalAction !== undefined;
+
+/** The people of the site, by the global role each holds. Five hold none of the roles in a list. */
+const PEOPLE_BY_GLOBAL_ROLE: Record<GlobalRole, readonly string[]> = {
+  member: [IDS.associate, IDS.reviewer, VIEWER, OUTSIDER, OTHER_ASSOCIATE],
+  legal_engineer: [IDS.legalEngineer],
+  admin: [IDS.admin],
+};
+
+/** What a person who is let in gets: a page, a created thing or a redirect after a write. */
+const LET_IN = [200, 201, 303];
+
+/**
+ * The generic check of a route that names a global action, over the probes it is given and the
+ * site they are registered on. A member (a person whose global role no list names, whatever their
+ * part in a matter) is refused with 403, a person whose global role the hand-written table lists is
+ * let in, a visitor is sent to sign in, and a refused request changes nothing. The roles come from
+ * `DOCUMENTED_GLOBAL_ROLES`, not from the table the code uses.
+ */
+function globalActionBlock(title: string, probes: readonly GlobalProbe[], siteOf: () => Site) {
+  describe(title, () => {
+    let site: Site;
+    const browsers = new Map<string, Browser>();
+    let visitor: Browser;
+    beforeAll(async () => {
+      site = siteOf();
+      visitor = site.anonymous();
+      for (const people of Object.values(PEOPLE_BY_GLOBAL_ROLE))
+        for (const user of people) browsers.set(user, await site.as(user));
+    });
+
+    const send = async (browser: Browser, probe: GlobalProbe): Promise<Response> =>
+      browser.send(probe.method, probe.template, initFor(probe, await browser.apiToken()));
+
+    for (const probe of probes)
+      describe(`${probe.method} ${probe.template} (${probe.globalAction})`, () => {
+        it("names the global action the route checks", () => {
+          const route = describeRoutes(site.app).find(
+            (r) => r.method === probe.method && r.path === probe.template,
+          );
+          expect(route?.kind).toBe("principal");
+          expect(route?.globalAction).toBe(probe.globalAction);
+        });
+
+        it("sends a visitor with no session to sign in, or tells a script to", async () => {
+          const before = fingerprint(site);
+          const response = await visitor.send(probe.method, probe.template, initFor(probe, null));
+          expect(response.status).toBe(isApi(probe.template) ? 401 : 303);
+          if (!isApi(probe.template)) expect(response.headers.get("location")).toBe(urls.home());
+          expect(fingerprint(site)).toEqual(before);
+        });
+
+        for (const role of Object.keys(PEOPLE_BY_GLOBAL_ROLE) as GlobalRole[]) {
+          const allowed = DOCUMENTED_GLOBAL_ROLES[probe.globalAction].includes(role);
+          for (const user of PEOPLE_BY_GLOBAL_ROLE[role])
+            it(`${allowed ? "lets in" : "refuses with 403"} ${user} (global role ${role})`, async () => {
+              const before = fingerprint(site);
+              const response = await send(browsers.get(user)!, probe);
+              if (allowed) expect(LET_IN).toContain(response.status);
+              else {
+                expect(response.status).toBe(403);
+                // A refused request changed nothing.
+                expect(fingerprint(site)).toEqual(before);
+              }
+            });
+        }
+      });
+  });
+}
+
+describe("every route that names a global action", () => {
+  // Zero today: the packages that add such a page (the evaluation comparison, the audit log, the
+  // trainer's key, the pilot measures) fill their probes and are held to this block at once.
+  globalActionBlock("on the application's own routes", OTHER_PROBES.filter(hasGlobalAction), () =>
+    makeSite(),
+  );
+
+  it("is held to the hand-written table: every global action has a row, and an administrator is in each", () => {
+    for (const probe of OTHER_PROBES.filter(hasGlobalAction)) {
+      expect(DOCUMENTED_GLOBAL_ROLES[probe.globalAction], probe.template).toContain("admin");
+      expect(probe.access, probe.template).toBe("principal");
+    }
+  });
+});
+
+/**
+ * Routes that exist for this test alone, on a site of their own, each with a probe that names the
+ * global action it checks. They show that the generic block above can tell a person who is let in
+ * from one who is refused: a read for the legal engineer and the administrator, a read for the
+ * administrator alone (the legal engineer is refused), and a write that answers with a redirect.
+ */
+const SYNTHETIC: GlobalProbe[] = [
+  {
+    method: "GET",
+    template: "/synthetic/evaluations",
+    access: "principal",
+    body: { kind: "none" },
+    globalAction: "evaluation.read",
+  },
+  {
+    method: "GET",
+    template: "/synthetic/audit",
+    access: "principal",
+    body: { kind: "none" },
+    globalAction: "audit.read",
+  },
+  {
+    method: "POST",
+    template: "/synthetic/calendar",
+    access: "principal",
+    body: { kind: "form", fields: { startDate: "2026-11-09" } },
+    globalAction: "pilot.manage",
+  },
+];
+
+function siteWithSyntheticRoutes(): Site {
+  const site = makeSite();
+  for (const probe of SYNTHETIC)
+    defineRoute(site.app, {
+      method: probe.method,
+      path: probe.template,
+      access: "principal",
+      globalAction: probe.globalAction,
+      handler: (c) => (probe.method === "GET" ? c.text("a synthetic page") : c.redirect("/", 303)),
+    });
+  return site;
+}
+
+globalActionBlock("on routes made for the test alone", SYNTHETIC, siteWithSyntheticRoutes);
+
+describe("the generic check of the global actions can tell routes apart", () => {
+  it("reads the three kinds of answer from the synthetic routes: refused for a member, let in, refused for the engineer", () => {
+    const rolesFor = (action: GlobalAction): readonly GlobalRole[] =>
+      DOCUMENTED_GLOBAL_ROLES[action];
+    // The synthetic probes must not be three copies of one case.
+    expect(rolesFor("evaluation.read")).toContain("legal_engineer");
+    expect(rolesFor("audit.read")).not.toContain("legal_engineer");
+    expect(rolesFor("pilot.manage")).toContain("admin");
+    for (const probe of SYNTHETIC) expect(rolesFor(probe.globalAction)).not.toContain("member");
+    expect(new Set(SYNTHETIC.map((probe) => probe.method))).toEqual(new Set(["GET", "POST"]));
+  });
+
+  it("registers the synthetic routes on a site of their own, so that the routes of the application are those it has", () => {
+    const own = describeRoutes(makeSite().app).map((route) => `${route.method} ${route.path}`);
+    for (const probe of SYNTHETIC) expect(own).not.toContain(`${probe.method} ${probe.template}`);
+    const synthetic = describeRoutes(siteWithSyntheticRoutes().app);
+    for (const probe of SYNTHETIC)
+      expect(
+        synthetic.find((route) => route.method === probe.method && route.path === probe.template)
+          ?.globalAction,
+      ).toBe(probe.globalAction);
   });
 });

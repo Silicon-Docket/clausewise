@@ -5,10 +5,15 @@
  * a read is a 200). That is what lets the same request be sent as every kind of caller, and the
  * guard's decision be read from the answer.
  *
- * This is the single source of truth for the table and for the request builder. Two things read
+ * This is the single source of truth for the tables and for the request builder. Two things read
  * it: the application's own tests (apps/parol/test/routes, which re-export this module) and the
  * exposure suite of the evaluation (authorization.ts next to this file). It must therefore import
  * nothing that imports vitest.
+ *
+ * The tables are composed here from the base (probes-base.ts) and the fragments of the packages
+ * that add routes (probes-evaluations.ts, probes-retention.ts, probes-feedback.ts,
+ * probes-training.ts and probes-pilot.ts, in that order), by `composeProbeTables`, which refuses
+ * a route that two owners both give. The types and the small builders are in probe-kit.ts.
  *
  * Besides the table of the routes that name a matter, it holds three more things the authorization
  * suite sends:
@@ -24,267 +29,136 @@
  * Nothing here sends a request. It is data and small pure functions.
  */
 import type { MatterAction } from "../../../../apps/parol/src/auth/actions.js";
+import {
+  A,
+  M,
+  NONE,
+  composeProbeTables,
+  form,
+  json,
+  probeKey,
+  type BorrowedIds,
+  type Effect,
+  type OtherProbe,
+  type Probe,
+  type ProbeBody,
+  type ProbeFragment,
+  type ProbeIds,
+  type Scratch,
+  type SubResource,
+} from "./probe-kit.js";
+import {
+  EFFECTS_BASE,
+  FORGED_BODIES_BASE,
+  MATTER_PROBES_BASE,
+  OTHER_PROBES_BASE,
+} from "./probes-base.js";
+import {
+  EFFECTS_EVALUATIONS,
+  FORGED_BODIES_EVALUATIONS,
+  MATTER_PROBES_EVALUATIONS,
+  OTHER_PROBES_EVALUATIONS,
+} from "./probes-evaluations.js";
+import {
+  EFFECTS_FEEDBACK,
+  FORGED_BODIES_FEEDBACK,
+  MATTER_PROBES_FEEDBACK,
+  OTHER_PROBES_FEEDBACK,
+} from "./probes-feedback.js";
+import {
+  EFFECTS_PILOT,
+  FORGED_BODIES_PILOT,
+  MATTER_PROBES_PILOT,
+  OTHER_PROBES_PILOT,
+} from "./probes-pilot.js";
+import {
+  EFFECTS_RETENTION,
+  FORGED_BODIES_RETENTION,
+  MATTER_PROBES_RETENTION,
+  OTHER_PROBES_RETENTION,
+} from "./probes-retention.js";
+import {
+  EFFECTS_TRAINING,
+  FORGED_BODIES_TRAINING,
+  MATTER_PROBES_TRAINING,
+  OTHER_PROBES_TRAINING,
+} from "./probes-training.js";
 
-export type ProbeBody =
-  | { kind: "none" }
-  | { kind: "form"; fields: Record<string, string> }
-  | {
-      kind: "multipart";
-      fields: Record<string, string>;
-      /** A text file in the form, for a request that has to get past the check that a file is there. */
-      file?: { name: string; text: string };
-    }
-  | { kind: "json"; json: unknown };
+export type {
+  BorrowedIds,
+  Effect,
+  OtherProbe,
+  Probe,
+  ProbeBody,
+  ProbeFragment,
+  ProbeIds,
+  Scratch,
+  ScratchLevel,
+  SubResource,
+} from "./probe-kit.js";
 
-export interface Probe {
-  method: "GET" | "POST" | "PATCH" | "DELETE";
-  template: string;
-  action: MatterAction;
-  body: ProbeBody;
-  /** What a caller who is let in gets. The guard's own refusals are 401, 403 and 404. */
-  reaches: number;
-  /** Runs on a matter made for the request, because the request changes it for good. */
-  fresh?: boolean;
-}
-
-const NONE: ProbeBody = { kind: "none" };
-const form = (fields: Record<string, string> = {}): ProbeBody => ({ kind: "form", fields });
-const upload: ProbeBody = { kind: "multipart", fields: {} };
-const json = (value: unknown = {}): ProbeBody => ({ kind: "json", json: value });
-
-const M = "/matters/:matterId";
-const A = "/api/matters/:matterId";
-
-export const MATTER_PROBES: readonly Probe[] = [
-  // Pages and forms
-  { method: "GET", template: M, action: "matter.read", body: NONE, reaches: 200 },
+/**
+ * The owners of the tables, in the order they are composed: the base, then the packages in the
+ * order of the phases that add them.
+ */
+export const PROBE_FRAGMENTS: readonly ProbeFragment[] = [
   {
-    method: "POST",
-    template: `${M}/settings`,
-    action: "matter.update",
-    body: form(),
-    reaches: 400,
-  },
-  { method: "POST", template: `${M}/members`, action: "member.add", body: form(), reaches: 400 },
-  { method: "POST", template: `${M}/delete`, action: "matter.delete", body: form(), reaches: 400 },
-  {
-    method: "POST",
-    template: `${M}/documents`,
-    action: "document.write",
-    body: upload,
-    reaches: 400,
+    name: "base",
+    matter: MATTER_PROBES_BASE,
+    other: OTHER_PROBES_BASE,
+    forgedBodies: FORGED_BODIES_BASE,
+    effects: EFFECTS_BASE,
   },
   {
-    method: "POST",
-    template: `${M}/documents/:documentId/versions`,
-    action: "document.write",
-    body: upload,
-    reaches: 400,
+    name: "evaluations",
+    matter: MATTER_PROBES_EVALUATIONS,
+    other: OTHER_PROBES_EVALUATIONS,
+    forgedBodies: FORGED_BODIES_EVALUATIONS,
+    effects: EFFECTS_EVALUATIONS,
   },
   {
-    method: "POST",
-    template: `${M}/documents/:documentId/operative`,
-    action: "document.write",
-    body: form(),
-    reaches: 400,
+    name: "retention",
+    matter: MATTER_PROBES_RETENTION,
+    other: OTHER_PROBES_RETENTION,
+    forgedBodies: FORGED_BODIES_RETENTION,
+    effects: EFFECTS_RETENTION,
   },
   {
-    method: "POST",
-    template: `${M}/versions/:versionId/stated-date`,
-    action: "document.write",
-    body: form({ statedDate: "2026-13-45" }),
-    reaches: 400,
+    name: "feedback",
+    matter: MATTER_PROBES_FEEDBACK,
+    other: OTHER_PROBES_FEEDBACK,
+    forgedBodies: FORGED_BODIES_FEEDBACK,
+    effects: EFFECTS_FEEDBACK,
   },
   {
-    method: "POST",
-    template: `${M}/documents/:documentId/remove`,
-    action: "document.write",
-    body: form(),
-    reaches: 400,
+    name: "training",
+    matter: MATTER_PROBES_TRAINING,
+    other: OTHER_PROBES_TRAINING,
+    forgedBodies: FORGED_BODIES_TRAINING,
+    effects: EFFECTS_TRAINING,
   },
   {
-    method: "POST",
-    template: `${M}/runs`,
-    action: "run.start",
-    body: form({ workflow: "bad label!" }),
-    reaches: 400,
-  },
-  {
-    method: "POST",
-    template: `${M}/runs/:runId/resume`,
-    action: "run.resume",
-    body: form(),
-    reaches: 409,
-  },
-  {
-    method: "POST",
-    template: `${M}/runs/:runId/cancel`,
-    action: "run.start",
-    body: form(),
-    reaches: 409,
-  },
-  { method: "GET", template: `${M}/runs/:runId`, action: "run.read", body: NONE, reaches: 200 },
-  {
-    method: "GET",
-    template: `${M}/runs/:runId/status`,
-    action: "run.read",
-    body: NONE,
-    reaches: 200,
-  },
-  {
-    method: "GET",
-    template: `${M}/findings/:findingId`,
-    action: "finding.read",
-    body: NONE,
-    reaches: 200,
-  },
-  {
-    method: "POST",
-    template: `${M}/findings/:findingId/reviews`,
-    action: "review.decide",
-    body: form(),
-    reaches: 400,
-  },
-  { method: "GET", template: `${M}/memos`, action: "memo.read", body: NONE, reaches: 200 },
-  { method: "POST", template: `${M}/memos`, action: "memo.export", body: form(), reaches: 303 },
-  {
-    method: "GET",
-    template: `${M}/memos/:memoId/file`,
-    action: "memo.read",
-    body: NONE,
-    reaches: 200,
-  },
-
-  // The JSON API
-  { method: "GET", template: A, action: "matter.read", body: NONE, reaches: 200 },
-  { method: "PATCH", template: A, action: "matter.update", body: json(), reaches: 400 },
-  { method: "DELETE", template: A, action: "matter.delete", body: NONE, reaches: 204, fresh: true },
-  { method: "POST", template: `${A}/members`, action: "member.add", body: json(), reaches: 400 },
-  {
-    method: "POST",
-    template: `${A}/documents`,
-    action: "document.write",
-    body: upload,
-    reaches: 400,
-  },
-  {
-    method: "POST",
-    template: `${A}/documents/:documentId/versions`,
-    action: "document.write",
-    body: upload,
-    reaches: 400,
-  },
-  {
-    // The NDA is not the last document, so it cannot be removed: nothing changes.
-    method: "DELETE",
-    template: `${A}/documents/:documentId`,
-    action: "document.write",
-    body: NONE,
-    reaches: 409,
-  },
-  {
-    method: "POST",
-    template: `${A}/runs`,
-    action: "run.start",
-    body: json({ workflow: "bad label!" }),
-    reaches: 400,
-  },
-  { method: "GET", template: `${A}/runs`, action: "run.read", body: NONE, reaches: 200 },
-  { method: "GET", template: `${A}/runs/:runId`, action: "run.read", body: NONE, reaches: 200 },
-  {
-    method: "POST",
-    template: `${A}/runs/:runId/resume`,
-    action: "run.resume",
-    body: NONE,
-    reaches: 409,
-  },
-  {
-    method: "POST",
-    template: `${A}/runs/:runId/cancel`,
-    action: "run.start",
-    body: NONE,
-    reaches: 409,
-  },
-  {
-    method: "GET",
-    template: `${A}/runs/:runId/findings`,
-    action: "run.read",
-    body: NONE,
-    reaches: 200,
-  },
-  {
-    method: "GET",
-    template: `${A}/findings/:findingId`,
-    action: "finding.read",
-    body: NONE,
-    reaches: 200,
-  },
-  {
-    method: "POST",
-    template: `${A}/findings/:findingId/reviews`,
-    action: "review.decide",
-    body: json(),
-    reaches: 400,
-  },
-  { method: "POST", template: `${A}/memos`, action: "memo.export", body: NONE, reaches: 201 },
-  {
-    method: "GET",
-    template: `${A}/memos/:memoId/file`,
-    action: "memo.read",
-    body: NONE,
-    reaches: 200,
+    name: "pilot",
+    matter: MATTER_PROBES_PILOT,
+    other: OTHER_PROBES_PILOT,
+    forgedBodies: FORGED_BODIES_PILOT,
+    effects: EFFECTS_PILOT,
   },
 ];
+
+const TABLES = composeProbeTables(PROBE_FRAGMENTS);
+
+export const MATTER_PROBES: readonly Probe[] = TABLES.matter;
 
 /** The routes that do not name a matter: a person is enough, or not even that. */
-export interface OtherProbe {
-  method: "GET" | "POST";
-  template: string;
-  access: "public" | "principal";
-  body: ProbeBody;
-}
+export const OTHER_PROBES: readonly OtherProbe[] = TABLES.other;
 
-export const OTHER_PROBES: readonly OtherProbe[] = [
-  { method: "GET", template: "/", access: "public", body: NONE },
-  { method: "GET", template: "/healthz", access: "public", body: NONE },
-  { method: "GET", template: "/assets/:name", access: "public", body: NONE },
-  {
-    method: "POST",
-    template: "/session",
-    access: "public",
-    body: form({ intent: "sign-in", userId: "usr_demo_associate" }),
-  },
-  { method: "POST", template: "/session/end", access: "public", body: form() },
-  { method: "GET", template: "/api/session", access: "public", body: NONE },
-  { method: "GET", template: "/matters", access: "principal", body: NONE },
-  {
-    method: "POST",
-    template: "/matters",
-    access: "principal",
-    body: form({ name: "A probe", clientLegalName: "Probe, Inc." }),
-  },
-  { method: "GET", template: "/api/matters", access: "principal", body: NONE },
-  {
-    method: "POST",
-    template: "/api/matters",
-    access: "principal",
-    body: json({ name: "A probe", clientLegalName: "Probe, Inc." }),
-  },
-  { method: "GET", template: "/api/playbooks", access: "principal", body: NONE },
-];
+const FORGED_BODIES: Readonly<Record<string, (own: ProbeIds, borrowed: BorrowedIds) => ProbeBody>> =
+  TABLES.forgedBodies;
+const EFFECTS: Readonly<Record<string, (scratch: Scratch) => Effect>> = TABLES.effects;
 
 export const isApi = (template: string): boolean => template.startsWith("/api/");
 export const isUnsafe = (method: string): boolean => method !== "GET";
-
-/** The ids that fill a template's parameters. A test's `Prepared` fits. */
-export interface ProbeIds {
-  matterId: string;
-  firstDocumentId: string;
-  versionId: string;
-  runId: string;
-  findingId: string;
-  memoId: string | null;
-}
 
 export function pathFor(template: string, ids: ProbeIds, matterId = ids.matterId): string {
   return template
@@ -382,23 +256,6 @@ export const LIST_PROBES: readonly OtherProbe[] = OTHER_PROBES.filter(
   (probe) => probe.method === "GET",
 );
 
-// ---------------------------------------------------------------------------------------------
-// Ids that belong to another matter, or to nothing
-// ---------------------------------------------------------------------------------------------
-
-export type SubResource = "document" | "version" | "run" | "finding" | "memo";
-
-/** The ids a forged request borrows: those of another matter, or well formed ids of no record. */
-export interface BorrowedIds {
-  documentId: string;
-  versionId: string;
-  runId: string;
-  findingId: string;
-  memoId: string;
-  /** What a decision on the borrowed finding carries as the content it was made on. */
-  findingContentSha256: string;
-}
-
 /** Well formed ids (a prefix and 16 hex digits) of records that exist nowhere. */
 export const NO_RECORD: BorrowedIds = {
   documentId: "doc_0000000000000000",
@@ -443,38 +300,6 @@ export function subResourcesOf(template: string): SubResource[] {
     (entry) => entry.position,
   );
 }
-
-const probeKey = (probe: Pick<Probe, "method" | "template">): string =>
-  `${probe.method} ${probe.template}`;
-
-const AMENDMENT_TEXT =
-  "AMENDMENT NO. 2 TO MUTUAL NONDISCLOSURE AGREEMENT\n\n" +
-  "1. A paragraph of synthetic text that is long enough to be reviewed.\n";
-const TEXT_FILE = { name: "amendment-2.txt", text: AMENDMENT_TEXT } as const;
-
-/**
- * The bodies a forged request carries so that it gets past the checks on the body and reaches the
- * lookup of the id it borrows. Without one, the probe's own body stands (a read has none).
- */
-const FORGED_BODIES: Record<string, (own: ProbeIds, borrowed: BorrowedIds) => ProbeBody> = {
-  [`POST ${M}/documents/:documentId/versions`]: () => ({
-    kind: "multipart",
-    fields: { statedDate: "2026-09-16" },
-    file: TEXT_FILE,
-  }),
-  [`POST ${A}/documents/:documentId/versions`]: () => ({
-    kind: "multipart",
-    fields: { statedDate: "2026-09-16" },
-    file: TEXT_FILE,
-  }),
-  [`POST ${M}/documents/:documentId/operative`]: (own) => form({ versionId: own.versionId }),
-  [`POST ${M}/versions/:versionId/stated-date`]: () => form({ statedDate: "2026-01-01" }),
-  [`POST ${M}/documents/:documentId/remove`]: () => form({ confirm: "yes" }),
-  [`POST ${M}/findings/:findingId/reviews`]: (_own, borrowed) =>
-    form({ decision: "accept", findingContentSha256: borrowed.findingContentSha256 }),
-  [`POST ${A}/findings/:findingId/reviews`]: (_own, borrowed) =>
-    json({ decision: "accept", findingContentSha256: borrowed.findingContentSha256 }),
-};
 
 /**
  * One request of a member of a matter that names a record of another matter: the matter is the
@@ -751,183 +576,6 @@ export function unroutedRequests(
   }
   return out;
 }
-
-// ---------------------------------------------------------------------------------------------
-// Bodies that would change the store
-// ---------------------------------------------------------------------------------------------
-
-/**
- * A matter made to be written to: the NDA with two versions (the earlier is not the operative one)
- * and an amendment, which is the one document that may be removed, and a person to add. When the
- * probe needs more, it has also been reviewed (`run`: a finished run whose findings are open) or
- * reviewed and decided but not exported (`decided`).
- */
-export interface Scratch {
-  matterId: string;
-  documentId: string;
-  versionId: string;
-  earlierVersionId: string;
-  amendmentId: string;
-  invitee: string;
-  /** The workflow version a review of this matter is asked for: the one the suite reviews under. */
-  workflow: string;
-  runId?: string;
-  findingId?: string;
-  /** The decision a reviewer would make on `findingId`, as the suite's own reviewer makes it. */
-  decision?: { decision: string; findingContentSha256: string; reason: string | null };
-}
-
-/** How far a scratch matter has been taken. */
-export type ScratchLevel = "documents" | "run" | "decided";
-
-/** Where a request that must change something if it gets through is aimed. */
-export interface Effect {
-  /** `scratch`: a matter made for the probe. `fresh`: a new matter for each request. */
-  target: "scratch" | "fresh";
-  /** What the scratch matter must have been taken through first. */
-  needs: ScratchLevel;
-  ids: (scratch: Scratch, own: ProbeIds) => ProbeIds;
-  body: ProbeBody;
-}
-
-const sameIds = (_scratch: Scratch, own: ProbeIds): ProbeIds => own;
-const onScratch = (scratch: Scratch, own: ProbeIds): ProbeIds => ({
-  ...own,
-  matterId: scratch.matterId,
-  firstDocumentId: scratch.documentId,
-  versionId: scratch.versionId,
-  runId: scratch.runId ?? own.runId,
-  findingId: scratch.findingId ?? own.findingId,
-});
-const NEW_DOCUMENT = {
-  kind: "multipart",
-  fields: { title: "A further amendment", kind: "amendment" },
-  file: TEXT_FILE,
-} as const satisfies ProbeBody;
-
-const decisionFields = (scratch: Scratch): Record<string, string> => ({
-  decision: scratch.decision?.decision ?? "accept",
-  findingContentSha256: scratch.decision?.findingContentSha256 ?? "0".repeat(64),
-  ...(scratch.decision?.reason == null ? {} : { reason: scratch.decision.reason }),
-});
-
-const EFFECTS: Record<string, (scratch: Scratch) => Effect> = {
-  [`POST ${M}/settings`]: () => ({
-    target: "scratch",
-    needs: "documents",
-    ids: onScratch,
-    body: form({ clientLegalName: "A Changed Client, Inc." }),
-  }),
-  [`POST ${M}/members`]: (scratch) => ({
-    target: "scratch",
-    needs: "documents",
-    ids: onScratch,
-    body: form({ userId: scratch.invitee, role: "viewer" }),
-  }),
-  [`POST ${M}/delete`]: () => ({
-    target: "scratch",
-    needs: "documents",
-    ids: onScratch,
-    body: form({ confirm: "yes" }),
-  }),
-  [`POST ${M}/documents`]: () => ({
-    target: "scratch",
-    needs: "documents",
-    ids: onScratch,
-    body: NEW_DOCUMENT,
-  }),
-  [`POST ${M}/documents/:documentId/versions`]: () => ({
-    target: "scratch",
-    needs: "documents",
-    ids: onScratch,
-    body: { kind: "multipart", fields: { statedDate: "2026-09-16" }, file: TEXT_FILE },
-  }),
-  [`POST ${M}/documents/:documentId/operative`]: (scratch) => ({
-    target: "scratch",
-    needs: "documents",
-    ids: onScratch,
-    body: form({ versionId: scratch.earlierVersionId }),
-  }),
-  [`POST ${M}/versions/:versionId/stated-date`]: () => ({
-    target: "scratch",
-    needs: "documents",
-    ids: onScratch,
-    body: form({ statedDate: "2031-07-04" }),
-  }),
-  [`POST ${M}/documents/:documentId/remove`]: (scratch) => ({
-    target: "scratch",
-    needs: "documents",
-    ids: (s, own) => ({ ...onScratch(s, own), firstDocumentId: scratch.amendmentId }),
-    body: form({ confirm: "yes" }),
-  }),
-  [`POST ${M}/runs`]: (scratch) => ({
-    target: "scratch",
-    needs: "documents",
-    ids: onScratch,
-    body: form({ workflow: scratch.workflow }),
-  }),
-  [`POST ${M}/findings/:findingId/reviews`]: (scratch) => ({
-    target: "scratch",
-    needs: "run",
-    ids: onScratch,
-    body: form(decisionFields(scratch)),
-  }),
-  [`POST ${M}/memos`]: () => ({
-    target: "scratch",
-    needs: "decided",
-    ids: onScratch,
-    body: form(),
-  }),
-  [`PATCH ${A}`]: () => ({
-    target: "scratch",
-    needs: "documents",
-    ids: onScratch,
-    body: json({ clientLegalName: "A Changed Client, Inc." }),
-  }),
-  [`DELETE ${A}`]: () => ({ target: "fresh", needs: "documents", ids: sameIds, body: NONE }),
-  [`POST ${A}/members`]: (scratch) => ({
-    target: "scratch",
-    needs: "documents",
-    ids: onScratch,
-    body: json({ userId: scratch.invitee, role: "viewer" }),
-  }),
-  [`POST ${A}/documents`]: () => ({
-    target: "scratch",
-    needs: "documents",
-    ids: onScratch,
-    body: NEW_DOCUMENT,
-  }),
-  [`POST ${A}/documents/:documentId/versions`]: () => ({
-    target: "scratch",
-    needs: "documents",
-    ids: onScratch,
-    body: { kind: "multipart", fields: { statedDate: "2026-09-16" }, file: TEXT_FILE },
-  }),
-  [`DELETE ${A}/documents/:documentId`]: (scratch) => ({
-    target: "scratch",
-    needs: "documents",
-    ids: (s, own) => ({ ...onScratch(s, own), firstDocumentId: scratch.amendmentId }),
-    body: NONE,
-  }),
-  [`POST ${A}/runs`]: (scratch) => ({
-    target: "scratch",
-    needs: "documents",
-    ids: onScratch,
-    body: json({ workflow: scratch.workflow }),
-  }),
-  [`POST ${A}/findings/:findingId/reviews`]: (scratch) => ({
-    target: "scratch",
-    needs: "run",
-    ids: onScratch,
-    body: json(decisionFields(scratch)),
-  }),
-  [`POST ${A}/memos`]: () => ({
-    target: "scratch",
-    needs: "decided",
-    ids: onScratch,
-    body: NONE,
-  }),
-};
 
 /**
  * What to send, instead of the probe's own body, to a caller who must be refused, so that the

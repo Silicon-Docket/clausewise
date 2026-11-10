@@ -25,6 +25,13 @@
  * every name and every canary string is forbidden in everything they are sent. A member is held to
  * nothing of the other matter. Nobody belongs to both matters, so these sets need no exception.
  *
+ * A route that names no matter and only some global roles may open (a probe with a `globalAction`:
+ * the evaluation comparison, the audit log, the trainer's key, the pilot measures) is required to
+ * load, a 200 with a body, only from a reader whose global role the hand-written table lists for it
+ * (`mayLoad`). Every other reader is sent to it all the same, and the answer it gets, a 403 included,
+ * is scanned for everything that reader must not see: only the requirement of a page is dropped for
+ * them, not the search.
+ *
  * The scan also runs the other way (the canary matter's own people reading the case matter's routes,
  * and the canary matter's pages and rows being searched for the case's ids and names, and not for
  * canary strings, which are their own data), because a leak has two directions. The model is a
@@ -72,6 +79,8 @@
  * text. A hit is a kind of artefact, a label (route template or table name), and a token's position.
  */
 import type { ObjectGenerator } from "@clausewise/llm";
+import type { GlobalAction } from "../../../../apps/parol/src/auth/actions.js";
+import type { GlobalRole } from "../../../../apps/parol/src/contracts.js";
 import { concreteUrl, describeRoutes } from "../../../../apps/parol/src/server/matter-route.js";
 import { DEMO_USER_IDS } from "../../../../apps/parol/src/store/index.js";
 import type { LoadedPlaybook } from "../../../../apps/parol/src/module-contracts.js";
@@ -92,6 +101,7 @@ import {
   requireTokensIn,
   type OwnPages,
 } from "./canary-controls.js";
+import { DOCUMENTED_GLOBAL_ROLES } from "./authorization.js";
 import { EXIT_UNTRUSTED, ExposureControlFailure, ExposureSuiteUnavailable } from "./errors.js";
 import { fileBytes } from "./files.js";
 import { createCaseOracle, createCapturingGenerator, type CapturingGenerator } from "./model.js";
@@ -206,6 +216,8 @@ const CASE_VIEWER = "usr_exposure_case_viewer";
 /** Belong to neither matter: a global role of the application, and nobody. */
 const GLOBAL_ADMIN = DEMO_USER_IDS.admin;
 const GLOBAL_ENGINEER = DEMO_USER_IDS.legalEngineer;
+/** The global role of the case's people and of the canary matter's people: members. */
+const GLOBAL_MEMBER: GlobalRole = "member";
 
 const MISSING_IDS = {
   runId: "run_0000000000000000",
@@ -225,6 +237,35 @@ const STATIC_PUBLIC: ReadonlySet<string> = new Set(["/healthz", "/assets/:name"]
 const KNOWN_GET: ReadonlySet<string> = new Set(
   [...GET_PROBES, ...OTHER_GET].map((probe) => probe.template),
 );
+
+/** A route that names no matter, as the scan reads it. */
+export interface OtherRoute {
+  template: string;
+  path: string;
+  public: boolean;
+  /** The global action the route checks, when only some global roles may open it. */
+  globalAction?: GlobalAction;
+}
+
+/**
+ * Whether a reader with this global role (null: a visitor with no session) is to be let into a
+ * route that names no matter, so that the scan may require a 200 with a body from it. A public
+ * route is for everyone; the others need a person; and a route that names a global action is for
+ * the roles the documented table lists for it (`DOCUMENTED_GLOBAL_ROLES`, written by hand, and
+ * not the application's own table, so that a page the application closed to the people it is
+ * documented for stops the scan instead of being excused). A reader who may not load a route is
+ * still sent to it and its answer, a 403 body included, is scanned for everything that reader
+ * must not see: only the requirement of a page is dropped, not the search.
+ */
+export function mayLoad(
+  route: Pick<OtherRoute, "public" | "globalAction">,
+  role: GlobalRole | null,
+): boolean {
+  if (route.public) return true;
+  if (role === null) return false;
+  if (route.globalAction === undefined) return true;
+  return DOCUMENTED_GLOBAL_ROLES[route.globalAction].includes(role);
+}
 
 export async function runCanaryScan(args: CanaryArgs): Promise<CanaryResult> {
   const splits = args.splits ?? (["dev"] as const);
@@ -766,11 +807,12 @@ async function scanCase(
     const noFinding = { ...reviewed, findingIds: [MISSING_IDS.findingId] };
     const canaryTargets = (side: CanarySide) => readTargets(noFinding, () => canaryIds(side));
     /** The routes that do not name a matter, for a reader who is not the static page's anonymous client. */
-    const otherRoutes = (): { template: string; path: string; public: boolean }[] =>
+    const otherRoutes = (): OtherRoute[] =>
       OTHER_GET.filter((probe) => !STATIC_PUBLIC.has(probe.template)).map((probe) => ({
         template: probe.template,
         path: pathFor(probe.template, caseIds(reviewed.findingIds[0]!)),
         public: probe.access === "public",
+        ...(probe.globalAction === undefined ? {} : { globalAction: probe.globalAction }),
       }));
     /** The templates requested, as `GET /template`: what "fetched" is counted from. */
     const fetched = new Set<string>();
@@ -827,7 +869,7 @@ async function scanCase(
         });
       for (const route of otherRoutes())
         await read(client, `${role} GET ${route.template}`, route.path, foreignToCase, {
-          load: true,
+          load: mayLoad(route, GLOBAL_MEMBER),
           members: canaryMembers,
         });
       own.require(`the case's ${role}`);
@@ -879,7 +921,12 @@ async function scanCase(
             `${side.matter.id} ${who} GET ${route.template}`,
             route.path,
             caseForCanarySide,
-            { load: true, shape: false, facts: false, members: caseMembers },
+            {
+              load: mayLoad(route, GLOBAL_MEMBER),
+              shape: false,
+              facts: false,
+              members: caseMembers,
+            },
           );
       }
     }
@@ -888,16 +935,15 @@ async function scanCase(
     //    either may reach them, on the lists, on the routes of the case and on the routes of the canary
     //    matters. The static pages that no caller can tell apart are fetched once, anonymously.
     const strangers = [
-      ["administrator", await site.signIn(GLOBAL_ADMIN)],
-      ["legal engineer", await site.signIn(GLOBAL_ENGINEER)],
-      ["anonymous", site.anonymous()],
+      ["administrator", await site.signIn(GLOBAL_ADMIN), "admin"],
+      ["legal engineer", await site.signIn(GLOBAL_ENGINEER), "legal_engineer"],
+      ["anonymous", site.anonymous(), null],
     ] as const;
     const everyone = [...caseMembers, ...canaryMembers];
-    for (const [who, client] of strangers) {
-      const signedIn = who !== "anonymous";
+    for (const [who, client, role] of strangers) {
       for (const route of otherRoutes())
         await read(client, `${who} GET ${route.template}`, route.path, nobodyOnLists, {
-          load: signedIn || route.public,
+          load: mayLoad(route, role),
           members: everyone,
         });
       for (const target of caseTargets)

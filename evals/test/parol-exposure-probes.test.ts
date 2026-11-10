@@ -29,10 +29,16 @@ describe("the probe table", () => {
     expect(own).not.toMatch(/reaches:/);
   });
 
-  it("covers 36 routes that name a matter, and no probe is listed twice", () => {
-    expect(shared.MATTER_PROBES).toHaveLength(36);
+  it("covers the routes that name a matter, once each: the base and every fragment, and no probe is listed twice", () => {
+    // The number of routes is not typed in. That the table is the application's routes, no more and no
+    // fewer, is what the suite itself checks (a route without a probe, a probe without a route).
+    expect(shared.MATTER_PROBES).toHaveLength(
+      shared.PROBE_FRAGMENTS.reduce((sum, fragment) => sum + fragment.matter.length, 0),
+    );
+    expect(shared.MATTER_PROBES.length).toBeGreaterThan(0);
     const names = shared.MATTER_PROBES.map(shared.probeName);
     expect(new Set(names).size).toBe(names.length);
+    // Seven kinds of caller, which the sentence of the record and the application's tests name.
     expect(ACTORS).toHaveLength(7);
   });
 
