@@ -16,8 +16,8 @@ and the design claims that the code does not satisfy, with a severity each, unde
 held-out split) each exited 0. The dataset has 26 cases (14 development with 112 rule slots, 12
 held-out with 96) and a calibration set of 40 pairs, the demonstration playbook has 8 rules, and the
 gates are 14. On the same day, on the code of the week-two parts 1 and 2 as committed, `pnpm lint`,
-`pnpm typecheck` and `pnpm fixtures:parol --check` each exited 0 and `pnpm test` reported 310 test
-files and 9,439 tests (9,438 passed and 1 skipped, in the CLI package). `pnpm eval:parol --selftest
+`pnpm typecheck` and `pnpm fixtures:parol --check` each exited 0 and `pnpm test` reported 312 test
+files and 9,495 tests (9,494 passed and 1 skipped, in the CLI package). `pnpm eval:parol --selftest
 --exposure` also exited 0 under workflows v1, v2 and v3 on the development split, on the held-out
 split and on both. The counts move with every test added, so run the commands instead of trusting
 this line. In this plan "run", used of the held-out split or of a model, means a live run, which is
