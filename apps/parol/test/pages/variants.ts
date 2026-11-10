@@ -25,9 +25,25 @@ import {
   buildMatterView,
   buildMemo,
 } from "./support.js";
+import { VARIANTS_EVALUATIONS } from "./variants-evaluations.js";
+import { VARIANTS_FEEDBACK } from "./variants-feedback.js";
+import { VARIANTS_PILOT } from "./variants-pilot.js";
+import { VARIANTS_RETENTION } from "./variants-retention.js";
+import { VARIANTS_TRAINING } from "./variants-training.js";
+import { VARIANTS_USAGE } from "./variants-usage.js";
 
-/** Every page, in every state that changes what it shows. Shared by the tests that sweep them all. */
-export const variants: [string, () => string, { fragment?: boolean }?][] = [
+/**
+ * One page fixture: a name, the page as HTML, and `fragment: true` for a pane that is a piece of a
+ * page and not a whole document.
+ */
+export type Variant = [string, () => string, { fragment?: boolean }?];
+
+/**
+ * The pages that exist before the packages of week two part 3, in every state that changes what
+ * they show. A package that adds a page does not edit this list: it adds its fixtures to its own
+ * `variants-<name>.ts`, which is spread after this list below.
+ */
+const BASE_VARIANTS: Variant[] = [
   ["matters, none", () => mattersPage([])],
   [
     "matters, several",
@@ -133,4 +149,15 @@ export const variants: [string, () => string, { fragment?: boolean }?][] = [
         buildChrome({ notice: { kind: "error", text: "The file could not be read." } }),
       ),
   ],
+];
+
+/** Every page, in every state that changes what it shows. Shared by the tests that sweep them all. */
+export const variants: Variant[] = [
+  ...BASE_VARIANTS,
+  ...VARIANTS_USAGE,
+  ...VARIANTS_EVALUATIONS,
+  ...VARIANTS_RETENTION,
+  ...VARIANTS_FEEDBACK,
+  ...VARIANTS_TRAINING,
+  ...VARIANTS_PILOT,
 ];
