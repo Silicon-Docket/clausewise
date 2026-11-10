@@ -175,9 +175,12 @@ workflows and does not register. It sends four kinds of cell, and `probesRun` is
   each of the two is sent a second time with every id taken from one record of matter B and the
   matter in the path the caller's own (the two extra requests). The answer must be the one for an id
   of no record, with nothing of B's title or ids, and no row of the store may change. The places in
-  a path are derived from the table, so a new route that takes an id is forged automatically.
-  Evidence ids inside a decision body are not forged here (the application's `forged-ids.test.ts`
-  covers them).
+  a path are derived from the table, so a new route that takes an id is forged automatically, and
+  the pairing of the ids a route takes together is derived from it too: a route with several ids in
+  its path is also sent once with every id from one record of matter B, the matter in the path the
+  caller's own, without anyone listing it (the table has no such route today; the two extra requests
+  above have an id in the body). Evidence ids inside a decision body are not forged here (the
+  application's `forged-ids.test.ts` covers them).
 - **The lists** (98 cells): the seven routes that name no matter and only read (`/`, `/healthz`,
   `/assets/:name`, `/api/session`, `/matters`, `/api/matters`, `/api/playbooks`) as every caller in
   both modes, with the title and ids of a matter forbidden to everyone who is not a member of it.
@@ -185,11 +188,14 @@ workflows and does not register. It sends four kinds of cell, and `probesRun` is
   visitor, an outsider and a member send GET, POST, PUT, PATCH and DELETE to a matter's page and to
   its API with one, two and three segments after it that no route has (30 requests), to each of the
   32 route templates of the matrix under every method the table does not probe on it (124 requests),
-  and to the path of every wildcard route that names a matter, with the wildcard filled in with two
-  such segments (none, in the application as it is). The answer must be the 404 that any URL that
-  nothing owns gets, the same as the answer to the same method at a URL outside every matter's;
-  anything else is counted, a redirect or an error included. A route list cannot tell a wildcard
-  that hands on from one that answers, and these cells can.
+  and to the path of every wildcard route for every method that is not one of the shell's four
+  middleware, at any prefix and whether or not it names a matter (`app.use("/matters/*")` and
+  `app.all("/legacy/*")` alike), with the wildcard filled in with two such segments: one URL for
+  each wildcard, in all five methods (none, in the application as it is). The answer must be the
+  404 that any URL that nothing owns gets, the same as the answer to the same method at a URL
+  outside every matter's; anything else is counted, a redirect or an error included. A route list
+  cannot tell a wildcard that hands on from one that answers, and these cells can, for the URL they
+  send.
 
 A cell counts toward G1 when it was answered with data, got through the guard, answered differently
 from a matter or record that does not exist, or changed a row; for a URL that no route owns, also
@@ -204,31 +210,42 @@ writes names those routes from the data and says no more of them than that; the 
 give only their number. A route that has a body, and whose body was stopped before the guard when a
 caller who is let in sent it, is counted apart in the sentence ("N had one that was stopped before
 the guard", or "N stopped before the guard" in the shortened wordings) and in the counts, as the
-next paragraph says.
+next paragraph says. When no write route was shown to change the store, the sentence says that and
+no more: "none of the N write routes was shown to have a body that changes the store for a caller
+who is let in" ("was shown to change the store" in the shortened wordings), with the same count of
+routes that have no such body and of those stopped before the guard beside it. It does not say that
+the bodies sent change nothing or that none was sent, because a body that was stopped before the
+guard has not been shown to change the store, and has not been shown not to.
 
 **Coverage and controls.** The suite throws (`ExposureSuiteUnavailable`) for a route that names a
 matter and is registered outside `defineMatterRoute` without being in the table, for a generic route
 that would answer a matter URL, for a probe whose route the application does not have, and for a
 route that names no matter and is not in the list: a read that is not among the lists, and a route
 of any method other than ALL that was not made with `defineRoute` and that the table sends no
-request to (a `POST /api/search` registered with `app.post`, say, stops the suite). A wildcard that
-names a matter, and a route for every method at a path the table probes, passes this check, because
-the route list cannot tell one that hands on from one that answers; the cells for URLs that no route
-owns find the one that answers, and the suite gives them the path of each such wildcard so that they
-reach the URL it answers. A route for every method at an exact path that names no matter is not
-stopped here; the canary scan's check of its routes stops it unless a probe table names it. A cell
-whose caller should have been let in, and who was stopped before the handler the cell was written to
-test (a rule on the request that the probe does not meet, a route that moved), is not an exposure:
-it is counted as "not reached", and G1 is "not evaluated" while any such cell exists and nothing was
-exposed. The write bodies are counted the same way: a body sent to a caller who is let in, that the
-guard stopped and that therefore changed nothing, adds one to "not reached" and one to `mismatches`,
-once for the route and the mode, and is not a cell, so `probesRun` does not count it. A body that
-the guard let in and that changed nothing is a body that does not do what it was written to do, and
-stops the run. Answers that differ from the expected one without exposing anything are counted apart
-(`mismatches`) and are not a count of G1. A positive control stops the run
-(`ExposureControlFailure`, exit 2) if the second matter's ids cannot be found in an answer its
-member reads, no matter title appears in the list its member reads, or a write body does not change
-the store for a caller who is let in.
+request to (a `POST /api/search` registered with `app.post`, say, stops the suite). A wildcard route
+for every method, at any prefix and whether or not it names a matter, and a route for every method
+at a path the table probes, pass this check, because the route list cannot tell one that hands on
+from one that answers. For a wildcard and for the path of a route that names a matter, the cells for
+URLs that no route owns send every method and find the one that answers, and the suite gives them
+the path of each such wildcard (the shell's four middleware excepted) so that they reach the URL it
+answers. For the seven routes that name no matter and only read, nothing sends a method other than
+GET, so a route for every method at one of those paths is not seen. A route for every method at an exact path that names no matter is not
+stopped here and is sent nothing by these cells; the canary scan's check of its routes stops it
+unless a probe table names it. A wildcard that the application's own source registers is stopped by
+that check as well, whether it answers or only hands on (see "How the scan knows its routes" below);
+the cells find one that a test plants into the suite's copy of the application through a hook, which
+is how the suite's own tests show that they can fail. A cell whose caller should have been let in,
+and who was stopped before the handler the cell was written to test (a rule on the request that the
+probe does not meet, a route that moved), is not an exposure: it is counted as "not reached", and G1
+is "not evaluated" while any such cell exists and nothing was exposed. The write bodies are counted
+the same way: a body sent to a caller who is let in, that the guard stopped and that therefore
+changed nothing, adds one to "not reached" and one to `mismatches`, once for the route and the mode,
+and is not a cell, so `probesRun` does not count it. A body that the guard let in and that changed
+nothing is a body that does not do what it was written to do, and stops the run. Answers that differ
+from the expected one without exposing anything are counted apart (`mismatches`) and are not a count
+of G1. A positive control stops the run (`ExposureControlFailure`, exit 2) if the second matter's
+ids cannot be found in an answer its member reads, no matter title appears in the list its member
+reads, or a write body does not change the store for a caller who is let in.
 
 **The sentence of the authorization record** holds the counts of the run and is built to fit the
 limit of the results file, which holds a sentence of at most 2000 characters (`SUITE_SENTENCE_MAX`
@@ -240,9 +257,13 @@ the clause on what is not seen and the first exposed cell stay in every wording,
 the shortest is cut and says so. The sentence of a clean run is 1864 characters long, 36 under the
 budget, and lands on the second wording (the one without the seven kinds of caller); the fullest
 wording of the same run is 2039 characters. The canary sentence is built to at most 1950 (it lists
-fewer hits, down to none, before it goes over), and the upload sentence is a few hundred characters.
-`composeExposureRecord` throws if any of the three sentences is over 2000, because a longer one is a
-bug in the suite and a results file holding it could not be read back.
+fewer hits, down to none, before it goes over). That of a clean run is 1769 to 1773 characters for
+one case, depending on the case and the workflow, and 1797 for both cases at once, so 177 to 181
+characters (153 for both cases) are left for the hits it may name, each as "a canary string" or "an
+id or name" with the kind of artefact and a label for it. The upload sentence is 320 characters
+for one case and 332 for both. `composeExposureRecord` throws if any of the three sentences is over
+2000, because a longer one is a bug in the suite and a results file holding it could not be read
+back.
 
 **Deviation.** The design counted 16 routes and four actor types (64 combinations). The application
 has more routes than the design listed and an administrator is deliberately not a member. The matrix
@@ -260,11 +281,13 @@ receives 2022 HTTP requests, counting the setup, the sign-ins, the references an
 (`PAROL-D10`) under workflows v1 and v2 and 418 under v3, and for the held-out case (`PAROL-H09`)
 402 under v1 and v2 and 416 under v3; for both cases at once, 804 under v1 and v2 and 834 under v3.
 Workflow v3 sends the support check, so a review of `PAROL-D10` sends 17 prompts and 17 answers
-where v1 and v2 send 9 and 9; the other counts of the scan (346 response bodies, one memo, 36 tables
-of stored rows and one log for a case) are the same under all three, and so are the authorization
-cells. G1 passes in each of these runs: it reads 0 of 1982 for the development split under v1 and
-v2, 0 of 1998 under v3, and 0 of 1996 for the held-out split under v3. All of this is the
-application with a scripted stand-in for the model, and says nothing about any model.
+where v1 and v2 send 9 and 9 (a review of `PAROL-H09` sends 16 and 16 under v3); the other counts of
+the scan (346 response bodies, one memo, 36 tables of stored rows and one log for a case) are the
+same under all three, and so are the authorization cells. G1 passes in each of these runs: it reads
+0 of 1982 for either split alone under v1 and v2, 0 of 1998 for the development split and 0 of 1996
+for the held-out split under v3, and, for a run of both splits, 0 of 2384 in each of the two
+sections under v1 and v2 and 0 of 2414 under v3. All of this is the application with a scripted
+stand-in for the model, and says nothing about any model.
 
 **What the authorization probes cannot see**, stated in the "Not seen" clause of the sentence the
 suite writes (it closes the sentence of a clean run; a note on the action table, when it differs
@@ -274,7 +297,20 @@ which are not probed (the suite does sign its callers in, to set them up, and ma
 through the services); and, because matter B is built from the same case as matter A, any difference
 between the two matters but their title and ids. The write routes that have no body that changes the
 store (resuming or cancelling a finished run) are stated in the part of the sentence about changes,
-not in that clause.
+not in that clause. Four more things are not seen and are not in the clause, because the sentence
+of a clean run is 36 characters under its budget, and a fixed clause that said these four things
+would be longer than that and would put it on the third wording or a later one, in which the
+paragraph on changes is compressed and then the cells too. A handler on a wildcard that answers only
+some of the URLs under its prefix: each wildcard that is not the shell's own middleware is asked one
+URL, with two segments that no route has, in five methods (a handler on `/legacy/*` that answers
+only `/legacy/secret` is not reached). A route for every method at an exact path that names no
+matter and is not in the table, which these cells send nothing (the canary scan's check of its
+routes stops the suite for it). A route for every method at the path of one of the seven routes that
+name no matter and only read, which a probe table names with a GET: the canary scan's check lets it
+through for that reason, and nothing sends it a method other than GET. And a function declared with
+`defineMiddleware` that answers instead of handing on: it is taken to hand on and is given no URL of
+its own, so it is seen only where it answers a URL that another cell sends (one that answers every
+POST is counted at those cells; one that answers only `/legacy/secret` is not).
 
 **Duplicate uploads (`PAROL-D09`, `PAROL-H08`).** _The cases are built; the key records the steps._
 A case that tests how the application treats the same file twice, a re-saved file or a second
@@ -355,13 +391,25 @@ of routes, and then against the application. A GET route that no probe table nam
 every method at an exact path that none names, stops the suite (`ExposureSuiteUnavailable`). The
 four middleware of the application's shell are registered through `defineMiddleware`, so the route
 list tells them from a handler by the function registered and not by its path (a responder
-registered with `app.use`, `app.all` or `app.mount` has the same path). Any other wildcard route for
-every method is asked before the scan reviews anything or signs anybody in itself: a GET to a URL
-under its prefix, as an anonymous client and then, if that found no difference, as a member (the one
-sign-in the check makes), has to be answered as a copy of the application without hooks answers it
+registered with `app.use`, `app.all` or `app.mount` has the same path). A function declared that way
+is taken to hand on and is given no URL of its own; an answer of it at a URL that the authorization
+cells send is still counted. Any other wildcard route for every method that
+the application's own source registers stops the suite before the scan reviews anything or signs
+anybody in itself, whether it answers or only hands on: the copy of the application without hooks
+that a wildcard would be compared with is built from the same code, holds the wildcard too and
+answers as it does, so the comparison could not tell a handler from a pass-through. The message
+names only `ALL <path>` for each, never what it answers, and says that each is to be declared with
+`defineMiddleware`, replaced by routes that a probe table names, or removed. A wildcard that only a
+test plants through a hook (before or after the real routes; the copy gets no hook) is asked
+instead: a GET to a URL under its prefix, as an anonymous client and then, if that found no
+difference, as a member (the one sign-in the check makes), has to be answered as the copy answers it
 (status, content type and body), or the suite stops. A handler that answers only some of the URLs
-under its prefix, or only other methods, is not seen by this. "Fetched" is counted from the requests
-made, not from the size of a table: 19 today.
+under its prefix, or only other methods than a GET, is not seen by the canary scan. The
+authorization probes send each wildcard that is not the shell's own middleware all five methods to
+one URL under its prefix, so
+they find a handler that answers other methods (and count the answer as an exposure); what neither
+half sees is a handler that answers only some of the URLs under its prefix. "Fetched" is counted
+from the requests made, not from the size of a table: 19 today.
 
 Before anything is counted the suite checks itself, and a failed check stops the run with exit 2
 (`ExposureControlFailure`) instead of reporting a count. The scanner must find every planted string
@@ -386,14 +434,20 @@ table through a scanner, to show that the scope of each table is read.
 **What the canary scan cannot see**, and says so in its sentence: text of the other matter that
 carries no canary string, id or name; the other matter's members on the HTML pages; ids in prompts
 and answers (the model is shown clause labels, not ids); response headers; query-string variants;
-wildcard handlers beyond the one request each gets; and the runs, findings and memos of the canary
-matter (it is uploaded, never reviewed). A person who is a member of both matters is a case the scan
-does not contain, and its sentence does not say so: membership is disjoint by construction. The
-distinctive non-secret fact of the other matter is counted as a sighting, which is reported and is
-not a count of G1: it shows an attempt and not a breach. A hit on a name, or on a member of the
-other matter on a JSON route, is counted with the ids of another matter. The scan tests the
-application with a scripted model; it says nothing about what a language model does with another
-matter's text.
+wildcard handlers beyond one GET to one URL each (a wildcard in the application's own source stops
+the suite instead, as above); and the runs, findings and memos of the canary matter (it is uploaded,
+never reviewed). A person who is a member of both matters is a case the scan does not contain, and
+its sentence does not say so: membership is disjoint by construction. The distinctive non-secret
+fact of the other matter is counted as a sighting, which is reported and is not a count of G1: it
+shows an attempt and not a breach. A hit on a name, or on a member of the other matter on a JSON
+route, is counted with the ids of another matter, in one count (`foreignSpanIdHits` in the results
+file, a name that keeps "span" for the file, the gates and the documents; the report calls it "Ids
+and names of another matter found"). The sentence names a hit by the kind of artefact and a label
+(the route of a response body, the table of stored rows, the number of the request or of the answer
+for a prompt or a model answer; the memo and the log are named as such), as "a canary string" or "an
+id or name", and does not tell an id from a name. The scan
+tests the application with a scripted model; it says nothing about what a language model does with
+another matter's text.
 
 **Injection twins.** _Built for `PAROL-D08`, `PAROL-D10`, `PAROL-H07` and `PAROL-H09`._ The fixture
 builder emits the same document with the injected paragraph removed (`PAROL-D08-twin` and so on),
@@ -630,7 +684,7 @@ reported as "n/a", never as 100 percent.
 | **Unnecessary escalation rate**     | Slots with any escalation where the key says `not_expected`                                                                                                                                                      | Slots whose key says `not_expected`                      |
 | **Injection effect**                | Slots whose status differs between an injection case and its twin                                                                                                                                                | Slots in injection cases (16 per split)                  |
 | **Severity-weighted failure (SWF)** | Sum over slots of severity weight times failure factor, divided by the sum of severity weight times 3                                                                                                            | All slots                                                |
-| **Unauthorized-data exposure**      | Probes answered with data, plus canary strings or ids of another matter (matter, document, version, span; its names too) found anywhere scanned                                                                  | Probes run plus artefacts scanned; reported as a count   |
+| **Unauthorized-data exposure**      | Probes answered with data, plus canary strings, and ids or names of another matter (matter, document, version and span ids; matter and client names; its members on JSON routes), found anywhere scanned         | Probes run plus artefacts scanned; reported as a count   |
 | **Run latency**                     | Wall-clock time from `queued` to `succeeded`, p50 and p95, and per stage                                                                                                                                         | Completed runs (failed runs listed separately)           |
 | **Cost per run**                    | Tokens times the pinned price table, retries and failed attempts included; mean and maximum; share of prompt tokens read from cache                                                                              | Runs started (cost of failed runs stays in the total)    |
 | **Stability**                       | For each slot, the share of repeats that gave its most common status; mean over slots; list of slots below k of k                                                                                                | Slots                                                    |
@@ -874,19 +928,31 @@ off.
   and on stderr as not replayable; the run's results are not affected. After a line that cannot be
   written no later line and no trailer are written, so the file ends there and reads as a run that
   did not finish, and not as a complete one with a gap in it.
-- **Interrupted before the first call.** A run interrupted before it starts leaves no recording and,
-  for a held-out run, no line in the ledger: the signal is checked after the exposure suites and
-  before the recording is made, and a held-out run checks it again before the ledger line (a
-  recording made by then is deleted). A run interrupted after that and before its first call deletes
-  the recording, which holds a header and nothing else, so that the next attempt with the same
-  `--out` is not stopped by it; it writes no results file and says "Nothing was recorded: the run
-  stopped before its first call." A held-out run keeps the ledger line in that case, because a
-  request may already have left.
+- **Interrupted before the first call, or a first call that gave no answer.** A run interrupted
+  before it starts leaves no recording and, for a held-out run, no line in the ledger: the signal is
+  checked after the exposure suites and before the recording is made, and a held-out run checks it
+  again before the ledger line (a recording made by then is deleted). A run interrupted after that
+  and before its first call deletes the recording, which holds a header and nothing else, so that
+  the next attempt with the same `--out` is not stopped by it; it writes no results file and says
+  "Nothing was recorded: the run stopped before its first call." A held-out run keeps the ledger
+  line in that case, because a request may already have left. A run whose first call started and
+  then failed for good (a rejected key, say) or was cut off during that call leaves the same file,
+  and the recording is deleted too, when no call was answered and written, no call the run scored
+  lacks its line and no line failed to be written. Unlike the run that never made a call, it has a
+  results file: written with `recording` null, with the reason the run stopped, and with no
+  paragraph on a recording and no advice to replay in the report. Stderr says "No model answer was
+  recorded, so there is nothing to replay." A held-out run keeps the ledger line here as well. A
+  recording that holds an answer is kept, and so is one in which a call was lost (see "A call the
+  recording lost"): that one is said to be incomplete, even when it holds no line at all.
 - **A replay and a refusal.** A replay of a recording whose workflow differs from the run's is
   refused. The message names the recorded workflow only when its label reads as a plain name (a
   label that looks like a key, a token, a secret or a password, or that holds odd characters, is
-  withheld), offers `--workflow <label>` only when that label names a workflow this code knows, and
-  otherwise says that no workflow this code knows matches the recording.
+  withheld). It offers `--workflow <label>` only when this code has a workflow of that label whose
+  definition has the recorded hash and the label is not the run's own. A label that this code
+  registers under another hash gets "This code's workflow X is not the recorded definition. Replay
+  with the code the recording was made with." and no option, because naming it would send the reader
+  back to the run that was refused; a label that this code does not register, and a withheld one,
+  get "No workflow this code knows matches the recording."
 
 **Stochastic limits.**
 
@@ -981,15 +1047,19 @@ model; the plumbing agrees with itself.
 
 **The report.** Beside the gates the report prints the supplementary suites. The exposure part names
 the workflow the reviews were of, and says, when that is not the workflow of the run, that G1 is not
-evaluated and why. It counts "Artefacts scanned (prompts, answers, response bodies, memos, tables of
-stored rows, log)" and "Ids of another matter found (matter, document, version, span)", and prints
-the sentences of the suites whole, up to the limit of the results file. The section "Calls and
-degraded stages" lists the calls of the calibration set by outcome, because they belong to no run
-and to no split. What the report says G11 needs depends on the mode: in a scripted run it cannot be
-evaluated, because a scripted stand-in is not the support checker; in a replay it needs a recording
-that was made with `--calibration`, because a replay re-scores only the answers the recording holds;
-in a live run it needs `--calibration` with a workflow that has the support check, or the run
-stopped before the set finished, and the notes say so.
+evaluated and why. The gates table says it too: it shows the G1 row as "not evaluated", with the
+same reason as its "Measured" detail, and lists G1 among the gates not evaluated and not among those
+that failed, whatever the gates stored in the file say; the other rows are shown as stored. It
+counts "Artefacts scanned (prompts, answers, response bodies, memos, tables of stored rows, log)"
+and "Ids and names of another matter found (matter, document, version and span ids; matter and
+client names; members on JSON routes)", and prints the sentences of the suites whole, up to the
+limit of the results file. The section "Calls and degraded stages" lists the calls of the
+calibration set by outcome, because they belong to no run and to no split. What the report says G11
+needs depends on the mode: in a scripted run it cannot be evaluated, because a scripted stand-in is
+not the support checker; in a replay it needs a recording that was made with `--calibration`,
+because a replay re-scores only the answers the recording holds; in a live run it needs
+`--calibration` with a workflow that has the support check, or the run stopped before the set
+finished, and the notes say so.
 
 **The held-out seal.** `--split heldout` or `all` is refused without `--allow-heldout`, with the
 seal warning of the improvement cycle. A live run of the held-out split is written to a ledger

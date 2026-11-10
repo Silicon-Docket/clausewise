@@ -342,9 +342,15 @@ service that reads matter data, calls a model or writes a file. As built:
   `defineMiddleware`, so that the list of routes tells them from a handler that answers: a test fails
   if the shell as `createApp` builds it holds a route registered another way, of any method, and a
   scan of the source fails for a direct `app.get`, `app.all` or the like. A wildcard handler added
-  by `app.use` or `app.mount` among the page and API routes is found only by the evaluation's
-  exposure suite, which stops if a wildcard route for every method that is not one of the four
-  makes a GET under its prefix come out differently from the application without it (see
+  by `app.use` or `app.mount` among the page and API routes under a path that names a matter fails
+  the test of the matter routes as well; one under a path that names no matter (`/legacy/*`) is found only by the
+  evaluation's exposure suite, which stops for any wildcard route for every method that the source
+  registers and that is not one of the four, whether it answers or only hands on, until it is
+  declared with `defineMiddleware`, replaced by routes that a probe table names, or removed. A
+  function declared with `defineMiddleware` is taken to hand on and is given no URL of its own; an
+  answer of it at a URL that another probe sends is counted all the same. The authorization
+  probes also send each such wildcard all five methods and count an answer other than the 404 of a
+  URL that nothing owns as an exposure (see
   [document 5](05-evaluation.md#supplementary-suites)).
 - Responses carry a content security policy that allows script, style and connections from the same
   origin only (`default-src 'none'`), no framing, `nosniff`, `no-referrer`, a permissions policy that
@@ -365,11 +371,12 @@ reference pipeline on the development cases. Nothing makes a later change to
 The exposure suite is the exception to that composition. `pnpm eval:parol --exposure`
 (`evals/src/parol/exposure/`) builds the real application in process (the real shell, routes and
 services over an in-memory store, with no socket) and sends the authorization probes (which include
-requests to URLs that no route owns, sent with each of GET, POST, PUT, PATCH and DELETE, and which
-must all get the 404 of a URL that nothing owns), the canary scan and the replay of upload steps
-through it. The model in that application is a scripted key-oracle that is not a language model, so
-the suite tests the application and not a model. The reviews it starts follow the workflow of the
-run (`--workflow`, v1 unless given; a call from code that names none gets the newest version the
+requests to URLs that no route owns, sent with each of GET, POST, PUT, PATCH and DELETE, including
+one URL under each wildcard route that is not one of the shell's four middleware, and which must all
+get the 404 of a URL that nothing owns), the canary scan and the replay of upload steps through it.
+The model in that application is a scripted key-oracle that is not a language model, so the suite
+tests the application and not a model. The reviews it starts follow the workflow of the run
+(`--workflow`, v1 unless given; a call from code that names none gets the newest version the
 application ships), because the prompts a review sends depend on the version. A version that the
 application does not ship (v3) is registered in the suite's own copy of the application and nowhere
 else. The record carries the label and the hash of that workflow, and gate G1 is read from it only

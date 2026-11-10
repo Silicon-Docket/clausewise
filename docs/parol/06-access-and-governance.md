@@ -77,17 +77,21 @@ approved playbook, a prompt or a workflow manifest.
 **Tests.** The authorization probe matrix runs in the unit suite (`test/routes/authorization.test.ts`:
 one request for every route, as every kind of caller). The matrix is also run as a step of the
 evaluation (`pnpm eval:parol --exposure`), with the ids of one matter named in requests for another
-(a route that takes several ids is also sent with all of them from one record of the other matter),
-the routes that name no matter read as every caller, and URLs that no route owns sent with each of
-GET, POST, PUT, PATCH and DELETE as a visitor, an outsider and a member, each of which must get the
-404 of a URL that nothing owns. It feeds gate G1 of
+(a route that takes several ids is also sent with all of them from one record of the other matter,
+a route added later included), the routes that name no matter read as every caller, and URLs that no
+route owns sent with each of GET, POST, PUT, PATCH and DELETE as a visitor, an outsider and a member
+(one URL under each wildcard route that is not the shell's own middleware among them), each of which
+must get the 404 of a URL that nothing owns. It feeds gate G1 of
 [document 5](05-evaluation.md#supplementary-suites); it tests the application with a scripted
 stand-in for the model and not a model. The reviews it starts follow the workflow of the run, and G1
 is read only from a record made under the workflow of the run it is reported for. A test enumerates
 the application's matter routes and fails if any lacks the guard, if a generic route would answer a
 matter URL, or, for the shell as `createApp` builds it, if any route of any method is registered
 other than through the declaring functions (`test/server/shell-routes.test.ts`; a wildcard handler
-that `registerRoutes` adds with `app.use` or `app.mount` is found only by the exposure suite); a
+that `registerRoutes` adds with `app.use` or `app.mount` under a path that names no matter
+(`/legacy/*`) is found only by the exposure suite, which stops for it, whether it answers or only
+hands on, unless it is declared with `defineMiddleware` (and then takes the declaration to mean
+that it hands on); one under a matter's path fails the test of the matter routes as well); a
 scan fails if any file other than `authorize.ts` makes an `AuthorizedMatter`
 (`test/auth/brand.test.ts`, and a type-aware scan in `brand-typed.test.ts`); every route that
 changes state is tested to refuse a request without its token (`test/routes/csrf.test.ts`); a
