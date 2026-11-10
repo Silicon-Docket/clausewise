@@ -43,3 +43,24 @@ needs no key and must show 100 percent accuracy and an integrity pass. Running i
 model spends money and needs `--yes`; see `evals/README.md`.
 
 By contributing you agree your work is licensed under Apache-2.0.
+
+## Releases
+
+A release is a version tag on a commit on `main` whose CI passed:
+
+```sh
+git tag v0.1.0 origin/main
+git push origin v0.1.0
+```
+
+`.github/workflows/release.yml` then builds the server image from that commit, pushes it to
+`ghcr.io/silicon-docket/clausewise/server`, attests its build provenance and the SBOM of its
+bundled packages, checks both attestations verify, and creates a GitHub release that names the
+image's digest. A tag such as `v0.2.0-rc.1` makes a prerelease. Each version is published once:
+the workflow refuses a version that is already in the registry, so a broken release is followed
+by a new version, not replaced.
+
+The first release creates the package as private, which firms' registries cannot pull without
+credentials. An organization owner then makes it public once, in the package's settings
+(Change visibility). GitHub does not allow making it private again. Until then, the release
+workflow ends with a warning.

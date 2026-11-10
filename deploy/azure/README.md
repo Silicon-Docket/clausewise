@@ -290,12 +290,24 @@ with `imageDigest` set to the new release and `migrateImageDigest` left out. In 
 mode Container Apps keeps the old web revision serving until the new one passes its probes. An
 old worker that is stopped hands its review back to the queue, and a new one takes it.
 
-**The image.** No release is published yet. The image builds from the repository root with
-`docker build --tag clausewise-server .`. Releases are to be published as
-`<upstreamImageRepository>/server`, which the foundation's cache rule maps to
-`<registryImagePrefix>/server`; the digest a release publishes is the `imageDigest` to deploy.
-The image holds Node.js, the bundled server and its third-party notices, and nothing else: no
-shell, no package manager. It runs as a non-root user and writes nothing to its file system.
+**The image.** Releases are published by `.github/workflows/release.yml` as
+`ghcr.io/silicon-docket/clausewise/server`, the foundation's `<upstreamImageRepository>/server`,
+which its cache rule maps to `<registryImagePrefix>/server`. Each GitHub release names its digest,
+the `imageDigest` to deploy. Before deploying a digest, check that this repository's release
+workflow built it, from a version tag:
+
+```sh
+gh attestation verify oci://ghcr.io/silicon-docket/clausewise/server@sha256:<digest> \
+  --repo Silicon-Docket/clausewise \
+  --signer-workflow Silicon-Docket/clausewise/.github/workflows/release.yml
+```
+
+Add `--predicate-type https://cyclonedx.org/bom` to check the SBOM of the npm packages bundled
+into it, which each release also attaches as `sbom.cdx.json`. The SBOM BuildKit attaches to the
+image lists those and the base image's packages, for a scanner to read. The image holds Node.js,
+the bundled server, its SBOM and its third-party notices, and nothing else: no shell, no package
+manager. It runs as a non-root user and writes nothing to its file system. To build it yourself:
+`docker build --tag clausewise-server .`.
 
 ## What is not confirmed
 
@@ -347,6 +359,10 @@ deployment:
 - **Ingress in an internal environment.** That `external: true` makes the web app reachable from
   the virtual network and the networks peered with it, at the foundation's `webUrl`, and from
   nowhere else.
+- **The release workflow** has not run on GitHub. Its scripts, the build with BuildKit's SBOM and
+  provenance, and the extraction of the bundled packages' SBOM were run on one machine against a
+  local registry; the attestations, their verification and the GitHub release happen only on
+  GitHub.
 - **Log Analytics with local authentication off** still accepts diagnostic settings. Microsoft
   lists only agents and the Data Collector API as affected.
 

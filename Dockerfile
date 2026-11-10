@@ -15,6 +15,8 @@ WORKDIR /src
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm fetch --frozen-lockfile
 COPY . .
+# The release this image is, as its SBOM (/app/sbom.cdx.json) names it.
+ARG CLAUSEWISE_VERSION=dev
 RUN pnpm install --frozen-lockfile --offline && pnpm bundle:server /out
 
 # No shell and no package manager: only Node, CA certificates and the bundles.
