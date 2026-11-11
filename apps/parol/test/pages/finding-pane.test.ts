@@ -9,6 +9,8 @@ import {
   evidenceRoleField,
 } from "../../src/server/pages/index.js";
 import { STATUSES, EVIDENCE_ROLES } from "../../src/contracts.js";
+import { FindingPage, render } from "../../src/server/pages/index.js";
+import { accessibleName } from "../a11y/rules.js";
 import { checkInvariants } from "./invariants.js";
 import {
   all,
@@ -33,6 +35,7 @@ import {
   buildDecidedFinding,
   buildEvidence,
   buildFindingView,
+  buildChrome,
   buildStaleFinding,
   buildUndecidableFinding,
   buildUnverifiedFinding,
@@ -520,6 +523,12 @@ describe("FindingPane when the finding cannot be decided", () => {
     ).toHaveLength(0);
   });
 
+  it("says, in the fixed reason, who can decide, so the person is not left with only a refusal", () => {
+    expect(CANNOT_DECIDE_REASON).toBe(
+      "You cannot decide this finding. Only the reviewing attorney can record a decision.",
+    );
+  });
+
   it("falls back to a fixed reason when the service gives none", () => {
     const root = pane(buildUndecidableFinding(""));
     expect(readable(byId(root, "decision")!)).toContain(
@@ -602,5 +611,131 @@ describe("evidence role field names", () => {
     expect(evidenceIdOfRoleField("reason")).toBeNull();
     expect(evidenceIdOfRoleField("evidenceRole:")).toBeNull();
     expect(evidenceIdOfRoleField("xevidenceRole:ev")).toBeNull();
+  });
+});
+
+/** The finding page as a route makes it: with the review the matter shows now, when there is one. */
+const pageWithReview = (finding: FindingView, currentRunId: string | null | undefined): El =>
+  checkInvariants(
+    render(
+      FindingPage({
+        chrome: buildChrome(),
+        matterId: IDS.matter,
+        matterName: "Lanternfish / Corvane NDA",
+        finding,
+        currentRunId,
+      }),
+    ),
+  );
+const crumbLinks = (root: El): (string | null | undefined)[] =>
+  byTag(
+    first(root, (el) => hasClass(el, "crumbs")),
+    "a",
+  ).map((a) => attr(a, "href"));
+
+describe("FindingPage and the way back to the review", () => {
+  it("links back to the issue table of the current review, with the finding chosen", () => {
+    const root = pageWithReview(buildFindingView(), IDS.run);
+    expect(crumbLinks(root)).toEqual([
+      urls.matters(),
+      urls.matter(IDS.matter),
+      urls.run(IDS.matter, IDS.run, IDS.finding),
+    ]);
+    const crumbs = first(root, (el) => hasClass(el, "crumbs"));
+    expect(byTag(crumbs, "li").map(readable)).toEqual([
+      "Matters",
+      "Lanternfish / Corvane NDA",
+      "Review",
+      "Duration of confidentiality obligations",
+    ]);
+  });
+
+  it("opens the table without choosing a row when the finding is out of date, as it is not a row of the current review", () => {
+    const root = pageWithReview(buildStaleFinding(), IDS.run);
+    expect(crumbLinks(root)).toEqual([
+      urls.matters(),
+      urls.matter(IDS.matter),
+      urls.run(IDS.matter, IDS.run),
+    ]);
+  });
+
+  it("has no such link when the matter has no current review, or the page is not told of one", () => {
+    for (const none of [null, undefined])
+      expect(crumbLinks(pageWithReview(buildFindingView(), none)), String(none)).toEqual([
+        urls.matters(),
+        urls.matter(IDS.matter),
+      ]);
+  });
+});
+
+describe("a long passage is a named region that can be scrolled by keyboard", () => {
+  // Long, and with two sentences that occur once each, so that each quote is found in place.
+  const LONG = `${"The Receiving Party shall keep the information confidential. ".repeat(40)}First unique clause. Second unique clause.`;
+  const cited = (id: string, location: string, spanText: string, quote: string) =>
+    buildEvidence({ id, spanId: `s_${id}`, location, quote, role: "supporting", spanText });
+  /** The boxes that hold the text of a cited paragraph, in the order of the passages. */
+  const blockquotes = (root: El): El[] =>
+    passages(root).flatMap((p) =>
+      all(
+        p,
+        (el) => el.name === "blockquote" && hasClass(el, "doc-text") && !hasClass(el, "quoted"),
+      ),
+    );
+
+  it("has a tab stop, the role of a region and a name that says where the text comes from", () => {
+    const root = pane(
+      buildFindingView({
+        evidence: [
+          cited("ev_long", "Mutual NDA (v1), Section 4, paragraph 4", LONG, "First unique clause"),
+        ],
+      }),
+    );
+    const [box] = blockquotes(root);
+    expect(hasClass(box!, "long")).toBe(true);
+    expect(attr(box!, "tabindex")).toBe("0");
+    expect(attr(box!, "role")).toBe("region");
+    expect(accessibleName(root, box!)).toBe("Text of Mutual NDA (v1), Section 4, paragraph 4");
+  });
+
+  it("gives a short passage no stop, no role and no name of its own", () => {
+    const root = pane(
+      buildFindingView({
+        evidence: [
+          cited(
+            "ev_short",
+            "Mutual NDA (v1), Section 5, paragraph 5",
+            "Short text about the Receiving Party.",
+            "Short text",
+          ),
+        ],
+      }),
+    );
+    const [box] = blockquotes(root);
+    expect(hasClass(box!, "long")).toBe(false);
+    expect(hasAttr(box!, "tabindex")).toBe(false);
+    expect(hasAttr(box!, "role")).toBe(false);
+    expect(hasAttr(box!, "aria-label")).toBe(false);
+  });
+
+  it("tells two boxes apart when one paragraph is cited twice, and leaves a single citation unnumbered", () => {
+    const location = "Mutual NDA (v1), Section 4, paragraph 4";
+    const root = pane(
+      buildFindingView({
+        evidence: [
+          cited("ev_a", location, LONG, "First unique clause"),
+          cited("ev_b", location, LONG, "Second unique clause"),
+        ],
+      }),
+    );
+    expect(blockquotes(root).map((b) => accessibleName(root, b))).toEqual([
+      `Text of ${location}, citation 1`,
+      `Text of ${location}, citation 2`,
+    ]);
+    const single = pane(
+      buildFindingView({ evidence: [cited("ev_a", location, LONG, "First unique clause")] }),
+    );
+    expect(blockquotes(single).map((b) => accessibleName(single, b))).toEqual([
+      `Text of ${location}`,
+    ]);
   });
 });

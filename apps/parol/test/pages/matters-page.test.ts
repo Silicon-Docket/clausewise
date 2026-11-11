@@ -120,6 +120,15 @@ describe("SignInPage", () => {
     expect(readable(root)).toContain("It is not authentication");
   });
 
+  it("says what it means to be sent back here, and that what was typed was not saved", () => {
+    for (const users of [buildUsers(), []]) {
+      const text = readable(checkInvariants(signInPage(users))).replace(/\s+/g, " ");
+      expect(text).toContain(
+        "If Parol sent you back to this page, your session ended: sessions are limited in time, and a server started without a fixed cookie secret signs everyone out whenever it restarts. Choose a person to start again. Anything you were typing was not saved.",
+      );
+    }
+  });
+
   it("has no sign-out form, because nobody is signed in", () => {
     const root = checkInvariants(signInPage());
     const intents = all(root, (el) => el.name === "input" && attr(el, "name") === FIELDS.intent);

@@ -1,4 +1,5 @@
 import type { Severity } from "@clausewise/playbook";
+import { roleAllows } from "../../auth/actions.js";
 import type { Status } from "../../contracts.js";
 import { STAND_IN_HEADING, STAND_IN_TEXT, isStandInProvider } from "../../stand-in.js";
 import type {
@@ -435,8 +436,10 @@ export function RunPage(props: RunPageProps) {
               {rows.length === 0 ? (
                 <p class="empty">
                   {issues.length === 0
-                    ? "This review has no findings."
-                    : "No finding matches this filter."}
+                    ? roleAllows(matter.role, "run.start")
+                      ? "This review has no findings. Go to the matter to run it again."
+                      : "This review has no findings. The associate on the matter can run it again."
+                    : "No finding matches this filter. Choose All to see every finding."}
                 </p>
               ) : (
                 <>

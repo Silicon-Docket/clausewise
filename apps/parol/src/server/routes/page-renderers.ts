@@ -212,7 +212,8 @@ export function createPageRenderers(deps: AppDeps): PageRenderers {
 
   const findingPage: PageRenderers["findingPage"] = (c, am, findingId, refusal, draft, options) => {
     const finding = runs.finding(am, findingId);
-    const matter = matters.view(am).matter;
+    const view = matters.view(am);
+    const matter = view.matter;
     // A decision or a note refused for its fields is answered here whatever the finding: the link
     // to the form goes when this page has none (the finding went out of date, or its matter was
     // exported).
@@ -223,6 +224,8 @@ export function createPageRenderers(deps: AppDeps): PageRenderers {
         finding,
         matterName: matter.name,
         training: matter.training,
+        // The way back to the issue table, for the page shown again after a refused decision.
+        currentRunId: view.currentRun?.id ?? null,
         draft,
         noteDraft: options?.noteDraft,
       }),

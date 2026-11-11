@@ -21,9 +21,20 @@ export function MemoList(props: {
   memos: MemoSummary[];
   /** The review the matter shows now, or null when there is none yet. */
   currentRunId?: string | null | undefined;
+  /**
+   * Whether the signed-in person may export. The empty sentence says what that person can do: the
+   * reviewing attorney is told to export, anyone else is told who does.
+   */
+  canExport?: boolean | undefined;
 }) {
   if (props.memos.length === 0) {
-    return <p class="empty">No memo has been exported yet.</p>;
+    return (
+      <p class="empty">
+        {props.canExport === true
+          ? "No memo has been exported yet. Export one when every finding has a current decision."
+          : "No memo has been exported yet. The reviewing attorney exports it when every finding has a current decision."}
+      </p>
+    );
   }
   const earlier = (memo: MemoSummary): boolean =>
     memo.status === "current" &&
@@ -31,7 +42,7 @@ export function MemoList(props: {
     memo.runId !== props.currentRunId;
   return (
     <>
-      <ScrollBox label="Exported memos">
+      <ScrollBox label="List of exported memos">
         <table class="data-table">
           <caption class="sr-only">Exported memos</caption>
           <thead>
@@ -183,6 +194,7 @@ export function MemosPage(props: MemosPageProps) {
           matterId={props.matter.id}
           memos={props.memos}
           currentRunId={props.currentRunId}
+          canExport={props.canExport}
         />
       </Section>
       {props.canExport ? (

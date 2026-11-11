@@ -1,3 +1,12 @@
+import { GUIDANCE_BY_STATUS, GUIDANCE_KEYS, type GuidanceKey } from "../../src/server/guidance.js";
+import { titleFor } from "../../src/server/middleware/errors.js";
+import {
+  FindingPage,
+  MemosPage,
+  RunPage,
+  render,
+  renderErrorPage,
+} from "../../src/server/pages/index.js";
 import {
   errorPage,
   findingPage,
@@ -9,10 +18,14 @@ import {
   signInPage,
 } from "./render.js";
 import {
+  IDS,
   buildAllKindsFinding,
   buildChrome,
   buildConflictFinding,
   buildDecidedFinding,
+  buildEvidence,
+  buildFindingView,
+  buildIssueRows,
   buildMatterSummary,
   buildMatterViewFor,
   buildNotReadyMatterView,
@@ -37,6 +50,92 @@ import { VARIANTS_USAGE } from "./variants-usage.js";
  * page and not a whole document.
  */
 export type Variant = [string, () => string, { fragment?: boolean }?];
+
+/** The id a server fault carries (`req_` and sixteen hex digits), so that the 500 page prints one. */
+const REQUEST_ID = "req_0123456789abcdef";
+
+/**
+ * The status each guidance key is answered with: its own where the table gives one, 403 for the
+ * causes of a 403 that the shell names from the kind of error, and a status the table does not know
+ * for `other`, which is what the key is for.
+ */
+const statusOfKey = (key: GuidanceKey): number => {
+  const own = Object.entries(GUIDANCE_BY_STATUS).find(([, k]) => k === key)?.[0];
+  if (own !== undefined) return Number(own);
+  return key === "csrf" || key === "host" || key === "global_role" ? 403 : 418;
+};
+
+/**
+ * One error page for every key of `server/guidance.ts`, made by the renderer the shell uses. A key
+ * added there is a page in the sweep of every page, without anyone adding it here.
+ */
+const ERROR_PAGE_VARIANTS: Variant[] = GUIDANCE_KEYS.map((key) => {
+  const status = statusOfKey(key);
+  return [
+    `error page, ${key}`,
+    () => renderErrorPage(status, titleFor(status), status === 500 ? REQUEST_ID : undefined, key),
+  ];
+});
+
+/** A long paragraph, cited twice by one finding: two scroll boxes with one location to tell apart. */
+const buildTwiceCitedLongFinding = () => {
+  const long = `${"The Receiving Party shall keep the information confidential. ".repeat(40)}Final sentence.`;
+  const cite = (id: string, quote: string) =>
+    buildEvidence({
+      id,
+      spanId: "dv_d1v1:p4",
+      location: "Mutual NDA (v1), Section 4, paragraph 4",
+      quote,
+      role: "supporting",
+      spanText: long,
+    });
+  return buildFindingView({
+    evidence: [
+      cite("ev_long_a", "shall keep the information confidential"),
+      cite("ev_long_b", "Final sentence"),
+    ],
+  });
+};
+
+/** The finding page as a route makes it, with the review the matter shows now to go back to. */
+const findingPageWithReview = (
+  finding = buildFindingView(),
+  currentRunId: string | null = IDS.run,
+) =>
+  render(
+    FindingPage({
+      chrome: buildChrome(),
+      matterId: IDS.matter,
+      matterName: "Lanternfish / Corvane NDA",
+      finding,
+      currentRunId,
+    }),
+  );
+
+/** The review page for a given role, for the empty states whose words depend on it. */
+const runPageFor = (role: "associate" | "reviewer" | "viewer", issuesOnly: boolean) =>
+  render(
+    RunPage({
+      chrome: buildChrome(),
+      matter: buildMatterSummary({ role }),
+      run: buildRunSummary(),
+      issues: issuesOnly ? buildIssueRows() : [],
+      selected: null,
+      filter: issuesOnly ? "stale" : "all",
+    }),
+  );
+
+/** The memos page with no memo yet, for a person who may export and for one who may not. */
+const memosPageWithoutMemos = (canExport: boolean) =>
+  render(
+    MemosPage({
+      chrome: buildChrome(),
+      matter: buildMatterSummary(),
+      memos: [],
+      canExport,
+      exportBlockedReason: canExport ? "Decide every finding first." : null,
+    }),
+  );
 
 /**
  * The pages that exist before the packages of week two part 3, in every state that changes what
@@ -146,9 +245,78 @@ const BASE_VARIANTS: Variant[] = [
     () =>
       mattersPage(
         [],
-        buildChrome({ notice: { kind: "error", text: "The file could not be read." } }),
+        buildChrome({
+          notice: {
+            kind: "error",
+            text: "The file could not be read. Choose another file.",
+            todo: "Choose another file.",
+          },
+        }),
       ),
   ],
+  [
+    "error notice, with a link to the field",
+    () =>
+      render(
+        FindingPage({
+          chrome: buildChrome({
+            notice: {
+              kind: "error",
+              text: "A reason is needed to reject a finding. Give a reason.",
+              todo: "Give a reason.",
+              jump: { href: "#decision-reason", label: "Go to the reason" },
+            },
+          }),
+          matterId: IDS.matter,
+          matterName: "Lanternfish / Corvane NDA",
+          finding: buildFindingView(),
+        }),
+      ),
+  ],
+  ["finding page, with the way back to the review", () => findingPageWithReview()],
+  [
+    "finding page, out of date, with the way back to the review",
+    () => findingPageWithReview(buildStaleFinding()),
+  ],
+  ["finding page, no current review", () => findingPageWithReview(buildFindingView(), null)],
+  [
+    "finding page, one long paragraph cited twice",
+    () => findingPageWithReview(buildTwiceCitedLongFinding()),
+  ],
+  [
+    "pane, nothing cited, no checks, no suggestion, no history",
+    () =>
+      paneOnly(
+        buildFindingView({
+          evidence: [],
+          checks: [],
+          fallbackLanguage: null,
+          reviews: [],
+        }),
+      ),
+    { fragment: true },
+  ],
+  // The empty states, with the words of each role that can reach them.
+  [
+    "matter, empty, reviewer",
+    () =>
+      matterPage(
+        buildMatterViewFor("reviewer", {
+          matter: buildMatterSummary({ status: "draft", role: "reviewer" }),
+          documents: [],
+          warnings: [],
+          currentRun: null,
+          runs: [],
+          start: { ready: false, reasons: ["Add the NDA"] },
+        }),
+        { canDelete: false },
+      ),
+  ],
+  ["memos, none, reviewer", () => memosPageWithoutMemos(true)],
+  ["memos, none, viewer", () => memosPageWithoutMemos(false)],
+  ["run, no findings, viewer", () => runPageFor("viewer", false)],
+  ["run, no finding matches the filter", () => runPageFor("associate", true)],
+  ...ERROR_PAGE_VARIANTS,
 ];
 
 /** Every page, in every state that changes what it shows. Shared by the tests that sweep them all. */

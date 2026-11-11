@@ -148,6 +148,18 @@ const PAIRS: [string, string, number][] = [
   ["--edge", "--field", 3],
   ["--focus", "--paper", 3],
   ["--focus", "--surface", 3],
+  // The ring on the backgrounds a control can have: the chosen row, and the notices and banners that
+  // hold links and buttons.
+  ["--focus", "--select", 3],
+  ["--focus", "--ok-bg", 3],
+  ["--focus", "--bad-bg", 3],
+  ["--focus", "--info-bg", 3],
+  ["--focus", "--warn-bg", 3],
+  ["--focus", "--neutral-bg", 3],
+  // A link in a notice is the accent on the notice's own ground.
+  ["--accent", "--ok-bg", 4.5],
+  ["--accent", "--bad-bg", 4.5],
+  ["--accent", "--info-bg", 4.5],
   ["--ok-edge", "--paper", 3],
   ["--bad-edge", "--paper", 3],
   ["--warn-edge", "--paper", 3],
@@ -177,6 +189,9 @@ describe("contrast of the colour pairs, in both themes", () => {
       "banner-ink on banner-bg",
       "mark-ink on mark-bg",
       "focus on paper",
+      "focus on select, ok-bg, bad-bg, info-bg, warn-bg and neutral-bg",
+      "accent on ok-bg, bad-bg and info-bg",
+      "skip link, focused",
     ]) {
       expect(comment, phrase).toContain(phrase);
     }
@@ -289,6 +304,207 @@ describe("the stylesheet", () => {
     const important = [...css.matchAll(/!important/g)].length;
     // [hidden] and the reduced-motion block.
     expect(important).toBeLessThanOrEqual(5);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Colour only through tokens, the focus ring, the skip link, hover
+// ---------------------------------------------------------------------------------------------
+
+/** The body of the first rule whose selector is exactly `selector`, or "" when there is none. */
+function ruleBody(selector: string): string {
+  const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  for (const rule of bare.matchAll(/([^{}@]+)\{([^{}]*)\}/g))
+    if ((rule[1] as string).trim() === selector) return rule[2] as string;
+  return "";
+}
+
+/** The value of a declaration in a rule body, or undefined. */
+function property(body: string, name: string): string | undefined {
+  return new RegExp(`(?:^|[;\\s])${name}:\\s*([^;]+)`).exec(body)?.[1]?.trim();
+}
+
+/** `var(--x)` as a token name, or undefined when the value is anything else. */
+function tokenIn(value: string | undefined): string | undefined {
+  return value === undefined ? undefined : /^var\((--[\w-]+)\)$/.exec(value)?.[1];
+}
+
+const NAMED_COLOURS = [
+  "white",
+  "black",
+  "red",
+  "green",
+  "blue",
+  "gray",
+  "grey",
+  "silver",
+  "yellow",
+  "orange",
+  "purple",
+  "navy",
+  "teal",
+  "maroon",
+  "lime",
+  "aqua",
+  "fuchsia",
+  "olive",
+] as const;
+
+/** The stylesheet with its comments and its blocks of token definitions taken out. */
+const withoutTokens = (text: string): string =>
+  text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/:root\s*\{[^}]*\}/g, "");
+
+/**
+ * The colours a stylesheet writes out where it should name a token: a hex colour, a colour
+ * function, or the name of a colour in the value of a declaration. The values `currentColor` and
+ * `transparent` and the system colours of the forced-colours block are not colours chosen by the
+ * stylesheet, so they are not found.
+ */
+function colourLiterals(text: string): string[] {
+  const rest = withoutTokens(text);
+  const found = [
+    ...rest.matchAll(/#[0-9a-fA-F]{3,8}\b/g),
+    ...rest.matchAll(/\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color-mix|color)\([^)]*\)/g),
+    ...rest.matchAll(new RegExp(`:[^;{}]*\\b(${NAMED_COLOURS.join("|")})\\b`, "g")),
+  ];
+  return found.map((m) => m[1] ?? m[0]);
+}
+
+describe("colour comes only from the tokens", () => {
+  it("has no colour written out outside the token blocks", () => {
+    expect(colourLiterals(css)).toEqual([]);
+  });
+
+  it("finds a colour written out in a rule, in any of its forms, and none in a token block", () => {
+    expect(colourLiterals(".a { color: #123456; }")).toEqual(["#123456"]);
+    expect(colourLiterals(".a { background: rgb(1, 2, 3); }")).toEqual(["rgb(1, 2, 3)"]);
+    expect(colourLiterals(".a { border: 1px solid white; }")).toEqual(["white"]);
+    expect(colourLiterals(":root { --paper: #ffffff; } .a { color: var(--paper); }")).toEqual([]);
+    expect(
+      colourLiterals(
+        ".a { color: CanvasText; border-color: currentColor; background: transparent; }",
+      ),
+    ).toEqual([]);
+  });
+
+  it("names, in every var(), a token that is defined", () => {
+    const { light, dark } = themes();
+    const used = new Set(
+      [...withoutTokens(css).matchAll(/var\((--[\w-]+)/g)].map((m) => m[1] as string),
+    );
+    expect(used.size).toBeGreaterThan(20);
+    for (const name of used) {
+      expect(light[name], `${name} is defined`).toBeDefined();
+      // The fonts are defined once; every colour is defined again for the dark theme.
+      if (isColour(light[name] as string))
+        expect(dark[name], `${name} in the dark theme`).toBeDefined();
+    }
+  });
+});
+
+describe("the focus ring and the skip link", () => {
+  const { light, dark } = themes();
+  const rule = ruleBody(".skip-link:focus");
+
+  it("has a rule of its own for the skip link when it has focus", () => {
+    expect(rule).not.toBe("");
+  });
+
+  for (const [name, tokens] of [
+    ["light", light],
+    ["dark", dark],
+  ] as const) {
+    describe(name, () => {
+      const colour = (token: string | undefined, fallback: string): string => {
+        const value = tokens[token ?? fallback];
+        expect(value, `${token ?? fallback} is a token`).toBeDefined();
+        return value as string;
+      };
+      // What the link looks like focused: the declarations of `.skip-link:focus`, else those of
+      // `.skip-link`, else the ring that every focused control gets.
+      const base = ruleBody(".skip-link");
+      const fill = colour(
+        tokenIn(property(rule, "background")) ?? tokenIn(property(base, "background")),
+        "--accent",
+      );
+      const text = colour(
+        tokenIn(property(rule, "color")) ?? tokenIn(property(base, "color")),
+        "--accent-ink",
+      );
+      const border = /border:\s*\d+px solid var\((--[\w-]+)\)/.exec(rule)?.[1];
+      const ring = colour(
+        tokenIn(property(rule, "outline-color")) ??
+          tokenIn(property(ruleBody(":focus-visible"), "outline")?.replace(/^\d+px solid /, "")),
+        "--focus",
+      );
+      const banner = tokens["--banner-bg"] as string;
+      const paper = tokens["--paper"] as string;
+
+      it("sets the focused link's fill off from the banner it floats over (3 or more)", () => {
+        expect(contrast(fill, banner)).toBeGreaterThanOrEqual(3);
+      });
+
+      it("sets the link off from the page where it hangs below the banner: its fill or its border (3 or more)", () => {
+        const edge = border === undefined ? 1 : contrast(colour(border, "--ink"), paper);
+        expect(Math.max(contrast(fill, paper), edge)).toBeGreaterThanOrEqual(3);
+      });
+
+      it("shows its ring against the banner (3 or more)", () => {
+        expect(contrast(ring, banner)).toBeGreaterThanOrEqual(3);
+      });
+
+      it("reads its own text on its own fill (4.5 or more)", () => {
+        expect(contrast(text, fill)).toBeGreaterThanOrEqual(4.5);
+      });
+    });
+  }
+
+  it("keeps the ring a focused control gets from :focus-visible on every other element", () => {
+    const ring = ruleBody(":focus-visible");
+    expect(ring).toContain("outline: 3px solid var(--focus)");
+    expect(ring).toContain("outline-offset");
+  });
+});
+
+// What a hover may change: how the thing is coloured, bordered or underlined, and the pointer. A
+// hover that moved, showed or hid something would leave a keyboard user without it.
+const HOVER_MAY_SET =
+  /^(color|background|background-color|border|border-color|border-style|border-width|text-decoration|text-decoration-\w+|box-shadow|cursor)$/;
+
+/** Every `selector: property` in a rule with `:hover` that sets something a hover may not set. */
+function hoverRevealing(text: string): string[] {
+  const out: string[] = [];
+  const bare = text.replace(/\/\*[\s\S]*?\*\//g, "");
+  for (const rule of bare.matchAll(/([^{}@]+)\{([^{}]*)\}/g)) {
+    const selector = (rule[1] as string).trim();
+    if (!selector.includes(":hover")) continue;
+    for (const m of (rule[2] as string).matchAll(/([a-z-]+)\s*:/g))
+      if (!HOVER_MAY_SET.test(m[1] as string)) out.push(`${selector}: ${m[1]}`);
+  }
+  return out;
+}
+
+describe("hover only decorates", () => {
+  it("sets, in every rule with :hover, only colour, background, border, text decoration, shadow or cursor", () => {
+    expect([...css.matchAll(/:hover/g)].length).toBeGreaterThan(0);
+    expect(hoverRevealing(css)).toEqual([]);
+  });
+
+  it("finds a hover that shows, hides or moves something", () => {
+    expect(hoverRevealing(".a:hover { display: block; }")).toEqual([".a:hover: display"]);
+    expect(hoverRevealing(".a:hover { color: red; opacity: 1; }")).toEqual([".a:hover: opacity"]);
+    expect(hoverRevealing(".a:hover { transform: none; }")).toEqual([".a:hover: transform"]);
+    expect(
+      hoverRevealing(".a:hover { border-color: red; text-decoration-thickness: 2px; }"),
+    ).toEqual([]);
+    expect(hoverRevealing(".a { display: block; }")).toEqual([]);
+  });
+});
+
+describe("the sentence that says what to do, and the link to where", () => {
+  it("has a rule for .todo and for .notice-jump, so the sentence stands out and the link is set apart", () => {
+    expect(ruleBody(".todo")).toContain("font-weight");
+    expect(ruleBody(".notice-jump")).toContain("margin-left");
   });
 });
 

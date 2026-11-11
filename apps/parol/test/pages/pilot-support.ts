@@ -197,9 +197,9 @@ export function matterPagePilot(role: MatterRole, fixture: MatterPilotFixture = 
 
 /**
  * What the accessibility rules find on a whole matter page that they do not find on the same page
- * without the two pilot panels. The rest of the matter page is the sweep of a later package
- * (W2.9-fix), so the panels are held to the rules by what they add, and the panes are audited
- * alone as well, where nothing else is on the page.
+ * without the two pilot panels. The whole page is held to the rules by `checkInvariants` as well;
+ * this names what the panels add, so a failure points at them, and the panes are audited alone
+ * too, where nothing else is on the page.
  */
 export function violationsAddedByPanels(
   role: MatterRole,

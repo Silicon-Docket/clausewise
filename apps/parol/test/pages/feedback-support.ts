@@ -11,8 +11,6 @@ import type { MemosPageProps } from "../../src/server/pages/memos.js";
 import type { DecisionDraft } from "../../src/server/pages/finding.js";
 import type { Chrome } from "../../src/server/pages/layout.js";
 import { RatingSection } from "../../src/server/pages/feedback.js";
-import { auditPage, expectAccessible, formatViolations } from "../a11y/rules.js";
-import { byId, parseHtml, type El } from "./html.js";
 import type { RunPageProps } from "../../src/server/pages/run.js";
 import { refusalOf } from "../../src/server/routes/notices.js";
 import type {
@@ -301,32 +299,6 @@ export const ratingSectionOf = (rating: MemosRating): string =>
       draft: rating.draft,
     }),
   );
-
-/**
- * One problem of the memos page is not this package's: the list of memos names two landmarks
- * "Exported memos", the heading of its section and the box that scrolls its table, which
- * `memos.tsx` has had since before the rating and which the sweep of the pages (W2.9-fix) mends.
- * It is let through here by rule and by name, and nothing else is.
- */
-export const isKnownProblemOfTheMemoList = (violation: { rule: string; detail: string }): boolean =>
-  violation.rule === "landmark-names-unique" && /"exported memos"/.test(violation.detail);
-
-/**
- * Audits a page or a pane with the rules of `test/a11y/rules.ts` and fails on any problem but the
- * one above. The section this package adds to the memos page is audited alone as well, strictly.
- */
-export function expectAccessibleExceptTheMemoList(
-  html: string,
-  options: { fragment?: boolean } = {},
-): El {
-  const root = parseHtml(html);
-  const violations = auditPage(root, options).filter((v) => !isKnownProblemOfTheMemoList(v));
-  if (violations.length > 0)
-    throw new Error(`accessibility problems:\n${formatViolations(violations)}`);
-  const rating = byId(root, "rating");
-  if (rating !== undefined) expectAccessible(rating, { fragment: true });
-  return root;
-}
 
 // ---------------------------------------------------------------------------------------------
 // The notes on a finding (slice D)

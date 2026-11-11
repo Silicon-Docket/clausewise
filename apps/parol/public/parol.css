@@ -16,6 +16,9 @@
  *   ok-ink and bad-ink on paper 4.5           muted on neutral-bg 4.5
  *   edge on paper and field 3 (form borders)  focus on paper and surface 3
  *   ok, bad, warn and info edge on paper 3 (chip borders)
+ *   focus on select, ok-bg, bad-bg, info-bg, warn-bg and neutral-bg 3 (a ring on a notice, a banner
+ *   or the chosen row)                       accent on ok-bg, bad-bg and info-bg 4.5 (a link in a notice)
+ *   skip link, focused: its fill on banner-bg 3, and the larger of its fill and its border on paper 3
  */
 
 :root {
@@ -248,8 +251,19 @@ bdi {
   font-weight: 600;
 }
 
+/*
+ * Focused, the link is the banner turned inside out (the banner's ink as its fill, the banner's
+ * ground as its text and its border), so it stands out from the banner it floats over and, where it
+ * hangs below the banner, from the page. The ring takes the fill's colour for the same reason: the
+ * accent is the colour of the banner's own surroundings here and could not be seen against it.
+ * test/pages/styles.test.ts recomputes both pairs in both themes.
+ */
 .skip-link:focus {
   top: 0.5rem;
+  background: var(--banner-ink);
+  color: var(--banner-bg);
+  border: 2px solid var(--banner-bg);
+  outline-color: var(--banner-ink);
 }
 
 .demo-banner {

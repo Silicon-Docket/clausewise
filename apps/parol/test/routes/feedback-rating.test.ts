@@ -10,8 +10,7 @@ import {
   ratingChoiceLabel,
 } from "../../src/server/views/feedback.js";
 import type { MatterFeedbackView, RatingView } from "../../src/services/views.js";
-import { tabStops } from "../a11y/rules.js";
-import { expectAccessibleExceptTheMemoList } from "../pages/feedback-support.js";
+import { expectAccessible, tabStops } from "../a11y/rules.js";
 import {
   all,
   attr,
@@ -134,7 +133,7 @@ const marks = (page: Page): { value: string; label: string; checked: boolean }[]
   }));
 
 function accessible(page: Page): void {
-  expectAccessibleExceptTheMemoList(page.html);
+  expectAccessible(page.html);
 }
 
 const error = async (response: Response): Promise<{ kind: string; code?: string }> =>
