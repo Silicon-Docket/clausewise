@@ -427,11 +427,12 @@ review, which closes the list) through the real service for the case's matter an
 matter, and a control stops the suite when a matter has none. Neither table holds text, so the
 canary strings cannot appear in them: only ids (the matter and user ids in the rows, the matter id in
 audit events) can. Nothing in the scan writes a feedback row or makes an evaluation run, so
-`feedback` and `eval_slot_results` are read and hold nothing. The text is searched as written, decoded (JSON escapes, entities and percent escapes)
-with tags stripped, and with the invisible characters removed: the Unicode default ignorable code
-points and the format characters (soft hyphen, zero-width characters, bidi marks, embeddings and
-isolates, the Arabic letter mark, variation selectors, tag characters, the byte order mark). A Word
-package is opened and its parts read.
+`feedback` and `eval_slot_results` are read and hold nothing. The text is searched as written,
+decoded (JSON escapes, entities and percent escapes) with tags stripped, and with the invisible
+characters removed: the Unicode default ignorable code points and the format characters (soft
+hyphen, zero-width characters, bidi marks, embeddings and isolates, the Arabic letter mark,
+variation selectors, tag characters, the byte order mark). A Word package is opened and its parts
+read.
 
 **How the scan knows its routes.** The set of routes is checked against the application's own list
 of routes, and then against the application. A GET route that no probe table names, and a route for
@@ -912,7 +913,9 @@ before it was a wrong flag. That is the arithmetic of the scoring table, and has
 The record of the exposure suite carries the workflow its reviews ran under, label and hash, and
 gate G1 reads it only for a run of the same workflow (see the gates).
 
-**Evidence trails** (the optional field `trails` of the results file, `evals/src/parol/trails.ts`).
+**Evidence trails** (the optional field `trails` of the results file, `evals/src/parol/trails.ts`; a
+decision of the build that the owner may overturn, and the one that edits evaluation code that part 2
+had finished: document 7, decisions of part 3, number 1).
 For every rule slot of every run the file records the split, the case, the rule, the repeat, the
 verification state and the escalation codes; which paragraphs retrieval showed, by document label and
 paragraph index, each with the reason (located, definition, cross reference, hint), or that the whole
@@ -1188,8 +1191,10 @@ reads two document sets, the worked example and the training matter T01 (the wor
 instruction paragraph added to the NDA; T01 is not in the dataset or either split and is never
 scored), and declines every other document, including one changed word of either. From the
 passages it is shown it answers the worked example, so it can show a retrieval gap and its fix and
-nothing else. For T01 it also gives one planted wrong answer by script (document 8). Every report
-and results file says so in capitals.
+nothing else. For T01 it also gives one planted wrong answer by script (document 8): a decision of
+the build that the owner may overturn, because the store accepts a finding only from the stages
+(document 7, decisions of part 3, number 9, and known gap 35). Every report and results file says so
+in capitals.
 
 ```sh
 pnpm eval:parol --simulate --workflow v1 --out evals/results/sim-v1.json

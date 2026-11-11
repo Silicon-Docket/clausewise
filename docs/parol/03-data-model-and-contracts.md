@@ -56,7 +56,9 @@ settled by code against the rule's flags, for every workflow version (see
 [Required and absence semantics](#deterministic-checks-and-model-judgment)): a clause that is not
 required and that no text covers is `not_applicable`, a required one is `missing`, and a rule that
 forbids something is `compliant` when nothing is found. The status the workflow stated is kept in
-`findings.model_status` whenever code changed it.
+`findings.model_status` whenever code changed it. That settlement applies to v1 and v2 as well as v3
+is a decision of the build that the project owner may overturn
+([document 7](07-delivery-plan.md#decisions-of-part-3-that-the-project-owner-can-overturn), number 3).
 
 **Escalation reasons** (the only way Parol expresses doubt; there are no confidence scores). These
 are the eleven codes in `ESCALATION_CODES`; the check names are those of the verification checks
@@ -526,8 +528,10 @@ CREATE TABLE feedback (                    -- append-only (006); written by the 
 
 -- Evaluation ------------------------------------------------------------------------------
 -- The three tables and their store methods exist and are tested. The evaluation runner
--- (evals/src/parol) does not write to them: it writes a results file, and with --publish a
--- page document (see "The comparison page document"), which is what the comparison page reads.
+-- (evals/src/parol) does not write to them: it writes a results file (which can carry the
+-- evidence trail of every rule slot: ids, offsets and codes, never text; see document 5) and,
+-- with --publish, a page document (see "The comparison page document"), which is what the
+-- comparison page reads.
 CREATE TABLE eval_datasets (
   id              TEXT PRIMARY KEY,
   label           TEXT NOT NULL,           -- parol-cases v1
@@ -760,6 +764,12 @@ The reason shown for a stale matter is read from its stale findings. A matter wh
 stopped by the change holds no finding, so its reason is read from the last `inputs.changed` audit
 event and worded "while the review was running" (for example "The stated date of a document changed
 while the review was running."), and its banner does not talk about decisions that were never made.
+
+Feedback follows its finding or its run and is not invalidated by a change: a note is bound to the
+finding it was written on, so after a new review the new findings start with no notes and the old
+findings keep theirs (and are themselves shown as out of date), and a missed-issue report is bound
+to the run it was made about and stays with that run. Neither is carried to a new review (known gap
+37 of [document 7](07-delivery-plan.md#known-gaps)).
 
 **Not built.** Scope cut 2 in [document 7](07-delivery-plan.md#scope-cuts-in-order) drops it: when
 only the playbook version changes, findings for rules whose `rule_sha256` is unchanged are carried into the new run,
@@ -1176,7 +1186,9 @@ that binds it to the person and the page, so that a link cannot make a page clai
 A form that is refused is answered with its own page and the status of the refusal: every form of a
 matter does this (settings, members, delete, documents, versions, operative version, stated date,
 removal, run start, resume, cancel, the three feedback forms, the retention date, the timer and the
-reference list), and so does the form that creates a matter, on the list of matters, and the form that
+reference list; a refused deletion by an administrator who is not on the matter is the exception,
+because the matter's page would be a read beyond the deletion, and is answered by the shell's page),
+and so does the form that creates a matter, on the list of matters, and the form that
 starts the training matter, on the quickstart. An error notice carries a marked "what to do" sentence
 and, where the page has the control, a link to it.
 
@@ -1351,7 +1363,9 @@ not one of the three `eval_*` tables, which the runner does not write (known gap
   its documents and the passages the key points at, with their text: it is the synthetic text of
   `fixtures/parol`, and nothing a model wrote.
 - **What it never holds.** A model answer, a quotation a model wrote, a prompt, or text from a
-  matter. A trail is of labels, indexes, offsets and closed codes. A side's `trailsRecorded` and each
+  matter. (That a results file records trails at all, as an optional and strictly read field, is a
+  decision of the build that the owner may overturn; without them the trail pane shows the answer key
+  and the scores only, document 7, number 1.) A trail is of labels, indexes, offsets and closed codes. A side's `trailsRecorded` and each
   trail's `recorded` and `whyNot` (`not_recorded` for a results file made before trails existed, or
   `case_changed` when the case files no longer read as they did) say when there is none.
 - **The held-out set is sealed in the document.** A held-out changed slot is `{ sealed: true }` and
