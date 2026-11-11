@@ -10,6 +10,7 @@ import {
   TIMER_RUNNING_SINCE,
   TIMER_START_LABEL,
   TIMER_STOP_LABEL,
+  TIMER_TRAINING_NOTE,
   timedSentence,
 } from "../views/pilot.js";
 import { Chip, Section, Time } from "./components.js";
@@ -67,6 +68,21 @@ function TimerButton(props: { chrome: Chrome; matterId: string; intent: "start" 
 export function TimerPanel(props: TimerPanelProps) {
   const { timer } = props;
   if (timer === undefined || !timer.allowed) return null;
+  // A timer left running on a training matter by an earlier build: the Stop, and nothing else.
+  if (timer.training === true && timer.running !== null)
+    return (
+      <Section id={PILOT_ANCHORS.timer} title={TIMER_HEADING} note={TIMER_TRAINING_NOTE}>
+        <p>
+          <Chip tone="ok" shape="circle">
+            Running
+          </Chip>{" "}
+          {`${TIMER_RUNNING_SINCE} `}
+          <Time value={timer.running.since} />
+          {"."}
+        </p>
+        <TimerButton chrome={props.chrome} matterId={props.matterId} intent="stop" />
+      </Section>
+    );
   return (
     <Section id={PILOT_ANCHORS.timer} title={TIMER_HEADING} note={TIMER_NOTE}>
       {timer.running !== null ? (

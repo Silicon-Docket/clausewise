@@ -16,8 +16,11 @@ import type { RefusalFragment } from "./notices.js";
  * not a real date is mended at the date, and a person who is not a user, listed twice or too many
  * people at the roster. The timer and the reference list are sections of the matter page. A timer
  * that is already running, or that is not running, is not a control to mend (the page shows which
- * it is), so those have no jump, but `no_open_timer` leads to the timer, where the button to start
- * one is. The reference list's codes about a rule or a severity lead to the section, because the
+ * it is), so those have no jump, but `no_open_timer` leads to the timer section, which shows what
+ * can be done now: a Start button, or, for a person whose timer runs on another matter, the words
+ * that say to stop it there (no button), so the refusal does not tell anyone to press a button that
+ * is not there. `timer_training` and `reference_training` are about the matter, which no measure
+ * counts and whose page offers neither, so they have no jump either. The reference list's codes about a rule or a severity lead to the section, because the
  * form has one select per rule and a refusal does not say which; `bad_count` leads to the counts.
  * `reference_locked`, `timer_role` and `reference_role` are about the matter and the person, not a
  * control.
@@ -32,13 +35,18 @@ export const REFUSALS_PILOT = {
     too_many_participants:
       "The list holds more than 64 people, which is the most it can record. Untick the people who were not trained.",
     timer_open: "You already have a timer running. Stop it before starting another one.",
-    no_open_timer: "No timer is running on this matter. Press Start timer to begin one.",
+    no_open_timer:
+      "No timer is running on this matter, so there is nothing to stop. The timer section of this page shows what you can do now.",
     timer_role:
       "Only an associate or a reviewing attorney of a matter can time it. Ask an associate of this matter about your role.",
+    timer_training:
+      "A training matter is not timed, because the pilot measures leave it out. Time an ordinary matter instead.",
     reference_locked:
       "A review has started on this matter, so its reference list is closed. Report anything the review missed on the review page.",
     reference_role:
       "Only a reviewing attorney of this matter can record its reference list. Ask a reviewing attorney of this matter to record it.",
+    reference_training:
+      "A training matter has no reference list, because the pilot measures leave it out. Record the list on an ordinary matter instead.",
     duplicate_rule:
       "A rule is listed twice in the reference list. Choose one severity for each rule.",
     bad_severity:
@@ -52,10 +60,12 @@ export const REFUSALS_PILOT = {
     duplicate_user: "Tick each person once.",
     too_many_participants: "Untick the people who were not trained.",
     timer_open: "Stop it before starting another one.",
-    no_open_timer: "Press Start timer to begin one.",
+    no_open_timer: "The timer section of this page shows what you can do now.",
     timer_role: "Ask an associate of this matter about your role.",
+    timer_training: "Time an ordinary matter instead.",
     reference_locked: "Report anything the review missed on the review page.",
     reference_role: "Ask a reviewing attorney of this matter to record it.",
+    reference_training: "Record the list on an ordinary matter instead.",
     duplicate_rule: "Choose one severity for each rule.",
     bad_severity: "Choose High, Medium or Low, or leave the rule empty.",
     bad_count: "Enter a whole number from 0 to 9.",

@@ -75,8 +75,15 @@ describe("the fragment of the pilot package", () => {
     expect(REFUSAL_PHRASES["timer_open"]).toBe(
       "You already have a timer running. Stop it before starting another one.",
     );
+    // Not "Press Start timer": a person whose timer runs on another matter has no such button.
     expect(REFUSAL_PHRASES["no_open_timer"]).toBe(
-      "No timer is running on this matter. Press Start timer to begin one.",
+      "No timer is running on this matter, so there is nothing to stop. The timer section of this page shows what you can do now.",
+    );
+    expect(REFUSAL_PHRASES["timer_training"]).toBe(
+      "A training matter is not timed, because the pilot measures leave it out. Time an ordinary matter instead.",
+    );
+    expect(REFUSAL_PHRASES["reference_training"]).toBe(
+      "A training matter has no reference list, because the pilot measures leave it out. Record the list on an ordinary matter instead.",
     );
     expect(REFUSAL_TODO["bad_count"]).toBe("Enter a whole number from 0 to 9.");
     expect(REFUSAL_TODO["bad_calendar_date"]).toBe(
@@ -113,7 +120,14 @@ describe("the fragment of the pilot package", () => {
       expect(jump.label, code).not.toMatch(DASH);
     }
     // A refusal that is about the matter or the person, not a control, leads nowhere.
-    for (const code of ["timer_open", "timer_role", "reference_locked", "reference_role"])
+    for (const code of [
+      "timer_open",
+      "timer_role",
+      "timer_training",
+      "reference_locked",
+      "reference_role",
+      "reference_training",
+    ])
       expect(REFUSAL_JUMP[code], code).toBeUndefined();
   });
 });
@@ -128,6 +142,8 @@ describe("the refusal the person is shown", () => {
       ["bad_count", new ValidationError("bad_count", "words"), 400],
       ["timer_open", new ConflictError("timer_open", "words"), 409],
       ["no_open_timer", new ConflictError("no_open_timer", "words"), 409],
+      ["timer_training", new ConflictError("timer_training", "words"), 409],
+      ["reference_training", new ConflictError("reference_training", "words"), 409],
       ["reference_locked", new ConflictError("reference_locked", "words"), 409],
     ];
     for (const [code, error, status] of cases) {

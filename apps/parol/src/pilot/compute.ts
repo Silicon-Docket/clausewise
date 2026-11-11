@@ -148,7 +148,10 @@ interface RunSet {
   /** The ratings in force (R) and how many ratings viewers gave. */
   ratings: readonly RatingRecord[];
   viewerRatings: number;
-  /** People who could rate: associates and reviewers of the matters of X. */
+  /**
+   * Ratings that could be given: one for each associate and each reviewer of each matter of X, so a
+   * person on two exported matters counts twice. It counts (matter, person) pairs, not people.
+   */
   eligible: number;
 }
 
@@ -672,7 +675,17 @@ export function computePilotMeasures(
   const measuredIds = new Set(measured.map((m) => m.matterId));
   const latestFinished = new Map<string, Map<string, FindingRecord>>();
   for (const m of measured) {
-    const run = latest((runsByMatter.get(m.matterId) ?? []).filter((r) => FINISHED.has(r.status)));
+    // A review that finished is one that succeeded, or one that was superseded after it had saved
+    // its findings. A run superseded while still in flight saved none (the store refuses a finding
+    // for a superseded run), so it read nothing and is not a review to compare with; a failed run
+    // is not either. A matter with no review that finished is not compared.
+    const run = latest(
+      (runsByMatter.get(m.matterId) ?? []).filter(
+        (r) =>
+          r.status === "succeeded" ||
+          (r.status === "superseded" && (findingsByRun.get(r.runId) ?? []).length > 0),
+      ),
+    );
     if (run === undefined) continue;
     latestFinished.set(
       m.matterId,

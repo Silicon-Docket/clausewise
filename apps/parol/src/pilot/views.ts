@@ -15,6 +15,7 @@ import {
   noDataText,
   pilotEmptyNote,
   resultText,
+  unusableCalendarSentence,
   type PilotPhrases,
 } from "./phrases.js";
 import {
@@ -112,7 +113,18 @@ const numberCell = (
   return plainCell(value === null ? "none (a median)" : String(value));
 };
 
-export function presentMeasures(measures: PilotMeasures): PilotMeasuresView {
+export interface PresentOptions {
+  /**
+   * A start date that is stored and cannot be used (the measures were then computed with no
+   * calendar). The page says so, in place of the sentence for a calendar that is not set.
+   */
+  unusableStartDate?: string | null | undefined;
+}
+
+export function presentMeasures(
+  measures: PilotMeasures,
+  options: PresentOptions = {},
+): PilotMeasuresView {
   const { scope } = measures;
   const words = PILOT_PHRASES;
   const scopeName = words.scopeNames[scope];
@@ -310,7 +322,10 @@ export function presentMeasures(measures: PilotMeasures): PilotMeasuresView {
         ? pilotEmptyNote(count("matters_total"))
         : null,
     calendar: measures.calendar,
-    calendarSentence: calendarSentence(measures.calendar),
+    calendarSentence:
+      options.unusableStartDate === undefined || options.unusableStartDate === null
+        ? calendarSentence(measures.calendar)
+        : unusableCalendarSentence(options.unusableStartDate),
     tables: [
       measuresTable,
       phaseTable,
@@ -348,14 +363,32 @@ export interface PilotParticipantView {
 }
 
 export interface PilotAdminView {
-  /** The start date in force, with when it was set and how many times it has been set. */
-  calendar: { startDate: string; endDate: string; setAt: string; timesSet: number } | null;
+  /**
+   * The start date in force, with when it was set and how many times it has been set. `usable` is
+   * false for a stored date that the pilot cannot be counted from (a database made before the store
+   * refused such dates); it has no end date then.
+   */
+  calendar: {
+    startDate: string;
+    endDate: string | null;
+    usable: boolean;
+    setAt: string;
+    timesSet: number;
+  } | null;
+  /** The first and the last start date the form takes: the `min` and `max` of the date field. */
+  startDateRange: { min: string; max: string };
   participants: PilotParticipantView[];
 }
 
 export interface TimerView {
   /** The person's role on the matter may time it (an associate or a reviewing attorney). */
   allowed: boolean;
+  /**
+   * Set (true) only on a training matter where this person has a timer running: no timer can be
+   * started there, but one that a database made earlier holds must be stoppable, so the panel offers
+   * the Stop and nothing else, and says the time is used by nothing.
+   */
+  training?: boolean | undefined;
   /** Set when this person has a timer running on this matter. */
   running: { since: string } | null;
   /** True when this person has a timer running on another matter. The page names no matter. */

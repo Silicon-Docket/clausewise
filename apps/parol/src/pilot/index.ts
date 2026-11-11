@@ -4,7 +4,10 @@
  * given. The store fills `PilotRecords` in (`PilotRecordSource`); this folder never imports it.
  */
 export {
+  START_DATE_MAX,
+  START_DATE_MIN,
   calendarEnd,
+  isUsableStartDate,
   parseInstant,
   parseStartDate,
   phaseOfWeek,
@@ -27,6 +30,7 @@ export {
   percentText,
   pilotEmptyNote,
   resultText,
+  unusableCalendarSentence,
 } from "./phrases.js";
 export type { MeasureWords, PilotPhrases } from "./phrases.js";
 export {
@@ -79,6 +83,7 @@ export type {
   PilotMeasuresView,
   PilotParticipantView,
   PilotPopulationLine,
+  PresentOptions,
   PilotTableRowView,
   PilotTableView,
   ReferenceListInput,

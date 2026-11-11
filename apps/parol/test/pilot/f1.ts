@@ -38,6 +38,17 @@
  *       It is in neither scope; if the code ignored the flag these records would move the answer.
  *
  * Audit log: M1 to M8 and two matters that were deleted (D1 real, D2 synthetic).
+ *
+ * Two variants of M3's runs, for the shadow-mode comparison (builders below, each a fresh copy of F1
+ * with only M3's runs and findings changed; the expected values are worked out in `compute.test.ts`):
+ *
+ *   V1  `f1RunSupersededInFlight`: run-3 was still analyzing when a document changed. It is
+ *       `superseded` and it saved no finding (a superseded run refuses one), so M3 has no review
+ *       that finished and its three reference issues are not compared.
+ *   V2  `f1LaterRunSupersededInFlight`: run-3 finished with its findings (dur-1 flagged) and was
+ *       then superseded by a change; a later run-3b, started on day 8, was superseded while still
+ *       in flight and saved nothing. M3's latest review that finished is run-3 and the comparison
+ *       reads as in F1: 1 of 3.
  */
 import type {
   DecisionRecord,
@@ -402,3 +413,29 @@ export function f1Records(): PilotRecords {
 }
 
 export const AS_OF = "2026-02-10T12:00:00.000Z";
+
+/** V1: M3's only run was superseded while in flight, so it has no finding. */
+export function f1RunSupersededInFlight(): PilotRecords {
+  const records = f1Records();
+  for (const run of records.runs) if (run.runId === "run-3") run.status = "superseded";
+  records.findings = records.findings.filter((f) => f.runId !== "run-3");
+  return records;
+}
+
+/**
+ * V2: run-3 finished and was superseded, with its findings kept; run-3b started later and was
+ * superseded while in flight, with none.
+ */
+export function f1LaterRunSupersededInFlight(): PilotRecords {
+  const records = f1Records();
+  for (const run of records.runs) if (run.runId === "run-3") run.status = "superseded";
+  records.runs.push({
+    runId: "run-3b",
+    matterId: "M3",
+    startedBy: "a2",
+    startedByDemo: false,
+    startedAt: at(8, "10:00:00"),
+    status: "superseded",
+  });
+  return records;
+}

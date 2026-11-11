@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { hashOf, sha256Hex } from "../../src/canonical.js";
+import { calendarEnd } from "../../src/pilot/calendar.js";
+import { computePilotMeasures } from "../../src/pilot/compute.js";
 import {
   ConflictError,
   MAX_PARTICIPANTS,
@@ -83,7 +85,7 @@ const noList = { rules: [], outsideHigh: 0, outsideMedium: 0, outsideLow: 0 };
 
 // ---------------------------------------------------------------------------------------------
 describe("migration 008", () => {
-  it("adds four tables, four named indexes and twelve triggers to a fresh database", () => {
+  it("adds four tables, four named indexes and thirteen triggers to a fresh database", () => {
     const names = (type: string): string[] =>
       rows<{ name: string }>(
         `SELECT name FROM sqlite_master WHERE type = ? AND tbl_name IN (${TABLES.map(() => "?").join(",")})
@@ -102,6 +104,7 @@ describe("migration 008", () => {
       "pilot_calendar_no_delete",
       "pilot_calendar_no_replace",
       "pilot_calendar_no_update",
+      "pilot_participants_no_replace",
       "reference_issues_closed_delete",
       "reference_issues_closed_insert",
       "reference_issues_immutable",
@@ -144,6 +147,307 @@ describe("migration 008", () => {
         "reference_issues.recorded_at",
       ].sort(),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+describe("a training matter", () => {
+  /** The training matter of the associate, with the reviewer on it: the pilot measures leave it out. */
+  function trainingMatter() {
+    const created = w.repo.createMatter({
+      name: "Training: Lanternfish / Corvane NDA (T01)",
+      clientLegalName: "Lanternfish Software, Inc.",
+      createdBy: ACTORS.associate,
+      synthetic: true,
+      trainingKey: "T01",
+    });
+    w.repo.addMember(created.id, ACTORS.reviewer, "reviewer", associate);
+    return created;
+  }
+  /** A timer as an earlier build left it: the database does not hold the rule, the code does. */
+  const plantTimer = (matterId: string, userId: string, role: string) =>
+    w.db
+      .prepare(
+        "INSERT INTO time_entries (id, matter_id, user_id, role, started_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run("tim_earlier", matterId, userId, role, "2026-11-01T08:00:00.000Z");
+
+  it("takes no timer, which no measure counts and the page does not offer: a closed refusal and nothing written", () => {
+    const m = trainingMatter();
+    const events = w.repo.countAuditEvents();
+    for (const userId of [ACTORS.associate, ACTORS.reviewer]) {
+      const error = refused(() => w.repo.startTimer(m.id, { userId }));
+      expect(error, userId).toBeInstanceOf(ConflictError);
+      expect(error.code, userId).toBe("timer_training");
+    }
+    expect(q("SELECT COUNT(*) AS n FROM time_entries")).toEqual({ n: 0 });
+    expect(w.repo.countAuditEvents()).toBe(events);
+    // The person is free to time an ordinary matter, which the refused start did not block.
+    const ordinary = matterWithReviewer();
+    expect(w.repo.startTimer(ordinary.id, { userId: ACTORS.associate }).matterId).toBe(ordinary.id);
+  });
+
+  it("takes no reference list, from the reviewer or anyone: a closed refusal and nothing written", () => {
+    const m = trainingMatter();
+    const events = w.repo.countAuditEvents();
+    const error = refused(() =>
+      w.repo.saveReferenceList(
+        m.id,
+        { rules: [], outsideHigh: 1, outsideMedium: 0, outsideLow: 2 },
+        { userId: ACTORS.reviewer },
+      ),
+    );
+    expect(error).toBeInstanceOf(ConflictError);
+    expect(error.code).toBe("reference_training");
+    expect(q("SELECT COUNT(*) AS n FROM reference_issues")).toEqual({ n: 0 });
+    expect(w.repo.countAuditEvents()).toBe(events);
+    // The role is still asked first: an associate is told it is the reviewer's to record.
+    expect(
+      refused(() =>
+        w.repo.saveReferenceList(
+          m.id,
+          { rules: [], outsideHigh: 0, outsideMedium: 0, outsideLow: 0 },
+          { userId: ACTORS.associate },
+        ),
+      ).code,
+    ).toBe("reference_role");
+  });
+
+  it("can still have a running timer stopped, one that a database made earlier holds", () => {
+    const m = trainingMatter();
+    plantTimer(m.id, ACTORS.associate, "associate");
+    // The stray timer blocks nothing it should not: it is open, so a start elsewhere is refused ...
+    const ordinary = matterWithReviewer();
+    expect(refused(() => w.repo.startTimer(ordinary.id, { userId: ACTORS.associate })).code).toBe(
+      "timer_open",
+    );
+    // ... and the person can put it away, on the training matter, from the server's clock.
+    w.clock.tick(5_000);
+    const stopped = w.repo.stopTimer(m.id, { userId: ACTORS.associate });
+    expect(stopped).toMatchObject({ id: "tim_earlier", seconds: expect.any(Number) });
+    expect(stopped.stoppedAt).not.toBeNull();
+    expect(w.repo.startTimer(ordinary.id, { userId: ACTORS.associate }).matterId).toBe(ordinary.id);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+describe("INSERT OR REPLACE over every unique key of the four tables", () => {
+  /**
+   * A replace deletes the row that holds a key and then inserts, and no UPDATE or DELETE trigger
+   * sees it. Each case below collides on one key with a row that has a different value in every
+   * other key, so that it is the key and not the id that the guard has to name. Each is run twice:
+   * with the guard, which refuses and leaves the table as it was, and without it (the trigger
+   * dropped), where the replace succeeds and the row that held the key is gone. The second run is
+   * what shows that the first is the guard's doing.
+   */
+  interface Case {
+    name: string;
+    table: string;
+    guard: string;
+    /** Other triggers that would also see the deleted row (the database runs recursive triggers). */
+    alsoSees?: string[];
+    /** Makes the row that holds the key; returns the parameters of the colliding statement. */
+    setup: () => (string | number | null)[];
+    sql: string;
+    /** The pattern the guard's message matches. */
+    refusal: RegExp;
+  }
+
+  const CASES: Case[] = [
+    {
+      name: "the sequence number of the calendar",
+      table: "pilot_calendar",
+      guard: "pilot_calendar_no_replace",
+      // The calendar has a delete trigger of its own, which the replace's deletion also fires.
+      alsoSees: ["pilot_calendar_no_delete"],
+      setup: () => {
+        w.repo.setPilotCalendar({ startDate: "2026-11-09", actorId: ACTORS.admin });
+        return [ACTORS.admin];
+      },
+      sql: "INSERT OR REPLACE INTO pilot_calendar (seq, start_date, set_by, set_at) VALUES (1, '2026-01-01', ?, 't')",
+      refusal: /append-only/,
+    },
+    {
+      name: "the user of the roster",
+      table: "pilot_participants",
+      guard: "pilot_participants_no_replace",
+      setup: () => {
+        w.repo.setPilotParticipants([ACTORS.associate], { actorId: ACTORS.admin });
+        return [ACTORS.associate, ACTORS.legalEngineer];
+      },
+      sql: "INSERT OR REPLACE INTO pilot_participants (user_id, recorded_by, recorded_at) VALUES (?, ?, 'later')",
+      refusal: /roster entry is never replaced/,
+    },
+    {
+      name: "the id of a timer",
+      table: "time_entries",
+      guard: "time_entries_no_replace",
+      setup: () => {
+        const m = matterWithReviewer();
+        const entry = w.repo.startTimer(m.id, { userId: ACTORS.associate });
+        w.repo.stopTimer(m.id, { userId: ACTORS.associate });
+        return [entry.id, m.id, ACTORS.associate];
+      },
+      sql: "INSERT OR REPLACE INTO time_entries (id, matter_id, user_id, role, started_at) VALUES (?, ?, ?, 'associate', 'x')",
+      refusal: /time entries are never replaced/,
+    },
+    {
+      name: "the one open timer of a person, under a new id",
+      table: "time_entries",
+      guard: "time_entries_no_replace",
+      setup: () => {
+        const m = matterWithReviewer();
+        w.repo.startTimer(m.id, { userId: ACTORS.associate });
+        return ["tim_new", m.id, ACTORS.associate];
+      },
+      sql: "INSERT OR REPLACE INTO time_entries (id, matter_id, user_id, role, started_at) VALUES (?, ?, ?, 'associate', 'x')",
+      refusal: /time entries are never replaced/,
+    },
+    {
+      name: "the one open timer of a person, on another matter",
+      table: "time_entries",
+      guard: "time_entries_no_replace",
+      setup: () => {
+        const one = matterWithReviewer();
+        const two = matterWithReviewer();
+        w.repo.startTimer(one.id, { userId: ACTORS.associate });
+        return ["tim_new", two.id, ACTORS.associate];
+      },
+      sql: "INSERT OR REPLACE INTO time_entries (id, matter_id, user_id, role, started_at) VALUES (?, ?, ?, 'associate', 'x')",
+      refusal: /time entries are never replaced/,
+    },
+    {
+      name: "the id of a reference issue",
+      table: "reference_issues",
+      guard: "reference_issues_no_replace",
+      setup: () => {
+        const m = savedList();
+        const id = (q("SELECT id FROM reference_issues WHERE ordinal = 0") as { id: string }).id;
+        return [id, m.id, 7, ACTORS.reviewer];
+      },
+      sql: "INSERT OR REPLACE INTO reference_issues (id, matter_id, rule_key, severity, ordinal, recorded_by, recorded_at) VALUES (?, ?, 'gov-1', 'low', ?, ?, 't')",
+      refusal: /reference issues are never replaced/,
+    },
+    {
+      name: "the place of an issue in the list of a matter, under a new id",
+      table: "reference_issues",
+      guard: "reference_issues_no_replace",
+      setup: () => {
+        const m = savedList();
+        return ["ref_new", m.id, 0, ACTORS.reviewer];
+      },
+      sql: "INSERT OR REPLACE INTO reference_issues (id, matter_id, rule_key, severity, ordinal, recorded_by, recorded_at) VALUES (?, ?, 'gov-1', 'low', ?, ?, 't')",
+      refusal: /reference issues are never replaced/,
+    },
+    {
+      name: "the rule of a matter, under a new id and another place",
+      table: "reference_issues",
+      guard: "reference_issues_no_replace",
+      setup: () => {
+        const m = savedList();
+        return ["ref_new", m.id, 7, ACTORS.reviewer];
+      },
+      sql: "INSERT OR REPLACE INTO reference_issues (id, matter_id, rule_key, severity, ordinal, recorded_by, recorded_at) VALUES (?, ?, 'dur-1', 'low', ?, ?, 't')",
+      refusal: /reference issues are never replaced/,
+    },
+  ];
+
+  /** A matter whose list holds dur-1 (high, place 0) and one high issue no rule covers (place 1). */
+  function savedList(): MatterFixture {
+    const m = matterWithReviewer();
+    w.repo.saveReferenceList(
+      m.id,
+      {
+        rules: [{ ruleKey: "dur-1", severity: "high" }],
+        outsideHigh: 1,
+        outsideMedium: 0,
+        outsideLow: 0,
+      },
+      { userId: ACTORS.reviewer },
+    );
+    return m;
+  }
+
+  for (const c of CASES) {
+    it(`refuses a replace on ${c.name}, and without the guard the replace deletes the row`, () => {
+      const params = c.setup();
+      const before = rows(`SELECT * FROM ${c.table} ORDER BY rowid`);
+      expect(before.length, c.name).toBeGreaterThan(0);
+
+      expect(raw(c.sql, ...params), c.name).toThrow(c.refusal);
+      expect(rows(`SELECT * FROM ${c.table} ORDER BY rowid`), c.name).toEqual(before);
+
+      // Without the guard the same statement is accepted: it is the guard that refused it.
+      for (const name of [c.guard, ...(c.alsoSees ?? [])]) w.db.exec(`DROP TRIGGER ${name}`);
+      raw(c.sql, ...params)();
+      expect(rows(`SELECT * FROM ${c.table} ORDER BY rowid`), c.name).not.toEqual(before);
+    });
+  }
+
+  it("leaves a write that collides on no key alone, so the guards are not a blanket refusal", () => {
+    // A timer for another person, and a new one for the same person once the first is stopped.
+    const m = matterWithReviewer();
+    const first = w.repo.startTimer(m.id, { userId: ACTORS.associate });
+    const insertTimer = (id: string, userId: string, role: string) =>
+      raw(
+        "INSERT OR REPLACE INTO time_entries (id, matter_id, user_id, role, started_at) VALUES (?, ?, ?, ?, 't')",
+        id,
+        m.id,
+        userId,
+        role,
+      );
+    insertTimer("tim_reviewer", ACTORS.reviewer, "reviewer")();
+    w.repo.stopTimer(m.id, { userId: ACTORS.associate });
+    insertTimer("tim_second", ACTORS.associate, "associate")();
+    expect(rows("SELECT id FROM time_entries ORDER BY rowid").map((r) => r.id)).toEqual([
+      first.id,
+      "tim_reviewer",
+      "tim_second",
+    ]);
+    // A new place and a new rule in a list, and a roster entry for another person.
+    const list = savedList();
+    raw(
+      "INSERT OR REPLACE INTO reference_issues (id, matter_id, rule_key, severity, ordinal, recorded_by, recorded_at) VALUES ('ref_ok', ?, 'gov-1', 'low', 7, ?, 't')",
+      list.id,
+      ACTORS.reviewer,
+    )();
+    w.repo.setPilotParticipants([ACTORS.associate], { actorId: ACTORS.admin });
+    raw(
+      "INSERT OR REPLACE INTO pilot_participants (user_id, recorded_by, recorded_at) VALUES (?, ?, 't')",
+      ACTORS.reviewer,
+      ACTORS.admin,
+    )();
+    expect(q("SELECT COUNT(*) AS n FROM reference_issues WHERE matter_id = ?", list.id)).toEqual({
+      n: 3,
+    });
+    expect(q("SELECT COUNT(*) AS n FROM pilot_participants")).toEqual({ n: 2 });
+  });
+
+  it("still replaces the roster and the list through the application, which deletes before it writes", () => {
+    w.repo.setPilotParticipants([ACTORS.associate, ACTORS.reviewer], { actorId: ACTORS.admin });
+    w.repo.setPilotParticipants([ACTORS.reviewer, ACTORS.legalEngineer], { actorId: ACTORS.admin });
+    expect(
+      w.repo
+        .listPilotParticipants()
+        .map((p) => p.userId)
+        .sort(),
+    ).toEqual([ACTORS.reviewer, ACTORS.legalEngineer].sort());
+    const m = savedList();
+    const again = w.repo.saveReferenceList(
+      m.id,
+      {
+        rules: [{ ruleKey: "dur-1", severity: "low" }],
+        outsideHigh: 0,
+        outsideMedium: 0,
+        outsideLow: 2,
+      },
+      { userId: ACTORS.reviewer },
+    );
+    expect(again.issues.map((i) => [i.ruleKey, i.severity, i.ordinal])).toEqual([
+      ["dur-1", "low", 0],
+      [null, "low", 1],
+      [null, "low", 2],
+    ]);
   });
 });
 
@@ -315,6 +619,93 @@ describe("the pilot calendar", () => {
     }
     expect(q("SELECT COUNT(*) AS n FROM pilot_calendar")).toEqual({ n: 0 });
     expect(eventsOf("pilot.calendar")).toEqual([]);
+  });
+
+  it("refuses a start date the pilot module cannot count from, which only looks like a date", () => {
+    // Years below 1000 (a date field posts a typed "26" as 0026), and a window that leaves 9999.
+    const unusable = [
+      "0000-01-01",
+      "0026-01-05",
+      "0099-12-31",
+      "0999-12-30",
+      "0999-12-31",
+      "9999-11-27",
+      "9999-12-27",
+      "9999-12-30",
+      "9999-12-31",
+    ];
+    for (const value of unusable) {
+      const error = refused(() =>
+        w.repo.setPilotCalendar({ startDate: value, actorId: ACTORS.admin }),
+      );
+      expect(error, value).toBeInstanceOf(ValidationError);
+      expect(error.code, value).toBe("bad_calendar_date");
+    }
+    expect(q("SELECT COUNT(*) AS n FROM pilot_calendar")).toEqual({ n: 0 });
+    expect(eventsOf("pilot.calendar")).toEqual([]);
+  });
+
+  it("accepts the first and the last usable start date and the last days of a December", () => {
+    const usable = [
+      "1000-01-01",
+      "1000-12-31",
+      "2026-12-30",
+      "2026-12-31",
+      "9998-12-31",
+      "9999-11-26",
+    ];
+    for (const value of usable) {
+      expect(w.repo.setPilotCalendar({ startDate: value, actorId: ACTORS.admin }).startDate).toBe(
+        value,
+      );
+      expect(w.repo.getPilotCalendar()?.startDate).toBe(value);
+    }
+    expect(q("SELECT COUNT(*) AS n FROM pilot_calendar")).toEqual({ n: usable.length });
+  });
+
+  it("holds only start dates that the measures and the end of the pilot can be worked out from", () => {
+    // Whatever the store lets in must survive the computation that reads it back: try every day
+    // around the edges of the years and keep the ones that were accepted.
+    const edges = [
+      "0000-12-31",
+      "0025-12-31",
+      "0026-01-05",
+      "0099-12-31",
+      "0100-01-01",
+      "0999-12-31",
+      "1000-01-01",
+      "1000-01-02",
+      "9999-11-24",
+      "9999-11-25",
+      "9999-11-26",
+      "9999-11-27",
+      "9999-11-28",
+      "9999-12-31",
+    ];
+    const accepted: string[] = [];
+    for (const value of edges) {
+      try {
+        w.repo.setPilotCalendar({ startDate: value, actorId: ACTORS.admin });
+      } catch (error) {
+        expect(error).toBeInstanceOf(ValidationError);
+        continue;
+      }
+      accepted.push(value);
+      const records = w.repo.loadPilotRecords();
+      expect(records.calendar?.startDate).toBe(value);
+      expect(
+        () => computePilotMeasures(records, { scope: "pilot", asOf: "2026-02-10T12:00:00.000Z" }),
+        value,
+      ).not.toThrow();
+      expect(() => calendarEnd(value), value).not.toThrow();
+    }
+    expect(accepted).toEqual([
+      "1000-01-01",
+      "1000-01-02",
+      "9999-11-24",
+      "9999-11-25",
+      "9999-11-26",
+    ]);
   });
 
   it("needs an actor who exists", () => {
@@ -493,8 +884,12 @@ describe("timers", () => {
         two.id,
         ACTORS.associate,
       );
+    // The insert guard names the one-open-timer key too, and runs first ...
+    expect(insert("tim_raw")).toThrow(/time entries are never replaced/);
+    // ... the index is the second line, when the guard is gone ...
+    w.db.exec("DROP TRIGGER time_entries_no_replace");
     expect(insert("tim_raw")).toThrow(/UNIQUE constraint failed: time_entries\.user_id/);
-    // ... and the code refuses it when the index is gone.
+    // ... and the code refuses it when the index is gone as well.
     w.db.exec("DROP INDEX time_entries_one_open_per_user");
     expect(refused(() => w.repo.startTimer(two.id, { userId: ACTORS.associate })).code).toBe(
       "timer_open",
@@ -880,8 +1275,12 @@ describe("the reference list", () => {
         ACTORS.reviewer,
       );
     insert("ref_a", 20)();
+    // The insert guard names the rule key too, and runs first ...
+    expect(insert("ref_b", 21)).toThrow(/reference issues are never replaced/);
+    // ... the index is the second line, when the guard is gone ...
+    w.db.exec("DROP TRIGGER reference_issues_no_replace");
     expect(insert("ref_b", 21)).toThrow(/UNIQUE constraint failed: reference_issues\.matter_id/);
-    // ... and the code refuses it when the index is gone.
+    // ... and the code refuses it when the index is gone as well.
     w.db.exec("DROP INDEX reference_issues_one_per_rule");
     expect(
       refused(() =>

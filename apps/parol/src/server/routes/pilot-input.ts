@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PILOT_SEVERITIES, type ReferenceListInput } from "../../pilot/index.js";
+import { PILOT_SEVERITIES, isUsableStartDate, type ReferenceListInput } from "../../pilot/index.js";
 import { ValidationError } from "../../store/errors.js";
 import { formString, type FormFields } from "../http.js";
 import { CSRF_FIELD, FIELDS } from "../pages/forms.js";
@@ -28,13 +28,23 @@ const fieldsOf = (form: FormFields): Record<string, string | File> =>
 const unknownField = (): ValidationError =>
   new ValidationError("unknown_field", "the request has a field that is not accepted");
 
-/** The calendar form: one date. Whether it is a real day is the store's to say (`bad_calendar_date`). */
+/**
+ * The calendar form: one date. It must be one the pilot can be counted from, by the definition the
+ * store and the pilot module use (`isUsableStartDate`), and a date that is not is refused here with
+ * the store's own code, so the person is told in the words of the form before anything is looked up.
+ */
 export function calendarFromForm(form: FormFields): { startDate: string } {
   for (const name of Object.keys(fieldsOf(form)))
     if (name !== FIELDS.startDate) throw unknownField();
-  // A missing or non-text field is the empty date, which the store refuses with the same code as a
-  // date that is not a real one, so the person is told in the words of the form.
-  return { startDate: (formString(form, FIELDS.startDate) ?? "").trim() };
+  // A missing or non-text field is the empty date, which is refused with the same code as a date
+  // that is not a real one.
+  const startDate = (formString(form, FIELDS.startDate) ?? "").trim();
+  if (!isUsableStartDate(startDate))
+    throw new ValidationError(
+      "bad_calendar_date",
+      "the pilot start date is not a real date that the pilot can be counted from",
+    );
+  return { startDate };
 }
 
 /**

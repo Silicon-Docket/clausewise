@@ -86,17 +86,30 @@ describe("src/pilot is pure", () => {
     }
   });
 
-  it("is not reached from the store: nothing under src/store imports it", () => {
+  it("is not reached from the store: nothing under src/store imports it, but its types and one value", () => {
     const store = fileURLToPath(new URL("../../src/store/", import.meta.url));
     for (const name of readdirSync(store).filter((n) => n.endsWith(".ts"))) {
       const source = readFileSync(join(store, name), "utf8");
       for (const { specifier, typeOnly } of importsOf(source)) {
         if (specifier.includes("/pilot/")) {
-          // the one place the store may look at the pure module is for its record types
-          expect(typeOnly, `${name} imports ${specifier} as a value`).toBe(true);
+          // Two places only: the record types, and the definition of a start date, which the store
+          // takes from the calendar so that it cannot accept a date the measures then refuse.
+          const startDateRule = name === "repo-pilot.ts" && specifier === "../pilot/calendar.js";
+          expect(typeOnly || startDateRule, `${name} imports ${specifier} as a value`).toBe(true);
         }
       }
     }
+  });
+
+  it("is the only place a start date is defined: the store imports the rule and writes none of its own", () => {
+    const store = readFileSync(
+      fileURLToPath(new URL("../../src/store/repo-pilot.ts", import.meta.url)),
+      "utf8",
+    );
+    expect(store).toMatch(/import \{ isUsableStartDate \} from "\.\.\/pilot\/calendar\.js";/u);
+    expect(store).toContain("isUsableStartDate(value)");
+    // The check that used to stand here, a round trip through Date, accepted years 0000 to 0099.
+    expect(store).not.toMatch(/new Date\(`\$\{value\}/u);
   });
 
   it("finds an import of the store, of node and of a value from the contracts when one is planted", () => {

@@ -14,6 +14,7 @@ import {
   TIMER_RUNNING_SINCE,
   TIMER_START_LABEL,
   TIMER_STOP_LABEL,
+  TIMER_TRAINING_NOTE,
   formatDuration,
   timedSentence,
 } from "../../src/server/views/pilot.js";
@@ -263,8 +264,13 @@ describe("the words", () => {
 
   it("post the two values the route reads, and the refusals name the buttons by these words", () => {
     expect(TIMER_INTENTS).toEqual({ start: "start", stop: "stop" });
-    // The sentence that tells a person what to press is the label of the button.
-    expect(REFUSALS_PILOT.todo.no_open_timer).toContain(TIMER_START_LABEL);
+    // The refusal of a stop with nothing to stop tells nobody to press a button that may not be there:
+    // the timer has no Start while a timer runs on another matter. It points to the section instead.
+    expect(REFUSALS_PILOT.todo.no_open_timer).not.toContain(TIMER_START_LABEL);
+    expect(REFUSALS_PILOT.phrases.no_open_timer).not.toContain(TIMER_START_LABEL);
+    expect(REFUSALS_PILOT.todo.no_open_timer).toBe(
+      "The timer section of this page shows what you can do now.",
+    );
     expect(REFUSALS_PILOT.phrases.timer_open).toContain("Stop it before starting another one.");
     expect(REFUSALS_PILOT.jump.no_open_timer.href).toBe(`#${PILOT_ANCHORS.timer}`);
     expect(TIMER_ELSEWHERE).toContain("Stop it there first");
@@ -318,5 +324,52 @@ describe("the length of time in words", () => {
       "You have 1 stopped session on this matter, 1 minute 1 second in all.",
     );
     expect(timedSentence(0, 0)).toBe("You have not stopped a timer on this matter yet.");
+  });
+});
+
+describe("a timer left running on a training matter", () => {
+  const TRAINING_RUNNING = buildTimer({
+    allowed: true,
+    training: true,
+    running: { since: SINCE },
+  });
+  const { section } = sectionOf(timerPane(TRAINING_RUNNING));
+
+  it("offers the Stop and no Start, and says the time is used by nothing", () => {
+    expect(buttonsOf(section).map((b) => readable(b))).toEqual([TIMER_STOP_LABEL]);
+    const text = readable(section);
+    expect(text).toContain(TIMER_TRAINING_NOTE);
+    expect(text).toContain("Running");
+    expect(text).toContain(TIMER_RUNNING_SINCE);
+    // It does not call these times the pilot's: that is the note of an ordinary matter.
+    expect(text).not.toContain(TIMER_NOTE);
+    expect(text).not.toContain(TIMER_START_LABEL);
+    expect(text).not.toContain(timedSentence(0, 0));
+  });
+
+  it("posts the one form, with the token and the stop intent, to the timer route", () => {
+    const form = byTag(section, "form")[0]!;
+    expect(attr(form, "method")).toBe("post");
+    expect(attr(form, "action")).toBe(urls.matterTimer(IDS.matter));
+    const button = buttonsOf(section)[0]!;
+    expect(attr(button, "name")).toBe(FIELDS.intent);
+    expect(attr(button, "value")).toBe(TIMER_INTENTS.stop);
+  });
+
+  it("is the panel of a timer that runs only: with none running the training matter has no panel", () => {
+    expect(timerPane(buildTimer({ allowed: true, training: true, running: null }))).not.toContain(
+      "Stop timer",
+    );
+    expect(timerPane(buildTimer({ allowed: false }))).toBe("");
+    // The note says the matter is a training matter and that none can be started.
+    expect(TIMER_TRAINING_NOTE).toContain("training matter");
+    expect(TIMER_TRAINING_NOTE).toContain("A timer cannot be started on a training matter.");
+    expect(TIMER_TRAINING_NOTE).not.toMatch(/saved|faster|average|%|adoption|accura/i);
+  });
+
+  it("passes the page rules as a whole matter page, and adds nothing the rules find", () => {
+    const fixture = { timer: TRAINING_RUNNING };
+    expect(() => checkInvariants(matterPagePilot("associate", fixture))).not.toThrow();
+    expect(violationsAddedByPanels("associate", fixture)).toEqual([]);
   });
 });

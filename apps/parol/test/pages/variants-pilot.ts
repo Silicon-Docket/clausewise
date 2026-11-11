@@ -73,6 +73,22 @@ export const VARIANTS_PILOT: Variant[] = [
       }),
   ],
   [
+    "pilot measures, the stored start date cannot be used, the form to mend it",
+    () =>
+      pilotPage({
+        unusableStartDate: "0026-01-05",
+        admin: adminView({
+          calendar: {
+            startDate: "0026-01-05",
+            endDate: null,
+            usable: false,
+            setAt: "2026-01-02T09:00:00.000Z",
+            timesSet: 1,
+          },
+        }),
+      }),
+  ],
+  [
     "pilot measures, roster refused, what was ticked kept",
     () =>
       pilotPage({
@@ -91,6 +107,13 @@ export const VARIANTS_PILOT: Variant[] = [
   [
     "matter page, timer running on another matter, associate",
     () => matterPagePilot("associate", { timer: buildTimer({ elsewhere: true }) }),
+  ],
+  [
+    "matter page, training matter, a timer left running by an earlier build, only the Stop",
+    () =>
+      matterPagePilot("associate", {
+        timer: buildTimer({ allowed: true, training: true, running: { since: SINCE } }),
+      }),
   ],
   [
     "matter page, timer not running, reviewing attorney, list open",
@@ -157,6 +180,11 @@ export const VARIANTS_PILOT: Variant[] = [
   ],
   ["pane, timer not running", () => timerPane(buildTimer()), { fragment: true }],
   ["pane, timer running", () => timerPane(RUNNING), { fragment: true }],
+  [
+    "pane, timer left running on a training matter",
+    () => timerPane(buildTimer({ allowed: true, training: true, running: { since: SINCE } })),
+    { fragment: true },
+  ],
   [
     "pane, timer running on another matter",
     () => timerPane(buildTimer({ elsewhere: true })),

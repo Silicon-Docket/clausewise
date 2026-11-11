@@ -2,9 +2,12 @@ import { roleAllows } from "../auth/actions.js";
 import type { AuthorizedMatter, Principal } from "../auth/types.js";
 import { REASON_CODES } from "../contracts.js";
 import {
+  START_DATE_MAX,
+  START_DATE_MIN,
   calendarEnd,
   computePilotMeasures,
   csvFileName,
+  isUsableStartDate,
   presentMeasures,
   toCsv,
   type PilotAdminView,
@@ -52,16 +55,26 @@ export interface PilotService {
   setParticipants(principal: Principal, input: { userIds: readonly string[] }): void;
   /**
    * The caller's own timer on this matter. Any member may ask; `allowed` says whether they may time
-   * it, and is false on a training matter, whose times no measure counts.
+   * it, and is false on a training matter, whose times no measure counts, unless a timer already
+   * runs there (`training`), which the person must be able to stop.
    */
   timer(am: AuthorizedMatter): TimerView;
-  /** Starts the caller's timer. `time.record`. 409 `timer_open` when one runs, here or on another matter. */
+  /**
+   * Starts the caller's timer. `time.record`. 409 `timer_open` when one runs, here or on another
+   * matter; 409 `timer_training` on a training matter, which no measure counts.
+   */
   startTimer(am: AuthorizedMatter): TimerView;
-  /** Stops the caller's timer on this matter. `time.record`. 409 `no_open_timer`. */
+  /**
+   * Stops the caller's timer on this matter. `time.record`. 409 `no_open_timer`. Allowed on a
+   * training matter too, so that a timer left running there can always be put away.
+   */
   stopTimer(am: AuthorizedMatter): TimerView;
   /** The reference list, for the reviewer who may record it; null for any other role and for a training matter. */
   referenceList(am: AuthorizedMatter): ReferenceView | null;
-  /** Replaces the reference list. `reference.write`. 400 for a bad rule, severity or count; 409 `reference_locked`. */
+  /**
+   * Replaces the reference list. `reference.write`. 400 for a bad rule, severity or count; 409
+   * `reference_locked`, and 409 `reference_training` on a training matter.
+   */
   saveReferenceList(am: AuthorizedMatter, input: ReferenceListInput): ReferenceView;
 }
 
@@ -74,13 +87,25 @@ const SEVERITIES: readonly PilotSeverity[] = ["high", "medium", "low"];
 export function createPilotService(deps: ServiceDeps): PilotService {
   const { repo, config } = deps;
 
-  /** The measures of a scope, computed from the records of the store, as of the injected clock. */
-  const compute = (scope: PilotScope) =>
-    computePilotMeasures(repo.loadPilotRecords(), {
+  /**
+   * The measures of a scope, computed from the records of the store, as of the injected clock.
+   *
+   * The store refuses a start date the pilot cannot be counted from, but a database made before it
+   * did may hold one, and the page that holds the form to mend it must still open: such a date is
+   * left out of the computation (the measures then read as with no calendar) and handed on, so the
+   * page can say it cannot be used. The module itself stays loud about a date it cannot read.
+   */
+  const compute = (scope: PilotScope) => {
+    const records = repo.loadPilotRecords();
+    const stored = records.calendar?.startDate ?? null;
+    const unusable = stored !== null && !isUsableStartDate(stored);
+    const measures = computePilotMeasures(unusable ? { ...records, calendar: null } : records, {
       scope,
       asOf: deps.now().toISOString(),
       reasonCodes: REASON_CODES,
     });
+    return { measures, unusableStartDate: unusable ? stored : null };
+  };
 
   /**
    * A training matter is the exercise and not a pilot matter: the measures leave it out of both
@@ -94,10 +119,23 @@ export function createPilotService(deps: ServiceDeps): PilotService {
   };
 
   const timerView = (am: AuthorizedMatter): TimerView => {
-    if (!roleAllows(am.role, "time.record") || isTrainingMatter(am))
-      return { allowed: false, running: null, elsewhere: false, closedSeconds: 0, sessions: 0 };
+    const none: TimerView = {
+      allowed: false,
+      running: null,
+      elsewhere: false,
+      closedSeconds: 0,
+      sessions: 0,
+    };
+    if (!roleAllows(am.role, "time.record")) return none;
     // The caller's own entries only: the store filters on the matter and on the person.
     const state = repo.listTimerState(am.matterId, am.principal.userId);
+    if (isTrainingMatter(am)) {
+      // No timer can be started on a training matter (the store refuses it), but one that a database
+      // made earlier holds must always be stoppable: the person is offered the Stop and nothing else.
+      return state.running === null
+        ? none
+        : { ...none, allowed: true, training: true, running: { since: state.running.startedAt } };
+    }
     return {
       allowed: true,
       running: state.running === null ? null : { since: state.running.startedAt },
@@ -138,12 +176,13 @@ export function createPilotService(deps: ServiceDeps): PilotService {
   return {
     measures(principal, scope) {
       requireGlobalRole(principal, "pilot.read");
-      return presentMeasures(compute(scope));
+      const { measures, unusableStartDate } = compute(scope);
+      return presentMeasures(measures, { unusableStartDate });
     },
 
     csv(principal, scope) {
       requireGlobalRole(principal, "pilot.read");
-      const measures = compute(scope);
+      const { measures } = compute(scope);
       return { fileName: csvFileName(scope, measures.asOf), body: toCsv(measures) };
     },
 
@@ -160,10 +199,13 @@ export function createPilotService(deps: ServiceDeps): PilotService {
             ? null
             : {
                 startDate: stored.calendar.startDate,
-                endDate: calendarEnd(stored.calendar.startDate),
+                ...(isUsableStartDate(stored.calendar.startDate)
+                  ? { endDate: calendarEnd(stored.calendar.startDate), usable: true }
+                  : { endDate: null, usable: false }),
                 setAt: stored.calendar.setAt,
                 timesSet: stored.calendar.timesSet,
               },
+        startDateRange: { min: START_DATE_MIN, max: START_DATE_MAX },
         participants: repo.listUsers().map((user) => ({
           userId: user.id,
           name: user.displayName,
