@@ -20,6 +20,7 @@ import {
   type TextSample,
   type Walk,
 } from "./judge.js";
+import { PAGE_GETS } from "../inventory.js";
 import { openBrowser } from "./playwright.js";
 import { COLOR_MATH, PRELUDE } from "./scripts.js";
 import { targets } from "./targets.js";
@@ -498,6 +499,27 @@ describe("the list of pages and roles", () => {
     }
     expect(status("legal engineer", "/audit")).toBe(403);
     expect(status("administrator", "/audit")).toBe(200);
+  });
+
+  it("has a page for every page route of the route inventory, in a role that is shown it, and in one that is refused", () => {
+    // A page added to the application is added to PAGE_GETS (the inventory test says so); this makes
+    // the browser sweep follow, so a new page is walked in a real browser too.
+    const pattern = (template: string): RegExp =>
+      new RegExp(`^${template.replace(/:[A-Za-z]+/g, "[^/?]+").replace(/\//g, "\\/")}(\\?.*)?$`);
+    for (const route of PAGE_GETS) {
+      const matches = all.filter((t) => pattern(route).test(t.path));
+      expect(matches.length, `no target for ${route}`).toBeGreaterThan(0);
+      expect(
+        matches.some((t) => t.expect === 200),
+        `${route} is never shown`,
+      ).toBe(true);
+    }
+    // The pages that need a global role are also refused to someone without it.
+    for (const route of ["/evaluations", "/pilot", "/audit", "/training/key"])
+      expect(
+        all.some((t) => t.path.startsWith(route) && t.expect === 403),
+        route,
+      ).toBe(true);
   });
 
   it("tells a person with no part in a matter that it is not found, for a matter that exists and for one that does not", () => {
