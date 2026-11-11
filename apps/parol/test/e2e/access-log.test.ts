@@ -1,6 +1,7 @@
 import JSZip from "jszip";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { FIELDS } from "../../src/server/pages/forms.js";
+import { REFUSAL_PHRASES } from "../../src/server/routes/notices.js";
 import { urls } from "../../src/server/urls.js";
 import type { FindingView, IssueRow, MatterView } from "../../src/services/views.js";
 import { urlEncoded } from "../integration/layers-support.js";
@@ -173,8 +174,10 @@ describe("the story of the worked example, with a marker in everything", () => {
     });
     expect(blank.status).toBe(400);
     const blankHtml = await blank.text();
+    // The store refuses a blank text with the code bad_text, which has a fixed sentence of its own
+    // (it names no field and repeats nothing that was typed).
     expect(readable(parseHtml(problem.exec(blankHtml)?.[0] ?? ""))).toBe(
-      "Problem That request was not valid. Check the form and try again.",
+      `Problem ${REFUSAL_PHRASES["bad_text"]}`,
     );
     expect(blankHtml.replace(problem, "")).toBe(beforeSettings.html);
     // The shell's own page for a refused form, which no matter is behind: an identity that does not
