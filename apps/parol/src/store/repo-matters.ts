@@ -23,6 +23,7 @@ import {
   type Ctx,
 } from "./context.js";
 import { ConflictError, InvalidTransitionError, NotFoundError, ValidationError } from "./errors.js";
+import { tablesHoldingMatter } from "./residue.js";
 import { AnnotationSchema, SpanSchema } from "./schemas.js";
 import { canTransition } from "./states.js";
 import type {
@@ -73,6 +74,28 @@ const DEMO_USERS: readonly UserRow[] = [
 
 /** The default retention in the demo (docs/parol/06). */
 export const DEFAULT_RETAIN_DAYS = 30;
+
+/**
+ * The most days a matter may be kept, at creation or by a later change. A ceiling chosen for the
+ * demonstration so that the pilot of docs/parol/08 fits with room to export; it is not derived from
+ * any records policy (docs/parol/01, question 17, is unanswered). It lives here and not in the
+ * database, so the form, the request schema and the store all read the one number.
+ */
+export const MAX_RETAIN_DAYS = 90;
+
+/** Whole days from 1 to `MAX_RETAIN_DAYS`; anything else (a fraction, NaN, text) is refused. */
+function assertRetainDays(value: unknown): asserts value is number {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < 1 ||
+    value > MAX_RETAIN_DAYS
+  )
+    throw new ValidationError(
+      "retention_days",
+      `retention must be a whole number of days from 1 to ${MAX_RETAIN_DAYS}`,
+    );
+}
 
 /** Why the inputs changed. Stored as a finding's `stale_reason`, so it is a code and never text. */
 export const INPUT_CHANGE_REASONS = {
@@ -329,7 +352,7 @@ export function createMattersApi(ctx: Ctx) {
     const name = cleanLabel("matter name", input.name);
     const clientLegalName = cleanLabel("client legal name", input.clientLegalName);
     const retainDays = input.retainDays ?? DEFAULT_RETAIN_DAYS;
-    assertCount("retainDays", retainDays, 1);
+    assertRetainDays(retainDays);
     return tx(() => {
       requireUser(input.createdBy);
       const id = newId("mat");
@@ -1181,6 +1204,34 @@ export function createMattersApi(ctx: Ctx) {
 
   // --- retention ----------------------------------------------------------------------------
 
+  /**
+   * Moves the matter's retention date to `retainDays` whole days from now, earlier or later than
+   * the date it had. It touches the date and nothing else: a retention change is not an input of
+   * the review, so the findings, decisions, memo and runs keep their state, and it does not go
+   * through `applyInputChange`. The event holds the two dates and the number of days.
+   */
+  function setRetention(
+    matterId: string,
+    retainDays: number,
+    opts: { actorId: string | null },
+  ): MatterRow {
+    assertRetainDays(retainDays);
+    return tx(() => {
+      const matter = requireMatter(matterId);
+      const to = new Date(Date.parse(ctx.now()) + retainDays * 86_400_000).toISOString();
+      run("UPDATE matters SET retain_until = ? WHERE id = ?", to, matterId);
+      ctx.audit({
+        actorId: opts.actorId,
+        matterId,
+        action: "matter.retention",
+        targetType: "matter",
+        targetId: matterId,
+        detail: { from: matter.retainUntil, to, days: retainDays },
+      });
+      return requireMatter(matterId);
+    });
+  }
+
   const listExpiredMatters = (now?: Date | string): MatterRow[] => {
     const at = now === undefined ? ctx.now() : new Date(now).toISOString();
     return all<RawMatter>(
@@ -1197,8 +1248,26 @@ export function createMattersApi(ctx: Ctx) {
    * `FileStore.sweepOrphans(repo.listMatterIds())` finds and removes it.
    *
    * It refuses while a run is in flight: the run is still writing, so it is cancelled first.
+   *
+   * The deletion event records why (`reason`: `requested` by the creator or an administrator,
+   * `retention` by the retention command) and the retention date that was in force. Neither is
+   * text: one is a closed word and the other an ISO time.
+   *
+   * Every table that holds matter rows is deleted from by a statement of its own, in this order.
+   * Whoever adds a table with a `matter_id` column adds its delete here, before the parent it
+   * references. The check at the end is what makes a forgotten one loud: it looks, inside the same
+   * transaction, for any table with a `matter_id` column that still holds a row of this matter, and
+   * rolls the whole deletion back (`matter_residue`) if one does. The matter stays whole and the
+   * caller is told; nothing is quietly kept.
    */
-  function deleteMatter(matterId: string, opts: { actorId: string | null }): string[] {
+  function deleteMatter(
+    matterId: string,
+    opts: { actorId: string | null; reason?: "requested" | "retention" },
+  ): string[] {
+    const reason = opts.reason ?? "requested";
+    // A closed word, because it is written into the log: a value from anywhere else must not be.
+    if (reason !== "requested" && reason !== "retention")
+      throw new ValidationError("bad_reason", "the reason for a deletion is not recognised");
     return tx(() => {
       const matter = requireMatter(matterId);
       if (matter.status === "running" || hasActiveRun(matterId))
@@ -1250,6 +1319,9 @@ export function createMattersApi(ctx: Ctx) {
           "DELETE FROM span_annotations WHERE span_id IN (SELECT id FROM source_spans WHERE matter_id = ?)",
           matterId,
         ),
+        // Their keys cascade from the spans and the versions, but a deletion that depends on the
+        // cascade having run (and on the connection having foreign keys on) is not one to count on.
+        ingestWarnings: run("DELETE FROM ingest_warnings WHERE matter_id = ?", matterId),
         spans: run("DELETE FROM source_spans WHERE matter_id = ?", matterId),
         versions: run("DELETE FROM document_versions WHERE matter_id = ?", matterId),
         documents: run("DELETE FROM documents WHERE matter_id = ?", matterId),
@@ -1257,13 +1329,27 @@ export function createMattersApi(ctx: Ctx) {
       };
       run("DELETE FROM matters WHERE id = ?", matterId);
 
+      // Still inside the transaction: a table this function does not know about, and that holds a
+      // row of the matter, undoes the whole deletion. The message names tables of the schema only.
+      const left = tablesHoldingMatter(ctx.db, matterId);
+      if (left.length > 0)
+        throw new ConflictError(
+          "matter_residue",
+          `a table still holds rows of the matter: ${left.join(", ")}`,
+        );
+
       ctx.audit({
         actorId: opts.actorId,
         matterId,
         action: "matter.delete",
         targetType: "matter",
         targetId: matterId,
-        detail: { ...counts, files: paths.length },
+        detail: {
+          ...counts,
+          files: paths.length,
+          reason,
+          retainUntil: matter.retainUntil,
+        },
       });
       return paths;
     });
@@ -1320,6 +1406,7 @@ export function createMattersApi(ctx: Ctx) {
     applyInputChange,
     // retention
     listExpiredMatters,
+    setRetention,
     deleteMatter,
     // internal, shared with the other repository modules
     internal: { requireMatter, requireUser, transitionMatter, invalidateIfChanged },

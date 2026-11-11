@@ -1,10 +1,17 @@
 import type { MatterStatus } from "../contracts.js";
 import {
   appendAudit,
+  auditHead,
+  checkAudit,
+  checkAuditAnchor,
+  countAuditEvents,
+  latestAuditEvent,
   listAuditEvents,
   listMatterAuditEvents,
+  reconcileMatterEvents,
   verifyAuditChain,
   type AuditFilter,
+  type AuditHead,
   type AuditInput,
   type AuditPage,
   type MatterAuditFilter,
@@ -140,6 +147,18 @@ export function createRepository(db: Database, options: RepositoryOptions = {}) 
       listMatterAuditEvents(db, matterId, filter),
     /** The whole chain is one chain, so this is global by nature; it reports counts and a sequence number only. */
     verifyAuditChain: () => verifyAuditChain(db),
+    /** The newest event: its number and hash, which is all that has to be kept elsewhere to anchor the chain. */
+    auditHead: () => auditHead(db),
+    /** How many events the log holds: the denominator of a count of events. */
+    countAuditEvents: () => countAuditEvents(db),
+    /** The newest event with this action, or null. The retention command reads its own last run from it. */
+    latestAuditEvent: (action: string) => latestAuditEvent(db, action),
+    /** The event the anchor names exists and has this hash. */
+    checkAuditAnchor: (anchor: AuditHead) => checkAuditAnchor(db, anchor),
+    /** Matters against the events that account for them: counts, and ids of at most 20 anomalies. */
+    reconcileMatterEvents: () => reconcileMatterEvents(db),
+    /** The chain, the head, the anchor (if given) and the matter reconciliation, in one read. */
+    checkAudit: (options?: { anchor?: AuditHead }) => checkAudit(db, options),
     // plumbing
     transaction: <T>(fn: () => T): T => ctx.tx(fn),
     compact,

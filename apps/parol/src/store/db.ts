@@ -1,9 +1,9 @@
-import { chmodSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { sha256Hex } from "../canonical.js";
-import { MigrationError } from "./errors.js";
+import { MigrationError, StoreError } from "./errors.js";
 
 export type Database = DatabaseSync;
 
@@ -44,6 +44,46 @@ export function openDatabase(location: string = ":memory:", options: OpenOptions
   } catch (error) {
     db.close();
     throw error;
+  }
+  return db;
+}
+
+/**
+ * Opens an existing database for reading only: no migration, no journal pragma, no write. The dry
+ * run of the retention command and the audit check use it, and so can a tool that looks at a
+ * database beside a running server.
+ *
+ * `StoreError("no_database")` if the file is missing (nothing is created); `StoreError(
+ * "not_a_parol_database")` if it is not an SQLite file or has no `matters` or no `audit_events`
+ * table. The files get the same 0600 mode as `openDatabase` gives them.
+ *
+ * A read-only connection to a database in WAL mode leaves an empty `-wal` file and a `-shm` file
+ * beside it when it closes (checked on Node 22.23.4). They hold no data; the next read-write open
+ * and close removes them. They are not removed here, because another process may have them open.
+ * A database that is one migration behind is read as it is, and never migrated.
+ */
+export function openDatabaseReadOnly(location: string): Database {
+  if (typeof location !== "string" || location === "" || location === ":memory:")
+    throw new StoreError("no_database", "there is no database file to open");
+  if (!existsSync(location)) throw new StoreError("no_database", "there is no database file");
+  const db = new DatabaseSync(location, { readOnly: true, timeout: boundedTimeout(5000) });
+  try {
+    db.exec("PRAGMA query_only = ON");
+    const tables = new Set(
+      (
+        db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as unknown as {
+          name: string;
+        }[]
+      ).map((row) => row.name),
+    );
+    if (!tables.has("matters") || !tables.has("audit_events"))
+      throw new StoreError("not_a_parol_database", "the file is not a Parol database");
+    restrictFileModes(location);
+  } catch (error) {
+    db.close();
+    if (error instanceof StoreError) throw error;
+    // A file that SQLite cannot read as a database fails on the first statement.
+    throw new StoreError("not_a_parol_database", "the file is not a Parol database");
   }
   return db;
 }

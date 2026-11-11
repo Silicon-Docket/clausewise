@@ -148,13 +148,13 @@ describe("the record says which workflow its reviews ran under", () => {
   it("is v3 with the hash of v3 when v3 was asked, and the newest shipped version when nothing was", async () => {
     const v3 = await runExposureSuite({ ...common(), workflow: "v3" });
     expect(v3.workflow).toEqual({ label: "v3", sha256: workflowFor("v3").sha256 });
-    expect(v3.artefactsScanned).toBe(418);
+    expect(v3.artefactsScanned).toBe(426);
     expect(v3.probesAnsweredWithData + v3.canaryHits + v3.foreignSpanIdHits).toBe(0);
     expect(v3.letInNotReached).toBe(0);
 
     const plain = await runExposureSuite(common());
     expect(plain.workflow).toEqual(reviewedUnder("v2"));
-    expect(plain.artefactsScanned).toBe(402);
+    expect(plain.artefactsScanned).toBe(410);
     // The authorization half does not depend on the version: the same cells either way.
     expect(plain.probesRun).toBe(v3.probesRun);
   });
@@ -354,7 +354,7 @@ describe("the command and the workflow of the reviews", () => {
         });
         expect(file.pins.workflow.label).toBe(label);
         expect(g1(file).outcome).toBe("pass");
-        expect(file.suites.exposure!.artefactsScanned).toBe(label === "v3" ? 418 : 402);
+        expect(file.suites.exposure!.artefactsScanned).toBe(label === "v3" ? 426 : 410);
       } finally {
         await removeDir(folder);
       }

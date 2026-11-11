@@ -888,6 +888,7 @@ describe("what an error message in the store may interpolate", () => {
     MAX_DETAIL_STRING_LENGTH: "a constant",
     MAX_DETAIL_DEPTH: "a constant",
     MAX_DETAIL_ENTRIES: "a constant",
+    MAX_RETAIN_DAYS: "a constant",
     containerDepth: "a nesting level, a number",
     depth: "a nesting level, a number",
     "typeof value": "typeof yields one of a fixed set of words",
@@ -908,6 +909,8 @@ describe("what an error message in the store may interpolate", () => {
     "input.decision": "checked against REVIEW_DECISIONS before it is used",
     "input.kind": "checked against the feedback kinds before it is used",
     at: "the position of a finding in the batch, `finding <n>`",
+    'left.join(", ")':
+      "names of tables read from sqlite_master, matched against /^[a-z_][a-z0-9_]*$/ before use; no value of a request",
   };
 
   const dir = fileURLToPath(new URL("../../src/store/", import.meta.url));

@@ -5,6 +5,7 @@ import type { AppDeps } from "../../src/server/deps.js";
 import { answerRefusal, createPageRenderers } from "../../src/server/routes/page-renderers.js";
 import { urls } from "../../src/server/urls.js";
 import { ConflictError, ValidationError } from "../../src/store/errors.js";
+import { MAX_RETAIN_DAYS } from "../../src/store/index.js";
 import { all, attr, hasClass, parseHtml, readable, withClass } from "../pages/html.js";
 import { MATTER_PROBES, initFor, pathFor, type Probe } from "./probes.js";
 import {
@@ -46,6 +47,8 @@ const NOTICE = /<div class="notice notice-error"[^>]*>.*?<\/div>/s;
 const NOT_VALID = "That request was not valid. Check the form and try again.";
 const CONFLICT =
   "That conflicts with the current state of the matter. Reload the page and try again.";
+/** The retention form's refusal: its phrase, then the link to the field that the notice carries. */
+const RETENTION_DAYS = `That is not a number of days a matter can be kept for. Enter a whole number of days from 1 to ${MAX_RETAIN_DAYS}. Go to the retention field`;
 
 /**
  * The matter forms that answer in place. `template` is the route in the probe table; `words` is what
@@ -54,6 +57,7 @@ const CONFLICT =
 const IN_PLACE: { name: string; template: string; words: string }[] = [
   { name: "the settings", template: `${M}/settings`, words: NOT_VALID },
   { name: "adding a person", template: `${M}/members`, words: NOT_VALID },
+  { name: "changing the retention date", template: `${M}/retention`, words: RETENTION_DAYS },
   { name: "deleting the matter", template: `${M}/delete`, words: NOT_VALID },
   { name: "uploading a document", template: `${M}/documents`, words: NOT_VALID },
   {

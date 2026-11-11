@@ -171,6 +171,7 @@ function actionsOf(r: Pick<Reviewed, "w" | "am" | "matterId">): Set<string> {
     urls.session(),
     urls.matters(),
     urls.matterSettings(m),
+    urls.matterRetention(m),
     urls.matterDelete(m),
     urls.members(m),
     urls.documents(m),
@@ -3142,6 +3143,7 @@ const ORDER = [
   /\/resume$/,
   /\/cancel$/,
   /\/remove$/,
+  /\/retention$/,
   /\/delete$/,
 ];
 const rank = (action: string): number => {
@@ -3227,6 +3229,9 @@ async function perform(scene: Scene, as: AuthorizedMatter, root: El, form: El): 
     await runs.idle();
   } else if (/\/remove$/.test(action)) {
     matters.removeDocument(as, id(/\/documents\/([^/]+)\/remove$/));
+  } else if (/\/retention$/.test(action)) {
+    // The field is empty on the page: how long to keep the matter is the person's to type.
+    matters.setRetention(as, Number(fields[FIELDS.retainDays] || "45"));
   } else if (/\/delete$/.test(action)) {
     await matters.delete(as);
   } else if (/\/memos$/.test(action)) {

@@ -10,6 +10,7 @@ import {
   ConflictError,
   InputsIncompleteError,
   InvalidTransitionError,
+  MAX_RETAIN_DAYS,
   NotFoundError,
   ValidationError,
   canRunTransition,
@@ -98,6 +99,19 @@ describe("createMatter", () => {
     expect(w.repo.listAuditEvents({ matterId: m.id })[0]?.actorId).toBe(ACTORS.associate);
   });
 
+  it("accepts the whole days from 1 to the ceiling, and 90 is the ceiling", () => {
+    expect(MAX_RETAIN_DAYS).toBe(90);
+    for (const days of [1, 30, 90]) {
+      const m = w.repo.createMatter({
+        name: "n",
+        clientLegalName: "c",
+        createdBy: ACTORS.associate,
+        retainDays: days,
+      });
+      expect(Date.parse(m.retainUntil) - Date.parse(m.createdAt)).toBe(days * 86_400_000);
+    }
+  });
+
   it("honours retainDays and synthetic", () => {
     const m = w.repo.createMatter({
       name: "n",
@@ -127,6 +141,9 @@ describe("createMatter", () => {
       { name: "line\nbreak" },
       { retainDays: 0 },
       { retainDays: 1.5 },
+      { retainDays: 91 },
+      { retainDays: Number.NaN },
+      { retainDays: "30" },
     ]) {
       let error: unknown;
       try {
@@ -136,6 +153,8 @@ describe("createMatter", () => {
       }
       expect(error, JSON.stringify(over)).toBeInstanceOf(ValidationError);
       expect((error as Error).message).not.toContain("SECRET-CLIENT");
+      // The days of retention have a code of their own, so the page can say what to enter.
+      if ("retainDays" in over) expect((error as ValidationError).code).toBe("retention_days");
     }
     expect(() => attempt({ createdBy: "usr_nobody" })).toThrow(NotFoundError);
     expect(w.repo.listMattersForUser(ACTORS.associate)).toHaveLength(0);

@@ -171,6 +171,30 @@ const scenarios: Scenario[] = [
     },
   },
   {
+    // The date moves and its event is written together: refusing the event leaves the old date.
+    action: "matter.retention",
+    call: "setRetention",
+    prepare: (w) => {
+      const m = reviewable(w).m;
+      return () => w.repo.setRetention(m.id, 60, actor);
+    },
+  },
+  {
+    // The retention command writes this event after the matters it deleted, one transaction each.
+    // The event itself is the whole change of this call: a refused insert leaves nothing behind.
+    action: "retention.run",
+    call: "appendAudit (the retention command's run event)",
+    prepare: (w) => () =>
+      w.repo.appendAudit({
+        actorId: null,
+        matterId: null,
+        action: "retention.run",
+        targetType: "retention",
+        targetId: "retention",
+        detail: { mode: "apply", expired: 0, deleted: 0 },
+      }),
+  },
+  {
     action: "inputs.changed",
     call: "applyInputChange",
     prepare: (w) => {

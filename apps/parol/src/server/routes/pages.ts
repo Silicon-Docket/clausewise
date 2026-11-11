@@ -10,7 +10,14 @@ import { WORKFLOW_FIELD } from "../pages/matter.js";
 import { urls } from "../urls.js";
 import { decisionFromForm, draftFromForm } from "./decision.js";
 import { refusalOf, uploadNotice } from "./notices.js";
-import { addDocument, addVersion, createMatter, startRun, updateSettings } from "./operations.js";
+import {
+  addDocument,
+  addVersion,
+  createMatter,
+  setRetention,
+  startRun,
+  updateSettings,
+} from "./operations.js";
 import {
   AddMemberInput,
   ConfirmInput,
@@ -21,6 +28,8 @@ import {
   StatedDateInput,
   UploadDocumentFields,
   UploadVersionFields,
+  requiredRetainDaysFromForm,
+  retainDaysFromForm,
 } from "./schemas.js";
 import { answerRefusal, createPageRenderers } from "./page-renderers.js";
 import {
@@ -101,6 +110,8 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
             clientLegalName: formString(form, FIELDS.clientLegalName),
             playbookVersionId: blankToNull(formString(form, FIELDS.playbookVersionId)),
             reviewerUserId: blankToNull(formString(form, FIELDS.reviewerUserId)),
+            // Blank takes the default; text that is not a number of days is refused, in words.
+            retainDays: retainDaysFromForm(formString(form, FIELDS.retainDays)),
           });
           const created = createMatter(services, principal, input);
           return redirectWithNotice(c, principal, urls.matter(created.id), "matter-created");
@@ -132,6 +143,19 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
         });
         updateSettings(services, am, input);
         return redirectWithNotice(c, am.principal, urls.matter(am.matterId), "settings-saved");
+      });
+    },
+  });
+
+  defineMatterRoute(app, {
+    method: "POST",
+    path: "/matters/:matterId/retention",
+    action: "matter.update",
+    handler: async (c, am) => {
+      const form = await readForm(c);
+      return answerInPlace(c, am, () => {
+        setRetention(services, am, requiredRetainDaysFromForm(formString(form, FIELDS.retainDays)));
+        return redirectWithNotice(c, am.principal, urls.matter(am.matterId), "retention-saved");
       });
     },
   });

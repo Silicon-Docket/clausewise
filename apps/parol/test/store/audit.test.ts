@@ -1,17 +1,28 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { canonicalJson, sha256Hex } from "../../src/canonical.js";
 import {
+  AUDIT_ACTIONS,
+  AUDIT_BREAK_TEXT,
   AuditDetailError,
   GENESIS_HASH,
+  MAX_RECONCILIATION_IDS,
   ValidationError,
   appendAudit,
+  auditHead,
+  checkAudit,
+  checkAuditAnchor,
+  countAuditEvents,
+  latestAuditEvent,
   listAuditEvents,
   openDatabase,
+  reconcileMatterEvents,
   transaction,
   validateAuditDetail,
   verifyAuditChain,
   type Database,
 } from "../../src/store/index.js";
+import { ACTORS, makeWorld } from "./fixtures.js";
+import { rewriteChainFrom } from "./audit-tamper.js";
 
 let db: Database;
 let n = 0;
@@ -407,5 +418,237 @@ describe("verifyAuditChain", () => {
       firstBrokenSeq: 2,
       reason: "bad_detail",
     });
+  });
+});
+
+describe("auditHead and latestAuditEvent", () => {
+  it("is the last event, and null for an empty log", () => {
+    expect(auditHead(db)).toBeNull();
+    const first = append({ i: 1 });
+    expect(auditHead(db)).toEqual({ seq: first.seq, hash: first.hash });
+    const second = append({ i: 2 });
+    expect(auditHead(db)).toEqual({ seq: second.seq, hash: second.hash });
+  });
+
+  it("finds the newest event with an action, or null", () => {
+    expect(latestAuditEvent(db, "retention.run")).toBeNull();
+    const run = (n: number) =>
+      appendAudit(db, {
+        at: "2026-11-01T09:00:00.000Z",
+        actorId: null,
+        matterId: null,
+        action: "retention.run",
+        targetType: "retention",
+        targetId: "retention",
+        detail: { n },
+      });
+    append({ other: true });
+    run(1);
+    const newest = run(2);
+    append({ other: true });
+    expect(latestAuditEvent(db, "retention.run")).toEqual(newest);
+    expect(latestAuditEvent(db, "retention.run")?.detail).toEqual({ n: 2 });
+    expect(latestAuditEvent(db, "matter.delete")).toBeNull();
+  });
+
+  it("lists the two retention actions among those the store writes", () => {
+    expect(AUDIT_ACTIONS).toEqual(expect.arrayContaining(["matter.retention", "retention.run"]));
+  });
+});
+
+describe("checkAuditAnchor", () => {
+  it("holds for an event that is there with the hash it was given, and goes on holding as the log grows", () => {
+    seed(4);
+    const head = auditHead(db)!;
+    expect(checkAuditAnchor(db, head)).toEqual({ ok: true });
+    seed(3);
+    expect(checkAuditAnchor(db, head)).toEqual({ ok: true });
+  });
+
+  it("is missing for an event past the end, and mismatched for another hash", () => {
+    seed(4);
+    const head = auditHead(db)!;
+    expect(checkAuditAnchor(db, { seq: head.seq + 1, hash: head.hash })).toEqual({
+      ok: false,
+      reason: "anchor_missing",
+    });
+    expect(checkAuditAnchor(db, { seq: head.seq, hash: "0".repeat(64) })).toEqual({
+      ok: false,
+      reason: "anchor_mismatch",
+    });
+    expect(checkAuditAnchor(db, { seq: 0, hash: head.hash })).toEqual({
+      ok: false,
+      reason: "anchor_missing",
+    });
+  });
+
+  it("sees a log rewritten with every later hash recomputed, which the chain by itself passes", () => {
+    seed(6);
+    const head = auditHead(db)!;
+    rewriteChainFrom(db, 3, (row) => {
+      row.detail_json = '{"rewritten":true}';
+    });
+    // The documented limit, kept as an assertion so that it is not forgotten: the hash is not keyed.
+    expect(verifyAuditChain(db)).toEqual({ ok: true, events: 6 });
+    expect(checkAuditAnchor(db, head)).toEqual({ ok: false, reason: "anchor_mismatch" });
+    // An anchor taken before the edited event is not moved by it.
+    expect(checkAuditAnchor(db, { seq: 2, hash: listAuditEvents(db)[1]!.hash })).toEqual({
+      ok: true,
+    });
+  });
+
+  it("sees events cut from the end even when the highest number issued was edited to match", () => {
+    seed(6);
+    const head = auditHead(db)!;
+    db.exec("DROP TRIGGER audit_events_no_delete");
+    db.exec("DELETE FROM audit_events WHERE seq > 3");
+    db.exec("UPDATE sqlite_sequence SET seq = 3 WHERE name = 'audit_events'");
+    expect(verifyAuditChain(db)).toEqual({ ok: true, events: 3 });
+    expect(checkAuditAnchor(db, head)).toEqual({ ok: false, reason: "anchor_missing" });
+  });
+});
+
+describe("reconcileMatterEvents and checkAudit", () => {
+  it("counts the matters created, present and deleted, and finds none unaccounted for in a clean log", () => {
+    const w = makeWorld();
+    const a = w.repo.createMatter({ name: "a", clientLegalName: "c", createdBy: ACTORS.associate });
+    const b = w.repo.createMatter({ name: "b", clientLegalName: "c", createdBy: ACTORS.associate });
+    w.repo.createMatter({ name: "c", clientLegalName: "c", createdBy: ACTORS.associate });
+    w.repo.deleteMatter(a.id, { actorId: ACTORS.admin });
+    expect(reconcileMatterEvents(w.db)).toEqual({
+      created: 3,
+      present: 2,
+      deleted: 1,
+      goneWithoutDeleteEvent: { count: 0, ids: [] },
+      presentWithoutCreateEvent: { count: 0, ids: [] },
+      deletedButPresent: { count: 0, ids: [] },
+    });
+    expect(checkAudit(w.db)).toMatchObject({ ok: true, anchor: null, chain: { ok: true } });
+    expect(checkAudit(w.db).head).toEqual(auditHead(w.db));
+    expect(b.id).not.toBe(a.id);
+  });
+
+  it("names a matter removed by raw SQL without a deletion event, and fails the check", () => {
+    const w = makeWorld();
+    const a = w.repo.createMatter({ name: "a", clientLegalName: "c", createdBy: ACTORS.associate });
+    w.repo.createMatter({ name: "b", clientLegalName: "c", createdBy: ACTORS.associate });
+    w.db.prepare("DELETE FROM matters WHERE id = ?").run(a.id);
+    const found = reconcileMatterEvents(w.db);
+    expect(found.goneWithoutDeleteEvent).toEqual({ count: 1, ids: [a.id] });
+    expect(found.deleted).toBe(0);
+    const check = checkAudit(w.db);
+    expect(check.chain.ok).toBe(true);
+    expect(check.ok).toBe(false);
+  });
+
+  it("names a matter row that has no creation event, and one that has a deletion event and is still there", () => {
+    const w = makeWorld();
+    const a = w.repo.createMatter({ name: "a", clientLegalName: "c", createdBy: ACTORS.associate });
+    const b = w.repo.createMatter({ name: "b", clientLegalName: "c", createdBy: ACTORS.associate });
+    // A row made with SQL, with no event: copied from an existing one.
+    const row = w.db.prepare("SELECT * FROM matters WHERE id = ?").get(b.id) as Record<
+      string,
+      string | number | null
+    >;
+    const columns = Object.keys(row);
+    w.db
+      .prepare(
+        `INSERT INTO matters (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+      )
+      .run(
+        ...columns.map((c) =>
+          c === "id" ? "mat_cccccccccccccccc" : (row[c] as string | number | null),
+        ),
+      );
+    // A deletion event for a matter that was not deleted.
+    appendAudit(w.db, {
+      at: "2026-11-01T09:00:00.000Z",
+      actorId: null,
+      matterId: a.id,
+      action: "matter.delete",
+      targetType: "matter",
+      targetId: a.id,
+      detail: {},
+    });
+    const found = reconcileMatterEvents(w.db);
+    expect(found.presentWithoutCreateEvent).toEqual({ count: 1, ids: ["mat_cccccccccccccccc"] });
+    expect(found.deletedButPresent).toEqual({ count: 1, ids: [a.id] });
+    expect(checkAudit(w.db).ok).toBe(false);
+  });
+
+  it("gives the exact count and the ids of at most twenty", () => {
+    const w = makeWorld();
+    for (let i = 0; i < MAX_RECONCILIATION_IDS + 5; i++)
+      w.repo.createMatter({ name: `m${i}`, clientLegalName: "c", createdBy: ACTORS.associate });
+    w.db.exec("DELETE FROM matters");
+    const found = reconcileMatterEvents(w.db).goneWithoutDeleteEvent;
+    expect(found.count).toBe(MAX_RECONCILIATION_IDS + 5);
+    expect(found.ids).toHaveLength(MAX_RECONCILIATION_IDS);
+    expect([...found.ids].sort()).toEqual(found.ids);
+  });
+
+  it("fails the check for a chain that breaks, an anchor that does not hold, or both, and passes the anchor it is given", () => {
+    const w = makeWorld();
+    w.repo.createMatter({ name: "a", clientLegalName: "c", createdBy: ACTORS.associate });
+    const head = auditHead(w.db)!;
+    expect(checkAudit(w.db, { anchor: head })).toMatchObject({ ok: true, anchor: { ok: true } });
+    expect(checkAudit(w.db, { anchor: { seq: head.seq, hash: "1".repeat(64) } })).toMatchObject({
+      ok: false,
+      chain: { ok: true },
+      anchor: { ok: false, reason: "anchor_mismatch" },
+    });
+    w.db.exec("DROP TRIGGER audit_events_no_update");
+    w.db.exec("UPDATE audit_events SET action = 'review.forged' WHERE seq = 1");
+    expect(checkAudit(w.db)).toMatchObject({
+      ok: false,
+      chain: { ok: false, firstBrokenSeq: 1, reason: "hash_mismatch" },
+    });
+  });
+});
+
+describe("countAuditEvents", () => {
+  it("is 0 for an empty log and counts each event appended", () => {
+    expect(countAuditEvents(db)).toBe(0);
+    seed(4);
+    expect(countAuditEvents(db)).toBe(4);
+    append();
+    expect(countAuditEvents(db)).toBe(5);
+  });
+
+  it("counts the rows of a log whose chain breaks, which is what the chain check does not", () => {
+    seed(6);
+    dropAuditTriggers();
+    db.exec("UPDATE audit_events SET action = 'review.forged' WHERE seq = 3");
+    const chain = verifyAuditChain(db);
+    expect(chain).toMatchObject({ ok: false, firstBrokenSeq: 3, events: 2 });
+    // The chain check passed 2 events before it broke; the log holds 6. The count is the denominator.
+    expect(countAuditEvents(db)).toBe(6);
+  });
+
+  it("counts a log cut back to what is left", () => {
+    seed(6);
+    db.exec("DROP TRIGGER audit_events_no_delete");
+    db.exec("DELETE FROM audit_events WHERE seq > 4");
+    expect(countAuditEvents(db)).toBe(4);
+  });
+});
+
+describe("AUDIT_BREAK_TEXT", () => {
+  it("has plain words for every way a check can break, and none of them names a row", () => {
+    expect(Object.keys(AUDIT_BREAK_TEXT).sort()).toEqual(
+      [
+        "anchor_mismatch",
+        "anchor_missing",
+        "bad_detail",
+        "hash_mismatch",
+        "prev_hash_mismatch",
+        "sequence_gap",
+        "truncated",
+      ].sort(),
+    );
+    for (const words of Object.values(AUDIT_BREAK_TEXT)) {
+      expect(words).toMatch(/^[a-z][a-z' ]+$/);
+      expect(words).not.toMatch(new RegExp("[" + String.fromCharCode(0x2013, 0x2014) + "]"));
+    }
   });
 });

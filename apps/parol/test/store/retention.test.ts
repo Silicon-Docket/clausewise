@@ -11,7 +11,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { sha256Hex } from "../../src/canonical.js";
-import { ConflictError, FileStore, NotFoundError } from "../../src/store/index.js";
+import {
+  ConflictError,
+  FileStore,
+  MAX_RETAIN_DAYS,
+  NotFoundError,
+  ValidationError,
+  tablesHoldingMatter,
+} from "../../src/store/index.js";
 import {
   ACTORS,
   addMatter,
@@ -339,6 +346,211 @@ describe("deleteMatter", () => {
       w.repo.deleteMatter(id, { actorId: null });
       expect(w.repo.getMatter(id)).toBeUndefined();
     }
+  });
+});
+
+describe("deleteMatter, in its final form", () => {
+  it("records why: requested unless the retention job says so, with the date that was in force", () => {
+    const a = addMatter(w, { name: "asked" });
+    const b = addMatter(w, { name: "due" });
+    const c = addMatter(w, { name: "default" });
+    const dueA = w.repo.getMatter(a.id)!.retainUntil;
+    const dueB = w.repo.getMatter(b.id)!.retainUntil;
+    w.repo.deleteMatter(a.id, { actorId: ACTORS.associate, reason: "requested" });
+    w.repo.deleteMatter(b.id, { actorId: null, reason: "retention" });
+    w.repo.deleteMatter(c.id, { actorId: ACTORS.admin });
+
+    const event = (id: string) =>
+      w.repo.listAuditEvents({ matterId: id, action: "matter.delete" })[0]!;
+    expect(event(a.id).detail).toMatchObject({ reason: "requested", retainUntil: dueA });
+    expect(event(b.id).detail).toMatchObject({ reason: "retention", retainUntil: dueB });
+    expect(event(b.id).actorId).toBeNull();
+    expect(event(c.id).detail["reason"]).toBe("requested");
+  });
+
+  it("takes only the two reasons it knows, because the reason is written into the log", () => {
+    const m = addMatter(w);
+    for (const reason of ["because", "", "retention ", 1])
+      expect(() =>
+        w.repo.deleteMatter(m.id, { actorId: null, reason: reason as unknown as "retention" }),
+      ).toThrow(ValidationError);
+    // Nothing was deleted by the refusals, and nothing was written.
+    expect(w.repo.getMatter(m.id)).toBeDefined();
+    expect(w.repo.listAuditEvents({ matterId: m.id, action: "matter.delete" })).toEqual([]);
+  });
+
+  it("records the date a change had set, not the one the matter began with", () => {
+    const m = addMatter(w);
+    const first = w.repo.getMatter(m.id)!.retainUntil;
+    const changed = w.repo.setRetention(m.id, 60, { actorId: ACTORS.associate }).retainUntil;
+    expect(changed).not.toBe(first);
+    w.repo.deleteMatter(m.id, { actorId: ACTORS.associate });
+    expect(
+      w.repo.listAuditEvents({ matterId: m.id, action: "matter.delete" })[0]!.detail["retainUntil"],
+    ).toBe(changed);
+  });
+
+  it("deletes the upload warnings by its own statement and counts them, with foreign keys off", () => {
+    const m = addMatter(w);
+    w.repo.replaceIngestWarnings(m.id, m.nda.versionId, [
+      { code: "instruction_like_text", spanId: m.nda.spanIds[1] as string, detail: "pattern 1" },
+      { code: "unreviewed_content", detail: "2 parts" },
+    ]);
+    expect(w.db.prepare("SELECT count(*) AS n FROM ingest_warnings").get()).toEqual({ n: 2 });
+
+    // With the connection's foreign keys off no key cascades. A deletion that relied on the
+    // cascade would leave the warnings behind (and the residue guard would roll it back).
+    w.db.exec("PRAGMA foreign_keys = OFF");
+    w.repo.deleteMatter(m.id, { actorId: ACTORS.associate });
+    w.db.exec("PRAGMA foreign_keys = ON");
+
+    expect(w.db.prepare("SELECT count(*) AS n FROM ingest_warnings").get()).toEqual({ n: 0 });
+    expect(
+      w.repo.listAuditEvents({ matterId: m.id, action: "matter.delete" })[0]!.detail,
+    ).toMatchObject({ ingestWarnings: 2 });
+  });
+
+  it("rolls back and names the table when a table with a matter column still holds a row", () => {
+    const doomed = everything(w, "doomed");
+    w.db.exec("CREATE TABLE zz_extra (matter_id TEXT, note TEXT)");
+    w.db
+      .prepare("INSERT INTO zz_extra (matter_id, note) VALUES (?, 'left behind')")
+      .run(doomed.m.id);
+    const before = tableCounts(w.db);
+    const events = w.repo.listAuditEvents();
+    const chain = w.repo.verifyAuditChain();
+
+    let error: unknown;
+    try {
+      w.repo.deleteMatter(doomed.m.id, { actorId: ACTORS.associate });
+    } catch (e) {
+      error = e;
+    }
+
+    expect(error).toBeInstanceOf(ConflictError);
+    expect((error as ConflictError).code).toBe("matter_residue");
+    // The table is named, and nothing a request could supply is in the message.
+    expect((error as Error).message).toBe("a table still holds rows of the matter: zz_extra");
+    // The matter is whole, its rows and its audit chain untouched.
+    expect(tableCounts(w.db)).toEqual(before);
+    expect(w.repo.getMatter(doomed.m.id)?.status).toBe("exported");
+    expect(w.repo.listAuditEvents()).toEqual(events);
+    expect(w.repo.verifyAuditChain()).toEqual(chain);
+
+    // Once the table holds nothing of it, the same call goes through.
+    w.db.exec("DELETE FROM zz_extra");
+    expect(() => w.repo.deleteMatter(doomed.m.id, { actorId: ACTORS.associate })).not.toThrow();
+  });
+
+  it("finds the tables that hold a matter, in name order, and none for a matter that is gone", () => {
+    const m = addMatter(w);
+    const before = tablesHoldingMatter(w.db, m.id);
+    expect(before).toEqual(
+      expect.arrayContaining(["document_versions", "documents", "matter_members", "source_spans"]),
+    );
+    expect(before).toEqual([...before].sort());
+    w.db.exec("CREATE TABLE aa_first (matter_id TEXT)");
+    w.db.exec("CREATE TABLE zz_last (matter_id TEXT)");
+    w.db.exec("CREATE TABLE zz_other (name TEXT)");
+    w.db.prepare("INSERT INTO aa_first VALUES (?)").run(m.id);
+    w.db.prepare("INSERT INTO zz_last VALUES (?)").run(m.id);
+    const held = tablesHoldingMatter(w.db, m.id);
+    expect(held[0]).toBe("aa_first");
+    expect(held.at(-1)).toBe("zz_last");
+    expect(held).not.toContain("zz_other");
+    // The audit log keeps ids on purpose, and is not a residue.
+    expect(held).not.toContain("audit_events");
+    expect(tablesHoldingMatter(w.db, "mat_ffffffffffffffff")).toEqual([]);
+  });
+});
+
+describe("setRetention", () => {
+  it("counts the days from now, whether the new date is earlier or later, and audits the two dates and the days", () => {
+    const m = addMatter(w);
+    const first = w.repo.getMatter(m.id)!.retainUntil;
+    w.clock.tick(5 * 86_400_000);
+    const later = w.repo.setRetention(m.id, 60, { actorId: ACTORS.associate });
+    expect(Date.parse(later.retainUntil) - w.clock.now().getTime()).toBe(60 * 86_400_000);
+    const sooner = w.repo.setRetention(m.id, 2, { actorId: ACTORS.associate });
+    expect(Date.parse(sooner.retainUntil) - w.clock.now().getTime()).toBe(2 * 86_400_000);
+
+    const events = w.repo.listAuditEvents({ matterId: m.id, action: "matter.retention" });
+    expect(events.map((e) => e.detail)).toEqual([
+      { from: first, to: later.retainUntil, days: 60 },
+      { from: later.retainUntil, to: sooner.retainUntil, days: 2 },
+    ]);
+    expect(events[0]).toMatchObject({
+      actorId: ACTORS.associate,
+      targetType: "matter",
+      targetId: m.id,
+    });
+    expect(w.repo.verifyAuditChain().ok).toBe(true);
+  });
+
+  it("leaves the status, the findings, the decisions, the memo and the run alone: it is not an input of the review", () => {
+    const e = exported(w, { name: "done" });
+    const snapshot = () =>
+      JSON.stringify([
+        { ...w.repo.getMatter(e.m.id), retainUntil: "-" },
+        w.repo.listFindings(e.m.id, e.run.id),
+        w.repo.getRun(e.m.id, e.run.id),
+        w.repo.getCurrentMemo(e.m.id),
+        w.repo.getExportReadiness(e.m.id, e.run.id),
+        w.repo.computeInputsDigest(e.m.id),
+      ]);
+    const before = snapshot();
+    const events = w.repo.listAuditEvents({ matterId: e.m.id }).length;
+
+    w.repo.setRetention(e.m.id, 45, { actorId: ACTORS.associate });
+
+    expect(snapshot()).toBe(before);
+    expect(w.repo.getMatter(e.m.id)?.status).toBe("exported");
+    expect(w.repo.getExportReadiness(e.m.id, e.run.id).ready).toBe(true);
+    // One event, and no invalidation among them.
+    const after = w.repo.listAuditEvents({ matterId: e.m.id });
+    expect(after.length).toBe(events + 1);
+    expect(after.at(-1)?.action).toBe("matter.retention");
+  });
+
+  it("refuses 0, 91, a fraction, NaN and text with its own code, for a matter that is there or not", () => {
+    const m = addMatter(w);
+    const before = w.repo.getMatter(m.id)!.retainUntil;
+    for (const days of [
+      0,
+      -1,
+      MAX_RETAIN_DAYS + 1,
+      1.5,
+      Number.NaN,
+      Infinity,
+      "30",
+      null,
+      undefined,
+    ]) {
+      for (const id of [m.id, "mat_ffffffffffffffff"]) {
+        let error: unknown;
+        try {
+          w.repo.setRetention(id, days as number, { actorId: ACTORS.associate });
+        } catch (e) {
+          error = e;
+        }
+        expect(error, String(days)).toBeInstanceOf(ValidationError);
+        expect((error as ValidationError).code).toBe("retention_days");
+        expect((error as Error).message).toBe(
+          `retention must be a whole number of days from 1 to ${MAX_RETAIN_DAYS}`,
+        );
+      }
+    }
+    expect(w.repo.getMatter(m.id)!.retainUntil).toBe(before);
+    expect(w.repo.listAuditEvents({ matterId: m.id, action: "matter.retention" })).toEqual([]);
+    // The limits themselves are allowed.
+    expect(() => w.repo.setRetention(m.id, 1, { actorId: null })).not.toThrow();
+    expect(() => w.repo.setRetention(m.id, MAX_RETAIN_DAYS, { actorId: null })).not.toThrow();
+  });
+
+  it("treats a matter that does not exist as not found", () => {
+    expect(() => w.repo.setRetention("mat_ffffffffffffffff", 30, { actorId: null })).toThrow(
+      NotFoundError,
+    );
   });
 });
 

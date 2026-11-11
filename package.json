@@ -20,6 +20,8 @@
     "eval": "tsx evals/src/run.ts",
     "parol": "tsx --tsconfig apps/parol/tsconfig.json apps/parol/src/main.ts",
     "parol:seed": "tsx --tsconfig apps/parol/tsconfig.json apps/parol/src/seed.ts",
+    "parol:retain": "tsx --tsconfig apps/parol/tsconfig.json apps/parol/src/retain.ts",
+    "parol:audit-verify": "tsx --tsconfig apps/parol/tsconfig.json apps/parol/src/audit-verify.ts",
     "fixtures:parol": "tsx tools/make-parol-fixtures.ts",
     "fixtures:parol:case": "tsx evals/src/parol/check-case.ts",
     "eval:parol": "tsx --tsconfig apps/parol/tsconfig.json evals/src/parol/run.ts"

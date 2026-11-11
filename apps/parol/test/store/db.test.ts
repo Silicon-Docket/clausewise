@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   copyFileSync,
   mkdirSync,
   mkdtempSync,
@@ -14,8 +15,11 @@ import { sha256Hex } from "../../src/canonical.js";
 import {
   DEFAULT_MIGRATIONS_DIR,
   MigrationError,
+  StoreError,
+  createRepository,
   loadMigrationFiles,
   openDatabase,
+  openDatabaseReadOnly,
   runMigrations,
   transaction,
 } from "../../src/store/index.js";
@@ -365,5 +369,112 @@ describe("transaction", () => {
     ).toThrow(/asynchronous/);
     expect(count()).toBe(0);
     expect(db.isTransaction).toBe(false);
+  });
+});
+
+describe("openDatabaseReadOnly", () => {
+  it("reads a database as it is, and refuses every write", () => {
+    const file = join(dir, "ro.db");
+    const rw = openDatabase(file);
+    createRepository(rw).seedDemoUsers();
+    rw.close();
+
+    const db = openDatabaseReadOnly(file);
+    expect(createRepository(db).listUsers().length).toBeGreaterThan(0);
+    expect(pragma(db, "query_only")).toBe(1);
+    expect(() => db.exec("DELETE FROM users")).toThrow(/readonly|read-only|read only/i);
+    expect(() => db.exec("CREATE TABLE zz (x TEXT)")).toThrow();
+    // The repository, which writes through the same connection, is refused as well.
+    expect(() => createRepository(db).seedDemoUsers()).toThrow(/readonly/);
+    expect(() =>
+      createRepository(db).createMatter({
+        name: "n",
+        clientLegalName: "c",
+        createdBy: "usr_demo_associate",
+      }),
+    ).toThrow();
+    db.close();
+    expect(createRepository(openDatabase(file)).listMatterIds()).toEqual([]);
+  });
+
+  it("applies no migration to a database that is one migration behind, and reads it as it is", () => {
+    const migrations = copyMigrations();
+    const files = loadMigrationFiles(migrations);
+    const last = files[files.length - 1]!;
+    rmSync(join(migrations, `${String(last.version).padStart(3, "0")}_${last.name}.sql`));
+    const file = join(dir, "behind.db");
+    openDatabase(file, { migrationsDir: migrations }).close();
+
+    const db = openDatabaseReadOnly(file);
+    const versions = (
+      db.prepare("SELECT version FROM schema_migrations").all() as { version: number }[]
+    ).map((row) => row.version);
+    expect(versions).toEqual(files.slice(0, -1).map((f) => f.version));
+    // The audit log is there to be read, though the newest migration is not applied.
+    expect(db.prepare("SELECT count(*) AS n FROM audit_events").get()).toEqual({ n: 0 });
+    db.close();
+    const after = openDatabase(file, { migrationsDir: migrations });
+    expect(
+      (after.prepare("SELECT version FROM schema_migrations").all() as { version: number }[])
+        .length,
+    ).toBe(files.length - 1);
+    after.close();
+  });
+
+  it("refuses a missing file without creating it, and a file that is not Parol's", () => {
+    const missing = join(dir, "missing.db");
+    expect(() => openDatabaseReadOnly(missing)).toThrow(StoreError);
+    try {
+      openDatabaseReadOnly(missing);
+    } catch (error) {
+      expect((error as StoreError).code).toBe("no_database");
+    }
+    expect(() => statSync(missing)).toThrow();
+    for (const bad of ["", ":memory:"]) {
+      try {
+        openDatabaseReadOnly(bad);
+        throw new Error("opened");
+      } catch (error) {
+        expect((error as StoreError).code).toBe("no_database");
+      }
+    }
+
+    // An SQLite file with other tables.
+    const other = join(dir, "other.db");
+    const foreign = new DatabaseSync(other);
+    foreign.exec("CREATE TABLE unrelated (x TEXT)");
+    foreign.close();
+    try {
+      openDatabaseReadOnly(other);
+      throw new Error("opened");
+    } catch (error) {
+      expect(error).toBeInstanceOf(StoreError);
+      expect((error as StoreError).code).toBe("not_a_parol_database");
+      expect((error as Error).message).not.toContain("unrelated");
+    }
+
+    // A file that is not SQLite at all, and one that is empty.
+    const text = join(dir, "text.db");
+    writeFileSync(text, "SECRET-CONTENT this is plain text");
+    for (const file of [text]) {
+      try {
+        openDatabaseReadOnly(file);
+        throw new Error("opened");
+      } catch (error) {
+        expect((error as StoreError).code).toBe("not_a_parol_database");
+        expect((error as Error).message).not.toContain("SECRET-CONTENT");
+      }
+    }
+    const empty = join(dir, "empty.db");
+    writeFileSync(empty, "");
+    expect(() => openDatabaseReadOnly(empty)).toThrow(StoreError);
+  });
+
+  it("gives the files the owner-only mode that openDatabase gives them", () => {
+    const file = join(dir, "mode.db");
+    openDatabase(file).close();
+    chmodSync(file, 0o644);
+    openDatabaseReadOnly(file).close();
+    expect(statSync(file).mode & 0o777).toBe(0o600);
   });
 });
