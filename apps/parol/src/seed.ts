@@ -248,7 +248,7 @@ export async function seedDemo(options: SeedOptions): Promise<SeedReport> {
 
   let training: SeededTraining | null = null;
   if (options.training === true) {
-    // Alex prepares, Dana decides, Lee is the trainer and can read it and change nothing.
+    // Alex prepares, Dana decides, Lee is the trainer, a viewer: can read it, add notes, report a missed issue and rate it, and cannot decide, run, export or change the matter.
     const owner = principalOf(repo, DEMO_USER_IDS.associate);
     const reviewer = principalOf(repo, DEMO_USER_IDS.reviewer);
     const trainer = principalOf(repo, DEMO_USER_IDS.legalEngineer);

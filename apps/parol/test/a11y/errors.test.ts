@@ -626,8 +626,6 @@ const NOT_REACHED: Record<string, string> = {
   duplicate_check:
     "a stage saves a finding with one result for each check, and the stage writes no other",
   duplicate_file: "the upload service finds a file already in the matter first and keeps one copy",
-  duplicate_rule:
-    "a stage writes one finding for each rule, and a playbook is registered with unique rule keys",
   evidence_outside_manifest: "a stage cites passages of the documents the run was started on",
   field_not_allowed:
     "the feedback service passes only the fields its kind takes, so the store's guard cannot be reached",
