@@ -4,13 +4,15 @@ import {
   AnalysisSchema,
   LocateSchema,
   type AnalysisAnswer,
+  type ContextBundle,
   type IngestOutput,
   type PlaybookRuleRecord,
   type RunManifest,
+  type SourceSpan,
   type WorkflowManifest,
 } from "../contracts.js";
 import { getPrompt, renderPrompt } from "../prompts/registry.js";
-import { renderContractBlock, renderRule } from "../prompts/render.js";
+import { renderContractBlock, renderRule, renderSpans } from "../prompts/render.js";
 import { buildAnalyzeRequest, repairNote, shownSpans, validate } from "../stages/analyze.js";
 import { buildExtractRequest, emptyExtractOutput } from "../stages/extract.js";
 import { buildBundles } from "../stages/retrieve.js";
@@ -28,7 +30,11 @@ import { costOf, type Price } from "./prices.js";
  *
  * The figures are a bound under stated assumptions and not a measurement:
  *  - the extract answer is "nothing found", so every rule reads the whole document, which is the
- *    largest prompt a rule can get;
+ *    largest prompt a rule can get while the whole document fits the context budget. When it does
+ *    not, a rule that shares its category with no other is still sent with whatever clauses the
+ *    real answer locates, if those fit, so it is planned at the largest selection that could fit
+ *    (`largestSelectionTokens`); a rule that shares a category always reads the whole document and
+ *    is not sent;
  *  - every rule's first answer needs one repair call (when the workflow allows a repair), with the
  *    real repair note for one unknown label;
  *  - input is counted with `boundTokens`, which errs high, and no caching is assumed;
@@ -97,6 +103,58 @@ const UNKNOWN_LABEL_ANSWER: AnalysisAnswer = {
 
 const schemaTokens = (schema: ZodType): number => boundTokens(JSON.stringify(toJSONSchema(schema)));
 
+/**
+ * `estimateTokens` before its rounding, in thirds of a token: three for each character from
+ * U+0250 up (one code point, whatever its length in UTF-16) and one for each other. A test pins
+ * `ceil(thirds / 3)` to `estimateTokens`, so the two cannot drift apart.
+ */
+export function estimateThirds(text: string): number {
+  let thirds = 0;
+  for (const character of text) thirds += (character.codePointAt(0) ?? 0) < 0x250 ? 1 : 3;
+  return thirds;
+}
+
+/**
+ * The most that the contract block of a selection can add to a prompt, in `boundTokens`, for any
+ * selection the retrieval would send for this rule: one that fits its budget by the pipeline's own
+ * estimate (`estimatedTokens <= budgetTokens`, the rule's text included). That is the best of the
+ * clauses by bytes per estimated token that the budget leaves room for, so it is the room left
+ * for plain Latin text and only larger where a script takes more bytes than the estimate allows
+ * for. It relaxes the choice of clauses to fractions of a clause, which can only raise the figure.
+ * Null when not one clause fits, so that no selection can be sent.
+ */
+export function largestSelectionTokens(
+  spans: readonly SourceSpan[],
+  rule: PlaybookRuleRecord,
+  budgetTokens: number,
+): number | null {
+  // In thirds of a token. The retrieval estimates the clauses joined by blank lines, then a blank
+  // line and the rule: so each clause costs its own text and the two characters after it.
+  const room = 3 * budgetTokens - estimateThirds(renderRule(rule));
+  const items: { cost: number; bytes: number }[] = [];
+  for (const span of spans) {
+    const text = renderSpans([span]);
+    const cost = estimateThirds(text) + 2;
+    if (cost <= room) items.push({ cost, bytes: Buffer.byteLength(text) + 2 });
+  }
+  if (items.length === 0) return null;
+  // The fullest first: the most bytes for each unit of the budget.
+  items.sort((a, b) => b.bytes * a.cost - a.bytes * b.cost);
+  let left = room;
+  let bytes = 0;
+  for (const item of items) {
+    if (item.cost <= left) {
+      left -= item.cost;
+      bytes += item.bytes;
+      continue;
+    }
+    bytes += (item.bytes * left) / item.cost;
+    break;
+  }
+  // The estimate of the block itself is at most what the budget leaves; the bytes may say more.
+  return Math.max(Math.ceil(room / 3), Math.ceil(bytes / 3));
+}
+
 export function planRun(args: {
   ingest: IngestOutput;
   manifest: RunManifest;
@@ -144,13 +202,46 @@ export function planRun(args: {
     ? Math.max(0, Math.floor(workflow.repairAttempts)) >= 1
     : false;
   const analysisSchemaTokens = schemaTokens(AnalysisSchema);
-  // A rule over the context budget is not sent, so it has no call.
-  const analysable = bundles.filter((bundle) => !bundle.overBudget);
-  for (const bundle of analysable) {
-    const request = buildAnalyzeRequest({ bundle, ingest, manifest, prompt: prompts.analyze });
-    const first = boundTokens(request.system) + boundTokens(request.prompt) + analysisSchemaTokens;
+
+  // A rule whose whole-document bundle is over the context budget is not sent with it. A rule that
+  // shares its category with another always reads the whole document (stages/retrieve.ts), so it is
+  // never sent. Any other rule is sent with the clauses the real extract answer locates for it,
+  // whenever they fit, and the plan cannot know which: it is bounded by the largest selection that
+  // fits, or has no call when not one clause does.
+  const rulesIn = new Map<string, number>();
+  for (const rule of rules) rulesIn.set(rule.category, (rulesIn.get(rule.category) ?? 0) + 1);
+  interface Sendable {
+    bundle: ContextBundle;
+    /** The contract block in the prompt, counted apart from `bundle`, when it is a selection. */
+    selection: number | null;
+  }
+  const sendable: Sendable[] = [];
+  for (const bundle of bundles) {
+    if (!bundle.overBudget) {
+      sendable.push({ bundle, selection: null });
+      continue;
+    }
+    if ((rulesIn.get(bundle.category) ?? 0) > 1) continue;
+    const selection = largestSelectionTokens(ingest.spans, bundle.rule, workflow.budgetTokens);
+    if (selection !== null) sendable.push({ bundle, selection });
+  }
+
+  for (const { bundle, selection } of sendable) {
+    // A selection is counted apart (`selection`), so its request is built with an empty contract
+    // block; a whole-document bundle is built as it is.
+    const request = buildAnalyzeRequest({
+      bundle: selection === null ? bundle : { ...bundle, spans: [], fullDocument: false },
+      ingest,
+      manifest,
+      prompt: prompts.analyze,
+    });
+    const block = selection ?? 0;
+    const first =
+      boundTokens(request.system) + boundTokens(request.prompt) + block + analysisSchemaTokens;
     let second = 0;
     if (repairs) {
+      // The note lists the labels shown. The whole document's labels are the longest list a
+      // selection of it can have.
       const shown = new Map(shownSpans(bundle, ingest).map((span) => [span.modelLabel, span]));
       const note = repairNote(
         validate(UNKNOWN_LABEL_ANSWER, shown, bundle.rule, prompts.analyze.definition.id),
@@ -160,6 +251,7 @@ export function planRun(args: {
       second =
         boundTokens(request.system) +
         boundTokens(`${request.prompt}\n\n${note}`) +
+        block +
         analysisSchemaTokens;
     }
     units.push({
@@ -174,18 +266,22 @@ export function planRun(args: {
 
   // A workflow that pins a support prompt makes one more call per finding that has a verified
   // quote. What it cites is not known before the run, so each is bounded by a prompt that holds
-  // every clause of the run and a discrepancy as long as the output is assumed to be.
+  // every clause of the run (the largest selection, for a rule that is sent with a selection) and a
+  // discrepancy as long as the output is assumed to be.
   if (prompts.support !== null) {
     const supportSchemaTokens = schemaTokens(prompts.support.schema);
-    for (const bundle of analysable) {
+    for (const { bundle, selection } of sendable) {
       const text = renderPrompt(prompts.support.definition, {
-        contractBlock: renderContractBlock(ingest.spans),
+        contractBlock: renderContractBlock(selection === null ? ingest.spans : []),
         rule: renderRule(bundle.rule),
         status: "deviation",
         discrepancy: "x".repeat(assumedOutputTokens * 3),
       });
       const tokens =
-        boundTokens(prompts.support.definition.system) + boundTokens(text) + supportSchemaTokens;
+        boundTokens(prompts.support.definition.system) +
+        boundTokens(text) +
+        (selection ?? 0) +
+        supportSchemaTokens;
       units.push({
         stage: "verify",
         unit: bundle.ruleKey,

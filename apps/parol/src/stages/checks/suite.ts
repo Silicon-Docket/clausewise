@@ -217,6 +217,18 @@ export function citationShape({ claim, set, bundle, rule }: CheckContext): Check
         `status ${status} needs a verified governing or supporting quote, and none is cited (${plural(set.cited.length, "passage")} cited, ${plural(set.cited.filter(isUsable).length, "quote")} verified)`,
       );
     }
+    // Settlement turned the model's missing or not_applicable into compliant (an absence rule). The
+    // model's answer was that no clause covers the topic, and that answer must cite no passage in a
+    // relied role: a governing quote beside it is a contradiction, and the settled status must not
+    // be what hides it. The quote would otherwise satisfy the compliant branch above by itself.
+    if (
+      (claim.modelStatus === "missing" || claim.modelStatus === "not_applicable") &&
+      relied.length > 0
+    ) {
+      problems.push(
+        `the workflow stated ${claim.modelStatus} and cites governing or supporting passages: ${listCapped(relied.map((c) => refOf(set.cited, c)))}`,
+      );
+    }
   } else if (status === "missing" || status === "not_applicable") {
     if (relied.length > 0) {
       problems.push(

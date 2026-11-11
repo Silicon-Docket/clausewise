@@ -2,7 +2,17 @@ import { describe, expect, it } from "vitest";
 import { findingContentSha256 } from "../../src/canonical.js";
 import type { DeterminedStatus, PlaybookRuleRecord } from "../../src/contracts.js";
 import { settleStatus } from "../../src/settlement.js";
-import { check, cite, codes, draft, hint, ingestOf, rule, verify } from "./support-verify.js";
+import {
+  check,
+  cite,
+  codes,
+  draft,
+  hint,
+  ingestOf,
+  rule,
+  scriptedChecker,
+  verify,
+} from "./support-verify.js";
 
 /**
  * Status settlement in the verify stage. The playbook's flags, not the model, say when a clause
@@ -259,6 +269,100 @@ describe("settlement in verify: the checks judge the settled claim", () => {
     );
     expect(check(finding, "status_settled").detail).not.toContain("Ignore");
     expect(check(finding, "status_settled").detail).toMatch(/^[a-z_ :]+$/);
+  });
+});
+
+describe("settlement in verify: an answer that contradicts itself keeps its net", () => {
+  const quote = "This agreement is governed by Delaware law";
+  const cited = (
+    stated: DeterminedStatus,
+    r: PlaybookRuleRecord,
+    role: "governing" | "supporting",
+  ) =>
+    verify(draft({ status: stated, evidence: [cite(plain, "D1-p2", quote, role)] }), {
+      ingest: plain,
+      bundleLabels: ["D1-p1", "D1-p2"],
+      fullDocument: true,
+      rule: r,
+    });
+
+  for (const stated of ["missing", "not_applicable"] as const)
+    for (const role of ["governing", "supporting"] as const)
+      it(`escalates an absence rule answered ${stated} that cites a ${role} passage, as the stated status is judged`, async () => {
+        const { finding } = await cited(stated, absence, role);
+        // The row still records that the playbook settled the answer ...
+        expect(finding.modelStatus).toBe(stated);
+        expect(check(finding, "status_settled").outcome).toBe("pass");
+        // ... but the claim that no clause exists, with a clause cited, is not a verified finding.
+        expect(check(finding, "citation_shape")).toMatchObject({
+          outcome: "fail",
+          detail: `the workflow stated ${stated} and cites governing or supporting passages: evidence 1 (D1-p2)`,
+        });
+        expect(finding.escalations).toEqual([
+          {
+            code: "support_not_confirmed",
+            detail: `the workflow stated ${stated} and cites governing or supporting passages: evidence 1 (D1-p2)`,
+          },
+        ]);
+        // The settled status is kept (as for any citation failure) and the finding is not verified.
+        expect(finding.status).toBe("compliant");
+        expect(finding.verificationState).toBe("escalated_by_system");
+      });
+
+  it("does not escalate a cited passage in a role that is not relied on", async () => {
+    const { finding } = await verify(
+      draft({
+        status: "missing",
+        evidence: [cite(plain, "D1-p2", quote, "definition")],
+      }),
+      { ingest: plain, bundleLabels: ["D1-p1", "D1-p2"], fullDocument: true, rule: absence },
+    );
+    expect(finding.status).toBe("compliant");
+    expect(check(finding, "citation_shape").outcome).toBe("pass");
+    expect(finding.escalations).toEqual([]);
+  });
+
+  it("keeps the plain behaviour of a presence rule: the stated status was already judged", async () => {
+    for (const [r, stated] of [
+      [optional, "missing"],
+      [required, "not_applicable"],
+    ] as const) {
+      const { finding } = await cited(stated, r, "governing");
+      expect(codes(finding)).toEqual(["support_not_confirmed"]);
+      expect(check(finding, "citation_shape").outcome).toBe("fail");
+    }
+  });
+
+  it("does not show the support checker a compliant claim the model never made", async () => {
+    const { checker, generator, inputs } = scriptedChecker("supported");
+    const { finding, calls } = await verify(
+      draft({ status: "missing", evidence: [cite(plain, "D1-p2", quote, "governing")] }),
+      {
+        ingest: plain,
+        bundleLabels: ["D1-p1", "D1-p2"],
+        fullDocument: true,
+        rule: absence,
+        supportChecker: checker,
+        generator,
+      },
+    );
+    expect(inputs).toEqual([]);
+    expect(calls).toEqual([]);
+    expect(check(finding, "support")).toMatchObject({
+      kind: "model",
+      outcome: "not_applicable",
+      detail: "the workflow stated missing, which needs no support check",
+    });
+    expect(finding.evidence.map((e) => e.supportCheck)).toEqual(["not_run"]);
+    expect(finding.verificationState).toBe("escalated_by_system");
+  });
+
+  it("does not touch an absence rule answered compliant that cites the clause it relies on", async () => {
+    const { finding } = await cited("compliant" as never, absence, "supporting");
+    expect(finding.modelStatus ?? null).toBeNull();
+    expect(check(finding, "citation_shape").outcome).toBe("pass");
+    expect(finding.escalations).toEqual([]);
+    expect(finding.verificationState).toBe("verified");
   });
 });
 

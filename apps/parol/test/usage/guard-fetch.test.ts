@@ -5,6 +5,8 @@ import { createSpendGuard, worstCaseUsd, type SpendGuard } from "../../src/usage
 import { parsePriceTable } from "../../src/usage/prices.js";
 import { createRunScope, runStore } from "../../src/usage/scope.js";
 
+const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * The cap on each request, without an engine: what the guarded `fetch` lets through, holds back
  * and refuses, and what it does when a response arrives. The requests are small JSON bodies the
@@ -238,6 +240,140 @@ describe("a request that fits only when the requests in flight have settled", ()
   });
 });
 
+describe("a response that never reports usage", () => {
+  // Room for one request at its worst case and not for two. A reply that is not a Messages reply,
+  // or a stream that breaks, ends its call without a usage figure, so nothing but the end of the
+  // call can give back what the request reserved.
+  const limits = { perReviewUsd: WORST * 1.5, perDayUsd: 100 };
+  const within = async <T>(promise: Promise<T>, ms = 300): Promise<T | "waiting"> =>
+    Promise.race([
+      promise,
+      new Promise<"waiting">((resolve) => setTimeout(resolve, ms, "waiting")),
+    ]);
+
+  it("does not hold the room of the next call: its reservation comes back when its call ends", async () => {
+    build(limits);
+    begin("run_a");
+    const fetch = guard.guardFetch(network);
+    await inRun("run_a", async () => {
+      await guard
+        .scope(async () => {
+          await fetch("https://x.invalid", INIT());
+          // The adapter finds a reply it cannot use and throws; usage is never reported.
+          throw new Error("the reply was not a Messages API response");
+        })
+        .catch(() => undefined);
+      const next = guard.scope(() => fetch("https://x.invalid", INIT()));
+      expect(await within(next)).not.toBe("waiting");
+    });
+    expect(reaching).toBe(2);
+    expect(stops).toEqual([]);
+  });
+
+  it("does not hold the room of the next request of the same call", async () => {
+    build(limits);
+    begin("run_a");
+    const fetch = guard.guardFetch(network);
+    await inRun("run_a", async () => {
+      const call = guard.scope(async () => {
+        await fetch("https://x.invalid", INIT());
+        // A stream broke with a transient error and the adapter sends the request again; the
+        // first request's usage never arrived.
+        await fetch("https://x.invalid", INIT());
+        return "done";
+      });
+      expect(await within(call)).toBe("done");
+    });
+    expect(reaching).toBe(2);
+  });
+
+  it("still makes a request of another call wait while a call is under way, and sends it when that call ends", async () => {
+    build(limits);
+    begin("run_a");
+    const fetch = guard.guardFetch(network);
+    await inRun("run_a", async () => {
+      let end!: () => void;
+      const ended = new Promise<void>((resolve) => (end = resolve));
+      const first = guard.scope(async () => {
+        await fetch("https://x.invalid", INIT());
+        await ended;
+      });
+      await pause(5);
+      const second = guard.scope(() => fetch("https://x.invalid", INIT()));
+      expect(await within(second, 30)).toBe("waiting");
+      expect(reaching).toBe(1);
+      end();
+      await first;
+      expect(await within(second)).not.toBe("waiting");
+    });
+    expect(reaching).toBe(2);
+  });
+
+  it("gives back the share of a call that fails, and of a call that is aborted", async () => {
+    build(limits);
+    begin("run_a");
+    const fetch = guard.guardFetch(network);
+    await inRun("run_a", async () => {
+      for (const error of [new TypeError("network"), new DOMException("aborted", "AbortError")]) {
+        await guard
+          .scope(async () => {
+            await fetch("https://x.invalid", INIT());
+            throw error;
+          })
+          .catch(() => undefined);
+      }
+      expect(await within(guard.scope(() => fetch("https://x.invalid", INIT())))).not.toBe(
+        "waiting",
+      );
+    });
+    expect(reaching).toBe(3);
+  });
+
+  it("is given back by the usage of the same call: a response gives back its own share, not the oldest one", async () => {
+    // The first call reserved the most, the second a tenth of it. Room for the two and not for a
+    // third request at the first's worst case, while the first is still under way.
+    build({ perReviewUsd: WORST * 1.95, perDayUsd: 100 });
+    begin("run_a");
+    const fetch = guard.guardFetch(network);
+    await inRun("run_a", async () => {
+      let endFirst!: () => void;
+      const firstEnds = new Promise<void>((resolve) => (endFirst = resolve));
+      let reportSecond!: () => void;
+      const secondReports = new Promise<void>((resolve) => (reportSecond = resolve));
+      const first = guard.scope(async () => {
+        await fetch("https://x.invalid", INIT(10_000));
+        await firstEnds;
+      });
+      await pause(2);
+      const second = guard.scope(async () => {
+        await fetch("https://x.invalid", INIT(1_000));
+        await secondReports;
+        guard.onUsage(usage(100, 10));
+      });
+      await pause(5);
+      const third = guard.scope(() => fetch("https://x.invalid", INIT(10_000)));
+      expect(await within(third, 30)).toBe("waiting");
+      reportSecond();
+      await second;
+      // The second call's response gave back the second's share. The first is still in flight, and
+      // its share (the larger) is still held: the third must go on waiting.
+      expect(await within(third, 30)).toBe("waiting");
+      expect(reaching).toBe(2);
+      endFirst();
+      await first;
+      expect(await within(third)).not.toBe("waiting");
+    });
+    expect(reaching).toBe(3);
+  });
+
+  it("is only the business of a call inside a run: outside one the work simply runs", async () => {
+    await expect(guard.scope(async () => "ran")).resolves.toBe("ran");
+    await expect(
+      guard.scope(() => guard.guardFetch(network)("https://x.invalid", INIT())),
+    ).rejects.toMatchObject({ kind: "no_run_scope" });
+  });
+});
+
 describe("a request that cannot be sized", () => {
   it("is not sent, whatever the limits are, and ends the run as a fault of Parol", async () => {
     begin("run_a");
@@ -305,19 +441,72 @@ describe("the usage of a response", () => {
     });
   });
 
-  it("is not counted when a figure is not a whole number of 0 or more", async () => {
+  // Figures that are not whole numbers of 0 or more: a gateway's, or a provider's that sends floats.
+  const UNREADABLE: [string, Record<string, number>][] = [
+    ["negative", { inputTokens: -1 }],
+    ["fractional", { inputTokens: 1.5 }],
+    ["not a number", { outputTokens: Number.NaN }],
+    ["beyond a safe integer", { inputTokens: 1e300 }],
+    ["infinite", { cacheReadTokens: Number.POSITIVE_INFINITY }],
+  ];
+
+  for (const [name, bad] of UNREADABLE)
+    it(`is charged at the most its request could cost when a figure is ${name}, with no token counts`, async () => {
+      begin("run_a");
+      const fetch = guard.guardFetch(network);
+      await inRun("run_a", async () => {
+        await fetch("https://x.invalid", INIT());
+        guard.onUsage({ ...usage(0, 0), ...bad });
+      });
+      const ledger = repo.spendToday();
+      expect(ledger.responses).toBe(1);
+      // Not zero: the response is not free because its accounting cannot be read.
+      expect(ledger.costUsd).toBeCloseTo(WORST, 12);
+      expect(
+        repo.db
+          .prepare(
+            "SELECT input_tokens, output_tokens, cache_read_tokens, cache_write_tokens FROM spend_ledger",
+          )
+          .get(),
+      ).toEqual({ input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 });
+      // No figure, no text and no id in what is logged.
+      expect(logs).toEqual([
+        "spend guard: a response reported usage that could not be read, so the most its request could cost was charged",
+      ]);
+    });
+
+  it("counts the charge against the review: the next request that would pass the limit is not sent", async () => {
+    build({ perReviewUsd: WORST * 1.5, perDayUsd: 10 });
+    begin("run_a");
+    const fetch = guard.guardFetch(network);
+    await inRun("run_a", async () => {
+      await fetch("https://x.invalid", INIT());
+      guard.onUsage({ ...usage(0, 0), inputTokens: 1.5 });
+      await expect(fetch("https://x.invalid", INIT())).rejects.toBeInstanceOf(SpendStop);
+    });
+    expect(stops.map((s) => s.kind)).toEqual(["review_limit"]);
+    expect(reaching).toBe(1);
+  });
+
+  it("counts the charge against the day: the next request that would pass the day's limit is not sent", async () => {
+    build({ perReviewUsd: 100, perDayUsd: WORST * 1.5 });
+    begin("run_a");
+    const fetch = guard.guardFetch(network);
+    await inRun("run_a", async () => {
+      await fetch("https://x.invalid", INIT());
+      guard.onUsage({ ...usage(0, 0), outputTokens: -7 });
+      await expect(fetch("https://x.invalid", INIT())).rejects.toBeInstanceOf(SpendStop);
+    });
+    expect(stops.map((s) => s.kind)).toEqual(["daily_limit"]);
+  });
+
+  it("is not free when there is no request to take the figure from: nothing is invented, and the run is stopped", async () => {
     begin("run_a");
     await inRun("run_a", async () => {
-      guard.onUsage({ inputTokens: -1, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
-      guard.onUsage({ inputTokens: 1.5, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
-      guard.onUsage({
-        inputTokens: Number.NaN,
-        outputTokens: 0,
-        cacheReadTokens: 0,
-        cacheWriteTokens: 0,
-      });
+      guard.onUsage({ ...usage(0, 0), inputTokens: 1.5 });
     });
     expect(repo.spendToday()).toMatchObject({ costUsd: 0, responses: 0 });
+    expect(stops.map((s) => s.kind)).toEqual(["unsizable_request"]);
   });
 
   it("stops the review when the recorded spend passes its limit, and does not throw", async () => {

@@ -182,6 +182,18 @@ async function runSupportCheck(
   const checker = args.supportChecker;
   if (checker === undefined || checker === null) return null;
   const { claim } = ctx;
+  // Settlement only ever turns a missing or a not_applicable into another status, so a settled
+  // claim is one the model did not make as stated: it is never shown to the checker as compliant.
+  if (claim.modelStatus !== null) {
+    return {
+      output: modelResult(
+        "not_applicable",
+        `the workflow stated ${claim.modelStatus}, which needs no support check`,
+      ),
+      calls: [],
+      verdict: null,
+    };
+  }
   if (claim.status !== "compliant" && claim.status !== "deviation") {
     return {
       output: modelResult("not_applicable", `status ${claim.status} needs no support check`),
