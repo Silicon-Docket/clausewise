@@ -647,10 +647,13 @@ rule of a matter. The other five are `matters_by_retain_until`, `feedback_by_run
 `feedback_by_finding`, `time_entries_by_matter` and `reference_issues_by_matter`. In all, 38 named
 indexes, 12 of them unique.
 
-**Triggers.** The store refuses changes a bug could make, whatever
-code runs against the file. Each message starts with `parol:` so that the store can tell a trigger
-from another constraint error, and every immutability trigger has an insert guard too, because an
-`INSERT OR REPLACE` removes the old row without an update ever being seen.
+**Triggers.** The store refuses changes a bug could make, whatever code runs against the file. Each
+message starts with `parol:` so that the store can tell a trigger from another constraint error, and
+every immutability trigger has an insert guard too (the spend ledger has a delete guard instead,
+which a replacement meets), because an `INSERT OR REPLACE` removes the old row without an update
+ever being seen. Three have none: `span_annotations` has no key to collide on, the warnings of an
+ingest are replaced by design, and `model_calls_immutable` refuses an update of a recorded call but
+nothing refuses its replacement by an `INSERT OR REPLACE` with the same id.
 
 | Area                             | What the triggers enforce                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -667,7 +670,7 @@ from another constraint error, and every immutability trigger has an insert guar
 | Memos                            | Immutable except for being superseded; a memo belongs to the matter of its run and its file sits in that matter's folder                                                                                                                                                                                                                                                                                                                                                                    |
 | Feedback, evaluation             | Feedback refers only to its own matter, is written once and never edited or replaced, has the shape of its kind (a missed issue needs a run, text and a rule of that run's playbook or none; a rating needs a mark and no finding), and a person rates a matter once (006); evaluation results come only from synthetic matters, and never from a training matter (007)                                                                                                                     |
 | Ingest warnings (003)            | A warning belongs to a version of its own matter; warnings are replaced, never edited                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Usage and the spend ledger (004) | A call's four token counts are all given or all absent, and never negative; a cost needs tokens and a price table hash of 64 characters, and a price table hash needs a cost; a recorded call is never edited. The ledger's numbers only grow, its day never changes, and no row is deleted                                                                                                                                                                                                 |
+| Usage and the spend ledger (004) | A call's four token counts are all given or all absent, and never negative; a cost needs tokens and a price table hash of 64 characters, and a price table hash needs a cost; a recorded call is never edited by an update (a replacement by id is not refused). The ledger's numbers only grow, its day never changes, and no row is deleted                                                                                                                                               |
 | Pilot tables (008)               | The calendar is append-only. A roster entry is never replaced. A timer belongs to a member of the matter in the role held, starts open, takes one stop and is then final, and a person has one open timer. Reference issues are recorded by a reviewer of the matter, are closed once any review of the matter has started, and are replaced and never edited. Every insert guard names every key its table can collide on, because `INSERT OR REPLACE` would otherwise delete a row unseen |
 
 ### Audit actions
@@ -679,7 +682,7 @@ of the change it records, so a rollback takes it away. The 23 earlier actions ar
 `version.add`, `version.operative`, `version.stated_date`, `inputs.changed`, `run.create`,
 `run.status`, `finding.save`, `review.decide`, `memo.export`, `playbook.import`, `playbook.approve`,
 `prompt.register`, `workflow.register`, `workflow.promote`, `feedback.add` and `eval.record`. Part 3
-added seven and changed the detail of six:
+added seven and changed the detail of five:
 
 | Action               | Detail                                                                                                                                                                                          | Since                            |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
@@ -1169,8 +1172,8 @@ Conventions as built:
 | DELETE | `/api/matters/:id`                             | Delete the matter and its files; 204                                                                                                                                                                                                                                                                  | creator, AD                       |
 | GET    | `/api/playbooks`                               | Approved playbook versions a matter can pin (not every version)                                                                                                                                                                                                                                       | any user                          |
 | GET    | `/api/matters/:id/spans/:spanId`               | Not yet built. The inspector gets each cited paragraph inside the finding (`spanText`)                                                                                                                                                                                                                | A, R, V                           |
-| POST   | `/api/matters/:id/runs/:runId/missed-issues`   | Report an issue a review missed: body `{ ruleKey, location, note }` (`ruleKey` null for "not covered by any rule"); 201 and the report; stored for the signed-in person. 409 `run_has_no_findings`                                                                                                    | A, R, V                           |
-| POST   | `/api/matters/:id/findings/:findingId/notes`   | Add a note to a finding: body `{ note }`; 201; 409 `finding_not_current` when the finding or its review is out of date                                                                                                                                                                                | A, R, V                           |
+| POST   | `/api/matters/:id/runs/:runId/missed-issues`   | Report an issue a review missed: body `{ ruleKey, location, note }` (`ruleKey` null for "not covered by any rule"); 201 and the report; stored for the signed-in person. 409 `run_has_no_findings`; 409 `feedback_limit` after 50 reports by one person on one run                                    | A, R, V                           |
+| POST   | `/api/matters/:id/findings/:findingId/notes`   | Add a note to a finding: body `{ note }`; 201; 409 `finding_not_current` when the finding or its review is out of date; 409 `feedback_limit` after 20 notes by one person on one finding                                                                                                              | A, R, V                           |
 | POST   | `/api/matters/:id/rating`                      | Rate the matter once the first memo exists: body `{ rating (1 to 5), comment }`; 201 and the caller's own rating; 409 `not_exported`, 409 `already_rated`                                                                                                                                             | A, R, V                           |
 | GET    | `/api/matters/:id/feedback`                    | The matter's reports and notes, and only the caller's own rating (`MatterFeedbackView`)                                                                                                                                                                                                               | A, R, V                           |
 | POST   | `/api/playbooks/:slug/versions`                | Not yet built. The store can import a draft; at start-up the demo playbook is imported as the demo legal engineer                                                                                                                                                                                     | LE                                |
@@ -1335,9 +1338,10 @@ A run summary also carries `model.reported` (the model or models the provider na
 run, so the figures are less than was spent) and `lines`, the sentences the page shows. A matter
 view carries `retention` (`retainUntil`, `daysLeft`, `pastDate`, `defaultDays`, `maxDays`) and a
 matter summary `pastRetention`; a training matter's view also carries how far the person has got
-through the exercise. `modelStatus` and `settlementReason` of an issue row, and `reasonCode` and
-`minorEdit` of a decision, are left out of the JSON when there is nothing to say, so a row that
-code did not change reads as it did before part 3.
+through the exercise. `modelStatus` and `settlementReason` of an issue row, and `noteCount`, are
+left out of the JSON when there is nothing to say, so a row that code did not change reads as it did
+before part 3. `reasonCode` and `minorEdit` of a decision are always present and are null for an
+accept, an escalate and any decision made before 006.
 
 ### The comparison page document
 

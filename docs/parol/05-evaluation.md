@@ -837,7 +837,7 @@ it is not a pass. A release needs all fourteen to pass.
 | G9  | Unnecessary escalation rate                                                                                                                                                 | at most 0.15                                                                                      | Every repeat                                                                                                                                                                                                            |
 | G10 | Extraction span recall                                                                                                                                                      | at least 0.90                                                                                     | Every repeat                                                                                                                                                                                                            |
 | G11 | Support checker: catch rate and false alarms on the calibration set                                                                                                         | at least 18 of 20; at most 2 of 20                                                                | With `--calibration` (workflow v3, live or replay). Without it, "not evaluated". Read with care when calls returned no verdict (see above); "not evaluated" for a record whose counts disagree with each other          |
-| G12 | Non-regression against the current pilot version: no slot correct in 3 of 3 baseline repeats becomes wrong in 2 or more candidate repeats, at high severity; SWF not higher | as stated                                                                                         | Only with `--compare` and at least 2 repeats of each version; "3 of 3" is read as "every baseline repeat"                                                                                                               |
+| G12 | Non-regression against the current pilot version: no slot correct in 3 of 3 baseline repeats becomes wrong in 2 or more candidate repeats, at high severity; SWF not higher | as stated                                                                                         | Only in a comparison (`--compare`, or `--baseline` with `--candidate`) and with at least 2 repeats of each version; "3 of 3" is read as "every baseline repeat"                                                         |
 | G13 | p95 run latency and mean cost per run                                                                                                                                       | within 1.5 times the baseline, or within an absolute budget set after the first measured baseline | Live runs only. The 1.5 factor is applied against the baseline; the absolute budget is an input of the code that no command-line option sets                                                                            |
 | G14 | Stability: mean modal agreement                                                                                                                                             | at least 0.90                                                                                     | Needs at least 2 repeats                                                                                                                                                                                                |
 
@@ -914,16 +914,18 @@ The record of the exposure suite carries the workflow its reviews ran under, lab
 gate G1 reads it only for a run of the same workflow (see the gates).
 
 **Evidence trails** (the optional field `trails` of the results file, `evals/src/parol/trails.ts`; a
-decision of the build that the owner may overturn, and the one that edits evaluation code that part 2
-had finished: document 7, decisions of part 3, number 1).
-For every rule slot of every run the file records the split, the case, the rule, the repeat, the
-verification state and the escalation codes; which paragraphs retrieval showed, by document label and
-paragraph index, each with the reason (located, definition, cross reference, hint), or that the whole
-document was shown, or that nothing was sent because the bundle was over budget; which paragraphs the
-finding cited, with the role, the quote check and, for a verified quote, the offsets of the quote
-inside the paragraph; and the ids of the checks that passed, failed or did not apply. For each case
-it records a digest of the text of the case's documents as the run read them, and a later reader
-(the page, or a person) compares it with the case files on disk: a paragraph index names the same
+decision of the build that the owner may overturn, and the one that edits evaluation code that part
+2 had finished: document 7, decisions of part 3, number 1). For every rule slot of every run the
+file records the split, the case, the rule, the repeat, the verification state and the escalation
+codes; which paragraphs retrieval showed, by document label and paragraph index, each with the
+reason (located, definition, cross reference, hint), or that the whole document was shown, or that
+nothing was sent because the bundle was over budget; which paragraphs the finding cited, with the
+role, the quote check and, for a verified quote, the offsets of the quote inside the paragraph; and
+the ids of the checks that passed, failed or did not apply. For each case it records a digest of the
+text of the case's documents as the run read them. When `--publish` builds the page document, the
+evaluation command compares that digest with the case files on disk and keeps a trail only while
+they match (otherwise the page says the case documents are not the ones the run read); the
+application's page reads no case file and compares nothing itself. A paragraph index names the same
 paragraph only while the files are the ones the run read. **A trail never holds** a paragraph, a
 quotation, a check detail, a prompt or a model answer. It is optional: a file made before trails
 existed has none, and a run that has more than 20,000 trails, or whose repeats of a case read
@@ -1076,7 +1078,7 @@ the progress go to stderr and the report to stdout.
 ```sh
 pnpm eval:parol --selftest                  # a perfect scripted oracle; no key, nothing sent
 pnpm eval:parol --simulate --workflow v2    # the demo's scripted reader; no key, nothing sent
-pnpm eval:parol                             # a live run: prints the plan and exits 3, sends nothing
+pnpm eval:parol                             # a live run: with ANTHROPIC_API_KEY set, prints the plan and exits 3, sends nothing; without a key it exits 1
 pnpm eval:parol --yes --runs 3              # a live run (none has been made)
 ```
 
@@ -1266,15 +1268,22 @@ pnpm eval:parol --simulate --workflow v2 --compare evals/results/sim-v1.json --o
 ```
 
 The second command is the one the page's empty state shows. `./data/parol` is the folder that
-`PAROL_DATA_DIR` names. With no comparison published the page says so and shows that command. The page
-lays out, in this order: a banner in capitals for each scripted, simulated or replayed run in the
-comparison; the two versions, what they were run on and the differences between the runs; a switch
-between the splits that the file holds, with the number of cases and repeats behind each; the 14
-gates for each side with the reason a gate is "not evaluated" visible; the decision rule, always worded
-as a gate result and followed by the sentence that it is not a recommendation; the metric rows with
-their counts; the slots that changed, regressions first, with "N of M paired slots changed"; the
-evidence trail of the selected slot; a draft of a promotion record as text in a read-only box; and a
-footer that says the page shows a file and does not prove who made it or that a model was called.
+`PAROL_DATA_DIR` names. With no comparison published the page says so and shows that command. With
+no query the page lists the published comparisons, newest first, and lists a file that cannot be
+used with the reason; one comparison is opened with `?comparison=<id>`, and `split`, `case` and
+`rule` choose a section of it and a changed slot. An opened comparison lays out, in this order: a
+banner in capitals for each scripted, simulated or replayed run in the comparison; for each run that
+is not a clean measurement (a call lost on the wire or at the provider, an extraction that fell back
+to the whole document, or a rule not sent because the context was over budget), a banner "NOT A
+CLEAN MEASUREMENT" with the reasons; in the held-out section, the contamination note of a run that
+followed an earlier live run of the held-out split under the same workflow; the two versions, what
+they were run on and the differences between the runs; a switch between the splits that the file
+holds, with the number of cases and repeats behind each; the 14 gates for each side with the reason
+a gate is "not evaluated" visible; the decision rule, always worded as a gate result and followed by
+the sentence that it is not a recommendation; the metric rows with their counts; the slots that
+changed, regressions first, with "N of M paired slots changed"; the evidence trail of the selected
+slot; a draft of a promotion record as text in a read-only box; and a footer that says the page
+shows a file and does not prove who made it or that a model was called.
 
 The evidence trail has three parts: the answer key's passages for the slot; for each version and
 repeat, the status and the scores; and, for each version and repeat, where it looked (which
