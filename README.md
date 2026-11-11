@@ -229,14 +229,24 @@ matter and picks an approved playbook; a review reads them against each rule of 
 playbook; every finding shows the exact passages it rests on; code checks that those passages are
 in the documents; a reviewing attorney decides each finding; a change to the documents makes earlier
 decisions stop counting; and the decided findings export as a Word memorandum. The dataset and the
-scoring code are in `fixtures/parol` and `evals/src/parol` (`pnpm eval:parol`), with 6 of the 26
-planned cases written.
+scoring code are in `fixtures/parol` and `evals/src/parol` (`pnpm eval:parol`): all 26 planned cases
+are written (14 development, 12 held-out), with a 40-pair set for the support check, and none has
+been run on a model. Around them the app has a page that compares two evaluation runs, capture of
+reason codes, notes, missed-issue reports and a rating, timers and a page of pilot measures, a
+training matter with a quickstart and help, commands that delete expired matters and check the audit
+log, a limit on what a live review may spend, and keyboard and contrast checks. All of it has been
+tested against scripted stand-ins and synthetic data; none of it has met a live model or a pilot
+participant.
 
 **What does not exist.** No live model has ever read a document in Parol, so there is no accuracy,
 latency or cost figure for any model. The demonstration runs a scripted simulated reader that
-answers one worked example and is not a language model (`PAROL_SCRIPTED=1`). The sign-in is a demo
-picker without passwords and is not authentication. Not built: the evaluation comparison page,
-feedback and pilot measures, PDF documents, the Word add-in, and the held-out evaluation cases.
+answers two document sets (the worked example and the training matter built from it) and is not a
+language model (`PAROL_SCRIPTED=1`). The sign-in is a demo picker without passwords and is not
+authentication. No pilot has run, and the pilot measures page can show only what demonstration
+identities did. Not built: PDF documents, the Word add-in, the pilot go/no-go memo and the rollback
+switch. Not done, because each needs a provider key and the project owner's decision to spend: a
+first live run, a measured baseline, the improvement cycle, freezing the experiment EXP-001 and a
+qualified review of the dataset.
 
 **Where to start.** [apps/parol/README.md](apps/parol/README.md) has the run steps, a two minute
 walk-through and the full table of what is built. The design, with the status of each part, is in

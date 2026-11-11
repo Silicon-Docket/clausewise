@@ -268,3 +268,81 @@ matters with a scripted stand-in for the model; they feed gates G11 and G1. The 
 review under the run's `--workflow`, and a results file is read for G1 only if its exposure record
 was made under that workflow. Results go to `evals/results/parol-<UTC time>.json`. What is built,
 the metrics and the gates are in [docs/parol/05-evaluation.md](../docs/parol/05-evaluation.md).
+
+### Comparing two runs, and publishing the comparison
+
+`--compare <previous.json>` compares a run with an earlier results file, and `--baseline <a.json>
+--candidate <b.json>` compares two results files that already exist: it runs nothing, sends
+nothing, needs no key, prints the same Markdown comparison and refuses the same comparisons (the
+two options go together and cannot be combined with an option that runs something; `--playbook`,
+`--allow-differences` and `--publish` can). `--publish <data folder>` also writes the comparison as a page document into
+`<data folder>/evaluations`, where the data folder is the one `PAROL_DATA_DIR` names (`./data/parol`
+by default), and prints the address of the page. The application's `/evaluations` page (for a legal
+engineer or an administrator) reads only the files in that folder. The document is one JSON file named `cmp_` and 16 hexadecimal digits, at most 4 MiB, whose
+fingerprint the application checks whenever it parses the file (a file whose size and time have not
+changed is not parsed again). A comparison that was refused, or whose
+candidate is not finished and on disk whole, is not published, and publishing the same two files
+again leaves the file as it is. To have one to look at:
+
+```sh
+pnpm eval:parol --simulate --workflow v1 --out evals/results/sim-v1.json
+pnpm eval:parol --simulate --workflow v2 --compare evals/results/sim-v1.json --out evals/results/sim-v2.json --publish ./data/parol
+```
+
+The page shows what the two files say. A selftest, a simulated run or a replay is named as such, a
+scripted run has no latency or cost and the decision rule is not applied to it, and the page never
+recommends: it drafts the text of a promotion record, unsigned. `--open-heldout-trails` (it needs
+`--publish`) puts the evidence trails of the held-out split's changed slots into the document: the
+answer key and its passages and, for each version, where it looked and what it cited. They are left
+out otherwise, the document records that they were opened, the page says so in capitals, and a
+warning is printed when it holds any, because a workflow changed in response to them can no longer
+be judged on that split.
+
+### Trails in a results file
+
+A results file has an optional `trails` field: for every rule slot of every run, which paragraphs
+retrieval put in front of the reader (or that the whole document was shown, or that nothing was
+sent), which paragraphs the finding cited with their role, the result of the quote check and the
+offsets of a verified quote, which checks passed, failed or did not apply, and the escalation
+codes. It holds labels, indexes, offsets and closed codes and never a paragraph, a quotation, a
+check detail, a prompt or a model answer; a file that carries text is refused when it is read. It
+also holds a digest of each case's text as the run read it, and a comparison shows a trail only if
+the case files on disk, read when it is published, still have that digest; otherwise it says why
+no trail is shown. A file holds at most 20,000 trails, and a run that
+makes more records none and says so. Files written before trails existed have none, are still read,
+and the page says that no trail was recorded. A trail says where a version looked and what it
+cited; it does not say what it wrote.
+
+### Exposure counts
+
+The exposure suite (`--exposure`) tests the application with a scripted key-oracle that is not a
+language model, so a pass of gate G1 says nothing about a model. On 11 November 2026 the nine runs
+of `pnpm eval:parol --selftest --exposure` (workflows v1, v2 and v3, on the development split, the
+held-out split and both) all exited 0. Each sent 2,066 authorization probes. G1 read "found 0 of
+N": 0 is the number of probes answered with data plus the canary strings and the ids or names of
+another matter found in the artefacts scanned, and N is the probes run plus the artefacts scanned:
+
+| Workflow | Split   | Artefacts scanned | G1: found 0 of |
+| -------- | ------- | ----------------- | -------------- |
+| v1       | dev     | 478               | 2,544          |
+| v1       | heldout | 478               | 2,544          |
+| v1       | all     | 956               | 3,022          |
+| v2       | dev     | 478               | 2,544          |
+| v2       | heldout | 478               | 2,544          |
+| v2       | all     | 956               | 3,022          |
+| v3       | dev     | 494               | 2,560          |
+| v3       | heldout | 492               | 2,558          |
+| v3       | all     | 986               | 3,052          |
+
+A selftest scores every slot of a split it runs: 112 of 112 on the development split and 96 of 96
+on the held-out split, under each workflow, because it answers from the answer key. That checks the
+machinery and scores nothing. The counts move whenever a route, a probe or a table is added, so read
+them from a fresh run.
+
+The reader of the model a provider names in its responses is one file, in the application
+(`apps/parol/src/usage/reported-model.ts`), which the evaluation re-exports. The application keeps
+its own copies of the price loader, the planner of a review's calls and the worst case of one
+request, because it does not import from `evals`. Tests tie each copy to the evaluation's
+(`evals/test/parol-app-prices-parity.test.ts`, `parol-app-plan-parity.test.ts` and
+`parol-app-budget-parity.test.ts`), so a cost on a review page and a cost in a results file come
+from the same arithmetic.

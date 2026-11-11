@@ -9,6 +9,7 @@ party, document and passage was written for this project. Never paste text from 
 | `cases.ts`                           | The registry: every case, development first and then held-out, sorted by key. |
 | `cases/`                             | One file per case (`d01.ts` to `d14.ts`, `h01.ts` to `h12.ts`): the source.   |
 | `types.ts`                           | The case format and the built answer key.                                     |
+| `anchors.ts`                         | How an anchor is matched: exact, case sensitive. The resolver shares it.      |
 | `draft.ts`                           | Small constructors for writing a case.                                        |
 | `canary.ts`                          | The two canary matters, Bramblewick and Saltmarsh, and their strings.         |
 | `build.ts`, `render.ts`              | The builder, the traceability checks, and the DOCX and TXT writers.           |
@@ -19,6 +20,7 @@ party, document and passage was written for this project. Never paste text from 
 | `calibration/pairs.ts`               | The 40 (finding, evidence) pairs of the support calibration set.              |
 | `calibration.json`                   | Generated. The pairs with each quote resolved to a paragraph and pinned.      |
 | `../../tools/make-parol-fixtures.ts` | The command: `pnpm fixtures:parol`.                                           |
+| `../../tools/make-parol-training.ts` | The command `pnpm fixtures:parol:training`, for the training matter T01.      |
 
 ## What is built
 
@@ -28,8 +30,8 @@ twin: `D08`, `D10`, `H07` and `H09`. `D09` and `H08` carry upload steps (duplica
 identical file, a re-save), and `D10` and `H09` name a canary matter (Bramblewick and Saltmarsh).
 Each split is 20 files in `files/`. `splits.json` records the totals, the hash and the file count
 of each split, and the calibration entry. The build prints the totals table; document 5 compares it
-with the plan and explains the two rows where they differ (the injection rows in both splits and the
-held-out row for allowed alternatives).
+with the plan and explains the three rows where they differ, for two reasons (the two injection
+rows, in both splits, and the held-out row for allowed alternatives).
 
 **The held-out split is sealed.** Its files are in the repository, and nothing stops anyone opening
 them, but a case that was read to fix something is no longer a measure of the fix. Do not use a
@@ -41,6 +43,16 @@ No baseline has been run.
 case and twin of both splits through the real parser, ingest and stages against an oracle that
 answers from the keys. It is perfect only if every anchor resolves in the real ingest and no check
 raises an escalation the key does not expect. It says nothing about any model.
+
+**The training matter is not in the dataset.** The application's training matter T01 is built from
+two of these cases: the NDA of `PAROL-D05` with the instruction paragraph of `PAROL-D08` as its
+second paragraph, and the amendment of `PAROL-D05` as it is. `pnpm fixtures:parol:training` builds
+its two files, `t01-nda.docx` and `t01-amendment-1.txt`, into `apps/parol/training` and not here;
+`--check` writes nothing and exits 1 when what is on disk differs from what the cases build, and a
+test does the same comparison in memory. They are kept outside this folder on purpose: the builder
+here treats a file that no case names as stale, and the evaluation reads only this folder, so T01 is
+never scored. A change to `PAROL-D05` or `PAROL-D08` that changes T01's documents fails that check
+until the files are rebuilt. T01 appears in no split, no hash and no answer key.
 
 ## Building
 
@@ -79,7 +91,8 @@ Write the case in a file of its own, `cases/<id>.ts`, exporting one constant nam
 `H05`, and check it with `pnpm fixtures:parol:case fixtures/parol/cases/<id>.ts` until that exits 0. Then register
 it: import it in `cases.ts`, add it to `CASES` (development cases first, held-out after, each sorted
 by key), and run `pnpm fixtures:parol`. Case keys are `PAROL-Dnn` for the development split and
-`PAROL-Hnn` for the held-out split, and every file name starts with `parol-<nn>-`. A case lists:
+`PAROL-Hnn` for the held-out split, and every file name starts with `parol-d<nn>-` or
+`parol-h<nn>-`. A case lists:
 
 - `documents`: the NDA as `D1` and up to two amendments as `D2` and `D3`. Paragraphs are `title`,
   `heading`, `text` (outside any numbered clause), `clause` (numbered; typed into the text),
@@ -133,22 +146,18 @@ preamble, a recital, the signature block).
 A case normally has each document uploaded once, in label order. A case that tests what the
 application does with the same file twice, with a re-saved file, or with a second version of a
 document says what the person uploads, in order, and what the application should do about each
-file. Add `uploads` to the case:
+file. Add `uploads` to the case. This is the `uploads` of `PAROL-D09`; to see its steps in words,
+run `pnpm fixtures:parol:case fixtures/parol/cases/d09.ts --summary`:
 
 ```ts
 uploads: {
-  // Files that are not documents of the case: written next to the documents and counted in the hash.
-  files: [
-    identicalCopyOf("parol-d09-nda-v1.docx", "parol-d09-nda-v1-copy.docx"), // the same bytes, another name
-    resaveOf("parol-d09-nda-v1.docx", "parol-d09-nda-v1-resaved.docx"), // the same text, other bytes
-  ],
   steps: [
     // addDocument: title and kind are entered; the label is the one the person means it to have.
-    addDocument("parol-d09-nda-v1.docx", { label: "D1", title: "Mutual NDA", kind: "nda", statedDate: "2026-03-02" }, newDocument("D1")),
+    addDocument("parol-d09-nda-v1.docx", { label: "D1", title: "Mutual NDA", kind: "nda", statedDate: "2026-03-03" }, newDocument("D1")),
     // addVersion: to the document that has the label. The application takes no title or kind here.
-    addVersion("parol-d09-nda-v2.docx", "D1", "2026-04-20", newVersion("D1", 2)),
-    // The first file again under another name: nothing is stored, and v2 still governs.
-    addVersion("parol-d09-nda-v1-copy.docx", "D1", "2026-03-02", identicalFile("D1", 1, false)),
+    addVersion("parol-d09-nda-v2.docx", "D1", "2026-03-20", newVersion("D1", 2)),
+    // The first file again: nothing is stored, and v2 still governs.
+    addVersion("parol-d09-nda-v1.docx", "D1", "2026-03-03", identicalFile("D1", 1, false)),
   ],
 },
 ```
@@ -182,7 +191,17 @@ file's content (`instruction_like_text` and so on), which the builder cannot see
 verifies. The `warnings` of the case are every code any upload returns, together with the codes
 ingest raises for the documents that govern at the end.
 
-**Extra files.** `identicalCopyOf(of, file)` is a copy of the bytes of the document file `of` under
+**Extra files.** A case that needs a file of its own for a step lists it in `files`, next to
+`steps`. `PAROL-H08` does, for the same file under another name and for a re-save:
+
+```ts
+files: [
+  identicalCopyOf("parol-h08-nda.docx", "parol-h08-nda-copy.docx"), // the same bytes, another name
+  resaveOf("parol-h08-nda.docx", "parol-h08-nda-resaved.docx"), // the same text, other bytes
+],
+```
+
+`identicalCopyOf(of, file)` is a copy of the bytes of the document file `of` under
 a new name. `resaveOf(of, file)` has the text of `of` in other bytes: a Word file gets another
 editor, save time and revision number in its properties, and a text file gets Windows line
 endings. Both are fixed, so the same case gives the same bytes on every build and on every day.
@@ -203,8 +222,8 @@ service that never happens. A file with new text uploaded as version 2 becomes o
 and version 1 stops governing; a re-save is stored and does not govern; an identical file changes
 nothing. A document therefore always has one operative version, and the readiness check
 ("Choose which version of each document is operative") cannot be reached by uploading. The key of
-a D09 case records v2 as operative and the steps above, and a replay finds the matter ready to
-review.
+`PAROL-D09` records v2 as operative and the steps of `d09.ts`, and a replay finds the matter ready
+to review.
 
 **Replaying a case.** To replay, create the matter with the case's `intake`, then for each step in
 order read the file from `fixtures/parol/files` (it is named in `documents` or in
@@ -251,6 +270,13 @@ canary matter's own pages and rows, the other way round, for the case's ids and 
 strings are that matter's own data and are not looked for there). Each string has the matter's
 name in upper case and twelve lower case hex digits; match them case insensitively to be safe.
 The `fact` is not secret: it shows an attempt, not a breach.
+
+The scan reads every table of stored rows, so a table that is empty on both sides could never show a
+leak. A review fills most of them. A timer and a reference list are written by hand, so the scan
+writes one of each, through the application's services, for the case's matter and for each canary
+matter: one closed timer and a reference list of two issues. Neither table holds text, so a canary
+string cannot appear in them, and only ids can. The authorization half of the suite does not do
+this for the matters it probes (gap 32 of [document 7](../../docs/parol/07-delivery-plan.md)).
 
 **What the builder refuses.** A case that names a matter of the other split, a matter that does
 not exist, the same matter twice, or an empty list. A matter with fewer than three strings, a
@@ -393,7 +419,7 @@ All problems are reported together, naming the pair and the field and never quot
   - more than 5 pairs in a row have one label in the order of the ids.
 
   The shipped set is inside every limit (`--calibration` prints the figures). It also cites the
-  same paragraph in a supported and an unsupported pair six times, on purpose, with the pairs
+  same paragraph in a supported and an unsupported pair five times, on purpose, with the pairs
   differing only in the claim or the quote, so the paragraph cannot tell the label either.
 
 ### The file and the hash
