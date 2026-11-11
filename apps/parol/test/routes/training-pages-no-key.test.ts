@@ -166,7 +166,7 @@ describe("after a review", () => {
     expect(readable(rows[0] as El)).toContain("Compliant");
   });
 
-  it("keeps the words of the plant inside the banner on the review page, and off the finding pages", async () => {
+  it("keeps the words of the plant inside the banner on the review page, and outside it on no page", async () => {
     const runId = runPath.split("/").at(-1)!;
     const reviewPages = [
       await read("associate", alex, runPath),
@@ -183,11 +183,14 @@ describe("after a review", () => {
       // The banner is there to carry them.
       expect(withClass(page.root, "banner-training")).toHaveLength(1);
     }
-    // A finding page of its own has no banner, and so none of the words at all.
+    // A finding page of its own carries the words nowhere but in a banner, if it has one: the page
+    // belongs to another package in this phase and gets the banner when the lead applies the request
+    // in the report of package W2.8, and this holds before and after.
     for (const id of findingIds) {
       const page = await read("reviewer", dana, urls.finding(matterId, id));
+      const outside = outsideBanner(page);
       for (const word of PLANTED_WORDS)
-        expect(page.text, `${page.path}: "${word}"`).not.toContain(word);
+        expect(outside, `${page.path}: "${word}" outside a banner`).not.toContain(word);
     }
   });
 
