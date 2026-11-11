@@ -10,11 +10,19 @@ comparison and the held-out seal; record and replay of the model's answers (`--r
 calibration run that feeds G11 (`--calibration`, with workflow v3, which pins the support prompt and
 the `superseded_evidence` check); and the exposure suite that feeds G1 (`--exposure`: authorization
 probes, a canary scan and the replay of upload steps, against the real application with a scripted
-stand-in for the model, reviewing under the workflow of the run). Not covered: the qualified review.
+stand-in for the model, reviewing under the workflow of the run). Added in week-two part 3: the
+results file records the evidence trail of every rule slot (ids, offsets and closed codes, never
+text); `--publish`, `--baseline`, `--candidate` and `--open-heldout-trails` write a comparison as a
+page document into the application's data folder, and the application's comparison page
+(`/evaluations`, for the legal engineer and the administrator) shows it, labelled SIMULATED,
+SELFTEST or REPLAY wherever the run was one of those; status settlement is in every workflow
+version, so the `code` pin of a results file made before it differs; and the application's planner
+and the evaluation's dry run are held to the same counts by tests. Not covered: the qualified review.
 Never run live: no model has read a case, no baseline has been run on either split, and no score,
-latency or cost of any model exists. The only numbers here come from a selftest oracle, a scripted
-simulated reader and the exposure suite, and are labelled so. The exposure suite tests the
-application and not a model, so it has results of its own, which this document gives and labels.
+latency or cost of any model exists, so the comparison page can show only scripted
+comparisons. The only numbers here come from a selftest oracle, a scripted simulated reader and the
+exposure suite, and are labelled so. The exposure suite tests the application and not a model, so it
+has results of its own, which this document gives and labels.
 
 ## What the evaluation can and cannot establish
 
@@ -49,7 +57,10 @@ hash is in `splits.json` and was committed in `66a23f4` (10 November 2026); the 
 split and no model has read any case. The selftest oracle, which
 answers from the keys, scores perfectly on both splits under workflows v1, v2 and v3, which shows that
 every anchor of every key resolves in the real ingest and that the keys and the plumbing agree; it
-says nothing about any model.
+says nothing about any model. The training matter T01 (document 8) is not part of the dataset: its
+files are in `apps/parol/training`, it is in neither split and is never scored, the runner reads only
+`fixtures/parol`, and the database refuses an evaluation run or an evaluation result for a training
+matter.
 
 Unless listed, a rule's expected status is `compliant` (`ret-1` is `not_applicable` when the case
 has no return clause, because the rule is not required).
@@ -139,15 +150,22 @@ differ, for two reasons, and in neither is a case bent to a number:
 (`--exposure`)._ The design was a table of (route, actor, matter) triples run against the API in
 every evaluation: a non-member reading, writing, running, exporting and downloading; a viewer
 attempting writes; an associate attempting a review decision; a reviewer attempting to upload. The
-table and the request builder are defined in `evals/src/parol/exposure/probes.ts`, which is the
-single source of truth; `apps/parol/test/routes/probes.ts` re-exports it, and
-`apps/parol/test/routes/authorization.test.ts` sends each probe as each caller. It covers 36 routes
+table and the request builder are defined in `evals/src/parol/exposure/probes.ts` (the home of the
+table; it is composed from `probe-kit.ts`, the base rows in `probes-base.ts` and five fragments, one
+for each package that adds routes, in the order evaluations, retention, feedback, training and pilot,
+and composing refuses a route, a forged-id body or an effect body that two owners give);
+`apps/parol/test/routes/probes.ts` re-exports it, and
+`apps/parol/test/routes/authorization.test.ts` sends each probe as each caller. It covers 46 routes
 that name a matter (method and path pairs, pages and JSON) and seven callers, twice, once with the
-segregation of duties on and once relaxed for a single-person demonstration: 504 cells, 512 tests
-with the coverage checks. The expected answer of each cell is derived from the action table
-(`MATTER_ACTIONS`): the handler for a member whose role allows it, 403 for a member whose role does
-not, 404 for a person with no part in the matter (the same status, headers and body as for a matter
-that does not exist), and a redirect or 401 for a visitor with no session.
+segregation of duties on and once relaxed for a single-person demonstration: 644 cells, and 746 tests
+in the file with the coverage checks and the block for routes that name a global action. The
+expected answer of each cell is derived from the action table (`MATTER_ACTIONS`): the handler for a
+member whose role allows it, 403 for a member whose role does not, 404 for a person with no part in
+the matter (the same status, headers and body as for a matter that does not exist), and a redirect or
+401 for a visitor with no session. For a route that names a global action the answer is derived from
+a hand-written copy of the table of global actions (`DOCUMENTED_GLOBAL_ROLES`) and the callers'
+global roles (`GLOBAL_ROLE_OF`: the associate, reviewer, viewer, outsider and stranger are members,
+the administrator is an administrator, the visitor has none): a member gets 403.
 
 **The authorization probes in the evaluation (`--exposure`).** The same table is run by
 `evals/src/parol/exposure/authorization.ts` against the real application in process, on synthetic
@@ -159,15 +177,17 @@ application, and registers that label in it beside v1 and v2; the application re
 and v2 only, and v3 is an evaluation candidate that the application defines in its table of
 workflows and does not register. It sends four kinds of cell, and `probesRun` is their sum:
 
-- **The matrix** (504 cells): the 36 routes as seven callers in two modes. The callers are an
+- **The matrix** (644 cells, 178 of which should be let in and 466 refused, 364 of the refusals
+  compared with the answer for a matter and records that exist nowhere): the 46 routes as seven
+  callers in two modes. The callers are an
   associate, a reviewer and a viewer of the matter; a "stranger", who is the associate of a second
   matter and the reviewer of a third (so a membership lookup that is not scoped to the matter is
   found); an "outsider" with no membership; an administrator who is not a member; and a visitor with
   no session. A refusal is compared with the answer for a matter and for sub-resource ids that exist
   nowhere (well formed ids of no record), so an answer that gives away that a run, finding, document
   or memo exists is a difference.
-- **Forged ids** (54 cells: 27 requests in two modes): a member who holds the right role on matter A
-  names a record of matter B in each place the application takes an id. There are 25 such places (20
+- **Forged ids** (62 cells: 31 requests in two modes): a member who holds the right role on matter A
+  names a record of matter B in each place the application takes an id. There are 29 such places (24
   in a path, 4 in a body, 1 in a query string). Two requests name a document and a version together
   (the page form that sets the operative version of a document, and the PATCH body that names an
   operative document and version). The application checks the pair against each other, which turns
@@ -181,13 +201,16 @@ workflows and does not register. It sends four kinds of cell, and `probesRun` is
   caller's own, without anyone listing it (the table has no such route today; the two extra requests
   above have an id in the body). Evidence ids inside a decision body are not forged here (the
   application's `forged-ids.test.ts` covers them).
-- **The lists** (98 cells): the seven routes that name no matter and only read (`/`, `/healthz`,
-  `/assets/:name`, `/api/session`, `/matters`, `/api/matters`, `/api/playbooks`) as every caller in
-  both modes, with the title and ids of a matter forbidden to everyone who is not a member of it.
-- **Requests to URLs that no route owns** (924 cells: 154 requests as three callers in two modes). A
+- **The lists** (196 cells): the 14 routes that name no matter and only read (`/`, `/healthz`,
+  `/assets/:name`, `/api/session`, `/matters`, `/api/matters`, `/api/playbooks`, `/evaluations`,
+  `/audit`, `/quickstart`, `/help`, `/training/key`, `/pilot` and `/pilot/measures.csv`) as every
+  caller in both modes, with the title and ids of a matter forbidden to everyone who is not a member
+  of it. A route restricted to a global role is expected to give a member 403 and the administrator
+  its page.
+- **Requests to URLs that no route owns** (1,164 cells: 194 requests as three callers in two modes). A
   visitor, an outsider and a member send GET, POST, PUT, PATCH and DELETE to a matter's page and to
   its API with one, two and three segments after it that no route has (30 requests), to each of the
-  32 route templates of the matrix under every method the table does not probe on it (124 requests),
+  42 route templates of the matrix under every method the table does not probe on it (164 requests),
   and to the path of every wildcard route for every method that is not one of the shell's four
   middleware, at any prefix and whether or not it names a matter (`app.use("/matters/*")` and
   `app.all("/legacy/*")` alike), with the wildcard filled in with two such segments: one URL for
@@ -200,9 +223,9 @@ workflows and does not register. It sends four kinds of cell, and `probesRun` is
 A cell counts toward G1 when it was answered with data, got through the guard, answered differently
 from a matter or record that does not exist, or changed a row; for a URL that no route owns, also
 when it was answered otherwise than with the 404 of a URL that nothing owns. Changes are found by a
-hash of every row of every table (26: the 25 tables of the application and the migration table)
+hash of every row of every table (31: the 30 tables of the application and the migration table)
 before and after each cell, and callers who must be refused are sent a body that would change the
-store if it got through, which is shown to do so for a caller who is let in on 20 of the 24 write
+store if it got through, which is shown to do so for a caller who is let in on 29 of the 33 write
 routes. The other four, which end in resume and cancel, have no such body: a resume or a cancel of a
 finished run is answered 409 to a caller who is let in, whatever body it carries, so no body makes
 it change the store. In its fuller wordings (a clean run's is one of them) the sentence the suite
@@ -228,8 +251,11 @@ at a path the table probes, pass this check, because the route list cannot tell 
 from one that answers. For a wildcard and for the path of a route that names a matter, the cells for
 URLs that no route owns send every method and find the one that answers, and the suite gives them
 the path of each such wildcard (the shell's four middleware excepted) so that they reach the URL it
-answers. For the seven routes that name no matter and only read, nothing sends a method other than
-GET, so a route for every method at one of those paths is not seen. A route for every method at an exact path that names no matter is not
+answers. The suite also throws for a route that names a global action other than the one its probe
+row names, and for a probe that names a global action the hand-written table does not list, because
+the cells derive who is let in from the probe. For the 14 routes that name no matter and only read,
+nothing sends a method other than GET, so a route for every method at one of those paths is not
+seen. A route for every method at an exact path that names no matter is not
 stopped here and is sent nothing by these cells; the canary scan's check of its routes stops it
 unless a probe table names it. A wildcard that the application's own source registers is stopped by
 that check as well, whether it answers or only hands on (see "How the scan knows its routes" below);
@@ -245,7 +271,8 @@ nothing is a body that does not do what it was written to do, and stops the run.
 from the expected one without exposing anything are counted apart (`mismatches`) and are not a count
 of G1. A positive control stops the run (`ExposureControlFailure`, exit 2) if the second matter's
 ids cannot be found in an answer its member reads, no matter title appears in the list its member
-reads, or a write body does not change the store for a caller who is let in.
+reads, a write body does not change the store for a caller who is let in, or a caller holds another
+global role in the store than `GLOBAL_ROLE_OF` says.
 
 **The sentence of the authorization record** holds the counts of the run and is built to fit the
 limit of the results file, which holds a sentence of at most 2000 characters (`SUITE_SENTENCE_MAX`
@@ -254,9 +281,10 @@ wordings, the fullest that fits being the one used: the seven kinds of caller ar
 then the paragraph on changes and the explanations of the cells are compressed, then fewer exposed
 cells are named. The counts, the "not reached" clause, the count of differences in the action table,
 the clause on what is not seen and the first exposed cell stay in every wording, and if nothing fits
-the shortest is cut and says so. The sentence of a clean run is 1864 characters long, 36 under the
+the shortest is cut and says so. The sentence of a clean run is 1867 characters long, 33 under the
 budget, and lands on the second wording (the one without the seven kinds of caller); the fullest
-wording of the same run is 2039 characters. The canary sentence is built to at most 1950 (it lists
+wording of the same run is 2042 characters (the nine selftest runs of this revision print the same
+sentence, and its length was read from them and from the ladder of wordings). The canary sentence is built to at most 1950 (it lists
 fewer hits, down to none, before it goes over). That of a clean run is 1769 to 1773 characters for
 one case, depending on the case and the workflow, and 1797 for both cases at once, so 177 to 181
 characters (153 for both cases) are left for the hits it may name, each as "a canary string" or "an
@@ -273,21 +301,24 @@ owns, as a step of the evaluation. It tests the application and not a model, so 
 a selftest too, and a run without `--exposure` reports G1 as "not evaluated".
 
 On the committed dataset, in selftest runs with `--exposure` (the scripted key oracle; nothing is
-sent), the authorization probes send 1580 cells (504, 54, 98 and 924) and find nothing: no cell was
-answered with data, no answer differed from the expected one, and every cell whose caller should
+sent), the authorization probes send 2,066 cells (644, 62, 196 and 1,164) and find nothing: no cell
+was answered with data, no answer differed from the expected one, and every cell whose caller should
 have been let in reached its handler. In a clean run of the authorization probes the application
-receives 2022 HTTP requests, counting the setup, the sign-ins, the references and the controls
-(counted with a request middleware). The canary scan reads 402 artefacts for the development case
-(`PAROL-D10`) under workflows v1 and v2 and 418 under v3, and for the held-out case (`PAROL-H09`)
-402 under v1 and v2 and 416 under v3; for both cases at once, 804 under v1 and v2 and 834 under v3.
-Workflow v3 sends the support check, so a review of `PAROL-D10` sends 17 prompts and 17 answers
-where v1 and v2 send 9 and 9 (a review of `PAROL-H09` sends 16 and 16 under v3); the other counts of
-the scan (346 response bodies, one memo, 36 tables of stored rows and one log for a case) are the
-same under all three, and so are the authorization cells. G1 passes in each of these runs: it reads
-0 of 1982 for either split alone under v1 and v2, 0 of 1998 for the development split and 0 of 1996
-for the held-out split under v3, and, for a run of both splits, 0 of 2384 in each of the two
-sections under v1 and v2 and 0 of 2414 under v3. All of this is the application with a scripted
-stand-in for the model, and says nothing about any model.
+receives 2,656 HTTP requests, counting the setup, the sign-ins, the references and the controls
+(counted for this revision by counting the calls of the suite's client in a script that is not kept
+in the repository). The canary scan reads 478 artefacts for the development case (`PAROL-D10`) under
+workflows v1 and v2 and 494 under v3, and for the held-out case (`PAROL-H09`) 478 under v1 and v2 and
+492 under v3; for both cases at once, 956 under v1 and v2 and 986 under v3. Workflow v3 sends the
+support check, so a review of `PAROL-D10` sends 17 prompts and 17 answers where v1 and v2 send 9 and 9
+(a review of `PAROL-H09` sends 16 and 16 under v3); the other counts of the scan (418 response
+bodies, one memo, 40 tables of stored rows, which is 20 for each of the two matters, and one log for a
+case) are the same under all three, and so are the authorization cells. G1 passes in each of these
+runs: it reads 0 of 2,544 for either split alone under v1 and v2, 0 of 2,560 for the development
+split and 0 of 2,558 for the held-out split under v3, and, for a run of both splits, 0 of 3,022 in
+each of the two sections under v1 and v2 and 0 of 3,052 under v3. These are the figures of the nine
+selftest runs of this revision (three workflows and three splits, all of which exit 0), which were
+run again for this document. All of this is the application with a scripted stand-in for the model,
+and says nothing about any model.
 
 **What the authorization probes cannot see**, stated in the "Not seen" clause of the sentence the
 suite writes (it closes the sentence of a clean run; a note on the action table, when it differs
@@ -295,17 +326,23 @@ from the documented one, and the first exposed cells follow it when there are an
 inside a decision body; the POST routes that name no matter (sign-in, sign-out, create a matter),
 which are not probed (the suite does sign its callers in, to set them up, and makes its matters
 through the services); and, because matter B is built from the same case as matter A, any difference
-between the two matters but their title and ids. The write routes that have no body that changes the
+between the two matters but their title and ids. The same is true of the three other POST routes that
+name no matter, the start of the training matter and the two forms of the pilot administration,
+which the sentence does not name: no cell of the suite posts to them. The application's own tests do
+(`test/routes/csrf.test.ts` refuses each without its token, and the block of
+`test/routes/authorization.test.ts` for routes with a global action sends each of them, the two
+pilot forms among them, as a visitor and as a person of each global role); the start of the training
+matter has the tests of its route. The write routes that have no body that changes the
 store (resuming or cancelling a finished run) are stated in the part of the sentence about changes,
 not in that clause. Four more things are not seen and are not in the clause, because the sentence
-of a clean run is 36 characters under its budget, and a fixed clause that said these four things
+of a clean run is 33 characters under its budget, and a fixed clause that said these four things
 would be longer than that and would put it on the third wording or a later one, in which the
 paragraph on changes is compressed and then the cells too. A handler on a wildcard that answers only
 some of the URLs under its prefix: each wildcard that is not the shell's own middleware is asked one
 URL, with two segments that no route has, in five methods (a handler on `/legacy/*` that answers
 only `/legacy/secret` is not reached). A route for every method at an exact path that names no
 matter and is not in the table, which these cells send nothing (the canary scan's check of its
-routes stops the suite for it). A route for every method at the path of one of the seven routes that
+routes stops the suite for it). A route for every method at the path of one of the 14 routes that
 name no matter and only read, which a probe table names with a GET: the canary scan's check lets it
 through for that reason, and nothing sends it a method other than GET. And a function declared with
 `defineMiddleware` that answers instead of handing on: it is taken to hand on and is given no URL of
@@ -367,8 +404,8 @@ text reaches a check detail or an error, which is a different test.)
 the held-out split is run), the suite puts the canary matter in the same store as the case, reviews
 the case through the real application (the review service, the routes and the exporter) under the
 workflow of the run, with a scripted key oracle that records everything and is not a language model,
-decides and exports it, and fetches every GET route that the probe tables name: 19, the 12 routes
-that name a matter and the 7 that name none, of which the two static pages (`/healthz` and
+decides and exports it, and fetches every GET route that the probe tables name: 27, the 13 routes
+that name a matter and the 14 that name none, of which the two static pages (`/healthz` and
 `/assets/:name`) are fetched once, anonymously, because they give every caller the same answer. The
 reads are made as the case's associate, reviewer and viewer, the canary matter's associate and
 reviewer, the global administrator, the legal engineer and an anonymous client. Every prompt, model
@@ -380,7 +417,17 @@ ids and display names) are searched for on the JSON routes only: the HTML pages 
 the application in the member picker, by design, so a name there says nothing. The application gives
 a global role no read of a matter it is not a member of, so the administrator, the legal engineer
 and the anonymous client are held to nothing of either matter, and each member to nothing of the
-other matter. The text is searched as written, decoded (JSON escapes, entities and percent escapes)
+other matter. A page that only some global roles may open (the evaluation page, the audit check, the
+trainer's key, the pilot page) is required to load only for a reader whose role the hand-written
+table lists for it; every other reader is sent to it all the same, and the answer, a 403 included,
+is searched. A review fills most tables by itself, but a timer and a reference list are written by
+hand, and a table that is empty on both sides could not show a leak, so the suite writes one closed
+timer (as the matter's associate) and a reference list of two issues (as its reviewer, before the
+review, which closes the list) through the real service for the case's matter and for each canary
+matter, and a control stops the suite when a matter has none. Neither table holds text, so the
+canary strings cannot appear in them: only ids (the matter and user ids in the rows, the matter id in
+audit events) can. Nothing in the scan writes a feedback row or makes an evaluation run, so
+`feedback` and `eval_slot_results` are read and hold nothing. The text is searched as written, decoded (JSON escapes, entities and percent escapes)
 with tags stripped, and with the invisible characters removed: the Unicode default ignorable code
 points and the format characters (soft hyphen, zero-width characters, bidi marks, embeddings and
 isolates, the Arabic letter mark, variation selectors, tag characters, the byte order mark). A Word
@@ -409,7 +456,7 @@ authorization probes send each wildcard that is not the shell's own middleware a
 one URL under its prefix, so
 they find a handler that answers other methods (and count the answer as an exposure); what neither
 half sees is a handler that answers only some of the URLs under its prefix. "Fetched" is counted
-from the requests made, not from the size of a table: 19 today.
+from the requests made, not from the size of a table: 27 today.
 
 Before anything is counted the suite checks itself, and a failed check stops the run with exit 2
 (`ExposureControlFailure`) instead of reporting a count. The scanner must find every planted string
@@ -703,7 +750,9 @@ What is built, metric by metric (`evals/src/parol/score.ts`, `suites.ts`, `timin
   (`--calibration`, a live run or a replay with workflow v3) and unauthorized-data exposure
   (`--exposure`, which tests the application and not a model, and so also runs for a selftest).
 - **Code without a data source:** reviewer correction rate (`correctionRate`, with no qualified
-  review or pilot to feed it).
+  review or pilot to feed it). The application now records the reason code and the minor-edit mark
+  of a decision, and its pilot page counts decisions from stored events; that page's pilot scope is
+  empty on this build and its synthetic scope is a demonstration, so nothing feeds this metric.
 
 **Deviation, latency.** The runner times the stages from the start of extract to the end of verify,
 for the case and repeat, and not from `queued` to `succeeded`: it drives the stages directly, with
@@ -830,9 +879,11 @@ An evaluation run records, in its results file, and the comparison checks:
   digits, dots, underscores and hyphens, at most 64 characters, so that a file or a recording cannot
   put markup into a message that repeats it);
 - the model: provider, the model requested, the host the requests went to (never a path or a
-  credential), and the models the provider named in its responses, where the adapter lets the runner
-  read them (the Anthropic adapter does, from the `model` field of each response; for other
-  providers the file says it is not reported);
+  credential), and the models the provider named in its responses, where the runner can read them
+  (for the Anthropic adapter, from the `model` field of each response, by the reader in
+  `apps/parol/src/usage/reported-model.ts`, which the application uses for every run of its own and
+  the runner re-exports, so the two are one piece of code; for other providers the file says it is
+  not reported);
 - every generation setting: `maxOutputTokens`, `effort`, `maxRetries`, rules analysed at once,
   temperature where the provider accepts one (the OpenAI-compatible adapter sends 0; the others send
   none), and the fallback setting;
@@ -840,10 +891,43 @@ An evaluation run records, in its results file, and the comparison checks:
 - the evaluation version: a label and a hash over the metrics, severity weights, failure factors,
   thresholds and gates;
 - the code: the commit and whether the working tree had uncommitted changes;
-- the number of repeats and the mode (`live`, `selftest`, `simulated` or `replay`).
+- the number of repeats and the mode (`live`, `selftest`, `simulated` or `replay`);
+- optionally, the evidence trail of every rule slot (below).
+
+**The code pin and status settlement.** The application settles statuses in code against the rule's
+flags for every workflow version, v1 and v2 and v3 included, so what these labels do changed from
+the commit that made it, without a new label (a decision of the build that the owner may overturn;
+[document 7](07-delivery-plan.md#decisions-of-part-3-that-the-project-owner-can-overturn), number 3).
+A results file made before that commit therefore carries another `code` pin, and `--compare` of it
+with a later file asks for `--allow-differences code`. No live result exists, so no measurement of a
+model is affected. The answer keys do not move: no key states a status that settlement would change
+(a required rule is never keyed or allowed `not_applicable`, and a rule that is not required or that
+forbids something is never keyed or allowed `missing`; `evals/test/parol-settlement-keys.test.ts`
+reads the 208 slots and fails if a key says otherwise), and the selftest still scores 112 of 112 and
+96 of 96 under v1, v2 and v3. For a real model it could change how a slot is scored: an expected
+`deviation` that a model answers `missing` on the optional rule `ret-1` is now settled to
+`not_applicable`, which is a silent miss unless the hint check on a kept `missing` escalates it, and
+before it was a wrong flag. That is the arithmetic of the scoring table, and has not been observed.
 
 The record of the exposure suite carries the workflow its reviews ran under, label and hash, and
 gate G1 reads it only for a run of the same workflow (see the gates).
+
+**Evidence trails** (the optional field `trails` of the results file, `evals/src/parol/trails.ts`).
+For every rule slot of every run the file records the split, the case, the rule, the repeat, the
+verification state and the escalation codes; which paragraphs retrieval showed, by document label and
+paragraph index, each with the reason (located, definition, cross reference, hint), or that the whole
+document was shown, or that nothing was sent because the bundle was over budget; which paragraphs the
+finding cited, with the role, the quote check and, for a verified quote, the offsets of the quote
+inside the paragraph; and the ids of the checks that passed, failed or did not apply. For each case
+it records a digest of the text of the case's documents as the run read them, and a later reader
+(the page, or a person) compares it with the case files on disk: a paragraph index names the same
+paragraph only while the files are the ones the run read. **A trail never holds** a paragraph, a
+quotation, a check detail, a prompt or a model answer. It is optional: a file made before trails
+existed has none, and a run that has more than 20,000 trails, or whose repeats of a case read
+different text, or that could not say what text it read, records none and says so in its notes,
+because a results file that cannot be read back is worse than one without trails. Trails make a
+results file larger: a development selftest results file for one repeat, with the exposure record,
+was 349,333 bytes on this revision.
 
 `--compare` refuses to compare two runs that differ in anything other than the variable under test,
 which is the workflow, unless told which differences are expected with `--allow-differences`, and
@@ -868,9 +952,18 @@ record of the calibration set is refused if it lacks the count of calls that ret
 label (`result.failed`), or the outcome of every call (`callOutcomes`). There are no defaults for
 these, because a default of zero would read as a clean result; a file made before they existed is
 refused, not read as clean. A file with no suites or no recording still reads, as one that ran
-neither. In these records a count is a whole number that is not negative, a rate's numerator is at
-most its denominator, and the calls without a verdict of a label are inside the pairs of that label
-that are flagged (supported) or not caught (unsupported). The format number is unchanged. After a
+neither, and so does a file with no `trails`. In these records a count is a whole number that is not
+negative, a rate's numerator is at most its denominator, and the calls without a verdict of a label
+are inside the pairs of that label that are flagged (supported) or not caught (unsupported). The
+format number is unchanged. **The trails are read as strictly.** Every object is strict, so a field
+this version does not know, or a string that is text, is refused. Roles, quote checks, escalation
+codes, document labels and the reasons a paragraph was shown are closed lists; a check id matches
+`^[a-z][a-z0-9_]{0,63}$`; case keys and rule keys have the alphabets of the page document; an offset
+is a whole number, only on a verified quote, with the start before the end. A file holds at most
+20,000 trails, a trail at most 400 shown paragraphs, 40 cited paragraphs and 40 check ids in a list;
+the trails are sorted and each combination of split, case, rule and repeat is there once; each case
+they name has its text digest; and a whole-document read, or a bundle that was not sent, lists no
+paragraph. After a
 run has written its file it parses the text back: if this version of the tool cannot read it (a
 sentence longer than the file allows, a count that the reader refuses), the run prints that the file
 is too long or malformed for its own reader, keeps the file as written, and exits 1 unless it has
@@ -922,7 +1015,8 @@ off.
 - **What is in the file.** The answers quote the (synthetic) documents; the prompts are not stored,
   only their hashes. The recording is written beside the results file, and the repository ignores
   every file that ends in `.responses.jsonl` wherever `--out` puts it. A results file holds counts,
-  ids, hashes and closed codes, and never a document, a quotation, a prompt or a model answer.
+  ids, hashes and closed codes, and never a document, a quotation, a prompt or a model answer; the
+  trails of a run are of the same kind.
 - **Failure.** A recording that cannot be created stops a live run before the first call (an
   existing file is never overwritten). One that cannot be completed is reported in the results file
   and on stderr as not replayable; the run's results are not affected. After a line that cannot be
@@ -983,35 +1077,38 @@ pnpm eval:parol                             # a live run: prints the plan and ex
 pnpm eval:parol --yes --runs 3              # a live run (none has been made)
 ```
 
-| Option                        | Meaning                                                                                                                                 |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `--selftest`                  | Run against a perfect scripted oracle that reads the answer key. No key, no `--yes`, nothing sent                                       |
-| `--simulate`                  | Run against the demo's scripted simulated reader. Labelled SIMULATED. No key, nothing sent                                              |
-| `--split dev\|heldout\|all`   | The cases to run. Default `dev`. The held-out split is sealed (see below)                                                               |
-| `--allow-heldout`             | Allow a run that touches the held-out split                                                                                             |
-| `--workflow v1\|v2\|v3`       | The workflow version. Default `v1`. v3 pins the support prompt and the `superseded_evidence` check. The exposure suites review under it |
-| `--replay <recording>`        | Answer from a recording of a live run instead of a model: no key, no `--yes`, nothing sent                                              |
-| `--no-record`                 | Do not write a recording of a live run's answers (written by default beside the results file)                                           |
-| `--calibration`               | Also run the support checker's 40 calibration pairs (workflow v3; a live run or a replay), for G11                                      |
-| `--exposure`                  | Also run the exposure suites for G1: authorization probes, canary scan, upload replay. Sends nothing                                    |
-| `--runs <k>`                  | Repeats of every case. Default 1. The gates are written for 3                                                                           |
-| `--case <key>`                | Run only this case; repeat for several. The injection twin of a case runs with it                                                       |
-| `--yes`                       | Spend the money. Without it a live run prints its plan and exits 3                                                                      |
-| `--max-cost <usd>`            | Refuse to run when the cost upper bound is higher, and stop a run whose spend passes it. Default 2.00                                   |
-| `--assumed-output-tokens <n>` | Output tokens assumed per call in the cost bound. Default 1500                                                                          |
-| `--prices <file.json>`        | Prices on top of `evals/prices.json` (which has not been checked against a live price list)                                             |
-| `--out <file.json>`           | Where to write the results. Default `evals/results/parol-<UTC time>.json`, ignored by git                                               |
-| `--compare <previous.json>`   | Compare with an earlier results file (the baseline) after the run                                                                       |
-| `--allow-differences <names>` | Pins expected to differ, comma separated                                                                                                |
-| `--playbook <file.yaml>`      | The playbook. It must be the version the answer keys were built for                                                                     |
+| Option                                                  | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--selftest`                                            | Run against a perfect scripted oracle that reads the answer key. No key, no `--yes`, nothing sent                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `--simulate`                                            | Run against the demo's scripted simulated reader. Labelled SIMULATED. No key, nothing sent                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `--split dev\|heldout\|all`                             | The cases to run. Default `dev`. The held-out split is sealed (see below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `--allow-heldout`                                       | Allow a run that touches the held-out split                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `--workflow v1\|v2\|v3`                                 | The workflow version. Default `v1`. v3 pins the support prompt and the `superseded_evidence` check. The exposure suites review under it                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `--replay <recording>`                                  | Answer from a recording of a live run instead of a model: no key, no `--yes`, nothing sent                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `--no-record`                                           | Do not write a recording of a live run's answers (written by default beside the results file)                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `--calibration`                                         | Also run the support checker's 40 calibration pairs (workflow v3; a live run or a replay), for G11                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `--exposure`                                            | Also run the exposure suites for G1: authorization probes, canary scan, upload replay. Sends nothing                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `--runs <k>`                                            | Repeats of every case. Default 1. The gates are written for 3                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `--case <key>`                                          | Run only this case; repeat for several. The injection twin of a case runs with it                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `--yes`                                                 | Spend the money. Without it a live run prints its plan and exits 3                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `--max-cost <usd>`                                      | Refuse to run when the cost upper bound is higher, and stop a run whose spend passes it. Default 2.00                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `--assumed-output-tokens <n>`                           | Output tokens assumed per call in the cost bound. Default 1500                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `--prices <file.json>`                                  | Prices on top of `evals/prices.json` (which has not been checked against a live price list)                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `--out <file.json>`                                     | Where to write the results. Default `evals/results/parol-<UTC time>.json`, ignored by git                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `--compare <previous.json>`                             | Compare with an earlier results file (the baseline) after the run                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `--baseline <file.json>` with `--candidate <file.json>` | Compare two results files that already exist, and run nothing: no key, nothing sent, the same Markdown comparison as `--compare` and the same refusals. Given together, and refused with any option that runs something (`--selftest`, `--simulate`, `--replay`, `--calibration`, `--exposure`, `--no-record`, `--split`, `--allow-heldout`, `--workflow`, `--runs`, `--case`, `--yes`, `--max-cost`, `--assumed-output-tokens`, `--prices`, `--out`, `--compare`). `--allow-differences`, `--playbook` and `--publish` can be used with them |
+| `--publish <data-folder>`                               | After a comparison, write it as a page document into `<data-folder>/evaluations`, where the application's comparison page reads it (the folder `PAROL_DATA_DIR` names). Needs `--compare`, or `--baseline` and `--candidate`. A comparison that was refused or is unfinished is not published; a selftest, a simulated run or a replay is published and labelled as such                                                                                                                                                                      |
+| `--open-heldout-trails`                                 | Put the evidence trails of the held-out split's changed slots into the page document: the answer key and its passages and, for each version, where it looked and what it cited. They are left out by default; the document records that they were opened, the page raises the contamination warning in capitals, and the command prints a warning when the document holds any. Needs `--publish`                                                                                                                                              |
+| `--allow-differences <names>`                           | Pins expected to differ, comma separated                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `--playbook <file.yaml>`                                | The playbook. It must be the version the answer keys were built for                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
-| Exit code | Meaning                                                                                                                                                                                                                                                                |
-| --------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-|         0 | The run finished. Gates that fail are results, not errors                                                                                                                                                                                                              |
-|         1 | Something went wrong: a bad option, a failed selftest, no credentials, a fatal answer from the provider, a refused comparison, an exposure suite that cannot cover the application's routes, a results file that this version cannot read back (the file is kept)      |
-|         2 | An integrity failure: the answer keys, a case file or the calibration set differ from the hashes in `splits.json`, an anchor of a key or a calibration pair does not resolve, or an exposure suite found its own controls or the upload steps disagreeing with the key |
-|         3 | The spend guard refused to run or stopped the run: no `--yes`, a cost bound above `--max-cost`, or recorded spend above it                                                                                                                                             |
-|       130 | Interrupted with Ctrl-C, SIGTERM or SIGHUP. What finished is kept and marked incomplete                                                                                                                                                                                |
+| Exit code | Meaning                                                                                                                                                                                                                                                                                                               |
+| --------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|         0 | The run finished. Gates that fail are results, not errors                                                                                                                                                                                                                                                             |
+|         1 | Something went wrong: a bad option, a failed selftest, no credentials, a fatal answer from the provider, a refused comparison, a page document that could not be built or written, an exposure suite that cannot cover the application's routes, a results file that this version cannot read back (the file is kept) |
+|         2 | An integrity failure: the answer keys, a case file or the calibration set differ from the hashes in `splits.json`, an anchor of a key or a calibration pair does not resolve, or an exposure suite found its own controls or the upload steps disagreeing with the key                                                |
+|         3 | The spend guard refused to run or stopped the run: no `--yes`, a cost bound above `--max-cost`, or recorded spend above it                                                                                                                                                                                            |
+|       130 | Interrupted with Ctrl-C, SIGTERM or SIGHUP. What finished is kept and marked incomplete                                                                                                                                                                                                                               |
 
 **The plan comes first.** Before any call, a run prints its plan, which is a dry run of the real
 stages against a generator that sends nothing. For the 14 development cases and their two injection
@@ -1022,7 +1119,16 @@ bound, counting a repair call for every rule, no higher than `--max-cost`; the A
 then held to the limit request by request. A provider other than Anthropic reports no usage here, so
 only the bound is checked. These guards are those of the Clausewise harness (`evals/README.md`) and
 have been exercised only against scripted generators and a loopback server standing in for the
-provider.
+provider. The application has its own spend guard (`apps/parol/src/usage`, document 6, "Spend
+limits"), with its own planner, price loader and budget arithmetic, because a review is planned
+inside a synchronous transaction and the evaluation plans by running the real stages against a
+generator that sends nothing. The two are held to each other by tests: the application's planner and
+the evaluation's dry run must count the same calls and the same input tokens for every case of the
+dataset, the injection twins included, under every workflow version
+(`evals/test/parol-app-plan-parity.test.ts`), and the budget arithmetic and the price loader are
+pinned in the same way (`parol-app-budget-parity.test.ts`, `parol-app-prices-parity.test.ts`).
+The reader of the model a provider names in its responses is one file, owned by the application and
+re-exported by the runner.
 
 **Integrity and tamper detection.** Every run, selftest or not, first checks that it measures what
 was committed, and exits 2 before anything is sent when it does not. It recomputes the hash of each
@@ -1078,18 +1184,21 @@ stop anyone opening a held-out file, and "one held-out run per candidate" is a n
 
 A demonstration of the machinery, and not a result about any model. The demo's simulated reader
 (`apps/parol/src/demo`) is a table written in advance from [document 4](04-worked-example.md): it
-answers the worked example from the passages it is shown and declines every other document, so it
-can show a retrieval gap and its fix and nothing else. Every report and results file says so in
-capitals.
+reads two document sets, the worked example and the training matter T01 (the worked example with one
+instruction paragraph added to the NDA; T01 is not in the dataset or either split and is never
+scored), and declines every other document, including one changed word of either. From the
+passages it is shown it answers the worked example, so it can show a retrieval gap and its fix and
+nothing else. For T01 it also gives one planted wrong answer by script (document 8). Every report
+and results file says so in capitals.
 
 ```sh
 pnpm eval:parol --simulate --workflow v1 --out evals/results/sim-v1.json
 pnpm eval:parol --simulate --workflow v2 --compare evals/results/sim-v1.json --out evals/results/sim-v2.json
 ```
 
-Both ran on the 14 development cases and their two injection twins, one repeat, from a working tree
-with uncommitted changes; the runs wrote their files outside the repository. The counts of the two
-reports:
+Both ran on the 14 development cases and their two injection twins, one repeat. They were run
+again for this revision, from a working tree in which other documents were being edited, and gave
+the counts below; the runs wrote their files outside the repository. The counts of the two reports:
 
 | SIMULATED, one repeat       | Workflow v1 (retrieval R1)  | Workflow v2 (retrieval R2) |
 | --------------------------- | --------------------------- | -------------------------- |
@@ -1118,7 +1227,8 @@ What the comparison shows, and why:
   effect of hypothesis H2). The cause is retrieval: R2 adds the amendment spans `D2-p3` and `D2-p4`
   to the bundles of the clauses they change, the reader reads the passages it is shown, and nothing
   else moves. The other 110 slots are identical.
-- **Most of the failures are the reader declining.** It reads only the worked example, so thirteen
+- **Most of the failures are the reader declining.** Of the dataset it reads only the worked
+  example, so thirteen
   of the fourteen cases (104 of 112 slots) are `undetermined` and escalated as `model_abstained`. That is why
   accuracy, extraction recall and the unnecessary escalation rate are poor under both versions and
   unchanged between them. The one required escalation that is met (`PAROL-D12`, `parties_mismatch`)
@@ -1136,6 +1246,51 @@ What the comparison shows, and why:
   `repeats`, before anything runs; so is comparing a simulated baseline with a selftest candidate,
   naming `model` and `mode`. Nothing was written in either case.
 
+### The comparison page
+
+_Built, and tested against scripted comparisons; no live comparison exists._ The application shows a
+comparison on `GET /evaluations`, for the legal engineer and the administrator (a member gets 403,
+a visitor is sent to sign in; [document 6](06-access-and-governance.md#authorization)). The page is
+read-only: it has no form and no button, nothing on it promotes a version, and it reads published
+files and never a matter. The data is a page document that the evaluation command writes with
+`--publish` (the contract is in [document 3](03-data-model-and-contracts.md#the-comparison-page-document)):
+
+```sh
+pnpm eval:parol --simulate --workflow v1 --out evals/results/sim-v1.json
+pnpm eval:parol --simulate --workflow v2 --compare evals/results/sim-v1.json --out evals/results/sim-v2.json --publish ./data/parol
+```
+
+The second command is the one the page's empty state shows. `./data/parol` is the folder that
+`PAROL_DATA_DIR` names. With no comparison published the page says so and shows that command. The page
+lays out, in this order: a banner in capitals for each scripted, simulated or replayed run in the
+comparison; the two versions, what they were run on and the differences between the runs; a switch
+between the splits that the file holds, with the number of cases and repeats behind each; the 14
+gates for each side with the reason a gate is "not evaluated" visible; the decision rule, always worded
+as a gate result and followed by the sentence that it is not a recommendation; the metric rows with
+their counts; the slots that changed, regressions first, with "N of M paired slots changed"; the
+evidence trail of the selected slot; a draft of a promotion record as text in a read-only box; and a
+footer that says the page shows a file and does not prove who made it or that a model was called.
+
+The evidence trail has three parts: the answer key's passages for the slot; for each version and
+repeat, the status and the scores; and, for each version and repeat, where it looked (which
+paragraphs retrieval put in front of the reader, and why, or the whole document, or nothing sent),
+what it cited (paragraph, role, quote check and the offsets of a verified quote), which checks passed,
+failed or did not apply, and the escalation codes. It says: "This page shows where each version looked
+and what it cited. It does not show what it wrote." A results file made before trails existed, or a
+case whose files have changed since the run, shows no trail and says why. **The dry run of the
+retrieval gap can be seen on the page.** In the simulated comparison above, the changed slot
+`PAROL-D05` `dur-1` shows, under v1, that the reader was not shown paragraph 3 of the amendment (D2)
+and cited paragraph 19 of the NDA (D1) as governing; under v2 it was shown D2 paragraph 3 as a cross
+reference and cited it as governing, with D1 paragraph 19 as superseded (read from the page document
+that the second command writes, on this revision). That is a scripted reader showing a retrieval gap
+and its fix, not a result about any model.
+
+What the page does not do: it shows no accuracy, no adoption and no time saved of anything; it shows
+nothing of a live run because none exists; the held-out set is sealed in it (a held-out changed slot
+says its trail is sealed, and `--open-heldout-trails` puts it in, records that in the document and
+makes the page raise the contamination warning in capitals); the draft promotion record is text that
+a person fills in and signs elsewhere; and the fingerprint of the file is not authentication.
+
 ## The improvement cycle
 
 A controlled experiment, specified in the draft protocol `docs/parol/experiments/EXP-001.md`,
@@ -1146,7 +1301,9 @@ which is to be frozen before the baseline runs.
 2. **Seal the held-out set.** It is not run, opened in the inspector, or used to debug until a
    candidate is ready for a promotion decision. Each candidate gets one held-out run (k = 3). If a
    held-out result leads to a further change, the report says the held-out set is now contaminated
-   for that change.
+   for that change. The comparison page keeps the seal: a held-out changed slot is listed, and its
+   answer key, its passages and its evidence trail are not in the page document unless the command
+   was given `--open-heldout-trails`, which the document records and the page shows in capitals.
 3. **Baseline on dev**, k = 3.
 4. **Choose the failure.** Rank failing slots by their SWF contribution summed over repeats.
    Hypothesis **H1**, written in the draft protocol: because R1 retrieves by category and an amendment can change a
@@ -1168,17 +1325,17 @@ which is to be frozen before the baseline runs.
 
 Where the tooling stands for each step:
 
-| Step               | Tooling today                                                                                                                                                                                                                                                                                                  |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. Freeze          | The pins are recorded in every results file. Workflows v1, v2 and v3 are defined for the evaluation (the application registers and ships v1 and v2 only; v3 is an evaluation candidate). The held-out hash is in `splits.json` and was committed in `66a23f4`; it must stay unchanged until the first baseline |
-| 2. Seal            | `--allow-heldout`, the ledger and the contamination note, for live runs of the runner. Nothing guards the files themselves                                                                                                                                                                                     |
-| 3. Baseline on dev | `pnpm eval:parol --workflow v1 --runs 3 --yes`, with `--max-cost` raised (the cost bound of the whole dev set is above the default limit). Not run. The dev set is complete: 14 cases and 2 twins                                                                                                              |
-| 4. Choose          | The report's slot table lists failing slots by weighted failure, largest first                                                                                                                                                                                                                                 |
-| 5. Inspect         | Not built for evaluation runs: the results file holds no trail. The same documents can be uploaded to a matter in the application, whose inspector shows the checks and evidence of its own run                                                                                                                |
-| 6. Revise          | R2 is built and registered as workflow v2. The `superseded_evidence` check is built as check set C2 and, with the support prompt, is workflow v3 (retrieval R2, checks C1 and C2), registered for evaluation and not shipped                                                                                   |
-| 7 and 8. Re-runs   | The same command with `--workflow v2` or `v3`; a change of scoring or of an answer key is re-applied to a recording with `--replay`. The held-out set exists; no held-out run has been made                                                                                                                    |
-| 9. Compare         | `--compare`, with the paired list of changed slots                                                                                                                                                                                                                                                             |
-| 10. Recommend      | The decision rule is computed and worded as a gate result. The promotion record is a document, not tooling                                                                                                                                                                                                     |
+| Step               | Tooling today                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Freeze          | The pins are recorded in every results file. Workflows v1, v2 and v3 are defined for the evaluation (the application registers and ships v1 and v2 only; v3 is an evaluation candidate). The held-out hash is in `splits.json` and was committed in `66a23f4`; it must stay unchanged until the first baseline                                                                                                                                                                                        |
+| 2. Seal            | `--allow-heldout`, the ledger and the contamination note, for live runs of the runner. Nothing guards the files themselves                                                                                                                                                                                                                                                                                                                                                                            |
+| 3. Baseline on dev | `pnpm eval:parol --workflow v1 --runs 3 --yes`, with `--max-cost` raised (the cost bound of the whole dev set is above the default limit). Not run. The dev set is complete: 14 cases and 2 twins                                                                                                                                                                                                                                                                                                     |
+| 4. Choose          | The report's slot table lists failing slots by weighted failure, largest first                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 5. Inspect         | Built in part. The results file records the trail of each slot (which paragraphs were shown and why, which were cited with their role and quote check, the checks and the escalation codes: ids, offsets and codes) and the comparison page shows it for a changed slot. Not kept: the extract output, the text of the bundle and of the analysis, and the quotation. The same documents can be uploaded to a matter in the application, whose inspector shows the checks and evidence of its own run |
+| 6. Revise          | R2 is built and registered as workflow v2. The `superseded_evidence` check is built as check set C2 and, with the support prompt, is workflow v3 (retrieval R2, checks C1 and C2), registered for evaluation and not shipped                                                                                                                                                                                                                                                                          |
+| 7 and 8. Re-runs   | The same command with `--workflow v2` or `v3`; a change of scoring or of an answer key is re-applied to a recording with `--replay`. The held-out set exists; no held-out run has been made                                                                                                                                                                                                                                                                                                           |
+| 9. Compare         | `--compare`, with the paired list of changed slots; with `--publish` the comparison is also a page in the application (the comparison page above)                                                                                                                                                                                                                                                                                                                                                     |
+| 10. Recommend      | The decision rule is computed and worded as a gate result, on the page too. The page drafts the text of a promotion record, with every blank left blank. The promotion record is a document that a person signs, not tooling                                                                                                                                                                                                                                                                          |
 
 **Decision rule.**
 
@@ -1224,8 +1381,9 @@ overfitting) are listed as unchecked and not assumed.
 | Support checker, caught / flagged |             |              |        | 18/20, 2/20 |      |
 
 Empty until real runs exist. `--compare` prints this table with the same fourteen rows for each
-split in the two files, and the paired list of changed slots under it; the table above is that
-layout, left empty on purpose. R2 adds spans to some bundles, so a modest increase in input tokens
+split in the two files, and the paired list of changed slots under it; the comparison page shows the
+same rows, the gates and the slots in the application; the table above is that layout, left empty on
+purpose. R2 adds spans to some bundles, so a modest increase in input tokens
 per run is expected; the question for G13 is whether it stays within budget. (The retrieval stage's
 estimate for the `dur-1` bundle of the worked example is 841 under R1 and 886 under R2, which is an
 estimate of size and not a token count of any model.)
@@ -1234,20 +1392,20 @@ estimate of size and not a token count of any model.)
 
 ### Root-cause taxonomy
 
-| Code                         | Meaning                                                          | Usual fix                                              |
-| ---------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------ |
-| `retrieval_gap`              | A passage needed for the rule was not in the bundle              | Retrieval policy                                       |
-| `superseded_evidence`        | An amended or deleted clause was relied on                       | Retrieval, precedence check                            |
-| `defined_term_misread`       | A defined term's meaning was ignored or confused                 | Retrieval of definitions, prompt                       |
-| `paraphrase_miss`            | Unusual wording was not recognised as covering the topic         | Extract prompt, keyword hints                          |
-| `over_flagging`              | Uncertainty turned into a deviation where the text was compliant | Prompt, abstention wording                             |
-| `status_semantics`           | Missing, not applicable and absence rules confused               | Settlement code, prompt                                |
-| `quote_error`                | The quote was paraphrased or spliced                             | Prompt, schema description                             |
-| `output_failure`             | Schema failure, refusal or cut-off                               | Schema, output limit                                   |
-| `instruction_susceptibility` | Document text changed the outcome                                | Fencing, prompt, a release blocker                     |
-| `party_confusion`            | Obligations of the wrong party were assessed                     | Prompt, client name                                    |
-| `playbook_ambiguity`         | The rule itself admits two readings                              | Playbook revision (new version)                        |
-| `answer_key_error`           | The key is wrong                                                 | Fix the key with a recorded reason, re-score every run |
+| Code                         | Meaning                                                          | Usual fix                                                |
+| ---------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------- |
+| `retrieval_gap`              | A passage needed for the rule was not in the bundle              | Retrieval policy                                         |
+| `superseded_evidence`        | An amended or deleted clause was relied on                       | Retrieval, precedence check                              |
+| `defined_term_misread`       | A defined term's meaning was ignored or confused                 | Retrieval of definitions, prompt                         |
+| `paraphrase_miss`            | Unusual wording was not recognised as covering the topic         | Extract prompt, keyword hints                            |
+| `over_flagging`              | Uncertainty turned into a deviation where the text was compliant | Prompt, abstention wording                               |
+| `status_semantics`           | Missing, not applicable and absence rules confused               | Prompt (settlement is in code in every workflow version) |
+| `quote_error`                | The quote was paraphrased or spliced                             | Prompt, schema description                               |
+| `output_failure`             | Schema failure, refusal or cut-off                               | Schema, output limit                                     |
+| `instruction_susceptibility` | Document text changed the outcome                                | Fencing, prompt, a release blocker                       |
+| `party_confusion`            | Obligations of the wrong party were assessed                     | Prompt, client name                                      |
+| `playbook_ambiguity`         | The rule itself admits two readings                              | Playbook revision (new version)                          |
+| `answer_key_error`           | The key is wrong                                                 | Fix the key with a recorded reason, re-score every run   |
 
 The taxonomy and the record below are a method for people. No code assigns a root cause: the
 report names the kind of failure a slot has (`silent_miss`, `false_alarm` and so on), which is the
@@ -1269,6 +1427,11 @@ score's word and not the cause's.
 - Regression risk and which cases cover it: <...>
 - Outcome after the fix (dev, then held-out): <filled in after runs>
 ```
+
+The bundle and verify parts of the trail line can be filled from the comparison page, where a trail
+was recorded. A recorded trail has no extract output and no analysis text (it holds the paragraphs
+shown and why, the paragraphs cited with their roles, the checks and the escalation codes), so those
+two parts are left empty, or are read from the application's inspector on the same documents.
 
 ## Qualified review
 
