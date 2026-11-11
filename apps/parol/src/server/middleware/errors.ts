@@ -2,6 +2,7 @@ import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HTTPException } from "hono/http-exception";
 import { ZodError } from "zod";
+import { GLOBAL_ACTIONS } from "../../auth/actions.js";
 import { CsrfError } from "../../auth/csrf.js";
 import { UploadError } from "../../module-contracts.js";
 import { ForbiddenError, RunNotReadyError, SpendRefusedError } from "../../services/errors.js";
@@ -16,6 +17,7 @@ import {
   StaleRunError,
   ValidationError,
 } from "../../store/errors.js";
+import { guidanceFor, keyForStatus, type GuidanceKey } from "../guidance.js";
 import { answersInJson, isApiPath } from "../http.js";
 import { urls } from "../urls.js";
 
@@ -41,9 +43,15 @@ export interface SafeError {
   extra: Record<string, unknown>;
   /** The class name for the access log, set only for failures nobody expected. */
   logName: string | null;
+  /**
+   * Which sentence an error page gives (`guidance.ts`). It is chosen by the kind of failure and
+   * never by anything in the request, and it is not in the JSON body, which keeps its `kind` and
+   * `message` as they were.
+   */
+  guidance: GuidanceKey;
 }
 
-const TITLES: Record<number, string> = {
+export const TITLES: Readonly<Record<number, string>> = {
   400: "That request was not valid",
   401: "Sign in first",
   403: "You may not do that",
@@ -100,7 +108,8 @@ const safe = (
   message: string,
   extra: Record<string, unknown> = {},
   logName: string | null = null,
-): SafeError => ({ status, kind, title: titleFor(status), message, extra, logName });
+  guidance: GuidanceKey = keyForStatus(status),
+): SafeError => ({ status, kind, title: titleFor(status), message, extra, logName, guidance });
 
 /** The same answer for an unknown route, a matter the caller may not know of, and a missing row. */
 export const NOT_FOUND: SafeError = safe(404, "not_found", "Not found.");
@@ -108,11 +117,30 @@ export const NOT_FOUND: SafeError = safe(404, "not_found", "Not found.");
 const internal = (err: unknown): SafeError =>
   safe(500, "internal", "Something went wrong on the server.", {}, errorNameOf(err));
 
+/**
+ * Which of the three refusals a `ForbiddenError` is, told by the action it names: a request for a
+ * foreign address (`host`), a page that names no matter and is for a global role (`global_role`),
+ * or an action on a matter that the person's role on it does not allow (`role`). All three are
+ * decided before the request could learn anything about a matter it has no part in.
+ */
+function forbiddenGuidance(err: ForbiddenError): GuidanceKey {
+  if (err.action === "host") return "host";
+  return Object.hasOwn(GLOBAL_ACTIONS, err.action) ? "global_role" : "role";
+}
+
 export function toSafeError(err: unknown): SafeError {
   if (err instanceof CsrfError)
-    return safe(403, "csrf", "The form is no longer valid. Reload the page and try again.");
+    return safe(
+      403,
+      "csrf",
+      "The form is no longer valid. Reload the page and try again.",
+      {},
+      null,
+      "csrf",
+    );
   if (err instanceof NotFoundError) return NOT_FOUND;
-  if (err instanceof ForbiddenError) return safe(403, "forbidden", "You may not do that.");
+  if (err instanceof ForbiddenError)
+    return safe(403, "forbidden", "You may not do that.", {}, null, forbiddenGuidance(err));
   // A detail object that broke the audit rules is a defect in our code, not in the request.
   if (err instanceof AuditDetailError) return internal(err);
   if (err instanceof ValidationError)
@@ -195,8 +223,17 @@ export function toSafeError(err: unknown): SafeError {
  * sees "Something went wrong" has something to quote. It is made by the server for the request,
  * never taken from it. Pages for every other status get none, which keeps a 404 for a matter the
  * caller may not know of byte for byte the same as a 404 for a matter that does not exist.
+ *
+ * `guidance` names the sentence the page gives (`guidance.ts`). The shell chooses it from the kind
+ * of failure, so a 403 for a missing form token, a foreign address, a role on a matter and a global
+ * role read differently. It is a key from a closed list, never text, and nothing of the request.
  */
-export type RenderError = (status: number, title: string, requestId?: string) => string;
+export type RenderError = (
+  status: number,
+  title: string,
+  requestId?: string,
+  guidance?: GuidanceKey,
+) => string;
 
 const escapeHtml = (text: string): string =>
   text.replace(/[&<>"']/g, (ch) =>
@@ -212,11 +249,20 @@ const escapeHtml = (text: string): string =>
   );
 
 /**
- * The page used when the application gives none. A fixed title and a link home; nothing from the
- * request, and nothing inline, to satisfy the content security policy.
+ * The page used when the application gives none. A fixed title, the fixed sentence for the kind of
+ * failure and a link home; nothing from the request, and nothing inline, to satisfy the content
+ * security policy. The sentence comes from the status when no key is given, so a request that
+ * never reached the application (a header too large, a request that took too long) still says what
+ * happened and what to do.
  */
-export function builtinErrorPage(status: number, title: string, requestId?: string): string {
+export function builtinErrorPage(
+  status: number,
+  title: string,
+  requestId?: string,
+  guidance?: GuidanceKey,
+): string {
   const heading = escapeHtml(title);
+  const sentence = escapeHtml(guidanceFor(status, guidance).text);
   const reference =
     requestId === undefined ? "" : `<p>Reference: <code>${escapeHtml(requestId)}</code></p>`;
   return [
@@ -227,7 +273,7 @@ export function builtinErrorPage(status: number, title: string, requestId?: stri
     `<title>${heading} | Parol</title>`,
     '<link rel="stylesheet" href="/assets/parol.css">',
     "</head><body><main>",
-    `<p>Error ${status}</p><h1>${heading}</h1>${reference}`,
+    `<p>Error ${status}</p><h1>${heading}</h1><p>${sentence}</p>${reference}`,
     `<p><a href="${urls.home()}">Back to the start</a></p>`,
     "</main></body></html>",
   ].join("");
@@ -257,9 +303,9 @@ export function errorResponse(
   const reference = error.status >= 500 ? requestId : undefined;
   let html: string;
   try {
-    html = render(error.status, error.title, reference);
+    html = render(error.status, error.title, reference, error.guidance);
   } catch {
-    html = builtinErrorPage(error.status, error.title, reference);
+    html = builtinErrorPage(error.status, error.title, reference, error.guidance);
   }
   return c.html(html, error.status);
 }

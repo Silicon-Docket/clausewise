@@ -1,4 +1,6 @@
+import { guidanceFor, type GuidanceKey } from "../guidance.js";
 import { urls } from "../urls.js";
+import { TodoText } from "./components.js";
 import { localPath } from "./forms.js";
 import { Layout, render, type Chrome } from "./layout.js";
 
@@ -10,6 +12,12 @@ export interface ErrorPageProps {
   title: string;
   /** A fixed sentence saying what happened and what to do. Never text from the request. */
   message: string;
+  /**
+   * The part of `message` that says what to do, which the page sets in bold. Required, so that a
+   * caller cannot forget it: an error page that says what happened and not what to do is the thing
+   * this field exists to prevent. Normally a sentence that occurs inside `message`.
+   */
+  todo: string;
   /** Where "back" goes: a path on this site. Anything else is ignored. Defaults to the matters list. */
   backHref?: string;
   backLabel?: string;
@@ -39,7 +47,9 @@ export function ErrorPage(props: ErrorPageProps) {
       <div class="error-page" role="alert">
         <p class="error-code">Error {props.status}</p>
         <h1>{props.title}</h1>
-        <p>{props.message}</p>
+        <p>
+          <TodoText text={props.message} todo={props.todo} />
+        </p>
         {reference === null ? null : (
           <p class="technical">
             Reference: <code>{reference}</code>
@@ -56,35 +66,27 @@ export function ErrorPage(props: ErrorPageProps) {
 }
 
 /**
- * One sentence for each status the shell answers with. They say what happened and what to do, and
- * are the same for every request, so a refusal cannot be told from another by its words.
- */
-const MESSAGES: Record<number, string> = {
-  400: "The request could not be understood. Go back, check the form and try again.",
-  401: "You need to sign in first.",
-  403: "Your role on this matter does not allow that.",
-  404: "There is nothing here, or you are not a member of the matter.",
-  409: "The matter changed, or the request does not fit its state. Reload the page and try again.",
-  413: "That upload is larger than Parol accepts.",
-  422: "That file could not be accepted. Parol reads .docx and .txt files.",
-  500: "Something went wrong on the server. Quote the reference below if you report it.",
-};
-const FALLBACK_MESSAGE = "The request could not be completed.";
-
-/**
  * The shell's error renderer (`AppOptions.renderError`), made from `ErrorPage`. The shell calls it
- * with a status, a fixed title and, for a server fault, the request id, and with no request and so
- * no session: the page is the signed-out one, and the same bytes for the same status, which keeps
- * the 404 for a matter that is not yours identical to the 404 for one that does not exist.
+ * with a status, a fixed title, for a server fault the request id, and the key of the sentence for
+ * the kind of failure (`guidance.ts`), and with no request and so no session: the page is the
+ * signed-out one, and the same bytes for the same status and key, which keeps the 404 for a matter
+ * that is not yours identical to the 404 for one that does not exist. Without a key the status
+ * decides, and a status the table does not know gets the general sentence.
  */
-export function renderErrorPage(status: number, title: string, requestId?: string): string {
-  const message = Object.hasOwn(MESSAGES, status) ? MESSAGES[status] : undefined;
+export function renderErrorPage(
+  status: number,
+  title: string,
+  requestId?: string,
+  guidance?: GuidanceKey,
+): string {
+  const { text, todo } = guidanceFor(status, guidance);
   return render(
     ErrorPage({
       chrome: { userName: null, csrfToken: "" },
       status,
       title,
-      message: message ?? FALLBACK_MESSAGE,
+      message: text,
+      todo,
       ...(status === 401 ? { backHref: urls.home(), backLabel: "Go to sign in" } : {}),
       requestId,
     }),

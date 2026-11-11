@@ -189,7 +189,8 @@ describe("segregation of duties", () => {
     const view = w.services.runs.finding(asReviewer, finding.findingId);
     expect(view.canDecide).toEqual({
       allowed: false,
-      reason: "A reviewer cannot decide findings of a review they started.",
+      reason:
+        "A reviewer cannot decide findings of a review they started. Ask another reviewing attorney to decide them.",
     });
     const error = await errorOf(() =>
       w.services.reviews.decide(asReviewer, finding.findingId, decisionFor(view)),
