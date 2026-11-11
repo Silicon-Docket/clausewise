@@ -14,6 +14,12 @@
 /** What a ticked box of the roster posts. An unticked box posts nothing. */
 export const TRAINED_VALUE = "yes";
 
+/**
+ * What the button of the timer posts as `intent` (the field is `FIELDS.intent`): the button that
+ * starts a timer and the button that stops one. The route accepts these two values and no other.
+ */
+export const TIMER_INTENTS = { start: "start", stop: "stop" } as const;
+
 const TRAINED_PREFIX = "trained:";
 const SEVERITY_PREFIX = "severity:";
 

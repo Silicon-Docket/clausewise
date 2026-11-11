@@ -4,12 +4,19 @@ import type {
   PilotMeasuresView,
   PilotRecords,
   PilotScope,
+  ReferenceView,
+  TimerView,
 } from "../../src/pilot/index.js";
-import type { GlobalRole } from "../../src/contracts.js";
-import { render, type Chrome } from "../../src/server/pages/index.js";
+import type { GlobalRole, MatterRole } from "../../src/contracts.js";
+import { MatterPage, render, type Chrome } from "../../src/server/pages/index.js";
 import { PilotPage, type PilotDraft } from "../../src/server/pages/pilot.js";
+import { ReferencePanel } from "../../src/server/pages/reference.js";
+import { TimerPanel } from "../../src/server/pages/timer.js";
+import type { MatterView } from "../../src/services/views.js";
+import { auditPage, type Violation } from "../a11y/rules.js";
 import { AS_OF, f1Records } from "../pilot/f1.js";
-import { buildChrome } from "./support.js";
+import { parseHtml } from "./html.js";
+import { IDS, buildChrome, buildMatterViewFor, buildUsers } from "./support.js";
 
 /**
  * Fixtures of the pilot measures page (package W2.6b): the view the service would make from a set
@@ -104,4 +111,110 @@ export function pilotPage(fixture: PilotPageFixture = {}): string {
       draft: fixture.draft,
     }),
   );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The timer and the reference list on the matter page
+// ---------------------------------------------------------------------------------------------
+
+/** A timer view for a person who may time the matter, with none running and nothing timed yet. */
+export function buildTimer(overrides: Partial<TimerView> = {}): TimerView {
+  return {
+    allowed: true,
+    running: null,
+    elsewhere: false,
+    closedSeconds: 0,
+    sessions: 0,
+    ...overrides,
+  };
+}
+
+/** The rules of a synthetic playbook of eight rules, in the order of the playbook. */
+export const REFERENCE_RULES: ReferenceView["rules"] = [
+  { ruleKey: "pty-1", title: "The parties are named", severity: null },
+  { ruleKey: "def-1", title: "Confidential information is defined", severity: null },
+  { ruleKey: "exc-1", title: "The usual exclusions are present", severity: null },
+  { ruleKey: "pds-1", title: "Disclosure to advisers is allowed", severity: null },
+  { ruleKey: "pds-2", title: "Disclosure when the law requires it", severity: null },
+  { ruleKey: "dur-1", title: "The obligations end after a fixed term", severity: null },
+  { ruleKey: "ret-1", title: "Material is returned or destroyed", severity: null },
+  { ruleKey: "gov-1", title: "The governing law is acceptable", severity: null },
+];
+
+/** A reference list that is open, with the rules of the synthetic playbook and nothing recorded. */
+export function buildReference(overrides: Partial<ReferenceView> = {}): ReferenceView {
+  return {
+    state: "open",
+    rules: REFERENCE_RULES,
+    outside: { high: 0, medium: 0, low: 0 },
+    issues: 0,
+    ...overrides,
+  };
+}
+
+/** The same list with a severity set on some rules, as a saved list reads. */
+export function withSeverities(
+  severities: Record<string, "high" | "medium" | "low">,
+): ReferenceView["rules"] {
+  return REFERENCE_RULES.map((rule) => ({ ...rule, severity: severities[rule.ruleKey] ?? null }));
+}
+
+/** The timer panel alone, as a pane (no frame). Empty when it renders nothing. */
+export function timerPane(timer: TimerView | undefined, chrome: Chrome = buildChrome()): string {
+  const pane = TimerPanel({ chrome, matterId: IDS.matter, timer });
+  return pane === null ? "" : render(pane);
+}
+
+/** The reference list alone, as a pane (no frame). Empty when it renders nothing. */
+export function referencePane(
+  reference: ReferenceView | null | undefined,
+  chrome: Chrome = buildChrome(),
+): string {
+  const pane = ReferencePanel({ chrome, matterId: IDS.matter, reference });
+  return pane === null ? "" : render(pane);
+}
+
+export interface MatterPilotFixture {
+  timer?: TimerView | undefined;
+  reference?: ReferenceView | null | undefined;
+  view?: Partial<MatterView>;
+  chrome?: Chrome;
+}
+
+/** The whole matter page for a role, with the two optional panels as the service would fill them. */
+export function matterPagePilot(role: MatterRole, fixture: MatterPilotFixture = {}): string {
+  return render(
+    MatterPage({
+      chrome: fixture.chrome ?? buildChrome(),
+      view: buildMatterViewFor(role, fixture.view ?? {}),
+      users: buildUsers(),
+      canDelete: role === "associate",
+      timer: fixture.timer,
+      reference: fixture.reference,
+    }),
+  );
+}
+
+/**
+ * What the accessibility rules find on a whole matter page that they do not find on the same page
+ * without the two pilot panels. The rest of the matter page is the sweep of a later package
+ * (W2.9-fix), so the panels are held to the rules by what they add, and the panes are audited
+ * alone as well, where nothing else is on the page.
+ */
+export function violationsAddedByPanels(
+  role: MatterRole,
+  fixture: MatterPilotFixture,
+): Violation[] {
+  const key = (v: Violation): string => `${v.rule}|${v.where}|${v.detail}`;
+  const before = new Map<string, number>();
+  const without = { ...fixture, timer: undefined, reference: undefined };
+  for (const v of auditPage(parseHtml(matterPagePilot(role, without))))
+    before.set(key(v), (before.get(key(v)) ?? 0) + 1);
+  const added: Violation[] = [];
+  for (const v of auditPage(parseHtml(matterPagePilot(role, fixture)))) {
+    const left = before.get(key(v)) ?? 0;
+    if (left > 0) before.set(key(v), left - 1);
+    else added.push(v);
+  }
+  return added;
 }

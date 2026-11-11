@@ -249,6 +249,49 @@ describe("the timer", () => {
   });
 });
 
+describe("a training matter", () => {
+  /** An ordinary matter and the training matter of the same person, with the same people. */
+  function twoMatters() {
+    const w = world();
+    const ordinary = newMatter(w);
+    const training = w.services.matters.create(w.associate, {
+      name: "Training: Lanternfish / Corvane NDA (T01)",
+      clientLegalName: "Lanternfish Software, Inc.",
+      playbookVersionId: w.playbookVersionId,
+      reviewerUserId: w.reviewer.userId,
+      training: "T01",
+    });
+    return { w, ordinary, training };
+  }
+
+  it("is offered no timer, to the associate or to the reviewing attorney, and the ordinary matter still is", () => {
+    const { w, ordinary, training } = twoMatters();
+    const { pilot } = w.services;
+    const none = { allowed: false, running: null, elsewhere: false, closedSeconds: 0, sessions: 0 };
+    expect(pilot.timer(w.grant(w.associate, training.id))).toEqual(none);
+    expect(pilot.timer(w.grant(w.reviewer, training.id))).toEqual(none);
+    expect(pilot.timer(ordinary.am).allowed).toBe(true);
+    expect(pilot.timer(w.grant(w.reviewer, ordinary.matterId)).allowed).toBe(true);
+  });
+
+  it("is offered no reference list, which would name the playbook's rules, and the ordinary matter's is", () => {
+    const { w, ordinary, training } = twoMatters();
+    const { pilot } = w.services;
+    expect(pilot.referenceList(w.grant(w.reviewer, training.id))).toBeNull();
+    expect(pilot.referenceList(w.grant(w.reviewer, ordinary.matterId))).toMatchObject({
+      state: "open",
+    });
+  });
+
+  it("is offered no timer even to a person who has one running on an ordinary matter", () => {
+    const { w, ordinary, training } = twoMatters();
+    const { pilot } = w.services;
+    pilot.startTimer(ordinary.am);
+    expect(pilot.timer(w.grant(w.associate, training.id)).elsewhere).toBe(false);
+    expect(pilot.timer(w.grant(w.associate, training.id)).allowed).toBe(false);
+  });
+});
+
 describe("the reference list", () => {
   it("is for the reviewer: an associate and a viewer are refused, and see no list", () => {
     const w = world();

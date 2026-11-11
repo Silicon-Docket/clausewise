@@ -9,9 +9,9 @@ import { csvDownloadHeaders } from "../../src/server/routes/shared.js";
 import { urls } from "../../src/server/urls.js";
 import { createPilotService } from "../../src/services/pilot.js";
 import { DEMO_USER_IDS } from "../../src/store/index.js";
-import { auditPage, expectAccessible, formatViolations, tabStops } from "../a11y/rules.js";
+import { expectAccessible, tabStops } from "../a11y/rules.js";
 import { AS_OF, f1Records } from "../pilot/f1.js";
-import { all, attr, byId, byTag, hasClass, parseHtml, readable, type El } from "../pages/html.js";
+import { all, attr, byId, byTag, hasClass, readable, type El } from "../pages/html.js";
 import {
   Browser,
   IDS,
@@ -68,27 +68,8 @@ async function post(
   return browser.send("POST", path, { headers: FORM, body: body.toString() });
 }
 
-/**
- * The places on the matter page that the timer and the reference list lead a refusal to. The
- * panels that hold them are the next slice's (pages/timer.tsx, pages/reference.tsx); until they are
- * on the page a link to them dangles, and only that is let through here. The slice that adds the
- * panels removes this and calls `expectAccessible`.
- */
-const PANEL_ANCHORS = ["time", "reference-list", "reference-outside"];
-
 /** The rules every page has, for the matter page a refused form is answered with. */
-function accessibleMatterPage(html: string): El {
-  const root = parseHtml(html);
-  const found = auditPage(root).filter(
-    (v) =>
-      !(
-        v.rule === "fragment-link-dangling" &&
-        PANEL_ANCHORS.some((id) => v.detail.includes(`"${id}"`))
-      ),
-  );
-  if (found.length > 0) throw new Error(`accessibility problems:\n${formatViolations(found)}`);
-  return root;
-}
+const accessibleMatterPage = (html: string): El => expectAccessible(html);
 
 const noticeOf = (page: { root: El }): string | null => {
   const box = all(page.root, (el) => hasClass(el, "notice"))[0];

@@ -6,7 +6,7 @@ import { formString, readForm } from "../http.js";
 import { defineMatterRoute, defineRoute } from "../matter-route.js";
 import { PilotPage, type PilotDraft } from "../pages/pilot.js";
 import { FIELDS } from "../pages/forms.js";
-import { userIdOfTrainedField } from "../pages/pilotfields.js";
+import { TIMER_INTENTS, userIdOfTrainedField } from "../pages/pilotfields.js";
 import { urls } from "../urls.js";
 import { answerRefusal, createPageRenderers } from "./page-renderers.js";
 import type { Refusal } from "./notices.js";
@@ -142,7 +142,7 @@ export function registerPilotRoutes(app: Hono, deps: AppDeps): void {
       const form = await readForm(c);
       return answerInPlace(c, am, () => {
         const { intent } = timerFromForm(form);
-        if (intent === "start") {
+        if (intent === TIMER_INTENTS.start) {
           pilot.startTimer(am);
           return redirectWithNotice(c, am.principal, urls.matter(am.matterId), "timer-started");
         }

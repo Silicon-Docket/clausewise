@@ -50,13 +50,16 @@ export interface PilotService {
   setCalendar(principal: Principal, input: { startDate: string }): void;
   /** Replaces the roster of trained people. Needs `pilot.manage`. 400 `unknown_user`, `too_many_participants`. */
   setParticipants(principal: Principal, input: { userIds: readonly string[] }): void;
-  /** The caller's own timer on this matter. Any member may ask; `allowed` says whether they may time it. */
+  /**
+   * The caller's own timer on this matter. Any member may ask; `allowed` says whether they may time
+   * it, and is false on a training matter, whose times no measure counts.
+   */
   timer(am: AuthorizedMatter): TimerView;
   /** Starts the caller's timer. `time.record`. 409 `timer_open` when one runs, here or on another matter. */
   startTimer(am: AuthorizedMatter): TimerView;
   /** Stops the caller's timer on this matter. `time.record`. 409 `no_open_timer`. */
   stopTimer(am: AuthorizedMatter): TimerView;
-  /** The reference list, for the reviewer who may record it; null for any other role. */
+  /** The reference list, for the reviewer who may record it; null for any other role and for a training matter. */
   referenceList(am: AuthorizedMatter): ReferenceView | null;
   /** Replaces the reference list. `reference.write`. 400 for a bad rule, severity or count; 409 `reference_locked`. */
   saveReferenceList(am: AuthorizedMatter, input: ReferenceListInput): ReferenceView;
@@ -79,8 +82,19 @@ export function createPilotService(deps: ServiceDeps): PilotService {
       reasonCodes: REASON_CODES,
     });
 
+  /**
+   * A training matter is the exercise and not a pilot matter: the measures leave it out of both
+   * scopes, so a time on it or a reference list for it would be counted by nothing. The pages are
+   * given neither (the timer says its times are used by the pilot page, and the reference list
+   * would name the playbook's rules on a page where the exercise keeps them back).
+   */
+  const isTrainingMatter = (am: AuthorizedMatter): boolean => {
+    const matter = repo.getMatter(am.matterId);
+    return matter !== undefined && matter.trainingKey !== null;
+  };
+
   const timerView = (am: AuthorizedMatter): TimerView => {
-    if (!roleAllows(am.role, "time.record"))
+    if (!roleAllows(am.role, "time.record") || isTrainingMatter(am))
       return { allowed: false, running: null, elsewhere: false, closedSeconds: 0, sessions: 0 };
     // The caller's own entries only: the store filters on the matter and on the person.
     const state = repo.listTimerState(am.matterId, am.principal.userId);
@@ -184,7 +198,9 @@ export function createPilotService(deps: ServiceDeps): PilotService {
     },
 
     referenceList(am) {
-      return roleAllows(am.role, "reference.write") ? referenceView(am) : null;
+      return roleAllows(am.role, "reference.write") && !isTrainingMatter(am)
+        ? referenceView(am)
+        : null;
     },
 
     saveReferenceList(am, input) {

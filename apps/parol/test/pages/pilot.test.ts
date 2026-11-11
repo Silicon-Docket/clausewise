@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import { MEASURE_IDS, PILOT_PHRASES } from "../../src/pilot/index.js";
 import { FIELDS } from "../../src/server/pages/forms.js";
 import { PILOT_ANCHORS, TRAINED_VALUE, trainedField } from "../../src/server/pages/pilotfields.js";
+import { REFUSALS_PILOT } from "../../src/server/routes/refusals-pilot.js";
 import { urls } from "../../src/server/urls.js";
 import { expectAccessible, tabStops } from "../a11y/rules.js";
 import { all, attr, byId, byTag, hasAttr, hasClass, readable, type El } from "./html.js";
 import { checkInvariants } from "./invariants.js";
 import { PEOPLE, adminView, emptyRecords, pilotPage } from "./pilot-support.js";
 import { f1Records } from "../pilot/f1.js";
+import { VARIANTS_PILOT } from "./variants-pilot.js";
 
 /**
  * The pilot measures page (package W2.6b) as a document: what it lays out of the view it is given,
@@ -260,6 +262,188 @@ describe("the two forms", () => {
   });
 });
 
+describe("what a picture of the page shows", () => {
+  // The words are written out here, whole, so that a change of the module's constant is a change
+  // of this test too: a banner that quietly lost a word would no longer say what it must.
+  const BANNER =
+    "SYNTHETIC SCOPE: these figures count what demonstration identities did to synthetic matters. They are not pilot data, not adoption, not accuracy and not time saved.";
+
+  it("puts the exact banner words on the synthetic scope, whatever it holds", () => {
+    for (const records of [emptyRecords(), f1Records()]) {
+      const banner = all(rootOf(pilotPage({ scope: "synthetic", records })), (el) =>
+        hasClass(el, "banner-synthetic"),
+      );
+      expect(banner).toHaveLength(1);
+      expect(readable(banner[0]!)).toBe(BANNER);
+    }
+  });
+
+  it("marks the synthetic scope in the title, the banner, the link and every caption, and the pilot scope in none of them", () => {
+    const synthetic = rootOf(pilotPage({ scope: "synthetic", records: f1Records() }));
+    const pilot = rootOf(pilotPage({ scope: "pilot", records: f1Records() }));
+    expect(readable(byTag(synthetic, "title")[0]!)).toBe(
+      "Pilot measures (synthetic scope) | Parol",
+    );
+    expect(readable(byTag(pilot, "title")[0]!)).toBe("Pilot measures | Parol");
+    for (const table of byTag(synthetic, "table"))
+      expect(readable(byTag(table, "caption")[0]!)).toMatch(/synthetic scope$/);
+    for (const table of byTag(pilot, "table"))
+      expect(readable(byTag(table, "caption")[0]!)).not.toMatch(/synthetic/i);
+    expect(all(pilot, (el) => hasClass(el, "banner-synthetic"))).toEqual([]);
+  });
+
+  it("opens the pilot scope with the sentence that it is empty here, before the calendar, the roster and any table", () => {
+    const html = pilotPage({ admin: adminView() });
+    const text = readable(rootOf(html));
+    const empty = text.indexOf("No pilot data.");
+    expect(empty).toBeGreaterThan(-1);
+    expect(empty).toBeLessThan(text.indexOf("Pilot calendar"));
+    expect(empty).toBeLessThan(text.indexOf("People who were trained"));
+    expect(empty).toBeLessThan(text.indexOf("Pilot measures, pilot scope"));
+    // It is the first thing after the heading and the scope links: the scope section holds it.
+    const scope = byId(rootOf(html), "scope")!;
+    expect(readable(scope)).toContain(
+      "No pilot data. This database holds no matters, so the pilot scope is empty and every measure below reads no data.",
+    );
+    const mainText = readable(byTag(rootOf(html), "main")[0]!);
+    expect(
+      mainText.startsWith(
+        "Pilot measuresWhich scope is shownPilot scopeSynthetic scope, a demonstrationNo pilot data.",
+      ),
+    ).toBe(true);
+  });
+
+  it("counts the matters of a database that holds only demonstration matters, and says every one is excluded", () => {
+    const only = f1Records();
+    const synthetic = {
+      ...only,
+      matters: only.matters.map((m) => ({ ...m, synthetic: true })),
+    };
+    const text = readable(
+      byId(rootOf(pilotPage({ scope: "pilot", records: synthetic })), "scope")!,
+    );
+    expect(text).toMatch(
+      /No pilot data\. This database holds \d+ matters and every one is synthetic or was made by a demonstration identity/,
+    );
+  });
+
+  it("states in the population table that a training matter is in neither scope, and how many there are", () => {
+    for (const scope of ["pilot", "synthetic"] as const) {
+      const root = rootOf(pilotPage({ scope, records: f1Records() }));
+      const table = byTag(root, "table").find((t) =>
+        readable(byTag(t, "caption")[0]!).startsWith("Population of the measures"),
+      )!;
+      const row = all(table, (el) => el.name === "tr").find((tr) =>
+        readable(tr).startsWith("Training matters, made by the training exercise."),
+      )!;
+      expect(readable(byTag(row, "th")[0]!)).toBe(
+        "Training matters, made by the training exercise. They are in neither scope.",
+      );
+      expect(readable(byTag(row, "td")[0]!)).toBe("1");
+    }
+  });
+
+  it("gives every median its sample size, its minimum and its maximum, and computes no difference, mean or saving", () => {
+    const root = rootOf(pilotPage({ scope: "pilot", records: f1Records() }));
+    const time = byTag(root, "table").find((t) =>
+      readable(byTag(t, "caption")[0]!).startsWith("Active time"),
+    )!;
+    expect(
+      byTag(time, "th")
+        .filter((th) => attr(th, "scope") === "col")
+        .map((th) => readable(th)),
+    ).toEqual([
+      "Phase and series",
+      "Timed NDAs (n)",
+      "Median (minutes)",
+      "Minimum (minutes)",
+      "Maximum (minutes)",
+    ]);
+    const assisted = all(time, (el) => el.name === "tr").find(
+      (tr) => readable(byTag(tr, "th")[0]!) === "Assisted use (weeks 3 to 5), Associate",
+    )!;
+    expect(byTag(assisted, "td").map((td) => readable(td))).toEqual(["2", "35.0", "25.0", "45.0"]);
+    const satisfaction = byTag(root, "table")
+      .flatMap((t) => all(t, (el) => el.name === "tr"))
+      .find((tr) => readable(byTag(tr, "th")[0]!).startsWith("Satisfaction"))!;
+    expect(readable(byTag(satisfaction, "td")[0]!)).toBe("4.5 (n = 2, minimum 4, maximum 5)");
+    // No table names a mean, an average, a saving or a difference: the set of rows is closed.
+    for (const table of byTag(root, "table"))
+      for (const th of byTag(table, "th"))
+        expect(readable(th)).not.toMatch(
+          /\b(mean|average|saving|savings|difference|annualised)\b/i,
+        );
+  });
+
+  it("shows no figure for a person: a name or an id appears in the roster form and in no table", () => {
+    const html = pilotPage({ scope: "pilot", records: f1Records(), admin: adminView() });
+    const root = rootOf(html);
+    for (const table of byTag(root, "table")) {
+      const text = readable(table);
+      for (const person of PEOPLE) {
+        expect(text, person.name).not.toContain(person.name);
+        expect(text, person.userId).not.toContain(person.userId);
+      }
+      for (const th of byTag(table, "th"))
+        if (attr(th, "scope") === "col")
+          expect(readable(th)).not.toMatch(/\b(person|people|participant|user|who|name)\b/i);
+    }
+    // The names are in the roster, to be ticked, and in the file's address nowhere.
+    const roster = readable(byId(root, PILOT_ANCHORS.participants)!);
+    for (const person of PEOPLE) expect(roster).toContain(person.name);
+    expect(all(root, (el) => el.name === "a").flatMap((a) => attr(a, "href") ?? "")).not.toContain(
+      PEOPLE[0]!.userId,
+    );
+    for (const link of all(root, (el) => el.name === "a" && hasAttr(el, "href")))
+      for (const person of PEOPLE) expect(attr(link, "href")).not.toContain(person.userId);
+  });
+
+  it("says in the method lines what the page does not do: judge the acceptance criteria, or share a figure for a person", () => {
+    const method = readable(byId(rootOf(pilotPage()), "method")!);
+    expect(method).toContain("No figure is given for a person.");
+    expect(method).toContain("This page does not judge the acceptance criteria");
+    expect(method).toContain("computes no mean, no difference between phases and no saving");
+  });
+});
+
+describe("every fixture of this package", () => {
+  const named = (prefix: string) => VARIANTS_PILOT.filter(([name]) => name.startsWith(prefix));
+
+  it("covers each state the package's pages have", () => {
+    const names = VARIANTS_PILOT.map(([name]) => name);
+    expect(new Set(names).size).toBe(names.length);
+    for (const wanted of [
+      "pilot measures, pilot scope, no data, no calendar",
+      "pilot measures, synthetic scope, every row with a value",
+      "pilot measures, date refused, what was typed kept",
+      "pilot measures, roster refused, what was ticked kept",
+      "matter page, timer not running, associate",
+      "matter page, timer running, associate",
+      "matter page, timer running on another matter, associate",
+      "matter page, reference list saved",
+      "matter page, reference list closed by a review",
+      "matter page, reference list, no playbook chosen",
+      "matter page, viewer: neither the timer nor the reference list",
+      "pane, timer running",
+      "pane, reference list open",
+    ])
+      expect(names, wanted).toContain(wanted);
+  });
+
+  it("passes the accessibility rules on every page of the measures and on every pane", () => {
+    for (const [name, make, options] of [...named("pilot measures"), ...named("pane,")])
+      expect(
+        () => expectAccessible(make(), { fragment: options?.fragment === true }),
+        name,
+      ).not.toThrow();
+  });
+
+  it("passes the page rules on every one, matter pages included", () => {
+    for (const [name, make, options] of VARIANTS_PILOT)
+      expect(() => checkInvariants(make(), options), name).not.toThrow();
+  });
+});
+
 describe("keyboard and structure", () => {
   const variants = {
     "pilot scope, no data": () => pilotPage({ admin: adminView() }),
@@ -310,6 +494,19 @@ describe("keyboard and structure", () => {
     ])
       expect(byId(root, id), id).toBeDefined();
     expect(byId(root, PILOT_ANCHORS.startDate)).toBeDefined();
+  });
+
+  it("holds every place a refusal of its two forms leads to, so a link of the refused page never dangles", () => {
+    const root = rootOf(pilotPage({ admin: adminView() }));
+    const codes = ["bad_calendar_date", "unknown_user", "duplicate_user", "too_many_participants"];
+    for (const code of codes) {
+      const jump = REFUSALS_PILOT.jump[code as keyof typeof REFUSALS_PILOT.jump];
+      expect(jump.href.startsWith("#"), code).toBe(true);
+      expect(byId(root, jump.href.slice(1)), code).toBeDefined();
+    }
+    // The date's link leads to the input itself, the roster's to the group of boxes.
+    expect(REFUSALS_PILOT.jump.bad_calendar_date.href).toBe(`#${PILOT_ANCHORS.startDate}`);
+    expect(REFUSALS_PILOT.jump.unknown_user.href).toBe(`#${PILOT_ANCHORS.participants}`);
   });
 
   it("is the same page for the same view: no clock, no random value", () => {

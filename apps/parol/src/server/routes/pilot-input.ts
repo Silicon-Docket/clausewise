@@ -4,6 +4,7 @@ import { ValidationError } from "../../store/errors.js";
 import { formString, type FormFields } from "../http.js";
 import { CSRF_FIELD, FIELDS } from "../pages/forms.js";
 import {
+  TIMER_INTENTS,
   TRAINED_VALUE,
   ruleKeyOfSeverityField,
   userIdOfTrainedField,
@@ -52,7 +53,9 @@ export function participantsFromForm(form: FormFields): { userIds: string[] } {
 }
 
 /** The timer form: start or stop, and nothing else. */
-export const TimerInput = z.strictObject({ intent: z.enum(["start", "stop"]) });
+export const TimerInput = z.strictObject({
+  [FIELDS.intent]: z.enum([TIMER_INTENTS.start, TIMER_INTENTS.stop]),
+});
 export type TimerInput = z.infer<typeof TimerInput>;
 
 export const timerFromForm = (form: FormFields): TimerInput => TimerInput.parse(fieldsOf(form));
