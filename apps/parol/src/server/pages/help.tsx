@@ -47,8 +47,10 @@ export function HelpPage(props: HelpPageProps) {
     <Layout title="Help" chrome={props.chrome}>
       <h1>Help</h1>
       <p class="lead">
-        What the words on the review page mean. Each one is the sentence the page itself uses where
-        the word is shown, so nothing here is new, and nothing depends on hovering a chip.
+        What the words on the review page mean. Most of these are the sentences the pages show where
+        the word appears. The meaning of each severity, and the notes that explain a group or a
+        term, are written for help and appear only here and in the help lists of the review page.
+        Nothing depends on hovering a chip.
       </p>
       <nav aria-label="Help topics" class="help-topics">
         <ul class="nav-list">

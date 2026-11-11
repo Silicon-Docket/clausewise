@@ -369,7 +369,7 @@ export function describeSeed(report: SeedReport, settings: ParolSettings): strin
       `Training matter "${t.name}": ${state}`,
       `  associate: ${t.ownerName}`,
       `  reviewer: ${t.reviewerName}`,
-      `  trainer: ${t.trainerName}, who can read it and change nothing`,
+      `  trainer: ${t.trainerName}, who can read it and add notes, report a missed issue and rate the matter, and cannot decide a finding, start or change a review, export the memo or change the matter`,
       `  ${origin}${urls.matter(t.matterId)}`,
       "  No review has been run on it: the exercise starts at step 1 on the quickstart page.",
       "  The exercise needs the simulated reader (PAROL_SCRIPTED=1). With a provider key the finding it teaches about does not appear.",

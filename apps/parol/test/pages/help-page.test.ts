@@ -11,6 +11,16 @@ import {
   STATUSES,
   WARNING_CODES,
 } from "../../src/contracts.js";
+import {
+  EscalationChip,
+  MatterStatusChip,
+  QuoteCheckChip,
+  RoleChip,
+  RunStatusChip,
+  StatusChip,
+  SupportCheckChip,
+} from "../../src/server/pages/components.js";
+import { render } from "../../src/server/pages/index.js";
 import { urls } from "../../src/server/urls.js";
 import {
   DECISION_HINT,
@@ -36,11 +46,23 @@ import {
 } from "../../src/server/views/labels.js";
 import { KEYBOARD_SHORTCUTS, helpGroups } from "../../src/server/views/help.js";
 import { expectAccessible, tabStops, accessibleName } from "../a11y/rules.js";
-import { all, attr, byId, byTag, hasAttr, readable, withClass, type El } from "./html.js";
+import {
+  all,
+  attr,
+  byId,
+  byTag,
+  hasAttr,
+  hasClass,
+  parseHtml,
+  readable,
+  textOf,
+  withClass,
+  type El,
+} from "./html.js";
 import { checkInvariants } from "./invariants.js";
-import { runPage } from "./render.js";
+import { findingPage, matterPage, mattersPage, memosPage, runPage, signInPage } from "./render.js";
 import { buildChrome } from "./support.js";
-import { helpHtml } from "./training-support.js";
+import { helpHtml, quickstartHtml } from "./training-support.js";
 
 /**
  * The help page (package W2.8): every word the review uses, in the sentence the page already uses
@@ -238,5 +260,101 @@ describe("reading the page by keyboard", () => {
     expect(new Set(ids).size).toBe(ids.length);
     for (const group of helpGroups())
       for (const term of group.terms) expect(ids).toContain(term.id);
+  });
+});
+
+describe("the lead of the page says where its sentences come from", () => {
+  const lead = readable(withClass(root, "lead")[0] as El);
+
+  /** Everything a page shows outside its help lists: its text and the titles of its elements. */
+  function shownOutsideHelp(html: string): string {
+    const parts: string[] = [];
+    const visit = (el: El): void => {
+      if (hasClass(el, "words-help") || hasClass(el, "context-help")) return;
+      const title = attr(el, "title");
+      if (typeof title === "string") parts.push(title);
+      for (const child of el.children) {
+        if (child.type === "text") parts.push(textOf(child));
+        else visit(child);
+      }
+    };
+    visit(parseHtml(html));
+    return parts.join("\n").replace(/\s+/g, " ");
+  }
+
+  /** The sentences the chips of the vocabularies show as their titles, for every code. */
+  function chipTitles(): Set<string> {
+    const html = [
+      ...STATUSES.map((status) => render(StatusChip({ status }))),
+      ...EVIDENCE_ROLES.map((role) => render(RoleChip({ role }))),
+      ...Object.keys(QUOTE_CHECK_LABEL).map((check) =>
+        render(QuoteCheckChip({ check: check as never })),
+      ),
+      ...Object.keys(SUPPORT_CHECK_LABEL).map((check) =>
+        render(SupportCheckChip({ check: check as never })),
+      ),
+      ...ESCALATION_CODES.map((code) => render(EscalationChip({ code }))),
+      ...RUN_STATUSES.map((status) => render(RunStatusChip({ status }))),
+      ...MATTER_STATUSES.map((status) => render(MatterStatusChip({ status }))),
+    ];
+    const titles = html.map((chip) => attr(byTag(parseHtml(chip), "span")[0] as El, "title"));
+    return new Set(titles.filter((t): t is string => typeof t === "string"));
+  }
+
+  /** The pages that explain or show words, as a signed-in person gets them. */
+  const OTHER_PAGES: [string, string][] = [
+    ["the review page", runPage()],
+    ["the finding page", findingPage()],
+    ["the matter page", matterPage()],
+    ["the matters page", mattersPage()],
+    ["the memos page", memosPage()],
+    ["the quickstart", quickstartHtml()],
+    ["the sign-in page", signInPage()],
+  ];
+
+  it("no longer says that nothing on it is new", () => {
+    expect(lead).not.toMatch(/nothing here is new/i);
+    expect(lead).toBe(
+      "What the words on the review page mean. Most of these are the sentences the pages show where the word appears. The meaning of each severity, and the notes that explain a group or a term, are written for help and appear only here and in the help lists of the review page. Nothing depends on hovering a chip.",
+    );
+  });
+
+  it("is right that most of its sentences are ones the pages show: the title of a chip, or the hint of the decision form", () => {
+    const shown = chipTitles();
+    for (const hint of Object.values(DECISION_HINT)) shown.add(hint);
+    const terms = helpGroups()
+      .filter((group) => group.id !== "keyboard")
+      .flatMap((group) => group.terms);
+    const known = terms.filter((term) =>
+      [...shown].some((sentence) => term.meaning.includes(sentence)),
+    );
+    // A tie would not be most of them.
+    expect(known.length, `${known.length} of ${terms.length}`).toBeGreaterThan(terms.length / 2);
+  });
+
+  it("reads the pages as a person does: it sees the sentences they show, and it leaves their help lists out", () => {
+    // Without these two, the checks below would pass on a reader that saw nothing.
+    expect(shownOutsideHelp(findingPage())).toContain(DECISION_HINT.reject);
+    expect(shownOutsideHelp(runPage())).toContain(STATUS_MEANING.compliant);
+    expect(readable(parseHtml(runPage()))).toContain(SEVERITY_MEANING.high);
+    expect(shownOutsideHelp(runPage())).not.toContain(SEVERITY_MEANING.high);
+  });
+
+  it("is right that the meaning of each severity is on no page outside help", () => {
+    for (const [name, html] of OTHER_PAGES)
+      for (const sentence of Object.values(SEVERITY_MEANING))
+        expect(shownOutsideHelp(html), `${name}: ${sentence}`).not.toContain(sentence);
+  });
+
+  it("is right that the notes that explain a group or a term are on no page outside help", () => {
+    const notes = [
+      ...helpGroups().flatMap((group) => (group.intro === undefined ? [] : [group.intro])),
+      // The sentence that leads the meaning of a superseded passage, before the chip's own.
+      readable(termAt("role-superseded").dd).replace(ROLE_MEANING.superseded, "").trim(),
+    ];
+    expect(notes.length).toBeGreaterThan(5);
+    for (const [name, html] of OTHER_PAGES)
+      for (const note of notes)
+        expect(shownOutsideHelp(html), `${name}: ${note}`).not.toContain(note);
   });
 });

@@ -17,6 +17,7 @@ import {
   T01,
   TRAINER_NOTES,
   TRAINING_STEPS,
+  ownTrainingMatter,
   publicStep,
   startTraining,
 } from "../../training/index.js";
@@ -90,9 +91,7 @@ export function registerTrainingRoutes(app: Hono, deps: AppDeps): void {
       principal === null ? { userName: null, csrfToken: csrfToken(c) } : pageChrome(c, principal);
     if (principal === null)
       return sendPage(c, QuickstartPage({ chrome: base, steps, exercise }), refusal?.status);
-    const own = services.matters
-      .list(principal)
-      .find((matter) => matter.training === T01.key && matter.role === "associate");
+    const own = ownTrainingMatter(services, repo, principal);
     const playbookAvailable = services.matters
       .playbooks()
       .some((option) => option.slug === T01.playbookSlug);

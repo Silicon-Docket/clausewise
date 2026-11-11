@@ -1,4 +1,5 @@
 export { DEFAULT_TRAINING_DIR, readTrainingFile } from "./files.js";
+export { ownTrainingMatter } from "./own.js";
 export { CHECKABLE_STEPS, trainedUserIds, trainingProgress } from "./progress.js";
 export { QUICKSTART_STEPS, type QuickstartStep } from "./quickstart.js";
 export {

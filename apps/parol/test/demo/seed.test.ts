@@ -779,9 +779,11 @@ describe("the option --training", () => {
     );
     expect(text).toContain("associate: Alex Ruiz (associate)");
     expect(text).toContain("reviewer: Dana Whitfield (reviewing attorney)");
+    // A trainer is a viewer, who can add feedback, so the line does not say they change nothing.
     expect(text).toContain(
-      "trainer: Lee Okafor (legal engineer), who can read it and change nothing",
+      "trainer: Lee Okafor (legal engineer), who can read it and add notes, report a missed issue and rate the matter, and cannot decide a finding, start or change a review, export the memo or change the matter",
     );
+    expect(text).not.toMatch(/change nothing|cannot change anything/);
     expect(text).toContain(`http://127.0.0.1:8787/matters/${report.training!.matterId}`);
     expect(text).toContain("No review has been run on it");
     expect(text).toContain("http://127.0.0.1:8787/quickstart");
