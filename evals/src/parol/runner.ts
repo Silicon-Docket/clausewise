@@ -161,18 +161,17 @@ export type ParsedFiles = Map<string, Awaited<ReturnType<typeof parseDocument>>>
 const slug = (text: string): string => text.toLowerCase().replace(/[^a-z0-9]+/g, "_");
 
 /**
- * Reads the case's operative documents as an upload would and builds the ingest. The document
+ * Reads the case's operative documents as an upload would, ready for the ingest. The document
  * version ids are new for every repeat, so span ids differ between repeats as they do between
- * matters.
+ * matters. The comparison page reads the passages of a key through this too, so that it shows the
+ * paragraphs as a run reads them.
  */
-export async function prepareCase(args: {
+export async function readCaseDocuments(args: {
   dataset: Dataset;
   runnable: RunnableCase;
   repeat: number;
-  playbook: LoadedPlaybook;
-  workflow: RegisteredWorkflow;
   parsed: ParsedFiles;
-}): Promise<PreparedCase> {
+}): Promise<IngestDocumentInput[]> {
   const { runnable, repeat } = args;
   const documents: IngestDocumentInput[] = [];
   for (const doc of runnable.documents) {
@@ -199,6 +198,20 @@ export async function prepareCase(args: {
       inspection: parsed.inspection,
     });
   }
+  return documents;
+}
+
+/** Reads the case's operative documents (see `readCaseDocuments`) and builds the ingest. */
+export async function prepareCase(args: {
+  dataset: Dataset;
+  runnable: RunnableCase;
+  repeat: number;
+  playbook: LoadedPlaybook;
+  workflow: RegisteredWorkflow;
+  parsed: ParsedFiles;
+}): Promise<PreparedCase> {
+  const { runnable, repeat } = args;
+  const documents = await readCaseDocuments(args);
   const ingest = buildIngest({ documents });
   return {
     runnable,

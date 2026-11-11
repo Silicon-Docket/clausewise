@@ -38,6 +38,10 @@ describe("the argument parser", () => {
       compare: undefined,
       allowDifferences: [],
       playbook: undefined,
+      publish: undefined,
+      baseline: undefined,
+      candidate: undefined,
+      openHeldoutTrails: false,
       help: false,
     });
   });
@@ -95,6 +99,10 @@ describe("the argument parser", () => {
       compare: "c.json",
       allowDifferences: ["model", "prices", "code"],
       playbook: "pb.yaml",
+      publish: undefined,
+      baseline: undefined,
+      candidate: undefined,
+      openHeldoutTrails: false,
       help: false,
     });
     expect(parseParolArgs(["--selftest"]).selftest).toBe(true);
@@ -156,6 +164,10 @@ describe("the argument parser", () => {
       "--compare",
       "--allow-differences",
       "--playbook",
+      "--publish",
+      "--baseline",
+      "--candidate",
+      "--open-heldout-trails",
     ]) {
       expect(USAGE, name).toContain(name);
     }
