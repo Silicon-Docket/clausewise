@@ -10,10 +10,11 @@ import {
   MemosPage,
   RunPage,
 } from "../pages/index.js";
-import type { Chrome, Notice } from "../pages/layout.js";
+import type { Chrome } from "../pages/layout.js";
 import type { MissedIssueDraft, NoteDraft, RatingDraft } from "../pages/feedback.js";
 import type { DecisionDraft } from "../pages/finding.js";
 import { refusalOf, type Refusal } from "./notices.js";
+import { sendPageWithLiveJump } from "./refusal-jumps.js";
 import { exportBlockedReason, mayDeleteMatter, pageChrome, sendPage } from "./shared.js";
 
 /**
@@ -33,15 +34,6 @@ import { exportBlockedReason, mayDeleteMatter, pageChrome, sendPage } from "./sh
 function chromeFor(c: Context, principal: Principal, refusal: Refusal | undefined): Chrome {
   const chrome = pageChrome(c, principal);
   return refusal === undefined ? chrome : { ...chrome, notice: refusal.notice };
-}
-
-/** The place on the finding page that a refused note links to: its textarea. */
-const NOTE_CONTROL = "#note-text";
-
-/** The notice as it is, without its link to a place on the page. */
-function withoutJump(notice: Notice): Notice {
-  const { jump: _jump, ...rest } = notice;
-  return rest;
 }
 
 /**
@@ -154,42 +146,37 @@ export function createPageRenderers(deps: AppDeps): PageRenderers {
     const wanted = c.req.query("finding");
     const asked = wanted !== undefined && wanted !== "";
     const chosen = asked ? issues.find((issue) => issue.findingId === wanted) : undefined;
-    return sendPage(
-      c,
+    const selected = chosen === undefined ? null : runs.finding(am, chosen.findingId);
+    const reports = {
+      rules: feedback.ruleChoices(am, run.id),
+      items: feedback.list(am).missedIssues.filter((item) => item.runId === run.id),
+      draft: options?.missedIssueDraft,
+    };
+    // A report refused for its fields is answered here whatever the review: the link to the form
+    // goes when this page has none (no findings, or the review is still running).
+    return sendPageWithLiveJump(c, refusal, (shown) =>
       RunPage({
-        chrome: chromeFor(c, am.principal, refusal),
+        chrome: chromeFor(c, am.principal, shown),
         matter: view.matter,
         run,
         issues,
-        selected: chosen === undefined ? null : runs.finding(am, chosen.findingId),
+        selected,
         selectionMissing: asked && chosen === undefined,
         filter: ISSUE_FILTERS.find((name) => name === c.req.query("filter")) ?? "all",
         warnings: view.warnings,
         documents: view.documents,
-        feedback: {
-          rules: feedback.ruleChoices(am, run.id),
-          items: feedback.list(am).missedIssues.filter((item) => item.runId === run.id),
-          draft: options?.missedIssueDraft,
-        },
+        feedback: reports,
       }),
-      refusal?.status,
     );
   };
 
   const findingPage: PageRenderers["findingPage"] = (c, am, findingId, refusal, draft, options) => {
     const finding = runs.finding(am, findingId);
-    // A refusal of the note form links to the note's control. A note posted by hand to a finding
-    // that has gone out of date is refused for its text before its state, and that page offers no
-    // form, so the link is dropped there: it would lead nowhere.
-    const shown =
-      refusal === undefined ||
-      refusal.notice.jump?.href !== NOTE_CONTROL ||
-      finding.canAddNote?.allowed === true
-        ? refusal
-        : { ...refusal, notice: withoutJump(refusal.notice) };
     const matter = matters.view(am).matter;
-    return sendPage(
-      c,
+    // A decision or a note refused for its fields is answered here whatever the finding: the link
+    // to the form goes when this page has none (the finding went out of date, or its matter was
+    // exported).
+    return sendPageWithLiveJump(c, refusal, (shown) =>
       FindingPage({
         chrome: chromeFor(c, am.principal, shown),
         matterId: am.matterId,
@@ -199,7 +186,6 @@ export function createPageRenderers(deps: AppDeps): PageRenderers {
         draft,
         noteDraft: options?.noteDraft,
       }),
-      refusal?.status,
     );
   };
 
@@ -212,13 +198,7 @@ export function createPageRenderers(deps: AppDeps): PageRenderers {
     // form is on the page while the matter has a memo and the person has not rated; a refusal
     // that reaches the page otherwise (a post made by hand, or from a page opened earlier) is told
     // in words with no link, because a link to a control that is not there leads nowhere.
-    const formShown = memos.length > 0 && given === null;
-    const shown =
-      refusal === undefined || formShown || refusal.notice.jump === undefined
-        ? refusal
-        : { ...refusal, notice: withoutJump(refusal.notice) };
-    return sendPage(
-      c,
+    return sendPageWithLiveJump(c, refusal, (shown) =>
       MemosPage({
         chrome: chromeFor(c, am.principal, shown),
         matter: view.matter,
@@ -236,7 +216,6 @@ export function createPageRenderers(deps: AppDeps): PageRenderers {
           draft: options?.ratingDraft,
         },
       }),
-      refusal?.status,
     );
   };
 

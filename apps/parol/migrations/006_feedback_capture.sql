@@ -88,9 +88,15 @@ WHEN (NEW.text IS NOT NULL AND length(NEW.text) > 4000)
 BEGIN SELECT RAISE(ABORT, 'parol: feedback does not have the shape of its kind'); END;
 
 -- Feedback is written once. Deleting a matter removes its rows with DELETE, which these two do not
--- touch.
+-- touch. INSERT OR REPLACE deletes the row that holds a key and then inserts, with no UPDATE and no
+-- DELETE trigger to see it, so the insert guard has to name every key the table can collide on: the
+-- id, and the one-rating index above. A rating is final: a second one by the same person for the
+-- same matter, under any id, is refused here (and by the index, if this trigger were ever dropped).
 CREATE TRIGGER feedback_immutable BEFORE UPDATE ON feedback
 BEGIN SELECT RAISE(ABORT, 'parol: feedback is never edited'); END;
 CREATE TRIGGER feedback_no_replace BEFORE INSERT ON feedback
 WHEN NEW.id IS NULL OR EXISTS (SELECT 1 FROM feedback WHERE id = NEW.id)
+  OR (NEW.kind = 'rating' AND EXISTS (
+        SELECT 1 FROM feedback
+        WHERE matter_id = NEW.matter_id AND user_id = NEW.user_id AND kind = 'rating'))
 BEGIN SELECT RAISE(ABORT, 'parol: feedback is never replaced'); END;
