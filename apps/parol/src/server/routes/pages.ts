@@ -6,10 +6,11 @@ import { formString, readForm } from "../http.js";
 import { defineMatterRoute, defineRoute } from "../matter-route.js";
 import { SignInPage, runStatusPayload } from "../pages/index.js";
 import { FIELDS } from "../pages/forms.js";
+import { decisionFormShown } from "../pages/finding.js";
 import { WORKFLOW_FIELD } from "../pages/matter.js";
 import { urls } from "../urls.js";
 import { decisionFromForm, draftFromForm } from "./decision.js";
-import { refusalOf, uploadNotice } from "./notices.js";
+import { refusalForBlockedFinding, refusalOf, uploadNotice } from "./notices.js";
 import {
   addDocument,
   addVersion,
@@ -61,9 +62,10 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
   const { services, config } = deps;
   const { matters, runs, reviews } = services;
 
-  // The pages that more than one route answers with (page-renderers.ts), and the helper that
-  // answers a refused matter form on the matter's own page.
-  const { matterPage, mattersPage, runPage, findingPage, memosPage, answerInPlace } =
+  // The pages that more than one route answers with (page-renderers.ts), and the helpers that
+  // answer a refused matter form on the matter's own page and a refused export or download on the
+  // memos page.
+  const { matterPage, mattersPage, runPage, findingPage, memosPage, answerInPlace, answerOnMemos } =
     createPageRenderers(deps);
 
   // --- the start and the list of matters ------------------------------------------------------
@@ -371,11 +373,16 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
         // is answered on the finding itself, as it now stands, with what is wrong said in words.
         const refusal = refusalOf(error);
         if (refusal === null) throw error;
+        // A finding that has no decision form on its page (it went out of date, or its matter was
+        // exported) is refused for what stops the decision and not for a field of the form that is
+        // not there: the fields are checked first, and "Choose a reason code" is no help where
+        // there is nothing to choose it in.
+        const shown = decisionFormShown(finding) ? refusal : refusalForBlockedFinding(refusal);
         // What was typed comes back with the refusal, unless the finding itself moved: edits
         // written against a finding that has changed would sit beside text they were not written
         // for, and the reviewer has to read the finding again before deciding.
-        const moved = refusal.code === "content_mismatch" || refusal.code === "stale_finding";
-        return findingPage(c, am, findingId, refusal, moved ? undefined : draftFromForm(form));
+        const moved = shown.code === "content_mismatch" || shown.code === "stale_finding";
+        return findingPage(c, am, findingId, shown, moved ? undefined : draftFromForm(form));
       }
       // Back to the table the reviewer was working in, with this finding selected. A finding can
       // be decided only in the current run, so that is the run the table belongs to.
@@ -401,20 +408,26 @@ export function registerPageRoutes(app: Hono, deps: AppDeps): void {
     method: "POST",
     path: "/matters/:matterId/memos",
     action: "memo.export",
-    handler: async (c, am) => {
-      await reviews.exportMemo(am);
-      return redirectWithNotice(c, am.principal, urls.memos(am.matterId), "memo-exported");
-    },
+    // A decision that changed in another tab, a quoted passage that no longer matches, a review that
+    // went out of date: each is answered on the memos page, in words, and not on the shell's page.
+    handler: (c, am) =>
+      answerOnMemos(c, am, async () => {
+        await reviews.exportMemo(am);
+        return redirectWithNotice(c, am.principal, urls.memos(am.matterId), "memo-exported");
+      }),
   });
 
   defineMatterRoute(app, {
     method: "GET",
     path: "/matters/:matterId/memos/:memoId/file",
     action: "memo.read",
-    handler: async (c, am) => {
-      const file = await reviews.memoFile(am, param(c, "memoId"));
-      const bytes = new Uint8Array(file.bytes);
-      return c.body(bytes, 200, memoDownloadHeaders(file.fileName, bytes.byteLength));
-    },
+    // A file that is missing or has changed since it was recorded is a disagreement between the
+    // record and the disk. The link that was followed leads to the memos page, with the reason.
+    handler: (c, am) =>
+      answerOnMemos(c, am, async () => {
+        const file = await reviews.memoFile(am, param(c, "memoId"));
+        const bytes = new Uint8Array(file.bytes);
+        return c.body(bytes, 200, memoDownloadHeaders(file.fileName, bytes.byteLength));
+      }),
   });
 }

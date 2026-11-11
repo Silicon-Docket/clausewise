@@ -517,7 +517,11 @@ describe("a refused upload form says why, on the matter's page", () => {
       await viaPage(c, "contract.docx", amendment(700)),
       422,
     );
-    expect(notices).toEqual([`Problem ${api.message}`]);
+    // The words of the parser, as the JSON API gives them, then the sentence that says what to do
+    // and the way to the documents.
+    expect(notices).toEqual([
+      `Problem ${api.message} Fix the file or choose another. Go to the documents`,
+    ]);
     expect(notices[0]).toContain("could not be read as a Word document");
     // The matter's page again, with its forms, so the person can try another file.
     expect(actions).toContain(urls.versions(c.ids.matterId, c.ids.lastDocumentId));
@@ -528,7 +532,9 @@ describe("a refused upload form says why, on the matter's page", () => {
   it("says which kinds of file can be uploaded, for a file of the wrong type", async () => {
     const c = await caseWith(10 * 1024 * 1024);
     const { notices } = await refusedWith(await viaPage(c, "contract.pdf", amendment(701)), 422);
-    expect(notices).toEqual(["Problem Only .docx and .txt files can be uploaded."]);
+    expect(notices).toEqual([
+      "Problem Only .docx and .txt files can be uploaded. Fix the file or choose another. Go to the documents",
+    ]);
   });
 
   it("says that a file is needed, and that a second NDA is not wanted, on the add-document form", async () => {
@@ -537,7 +543,9 @@ describe("a refused upload form says why, on the matter's page", () => {
     const none = await c.associate.upload(page, urls.documents(c.ids.matterId), undefined, {
       set: { [FIELDS.title]: "Amendment No. 2", [FIELDS.kind]: "amendment" },
     });
-    expect((await refusedWith(none, 400)).notices).toEqual(["Problem Choose a file to upload."]);
+    expect((await refusedWith(none, 400)).notices).toEqual([
+      "Problem Choose a file to upload. Go to the documents",
+    ]);
 
     // The form offers no second NDA, so this one is posted by hand.
     const second = await c.associate.send("POST", urls.documents(c.ids.matterId), {
@@ -551,7 +559,7 @@ describe("a refused upload form says why, on the matter's page", () => {
       ),
     });
     expect((await refusedWith(second, 409)).notices).toEqual([
-      "Problem The matter already has an NDA.",
+      "Problem The matter already has an NDA. Upload a new version of it, or remove it first. Go to the documents",
     ]);
   });
 

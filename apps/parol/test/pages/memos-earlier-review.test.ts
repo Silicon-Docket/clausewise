@@ -47,7 +47,10 @@ describe("the memo of an earlier review", () => {
 
   it("still links to the file and to the review it records, and says which review that is", () => {
     const row = byTag(list, "tbody")[0]!;
-    const file = first(row, (el) => el.name === "a" && attr(el, "download") !== undefined);
+    const file = first(
+      row,
+      (el) => el.name === "a" && attr(el, "href") === urls.memoFile(IDS.matter, IDS.memo),
+    );
     expect(attr(file, "href")).toBe(urls.memoFile(IDS.matter, IDS.memo));
     const review = first(
       row,

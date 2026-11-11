@@ -51,6 +51,9 @@ const NOT_VALID = "That request was not valid. Check the form and try again.";
  */
 const REVIEW_NOT_IN_STATE =
   "The review is no longer in a state where that can be done: it may have finished, failed or been cancelled already. Reload the page to see how the review stands.";
+/** The export of a memo before every finding has a current decision (the store's `export_blocked`). */
+const EXPORT_BLOCKED =
+  "The memo cannot be exported yet: a finding has no current decision, or the review is out of date. Open the review, decide what is open, then export again.";
 /** The retention form's refusal: its phrase, then the link to the field that the notice carries. */
 const RETENTION_DAYS = `That is not a number of days a matter can be kept for. Enter a whole number of days from 1 to ${MAX_RETAIN_DAYS}. Go to the retention field`;
 
@@ -58,7 +61,20 @@ const RETENTION_DAYS = `That is not a number of days a matter can be kept for. E
  * The matter forms that answer in place. `template` is the route in the probe table; `words` is what
  * the notice says for the probe's mistake (a form with nothing in it, a run that has finished).
  */
-const IN_PLACE: { name: string; template: string; words: string }[] = [
+interface InPlace {
+  name: string;
+  template: string;
+  words: string;
+  /**
+   * The page the refusal is answered on and who posts: the matter's page for the associate, by
+   * default. The export of a memo is the reviewing attorney's and is answered on the memos page.
+   */
+  on?: "memos";
+  /** The status of the refusal, when the probe's own (`reaches`) is the answer to a form that works. */
+  status?: number;
+}
+
+const IN_PLACE: InPlace[] = [
   { name: "the settings", template: `${M}/settings`, words: NOT_VALID },
   { name: "adding a person", template: `${M}/members`, words: NOT_VALID },
   { name: "changing the retention date", template: `${M}/retention`, words: RETENTION_DAYS },
@@ -67,7 +83,7 @@ const IN_PLACE: { name: string; template: string; words: string }[] = [
   {
     name: "uploading a new version",
     template: `${M}/documents/:documentId/versions`,
-    words: "Choose a file to upload.",
+    words: "Choose a file to upload. Go to the documents",
   },
   {
     name: "choosing the operative version",
@@ -77,7 +93,8 @@ const IN_PLACE: { name: string; template: string; words: string }[] = [
   {
     name: "setting a stated date",
     template: `${M}/versions/:versionId/stated-date`,
-    words: "The stated date must be a real date.",
+    words:
+      "The stated date must be a real date. Enter it as year, month and day. Go to the documents",
   },
   {
     name: "removing a document",
@@ -95,6 +112,15 @@ const IN_PLACE: { name: string; template: string; words: string }[] = [
     template: `${M}/runs/:runId/cancel`,
     words: REVIEW_NOT_IN_STATE,
   },
+  // The probe's own answer is a memo made (303). This matter's findings are not decided, so the same
+  // request is refused: the memo cannot be exported until they are.
+  {
+    name: "exporting a memo",
+    template: `${M}/memos`,
+    words: EXPORT_BLOCKED,
+    on: "memos",
+    status: 409,
+  },
 ];
 
 const probeOf = (template: string): Probe => {
@@ -107,6 +133,7 @@ let site: Site;
 let ids: Prepared;
 let matterName: string;
 let associate: Browser;
+let reviewer: Browser;
 let viewer: Browser;
 let outsider: Browser;
 let admin: Browser;
@@ -119,6 +146,7 @@ beforeAll(async () => {
   matterName = site.w.services.matters.view(site.w.grant(site.w.associate, ids.matterId)).matter
     .name;
   associate = await site.as(IDS.associate);
+  reviewer = await site.as(IDS.reviewer);
   viewer = await site.as(VIEWER);
   outsider = await site.as(OUTSIDER);
   admin = await site.as(IDS.admin);
@@ -131,17 +159,23 @@ describe("a refused matter form", () => {
   for (const route of IN_PLACE) {
     describe(route.name, () => {
       const probe = probeOf(route.template);
+      const status = route.status ?? probe.reaches;
+      const memos = route.on === "memos";
+      // The export is the reviewing attorney's, and its refusal is shown on the memos page.
+      const poster = (): Browser => (memos ? reviewer : associate);
+      const pageUrl = (): string => (memos ? urls.memos(ids.matterId) : urls.matter(ids.matterId));
+      const heading = (): string => (memos ? "Memos" : matterName);
 
-      it(`is answered with ${probe.reaches}, the matter's page with one error notice, and changes nothing`, async () => {
-        const asked = await associate.page(urls.matter(ids.matterId));
+      it(`is answered with ${status}, ${memos ? "the memos page" : "the matter's page"} with one error notice, and changes nothing`, async () => {
+        const asked = await poster().page(pageUrl());
         const before = fingerprint(site);
-        const response = await send(associate, probe, await associate.apiToken());
-        expect(response.status).toBe(probe.reaches);
+        const response = await send(poster(), probe, await poster().apiToken());
+        expect(response.status).toBe(status);
         expect(response.headers.get("content-type")).toMatch(/^text\/html/);
         const html = await response.text();
         const root = parseHtml(html);
-        // The matter's page, and in it one notice that is an alert and says the fixed words.
-        expect(readable(all(root, (el) => el.name === "h1")[0]!)).toBe(matterName);
+        // The page that was asked from, and in it one notice that is an alert and says the fixed words.
+        expect(readable(all(root, (el) => el.name === "h1")[0]!)).toBe(heading());
         const alerts = all(root, (el) => attr(el, "role") === "alert");
         expect(alerts).toHaveLength(1);
         expect(hasClass(alerts[0]!, "notice-error")).toBe(true);
@@ -154,7 +188,7 @@ describe("a refused matter form", () => {
 
       it("is the shell's 403 when the token is missing, and not the matter's page", async () => {
         const before = fingerprint(site);
-        const response = await send(associate, probe, null);
+        const response = await send(poster(), probe, null);
         expect(response.status).toBe(403);
         const html = await response.text();
         expect(html).not.toContain(matterName);
@@ -182,9 +216,8 @@ describe("a refused matter form", () => {
       (p) => p.method === "POST" && p.template.startsWith("/matters/:matterId/"),
     ).map((p) => p.template);
     const elsewhere = [
-      // A refused decision is answered on the finding's page, and the memo form never refuses.
+      // A refused decision is answered on the finding's page.
       `${M}/findings/:findingId/reviews`,
-      `${M}/memos`,
       // A refused report of a missed issue is answered on the review's page, a refused note on the
       // finding's own page, and a refused rating on the memos page (package W2.6a,
       // routes/feedback-routes.ts; their refusals are tested in test/routes/feedback.test.ts,

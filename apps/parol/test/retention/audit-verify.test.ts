@@ -435,7 +435,10 @@ describe("it writes nothing", () => {
         db.close();
         const foreign = await verify(other);
         expect(foreign.code).toBe(2);
-        expect(foreign.err.join("\n")).toContain("StoreError: the file is not a Parol database");
+        // Said as what is wrong and what to do, with the class and the code of the store's refusal.
+        expect(foreign.err.join("\n")).toContain(
+          "the file parol.sqlite in the data folder is not a Parol database. Set PAROL_DATA_DIR to the folder the server uses.",
+        );
       } finally {
         rmSync(other, { recursive: true, force: true });
       }

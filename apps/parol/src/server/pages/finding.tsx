@@ -621,7 +621,7 @@ function DecisionForm({ chrome, matterId, finding, draft }: FindingPaneProps) {
           </textarea>
         </Field>
         {finding.evidence.length === 0 ? null : (
-          <fieldset class="roles">
+          <fieldset class="roles" id="edit-roles">
             <legend>How each passage is labelled</legend>
             {finding.evidence.map((evidence) => {
               const id = `role-${idPart(evidence.evidenceId)}`;
@@ -673,10 +673,18 @@ const statusFor = (decision: ReviewDecision): string =>
   ({ accept: "accepted", edit: "edited", reject: "rejected", escalate: "escalated" })[decision] ??
   "decided";
 
+/**
+ * Whether the page gives this finding a decision form. The page and the route that answers a
+ * refused decision both ask it, so the route can tell a refusal for a field of a form that is on the
+ * page from one for a form that is not.
+ */
+export const decisionFormShown = (finding: FindingView): boolean =>
+  finding.canDecide.allowed && finding.issue.validity !== "stale";
+
 function DecisionSection(props: FindingPaneProps & { sectionLevel: Lv }) {
   const { finding } = props;
   const stale = finding.issue.validity === "stale";
-  const allowed = finding.canDecide.allowed && !stale;
+  const allowed = decisionFormShown(finding);
   // The service gives a fixed phrase; a blank one would leave the reader with no explanation.
   const given = finding.canDecide.reason;
   const reason = stale

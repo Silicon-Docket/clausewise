@@ -1,11 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { FIELDS } from "../../src/server/pages/forms.js";
 import { PILOT_ANCHORS, referenceSeverityField } from "../../src/server/pages/pilotfields.js";
-import { pilotJumpHasTarget } from "../../src/server/routes/page-renderers.js";
 import { urls } from "../../src/server/urls.js";
 import { expectAccessible, tabStops } from "../a11y/rules.js";
 import { all, attr, byId, byTag, hasAttr, hasClass, readable, type El } from "../pages/html.js";
-import { buildReference, buildTimer } from "../pages/pilot-support.js";
 import {
   Browser,
   IDS,
@@ -424,31 +422,169 @@ describe("a matter with no playbook chosen", () => {
   });
 });
 
-describe("the link of a refusal", () => {
-  const OPEN = buildReference();
-  const LOCKED = buildReference({ state: "locked" });
-  const TIMER = buildTimer();
+/**
+ * The link of a refusal of the timer or the reference list, on the page that answers it. A refusal
+ * of these forms leads to a place of the matter page (the timer, the reference list, its counts),
+ * and the place is not always there: the timer is given to the associate and the reviewing
+ * attorney, the list to the reviewing attorney, a training matter has neither, a review closes the
+ * list and takes its counts away. The page that answers is built, and the link is kept only when the
+ * page it built has an element with that id (`routes/refusal-jumps.ts`, the one check every page of
+ * a refusal uses). Each case below posts the form by hand the way a browser would, to a matter whose
+ * page does or does not have the place, and reads the page that comes back.
+ */
+describe("the link of a refusal of the timer or the reference list", () => {
+  let site: Site;
+  let openId: string;
+  let trainingId: string;
+  let noPlaybookId: string;
+  let associate: Browser;
+  let reviewer: Browser;
 
-  it("is kept when the place it leads to is on the page", () => {
-    expect(pilotJumpHasTarget("#time", TIMER, null)).toBe(true);
-    expect(pilotJumpHasTarget("#reference-list", TIMER, OPEN)).toBe(true);
-    expect(pilotJumpHasTarget("#reference-list", TIMER, LOCKED)).toBe(true);
-    expect(pilotJumpHasTarget("#reference-outside", TIMER, OPEN)).toBe(true);
-    expect(
-      pilotJumpHasTarget("#reference-outside", TIMER, buildReference({ state: "no_playbook" })),
-    ).toBe(true);
+  beforeAll(async () => {
+    site = makeSite();
+    openId = newMatter(site.w, "Open list").matterId;
+    trainingId = site.w.services.matters.create(site.w.associate, {
+      name: "Training: Lanternfish / Corvane NDA (T01)",
+      clientLegalName: "Lanternfish Software, Inc.",
+      playbookVersionId: site.w.playbookVersionId,
+      reviewerUserId: site.w.reviewer.userId,
+      training: "T01",
+    }).id;
+    noPlaybookId = site.w.services.matters.create(site.w.associate, {
+      name: "No playbook",
+      clientLegalName: "Lanternfish Ltd",
+      playbookVersionId: null,
+      reviewerUserId: site.w.reviewer.userId,
+    }).id;
+    associate = await site.as(IDS.associate);
+    reviewer = await site.as(IDS.reviewer);
   });
 
-  it("is dropped when the person has no such panel, or the panel holds no such control", () => {
-    expect(pilotJumpHasTarget("#time", buildTimer({ allowed: false }), null)).toBe(false);
-    expect(pilotJumpHasTarget("#reference-list", TIMER, null)).toBe(false);
-    expect(pilotJumpHasTarget("#reference-outside", TIMER, null)).toBe(false);
-    expect(pilotJumpHasTarget("#reference-outside", TIMER, LOCKED)).toBe(false);
+  const post = async (
+    who: Browser,
+    path: string,
+    fields: Record<string, string>,
+  ): Promise<Response> =>
+    who.send("POST", path, {
+      headers: FORM,
+      body: new URLSearchParams({ _csrf: await who.apiToken(), ...fields }).toString(),
+    });
+
+  /** The page of a refused form: its status, its one alert, the links the alert carries, and whether each target is on the page. */
+  async function answered(response: Response, status: number) {
+    expect(response.status).toBe(status);
+    const html = await response.text();
+    const root = expectAccessible(html);
+    const alert = all(root, (el) => attr(el, "role") === "alert")[0] as El;
+    const links = all(alert, (el) => el.name === "a" && hasClass(el, "notice-jump")).map(
+      (a) => attr(a, "href") ?? "",
+    );
+    return {
+      root,
+      alert,
+      links,
+      targetsOnPage: links.map((href) => byId(root, href.slice(1)) !== undefined),
+    };
+  }
+
+  const stopWithNoTimer = (who: Browser, matterId: string) =>
+    post(who, urls.matterTimer(matterId), { [FIELDS.intent]: "stop" });
+  const badSeverity = (who: Browser, matterId: string) =>
+    post(who, urls.matterReferenceList(matterId), {
+      [referenceSeverityField("dur-1")]: "not-a-severity",
+    });
+  const badCount = (who: Browser, matterId: string) =>
+    post(who, urls.matterReferenceList(matterId), { [FIELDS.outsideHigh]: "12" });
+
+  describe("is kept when the place it leads to is on the page", () => {
+    it("the timer: a stop with no timer running leads to the timer, which the associate's page has", async () => {
+      const seen = await answered(await stopWithNoTimer(associate, openId), 409);
+      expect(readable(seen.alert)).toContain("No timer is running on this matter.");
+      expect(seen.links).toEqual(["#time"]);
+      expect(seen.targetsOnPage).toEqual([true]);
+      expect(byId(seen.root, PILOT_ANCHORS.timer)).toBeDefined();
+    });
+
+    it("the reference list: a severity that is not a choice leads to the list, which the open list has", async () => {
+      const seen = await answered(await badSeverity(reviewer, openId), 400);
+      expect(readable(seen.alert)).toContain("That severity is not one of the choices.");
+      expect(seen.links).toEqual(["#reference-list"]);
+      expect(seen.targetsOnPage).toEqual([true]);
+    });
+
+    it("the counts: a count out of range leads to the counts of an open list", async () => {
+      const seen = await answered(await badCount(reviewer, openId), 400);
+      expect(seen.links).toEqual(["#reference-outside"]);
+      expect(seen.targetsOnPage).toEqual([true]);
+    });
+
+    it("the counts: a count out of range leads to the counts of a list with no playbook behind it", async () => {
+      const seen = await answered(await badCount(reviewer, noPlaybookId), 400);
+      expect(seen.links).toEqual(["#reference-outside"]);
+      expect(seen.targetsOnPage).toEqual([true]);
+      expect(byTag(byId(seen.root, "reference-list") as El, "select")).toEqual([]);
+    });
+
+    it("the reference list: a severity that is not a choice leads to the list when a review has closed it", async () => {
+      const closed = newMatter(site.w, "Closed list").matterId;
+      await uploadCase(site.w, closed);
+      site.w.services.runs.start(site.w.grant(site.w.associate, closed), { workflowLabel: "v2" });
+      await site.w.services.runs.idle();
+      const seen = await answered(await badSeverity(reviewer, closed), 400);
+      // The list is shown as it was left, read only, and it is still the place the link names.
+      expect(seen.links).toEqual(["#reference-list"]);
+      expect(seen.targetsOnPage).toEqual([true]);
+      expect(readable(byId(seen.root, "reference-list") as El)).toContain(
+        "This list is closed because a review has started.",
+      );
+    });
   });
 
-  it("is left alone when it is not one of this fragment's places, or there is none", () => {
-    expect(pilotJumpHasTarget(undefined, TIMER, null)).toBe(true);
-    expect(pilotJumpHasTarget("#settings", TIMER, null)).toBe(true);
-    expect(pilotJumpHasTarget("#retention", buildTimer({ allowed: false }), null)).toBe(true);
+  describe("is dropped, and the words stand, when the place is not on the page", () => {
+    it("the timer: a training matter has no timer, so a stop posted by hand has no link", async () => {
+      const seen = await answered(await stopWithNoTimer(associate, trainingId), 409);
+      expect(readable(seen.alert)).toContain("No timer is running on this matter.");
+      expect(readable(seen.alert)).toContain("Press Start timer to begin one.");
+      expect(seen.links).toEqual([]);
+      expect(byId(seen.root, "time")).toBeUndefined();
+    });
+
+    it("the reference list: a training matter has none, so a severity posted by hand has no link", async () => {
+      const seen = await answered(await badSeverity(reviewer, trainingId), 400);
+      expect(readable(seen.alert)).toContain("That severity is not one of the choices.");
+      expect(seen.links).toEqual([]);
+      expect(byId(seen.root, "reference-list")).toBeUndefined();
+    });
+
+    it("the counts: a training matter has none, so a count posted by hand has no link", async () => {
+      const seen = await answered(await badCount(reviewer, trainingId), 400);
+      expect(readable(seen.alert)).toContain("That is not a count the list can hold.");
+      expect(seen.links).toEqual([]);
+      expect(byId(seen.root, "reference-outside")).toBeUndefined();
+    });
+
+    it("the counts: a closed list has none (the case the page test above also holds)", async () => {
+      const closed = newMatter(site.w, "Closed counts").matterId;
+      await uploadCase(site.w, closed);
+      site.w.services.runs.start(site.w.grant(site.w.associate, closed), { workflowLabel: "v2" });
+      await site.w.services.runs.idle();
+      const seen = await answered(await badCount(reviewer, closed), 400);
+      expect(seen.links).toEqual([]);
+      expect(byId(seen.root, "reference-list")).toBeDefined();
+      expect(byId(seen.root, "reference-outside")).toBeUndefined();
+    });
+  });
+
+  describe("is left as the table gives it when the refusal has no place to lead to", () => {
+    it("a second start of the timer is told in words and has no link", async () => {
+      await post(associate, urls.matterTimer(openId), { [FIELDS.intent]: "start" });
+      const seen = await answered(
+        await post(associate, urls.matterTimer(openId), { [FIELDS.intent]: "start" }),
+        409,
+      );
+      expect(readable(seen.alert)).toContain("You already have a timer running.");
+      expect(seen.links).toEqual([]);
+      await post(associate, urls.matterTimer(openId), { [FIELDS.intent]: "stop" });
+    });
   });
 });

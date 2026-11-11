@@ -194,32 +194,42 @@ const CORE_PHRASES = {
   // the same thing to the person at the form.
   edits_required: EDIT_CHANGES_NOTHING,
   edit_changes_nothing: EDIT_CHANGES_NOTHING,
-  edits_not_allowed: "Only an edit decision carries edits.",
+  edits_not_allowed:
+    "Only an edit decision carries edits. Choose Edit, or leave the edit fields as they are.",
   bad_decision: "Choose a decision.",
   bad_hash:
     "The form does not say which version of the finding it was made on. Reload the page and try again.",
   bad_status: "Choose one of the listed statuses.",
   bad_role: "Choose one of the listed labels.",
-  too_many_roles: "The form names more passages than the finding has.",
+  too_many_roles:
+    "The form names more passages than the finding has. Reload the page and try again.",
   content_mismatch:
     "The finding changed after this page was opened. It is shown again as it is now. Read it and decide again.",
   stale_finding:
     "This finding is out of date because the documents or the playbook changed. Run the review again to decide it.",
   decision_conflict:
-    "Another reviewer has already decided this finding, so your decision was not recorded. Their decision stands until they change it or the review is run again.",
+    "Another reviewer has already decided this finding, so your decision was not recorded. Their decision stands until they change it or the review is run again. Ask them to change it, or ask the associate to run the review again.",
   matter_exported:
-    "The memo has been exported, so decisions can change only after the review is run again.",
-  matter_not_in_review: "The matter is not open for review.",
-  run_not_succeeded: "The review has not finished, so its findings cannot be decided yet.",
+    "The memo has been exported, so decisions can change only after the review is run again. Ask the associate to run the review again if a decision has to change.",
+  matter_not_in_review: "The matter is not open for review. Open the matter to see its state.",
+  run_not_succeeded:
+    "The review has not finished, so its findings cannot be decided yet. Wait for it to finish, then try again.",
+  // The decision route says this in place of the words of a field when the finding has no decision
+  // form on its page (`refusalForBlockedFinding`): the reason is written under Decision.
+  finding_blocked:
+    "This decision was not recorded, because this finding cannot be decided now. Read the reason under Decision.",
   no_file: "Choose a file to upload.",
   nda_first: "Upload the NDA before an amendment.",
-  nda_exists: "The matter already has an NDA.",
-  amendment_limit: "The matter already has two amendments.",
-  document_limit: "The matter already has three documents.",
-  document_layout: "The documents of a matter must be an NDA followed by its amendments.",
+  nda_exists: "The matter already has an NDA. Upload a new version of it, or remove it first.",
+  amendment_limit:
+    "The matter already has two amendments. Upload a new version of one of them, or remove one first.",
+  document_limit:
+    "The matter already has three documents. Remove one first, or upload a new version of one.",
+  document_layout:
+    "The documents of a matter must be an NDA followed by its amendments. Remove the documents that are out of order and add them in order.",
   matter_changed:
     "The documents of the matter changed while the file was being read. Upload it again.",
-  bad_date: "The stated date must be a real date.",
+  bad_date: "The stated date must be a real date. Enter it as year, month and day.",
   duplicate_stated_date:
     "That file is already in the matter, so it was not stored again and the stated date you entered was not applied. Change the date on the existing version.",
   run_model_changed:
@@ -242,27 +252,94 @@ const CORE_PHRASES = {
     "The review is no longer in a state where that can be done: it may have finished, failed or been cancelled already. Reload the page to see how the review stands.",
   stale_run:
     "That review is out of date, because the documents or the playbook changed after it started. Start a new review.",
+  // The memo: the export on the memos page and the download of its file. A person meets these
+  // after the page was opened (a decision was changed in a second tab, the data folder was
+  // cleaned), and each is answered on the memos page with these words.
+  export_blocked:
+    "The memo cannot be exported yet: a finding has no current decision, or the review is out of date. Open the review, decide what is open, then export again.",
+  memo_quote_unverified:
+    "A passage quoted in a finding no longer matches the stored text, so the memo cannot be built. Run the review again, then decide and export.",
+  reviews_changed:
+    "A decision changed while the memo was being built, so no memo was made. Export the memo again.",
+  memo_file_missing:
+    "The stored file of this memo is missing, so it could not be sent. Nothing was changed. Ask whoever runs the server to restore the file.",
+  memo_file_changed:
+    "The stored file of this memo no longer matches what was recorded when it was exported, so it was not sent. Ask whoever runs the server to look at the stored file.",
 } as const satisfies Record<string, string>;
 
 /**
- * The core fragment: the codes the application had before packages added their own. The sentence
- * that says what to do (`todo`) is written for the codes that gained a phrase with the error pages;
- * the older codes have none yet, and test/a11y/errors.test.ts lists them so that the list can only
- * shrink. A jump leads to the place of the matter page where the refusal is fixed or explained.
- * `invalid_transition` and `stale_run` are about a review and not about a control, so they have
- * none.
+ * The core fragment: the codes the application had before packages added their own. Every phrase
+ * has the sentence that says what to do (`todo`), which occurs inside it, and a test requires it
+ * of every phrase of every fragment. A jump leads to the place of the page where the refusal is
+ * fixed or explained; a refusal that is about the matter or the review and not about a control
+ * (`invalid_transition`, `stale_run`, `content_mismatch`, the state of a finding, the memo) has
+ * none. A jump to a control that the page the refusal is answered on does not have is dropped when
+ * the page is built (`refusal-jumps.ts`), so a link never leads nowhere.
+ *
+ * The first sentence of a phrase that a test or a reader already knew is kept, and the sentence that
+ * says what to do is added after it.
  */
 const CORE = {
   phrases: CORE_PHRASES,
   todo: {
+    reason_required: "Give a reason.",
+    edits_required:
+      "Change the status, a text or a label to edit this finding, or choose another decision.",
+    edit_changes_nothing:
+      "Change the status, a text or a label to edit this finding, or choose another decision.",
+    edits_not_allowed: "Choose Edit, or leave the edit fields as they are.",
+    bad_decision: "Choose a decision.",
+    bad_hash: "Reload the page and try again.",
+    bad_status: "Choose one of the listed statuses.",
+    bad_role: "Choose one of the listed labels.",
+    too_many_roles: "Reload the page and try again.",
+    content_mismatch: "Read it and decide again.",
+    stale_finding: "Run the review again to decide it.",
+    decision_conflict: "Ask them to change it, or ask the associate to run the review again.",
+    matter_exported: "Ask the associate to run the review again if a decision has to change.",
+    matter_not_in_review: "Open the matter to see its state.",
+    run_not_succeeded: "Wait for it to finish, then try again.",
+    finding_blocked: "Read the reason under Decision.",
+    no_file: "Choose a file to upload.",
+    nda_first: "Upload the NDA before an amendment.",
+    nda_exists: "Upload a new version of it, or remove it first.",
+    amendment_limit: "Upload a new version of one of them, or remove one first.",
+    document_limit: "Remove one first, or upload a new version of one.",
+    document_layout: "Remove the documents that are out of order and add them in order.",
+    matter_changed: "Upload it again.",
+    bad_date: "Enter it as year, month and day.",
+    duplicate_stated_date: "Change the date on the existing version.",
+    run_model_changed: "Start a new review instead.",
     bad_text: "Check it and try again.",
     member_exists: "Check the list of people for the role they have.",
     remove_later_first: "Remove the later documents first.",
     active_run: "Follow the review in progress, or cancel it and start a new one.",
     invalid_transition: "Reload the page to see how the review stands.",
     stale_run: "Start a new review.",
+    export_blocked: "Open the review, decide what is open, then export again.",
+    memo_quote_unverified: "Run the review again, then decide and export.",
+    reviews_changed: "Export the memo again.",
+    memo_file_missing: "Ask whoever runs the server to restore the file.",
+    memo_file_changed: "Ask whoever runs the server to look at the stored file.",
   },
   jump: {
+    reason_required: { href: "#decision-reason", label: "Go to the reason" },
+    edits_required: { href: "#edit-status", label: "Go to the edit fields" },
+    edit_changes_nothing: { href: "#edit-status", label: "Go to the edit fields" },
+    bad_decision: { href: "#decision-accept", label: "Go to the choices" },
+    bad_status: { href: "#edit-status", label: "Go to the status" },
+    bad_role: { href: "#edit-roles", label: "Go to the labels" },
+    finding_blocked: { href: "#decision", label: "Go to the reason" },
+    no_file: { href: "#documents", label: "Go to the documents" },
+    nda_first: { href: "#documents", label: "Go to the documents" },
+    nda_exists: { href: "#documents", label: "Go to the documents" },
+    amendment_limit: { href: "#documents", label: "Go to the documents" },
+    document_limit: { href: "#documents", label: "Go to the documents" },
+    document_layout: { href: "#documents", label: "Go to the documents" },
+    matter_changed: { href: "#documents", label: "Go to the documents" },
+    bad_date: { href: "#documents", label: "Go to the documents" },
+    duplicate_stated_date: { href: "#documents", label: "Go to the documents" },
+    run_model_changed: { href: "#runs", label: "Go to the reviews" },
     member_exists: { href: "#people", label: "Go to the people on this matter" },
     remove_later_first: { href: "#documents", label: "Go to the documents" },
     active_run: { href: "#active-run", label: "Go to the review in progress" },
@@ -271,8 +348,9 @@ const CORE = {
 } as const satisfies RefusalFragment;
 
 /**
- * Every fragment, in the order they are merged. The four after the core are empty until their
- * package fills them.
+ * Every fragment, in the order they are merged: the core, then one for each package that added
+ * codes of its own. `test/a11y/refusal-completeness.test.ts` holds each of them to the same rules:
+ * a todo inside every phrase, and a place on a page of the package's fixtures for every jump.
  */
 export const REFUSAL_FRAGMENTS: readonly NamedRefusalFragment[] = [
   { name: "core", fragment: CORE },
@@ -414,11 +492,36 @@ export interface Refusal {
   code: string | null;
 }
 
-const REFUSAL_BY_STATUS: Readonly<Record<400 | 409 | 422, string>> = {
-  400: "That request was not valid. Check the form and try again.",
-  409: "That conflicts with the current state of the matter. Reload the page and try again.",
-  422: "That file could not be accepted.",
+/**
+ * What a refusal says when its code has no phrase of its own, by the status of the refusal. Each
+ * ends in the sentence that says what to do (`todo`), which is kept apart so the page can set it
+ * off. A code with a phrase never gets these.
+ */
+const REFUSAL_BY_STATUS: Readonly<Record<400 | 409 | 422, { text: string; todo: string }>> = {
+  400: {
+    text: "That request was not valid. Check the form and try again.",
+    todo: "Check the form and try again.",
+  },
+  409: {
+    text: "That conflicts with the current state of the matter. Reload the page and try again.",
+    todo: "Reload the page and try again.",
+  },
+  422: {
+    text: "That file could not be accepted. Choose another file.",
+    todo: "Choose another file.",
+  },
 };
+
+/**
+ * What an upload that cannot be accepted is told to do, after the sentence the ingest wrote for the
+ * person. Some of those sentences already end with advice of their own ("Save it as UTF-8 text and
+ * upload it again."), and the advice is then given twice; that is accepted over reading the
+ * sentence to find out, because a sentence about the file that is not read as a sentence cannot be
+ * mistaken for the instruction.
+ */
+export const UPLOAD_TODO = "Fix the file or choose another.";
+/** Where an upload is fixed: the documents of the matter page. */
+const UPLOAD_JUMP: RefusalJump = { href: "#documents", label: "Go to the documents" };
 
 /**
  * What a person using a form should be told about an error their request ended in, or null when
@@ -433,7 +536,8 @@ const REFUSAL_BY_STATUS: Readonly<Record<400 | 409 | 422, string>> = {
  *
  * When the code has a phrase of its own and its fragment says what to do (`todo`) or where to fix
  * it (`jump`), the notice carries both, copied, so a page cannot change the tables. A phrase that
- * came from the status and not from a code carries neither.
+ * came from the status and not from a code carries the todo of the status and no jump, and an
+ * upload error carries the sentence of `UPLOAD_TODO` after its own and a jump to the documents.
  *
  * `tables` are the merged tables of the fragments; a test passes its own to prove the merge reaches
  * the notice.
@@ -468,17 +572,75 @@ export function refusalOf(
   if (safe.status !== 400 && safe.status !== 409 && safe.status !== 422) return null;
   const code = typeof safe.extra.code === "string" ? safe.extra.code : null;
   if (error instanceof UploadError)
-    return { status: safe.status, notice: { kind: "error", text: safe.message }, code };
-  if (code === null || !Object.hasOwn(tables.phrases, code))
     return {
       status: safe.status,
-      notice: { kind: "error", text: REFUSAL_BY_STATUS[safe.status] },
+      notice: {
+        kind: "error",
+        text: `${safe.message} ${UPLOAD_TODO}`,
+        todo: UPLOAD_TODO,
+        jump: { href: UPLOAD_JUMP.href, label: UPLOAD_JUMP.label },
+      },
       code,
     };
+  if (code === null || !Object.hasOwn(tables.phrases, code)) {
+    const general = REFUSAL_BY_STATUS[safe.status];
+    return {
+      status: safe.status,
+      notice: { kind: "error", text: general.text, todo: general.todo },
+      code,
+    };
+  }
   const todo = Object.hasOwn(tables.todo, code) ? tables.todo[code] : undefined;
   const jump = Object.hasOwn(tables.jump, code) ? tables.jump[code] : undefined;
   const notice: Notice = { kind: "error", text: tables.phrases[code] as string };
   if (todo !== undefined) notice.todo = todo;
   if (jump !== undefined) notice.jump = { href: jump.href, label: jump.label };
   return { status: safe.status, notice, code };
+}
+
+// ---------------------------------------------------------------------------------------------
+// A decision for a finding that has no form
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The refusals of a decision that are about the finding or the matter and not about a field of the
+ * form: the finding changed, went out of date, the memo was exported, the matter or the review is
+ * not open, another reviewer has decided it. They hold whatever the state of the form, and say what
+ * is wrong with the thing the person is deciding.
+ */
+const ABOUT_THE_STATE: ReadonlySet<string> = new Set([
+  "content_mismatch",
+  "stale_finding",
+  "matter_exported",
+  "matter_not_in_review",
+  "run_not_succeeded",
+  "decision_conflict",
+]);
+
+/**
+ * The refusal of a decision, for a finding whose page shows no decision form.
+ *
+ * The parsers and the store check the fields of a decision before the state of the finding, so a
+ * reject with no reason code, posted for a finding that has gone out of date, is refused for the
+ * reason code. Those words ("Choose a reason code.") are right for a finding with a form and wrong
+ * for one without: there is nothing to choose it in, and what stops the decision is that the
+ * finding cannot be decided, whatever the fields hold. So a refusal that is already about the state
+ * is kept, and any other is told in the words of `finding_blocked`, which lead to the reason the
+ * page writes under Decision (the service's own sentence for the state, with what to do). The
+ * mistake in the field is not told, because it cannot be mended here and would send the person to a
+ * control that is not on the page; once the finding can be decided again its form is shown, and the
+ * same mistake is refused there in the words of its field. The status of the refusal is kept.
+ */
+export function refusalForBlockedFinding(
+  refusal: Refusal,
+  tables: Pick<RefusalTables, "phrases" | "todo" | "jump"> = MERGED,
+): Refusal {
+  if (refusal.code !== null && ABOUT_THE_STATE.has(refusal.code)) return refusal;
+  const code = "finding_blocked";
+  const notice: Notice = { kind: "error", text: tables.phrases[code] as string };
+  const todo = tables.todo[code];
+  if (todo !== undefined) notice.todo = todo;
+  const jump = tables.jump[code];
+  if (jump !== undefined) notice.jump = { href: jump.href, label: jump.label };
+  return { status: refusal.status, notice, code };
 }

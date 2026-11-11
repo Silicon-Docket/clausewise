@@ -1,4 +1,9 @@
-import { GUIDANCE_BY_STATUS, GUIDANCE_KEYS, type GuidanceKey } from "../../src/server/guidance.js";
+import {
+  GUIDANCE_BY_STATUS,
+  GUIDANCE_KEYS,
+  isGlobalGuidanceKey,
+  type GuidanceKey,
+} from "../../src/server/guidance.js";
 import { titleFor } from "../../src/server/middleware/errors.js";
 import {
   FindingPage,
@@ -62,7 +67,7 @@ const REQUEST_ID = "req_0123456789abcdef";
 const statusOfKey = (key: GuidanceKey): number => {
   const own = Object.entries(GUIDANCE_BY_STATUS).find(([, k]) => k === key)?.[0];
   if (own !== undefined) return Number(own);
-  return key === "csrf" || key === "host" || key === "global_role" ? 403 : 418;
+  return key === "csrf" || key === "host" || isGlobalGuidanceKey(key) ? 403 : 418;
 };
 
 /**

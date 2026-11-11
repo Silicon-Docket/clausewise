@@ -59,7 +59,11 @@ export function MemoList(props: {
             {props.memos.map((memo) => (
               <tr>
                 <th scope="row">
-                  <a href={urls.memoFile(props.matterId, memo.memoId)} download>
+                  {/* No `download` attribute: the response is an attachment and downloads without it,
+                      and with it a browser takes a refusal (the file is gone, or changed) for a failed
+                      download and shows no page. Without it the refusal is shown as the memos page,
+                      with its words. */}
+                  <a href={urls.memoFile(props.matterId, memo.memoId)}>
                     <RevealedText value={memo.fileName} />
                   </a>
                 </th>

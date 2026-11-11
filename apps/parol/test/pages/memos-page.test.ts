@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MemosPage, render } from "../../src/server/pages/index.js";
 import { accessibleName, auditPage } from "../a11y/rules.js";
 import { checkInvariants } from "./invariants.js";
-import { all, attr, hasClass, parseHtml, readable, section, type El } from "./html.js";
+import { all, attr, hasAttr, hasClass, parseHtml, readable, section, type El } from "./html.js";
 import { matterPage, memosPage } from "./render.js";
 import { buildChrome, buildMatterSummary, buildMatterViewFor, buildMemo } from "./support.js";
 
@@ -98,5 +98,21 @@ describe("MemosPage when no memo has been exported", () => {
       expect(text(role), role).toContain(
         "No memo has been exported yet. The reviewing attorney exports it when every finding has a current decision.",
       );
+  });
+});
+
+describe("the link to a memo file", () => {
+  it("has no download attribute, so that a browser shows a refusal as the memos page", () => {
+    // The response is an attachment and downloads without the attribute. With it, a browser takes a
+    // 409 for a failed download and shows no page (checked in headless Chrome: the click is a
+    // download that is cancelled, and the tab stays where it was), so the words a refused download
+    // is answered with would never be seen.
+    const root = checkInvariants(memosPage(true));
+    const links = all(
+      root,
+      (el) => el.name === "a" && /\/memos\/[^/]+\/file$/.test(attr(el, "href") ?? ""),
+    );
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) expect(hasAttr(link, "download")).toBe(false);
   });
 });

@@ -1432,7 +1432,11 @@ describe("the real shell around the real services", () => {
       expect(exported.headers.get("location")).toBe(urls.memos(r.matterId));
 
       const list = await pageOf(associate, urls.memos(r.matterId));
-      const link = first(list.root, (el) => el.name === "a" && hasAttr(el, "download"));
+      const link = first(
+        list.root,
+        (el) =>
+          el.name === "a" && /^\/matters\/[^/]+\/memos\/[^/]+\/file$/.test(attr(el, "href") ?? ""),
+      );
       const download = await associate.get(attr(link, "href")!);
       expect(download.status).toBe(200);
       expect(download.headers.get("content-type")).toBe(DOCX_TYPE);

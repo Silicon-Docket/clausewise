@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { CsrfError } from "../../src/auth/csrf.js";
 import { UploadError } from "../../src/module-contracts.js";
-import { GUIDANCE, type GuidanceKey } from "../../src/server/guidance.js";
+import { GUIDANCE, globalGuidanceKey, type GuidanceKey } from "../../src/server/guidance.js";
 import { defineRoute } from "../../src/server/matter-route.js";
 import { ForbiddenError, RunNotReadyError } from "../../src/services/errors.js";
 import {
@@ -83,7 +83,7 @@ const CASES: Case[] = [
     throws: () => new ForbiddenError("evaluation.read"),
     status: 403,
     body: { kind: "forbidden" },
-    guidance: "global_role",
+    guidance: globalGuidanceKey("evaluation.read"),
   },
   {
     name: "HTTPException 403",

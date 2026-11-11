@@ -607,14 +607,19 @@ describe("pnpm parol:seed, as a process", () => {
     expect(result.stdout).toMatch(/Review with workflow v1 on the first matter: run, succeeded/);
   });
 
-  it("says what went wrong when the data folder cannot be used, as the server does: the kind of error and its message, no stack", () => {
+  it("says what went wrong when the data folder cannot be used, as the server does: what to change, the code, no path and no stack", () => {
     // A regular file where the data folder should be.
     const notAFolder = join(folder(), "a-file");
     writeFileSync(notAFolder, "not a folder");
     const result = run({ PAROL_DEMO_IDENTITY: "1", PAROL_DATA_DIR: notAFolder });
     expect(result.status).toBe(1);
-    expect(result.stderr).toMatch(/^Parol seed cannot run: Error: \S.{10,}/);
-    expect(result.stderr).toContain(notAFolder);
+    expect(result.stderr).toMatch(
+      /^Parol seed cannot run: PAROL_DATA_DIR, or something in that folder/,
+    );
+    expect(result.stderr).toContain("Set PAROL_DATA_DIR to the folder the server uses.");
+    expect(result.stderr).toMatch(/ \[E[A-Z]+\]\n/);
+    // The message of the operating system holds the path; the sentence does not.
+    expect(result.stderr).not.toContain(notAFolder);
     expect(result.stderr).not.toMatch(/\n\s+at /);
     expect(result.stdout).toBe("");
   });

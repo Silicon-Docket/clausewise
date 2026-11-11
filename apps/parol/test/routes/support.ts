@@ -103,6 +103,8 @@ export interface SiteOptions {
   model2?: ReturnType<typeof controlledModel>;
   /** Single-person demonstration: the services and the shell both relax segregation. */
   relaxed?: boolean;
+  /** A builder of the memo of the test's own, in place of the real one (a gate that refuses, a change made while it builds). */
+  buildMemo?: NonNullable<Parameters<typeof makeWorld>[0]>["buildMemo"];
   maxUploadBytes?: number;
   /** Default true. With false nobody can be signed in. */
   demoIdentity?: boolean;
@@ -118,6 +120,7 @@ export function makeSite(options: SiteOptions = {}): Site {
     model: options.model ?? WORKED_EXAMPLE,
     ...(options.model2 === undefined ? {} : { model2: options.model2 }),
     ...(options.relaxed === true ? { config: { relaxedSegregation: true } } : {}),
+    ...(options.buildMemo === undefined ? {} : { buildMemo: options.buildMemo }),
   });
   addUser(w.repo, VIEWER);
   addUser(w.repo, OUTSIDER);

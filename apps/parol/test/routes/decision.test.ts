@@ -360,8 +360,9 @@ describe("the decision form, when the server refuses it", () => {
         },
       });
       const { notices, root } = await refused(response, 400);
+      // The words of the table, then the way to the field they are about.
       expect(notices, decision).toEqual([
-        "Problem Give a reason. A decision to edit, reject or escalate needs one.",
+        "Problem Give a reason. A decision to edit, reject or escalate needs one. Go to the reason",
       ]);
       // The finding is on the page again, with the form to try once more.
       expect(all(root, (el) => el.name === "form").map((f) => attr(f, "action"))).toContain(action);
@@ -380,13 +381,15 @@ describe("the decision form, when the server refuses it", () => {
       },
     });
     expect((await refused(same, 400)).notices).toEqual([
-      "Problem Nothing was changed. Change the status, a text or a label to edit this finding, or choose another decision.",
+      "Problem Nothing was changed. Change the status, a text or a label to edit this finding, or choose another decision. Go to the edit fields",
     ]);
     const none = await byHand(action, {
       [FIELDS.decision]: "",
       [FIELDS.findingContentSha256]: dur.contentSha256,
     });
-    expect((await refused(none, 400)).notices).toEqual(["Problem Choose a decision."]);
+    expect((await refused(none, 400)).notices).toEqual([
+      "Problem Choose a decision. Go to the choices",
+    ]);
   });
 
   it("tells the reviewer that the finding changed, and does not give the typed text back", async () => {

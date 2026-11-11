@@ -293,8 +293,35 @@ describe("the story of the worked example, with a marker in everything", () => {
     );
     expect(version.status).toBe(303);
     await note(await reviewer.api("POST", `/api/matters/${matterId}/memos`));
+    // The page's export is refused in place, like the upload above: the memos page again, byte for
+    // byte as it was asked from, with one fixed problem notice added. It names the matter as the
+    // page always does and repeats nothing the request carried (it carried nothing).
+    const beforeExport = await reviewer.page(urls.memos(matterId));
+    const blocked = await reviewer.submit(beforeExport, urls.memos(matterId));
+    expect(blocked.status).toBe(409);
+    const blockedHtml = await blocked.text();
+    expect(blockedHtml).toMatch(problem);
+    expect(blockedHtml).toContain(
+      "The memo cannot be exported yet: a finding has no current decision, or the review is out of date.",
+    );
+    expect(blockedHtml.replace(problem, "")).toBe(beforeExport.html);
+    // A review asked for on a matter with nothing in it is not a mistake in the form, so it is the
+    // shell's page for a conflict, and that page repeats nothing: not the name of the matter either.
+    const emptyId = matterIdFrom(
+      await associate.submit(await associate.page(urls.matters()), urls.matters(), {
+        set: {
+          [FIELDS.name]: `Empty matter ${TYPED}`,
+          [FIELDS.clientLegalName]: baseWorld.manifest.clientLegalName,
+          [FIELDS.reviewerUserId]: IDS.reviewer,
+          [FIELDS.playbookVersionId]: site.w.playbookVersionId,
+        },
+      }),
+    );
     await note(
-      await reviewer.submit(await reviewer.page(urls.memos(matterId)), urls.memos(matterId)),
+      await associate.send("POST", urls.runs(emptyId), {
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ _csrf: await associate.apiToken(), workflow: "v2" }).toString(),
+      }),
     );
 
     // The matter is deleted by its creator, with a form that carries the marker.

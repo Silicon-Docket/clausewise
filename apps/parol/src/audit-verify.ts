@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
 import {
   CliUsageError,
+  NO_DATABASE,
   dataFolder,
-  describeFailure,
+  describeCommandFailure,
   isEntryPointOf,
   stderrLine,
   stdoutLine,
@@ -10,7 +11,6 @@ import {
 import {
   AUDIT_BREAK_TEXT,
   MATTER_ID_PATTERN,
-  StoreError,
   checkAudit,
   openDatabaseReadOnly,
   type AuditCheck,
@@ -155,7 +155,8 @@ export function describeAuditCheck(check: AuditCheck, dataDir: string): string[]
 /** The exit code of a check: 0 intact, 1 broken. */
 export const exitCodeOfCheck = (check: AuditCheck): 0 | 1 => (check.ok ? 0 : 1);
 
-const READABLE = [CliUsageError, StoreError] as const;
+/** The errors whose messages are written for the person who runs the command. */
+const WRITTEN = [CliUsageError] as const;
 
 /**
  * Runs the command and returns its exit code. `env` is read for `PAROL_DATA_DIR` and nothing else.
@@ -170,9 +171,7 @@ export async function runAuditVerify(
     const args = parseAuditVerifyArgs(argv);
     const folder = dataFolder(env);
     if (!existsSync(folder.databasePath)) {
-      err(
-        "Parol audit check cannot run: there is no database in the data folder. Check PAROL_DATA_DIR.",
-      );
+      err(`Parol audit check cannot run: ${NO_DATABASE}`);
       return 2;
     }
     const db = openDatabaseReadOnly(folder.databasePath);
@@ -197,7 +196,7 @@ export async function runAuditVerify(
     } else for (const line of describeAuditCheck(check, folder.dataDir)) out(line);
     return exitCodeOfCheck(check);
   } catch (error) {
-    err(`Parol audit check cannot run: ${describeFailure(error, READABLE)}`);
+    err(describeCommandFailure("Parol audit check", error, WRITTEN));
     return 2;
   }
 }
