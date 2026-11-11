@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { getRequestListener, type ServerType } from "@hono/node-server";
 import {
+  LlmConfigError,
   loadLlmConfig,
   type GenerateObjectRequest,
   type LlmConfig,
@@ -29,6 +30,7 @@ import { reportRetentionNotices } from "./retention/notices.js";
 import { isStandInProvider } from "./stand-in.js";
 import {
   FileStore,
+  StoreError,
   createRepository,
   openDatabase,
   type Database,
@@ -559,6 +561,158 @@ function listen(
   });
 }
 
+// ---------------------------------------------------------------------------------------------
+// When the start fails
+// ---------------------------------------------------------------------------------------------
+
+const START_FAILED = "Parol cannot start:";
+
+/**
+ * Added to a model setting that cannot be used, because the person who meets it may only want to
+ * look at Parol. The reader that `PAROL_SCRIPTED` switches on is labelled for what it is.
+ */
+const WITHOUT_A_MODEL =
+  "To try Parol without a model, start it with PAROL_SCRIPTED=1, as in " +
+  "PAROL_DEMO_IDENTITY=1 PAROL_SCRIPTED=1 pnpm parol. The reader is then a scripted stand-in that " +
+  "answers only the demonstration documents from a table written in advance; it is not a language model.";
+
+/** The message of a module that is missing names the fault and no fix, and a test pins its words. */
+const MODULE_MISSING = /^Parol cannot start: the module [A-Za-z0-9_./-]+ is missing\.$/;
+const MODULE_MISSING_FIX =
+  "The copy of Parol is incomplete. Get a complete copy, install its dependencies again (pnpm install) and start again.";
+
+/** A name or a code that is safe to print: letters, digits and underscores, and short. */
+const SAFE_TOKEN = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+const tokenOf = (value: unknown): string | null =>
+  typeof value === "string" && SAFE_TOKEN.test(value) ? value : null;
+
+const DISK_FULL =
+  "The disk is full. Free some space, or set PAROL_DATA_DIR to a folder on another disk.";
+const NOT_WRITABLE =
+  "Parol may not write there. Make PAROL_DATA_DIR a folder that the user who starts Parol can write to, " +
+  "or set it to another folder. If the port is below 1024, set PAROL_PORT to a higher one.";
+const BAD_FOLDER =
+  "PAROL_DATA_DIR, or something in that folder, is not what Parol expects: a file stands where a folder is needed, " +
+  "or a folder where a file is needed. Set PAROL_DATA_DIR to a folder that exists, or that Parol can make, and that holds only Parol's own files.";
+const BAD_HOST =
+  "PAROL_HOST is not an address this machine can listen on. Set it to 127.0.0.1 or localhost, or unset it.";
+const TOO_MANY_FILES = "The system has too many files open. Close other programs and start again.";
+const MISSING_FILE =
+  "A file that Parol needs is missing. Install its dependencies again (pnpm install) and start again.";
+
+/** Operating system errors, by the code Node gives them. Their messages are not shown: they hold a path. */
+const SYSTEM_FAILURES: Readonly<Record<string, string>> = {
+  EADDRINUSE:
+    "The port is already in use by another program. Stop that program, or set PAROL_PORT to a port that is free.",
+  EACCES: NOT_WRITABLE,
+  EPERM: NOT_WRITABLE,
+  EADDRNOTAVAIL: BAD_HOST,
+  ENOTFOUND: BAD_HOST,
+  EAI_AGAIN: BAD_HOST,
+  EAI_NONAME: BAD_HOST,
+  EAI_FAIL: BAD_HOST,
+  ENOENT: BAD_FOLDER,
+  ENOTDIR: BAD_FOLDER,
+  EISDIR: BAD_FOLDER,
+  EEXIST: BAD_FOLDER,
+  ENOSPC: DISK_FULL,
+  EDQUOT: DISK_FULL,
+  EROFS:
+    "The data folder is on a disk that cannot be written to. Set PAROL_DATA_DIR to a folder that can.",
+  EMFILE: TOO_MANY_FILES,
+  ENFILE: TOO_MANY_FILES,
+  ERR_MODULE_NOT_FOUND: MISSING_FILE,
+  MODULE_NOT_FOUND: MISSING_FILE,
+};
+
+const DAMAGED_DATABASE =
+  "The database file in the data folder is damaged, or is not a Parol database. Restore it from a copy, " +
+  "or set PAROL_DATA_DIR to a new folder; the matters in the damaged one will not be there.";
+const DATABASE_IN_USE =
+  "The database is in use by another program. Stop it, and any other Parol that uses this data folder, then start again.";
+const MIGRATIONS_DISAGREE =
+  "The database and this copy of Parol do not agree on the migrations that build it: the database was made " +
+  "by another version of Parol, or a migration file was changed after it was applied. Start the version of " +
+  "Parol that made the data folder, or set PAROL_DATA_DIR to a new folder.";
+
+/** SQLite's result codes (the primary code, the low byte), by what the person can do. */
+const SQLITE_FAILURES: Readonly<Record<number, string>> = {
+  14: "The database file in the data folder cannot be opened. Check that PAROL_DATA_DIR is a folder that Parol can write to, and that parol.sqlite in it is a file and not a folder.",
+  26: DAMAGED_DATABASE,
+  11: DAMAGED_DATABASE,
+  5: DATABASE_IN_USE,
+  6: DATABASE_IN_USE,
+  13: DISK_FULL,
+  8: "The database cannot be written to. Make the data folder and parol.sqlite in it writable by the user who starts Parol.",
+  10: "The disk reported an error while Parol read or wrote the database. Check the disk, then start again.",
+};
+
+/** The codes of the store's own faults at start-up. */
+const STORE_FAILURES: Readonly<Record<string, string>> = {
+  migration_gap: MIGRATIONS_DISAGREE,
+  migration_changed: MIGRATIONS_DISAGREE,
+  migration_unknown: MIGRATIONS_DISAGREE,
+  bad_migration_name: MIGRATIONS_DISAGREE,
+};
+
+const sentence = (text: string): string => (/[.!?]$/.test(text) ? text : `${text}.`);
+/** `message` led by "Parol cannot start:", unless it already says so. */
+const said = (message: string): string =>
+  message.startsWith(START_FAILED) ? sentence(message) : `${START_FAILED} ${sentence(message)}`;
+
+/**
+ * What is said about an error that nobody wrote a sentence for. Its message is never shown: it can
+ * hold a path, a setting or a line of a file, and this is the one place that has to be sure it holds
+ * none. Only its class name and a code of a fixed shape are printed, so that whoever helps can find
+ * the fault.
+ */
+function describeUnexpected(error: unknown): string {
+  const fields =
+    typeof error === "object" && error !== null ? (error as Record<string, unknown>) : {};
+  const code = tokenOf(fields.code);
+  const name = error instanceof Error ? (tokenOf(error.name) ?? "Error") : null;
+  if (code === "ERR_SQLITE_ERROR" && typeof fields.errcode === "number") {
+    const primary = fields.errcode & 0xff;
+    const advice =
+      SQLITE_FAILURES[primary] ??
+      "The database could not be opened or updated. Check the data folder (PAROL_DATA_DIR) and start again.";
+    return `${START_FAILED} ${advice} [SQLite result ${primary}]`;
+  }
+  if (error instanceof StoreError && code !== null) {
+    const advice =
+      STORE_FAILURES[code] ??
+      "A check of the stored data failed. Start again; if it fails again, set PAROL_DATA_DIR to a new folder and report the code given here.";
+    return `${START_FAILED} ${advice} [${name ?? "StoreError"}, code ${code}]`;
+  }
+  if (code !== null && Object.hasOwn(SYSTEM_FAILURES, code))
+    return `${START_FAILED} ${SYSTEM_FAILURES[code]} [${code}]`;
+  const what = name === null ? "something that is not an error" : `an unexpected ${name}`;
+  return (
+    `${START_FAILED} ${what} stopped the start. Start again; if it happens again, report it with the ` +
+    `name${code === null ? "" : ` and the code ${code}`} given here. Its message is not shown, because it ` +
+    "could hold a path or a setting."
+  );
+}
+
+/**
+ * The sentence the entry point prints when the server cannot start, and it says what to do.
+ *
+ * A setting that is wrong (`ConfigError`), a start that cannot go on (`StartupError`) and a model
+ * setting that is wrong (`LlmConfigError`) were each written as a sentence that names the variable
+ * and the fix and never prints a value, so their words are shown as they are; the last of the three
+ * is followed by the one way to look at Parol without a model. Anything else is an error from the
+ * operating system, the database or the code. Its own message is never quoted, and it is told in
+ * words from its class and its code, which are fixed names.
+ */
+export function describeStartFailure(error: unknown): string {
+  if (error instanceof LlmConfigError) return `${said(error.message)} ${WITHOUT_A_MODEL}`;
+  if (error instanceof ConfigError || error instanceof StartupError) {
+    const message = said(error.message);
+    return MODULE_MISSING.test(message) ? `${message} ${MODULE_MISSING_FIX}` : message;
+  }
+  return describeUnexpected(error);
+}
+
 /** Start, then stop cleanly on SIGINT or SIGTERM. A second signal stops at once. */
 export async function main(env: Env = process.env): Promise<void> {
   const running = await start(env);
@@ -598,11 +752,7 @@ function isEntryPoint(): boolean {
 
 if (isEntryPoint()) {
   main().catch((error: unknown) => {
-    // Start-up errors are about settings and files, not about a request, so they may be read.
-    if (error instanceof ConfigError || error instanceof StartupError)
-      stderr(`Parol cannot start: ${error.message}`);
-    else if (error instanceof Error) stderr(`Parol cannot start: ${error.name}: ${error.message}`);
-    else stderr("Parol cannot start.");
+    stderr(describeStartFailure(error));
     process.exitCode = 1;
   });
 }
