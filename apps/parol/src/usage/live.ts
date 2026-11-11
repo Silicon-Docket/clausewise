@@ -1,4 +1,9 @@
-import { createObjectGenerator, type AnthropicUsage, type LlmConfig } from "@clausewise/llm";
+import {
+  createObjectGenerator,
+  type AnthropicUsage,
+  type GenerateObjectRequest,
+  type LlmConfig,
+} from "@clausewise/llm";
 import type { ObjectGenerator } from "@clausewise/llm";
 import type { Repository } from "../store/index.js";
 import { SpendConfigError } from "./errors.js";
@@ -38,10 +43,18 @@ export function createLiveGenerator(
     options.onUsage?.(usage);
     guard?.onUsage(usage);
   };
-  return createObjectGenerator(llm, {
+  const generator = createObjectGenerator(llm, {
     onUsage: createUsageSink(also),
     fetch: meteringFetch(guard === undefined ? network : guard.guardFetch(network)),
   });
+  if (guard === undefined) return generator;
+  // Each call is one scope of the guard, so that what its requests reserved comes back when the
+  // call ends, also when a response never reaches the usage hook.
+  return {
+    ...generator,
+    generate: <T>(request: GenerateObjectRequest<T>): Promise<T> =>
+      guard.scope(() => generator.generate(request)),
+  };
 }
 
 // ---------------------------------------------------------------------------------------------

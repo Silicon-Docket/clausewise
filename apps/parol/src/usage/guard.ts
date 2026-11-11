@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { AnthropicUsage } from "@clausewise/llm";
 import type { SpendUsage } from "../store/repo-spend.js";
 import type { Repository } from "../store/index.js";
@@ -73,9 +74,19 @@ export interface SpendGuard extends CallPricer {
   /** The engine, once per job: where to send a stop. It must be idempotent. */
   begin(runId: string, onStop: (stop: SpendStop) => void): void;
 
+  /**
+   * Runs one model call (one `generate`). What its requests reserved is given back when it ends,
+   * whichever way it ends, and a request of the call does not wait for the room that an earlier
+   * request of the same call still holds: the requests of one call run one after another.
+   */
+  scope<T>(work: () => Promise<T>): Promise<T>;
   /** Wraps the real `fetch` with the per-request cap. */
   guardFetch(inner: typeof globalThis.fetch): typeof globalThis.fetch;
-  /** For the adapter's `onUsage`: counts the response in the ledger and the run, and trips a limit. */
+  /**
+   * For the adapter's `onUsage`: counts the response in the ledger and the run, and trips a limit.
+   * Usage that is not made of whole numbers of 0 or more is not the provider's accounting, and a
+   * response is never free for that: the worst case of its request is charged instead.
+   */
   onUsage(usage: AnthropicUsage): void;
 }
 
@@ -124,8 +135,21 @@ interface RunState {
   spentUsd: number;
   onStop: ((stop: SpendStop) => void) | null;
   /** The worst case of each request in flight, oldest first. */
-  pending: number[];
+  pending: Reservation[];
 }
+
+/** One model call (`scope`): the identity that the reservations of its requests carry. */
+type CallOwner = Record<string, never>;
+
+interface Reservation {
+  /** The most the request can cost. */
+  worst: number;
+  /** The call it belongs to; null for a request made outside `scope`. */
+  owner: CallOwner | null;
+}
+
+/** Which call is running, for the guarded `fetch` and `onUsage` that carry no identity of their own. */
+const ownerStore = new AsyncLocalStorage<CallOwner>();
 
 const ZERO: SpendUsage = {
   responses: 0,
@@ -193,7 +217,7 @@ export function createSpendGuard(args: {
     return held;
   };
   const reservedUsd = (state: RunState): number =>
-    state.pending.reduce((total, usd) => total + usd, 0);
+    state.pending.reduce((total, reservation) => total + reservation.worst, 0);
   const reservedAllUsd = (): number => {
     let total = 0;
     for (const state of runs.values()) total += reservedUsd(state);
@@ -229,6 +253,14 @@ export function createSpendGuard(args: {
   const stateOfCurrentRun = (): RunState | undefined => {
     const scope = currentRun();
     return scope === undefined ? undefined : runs.get(scope.runId);
+  };
+
+  /** Gives back what the requests of a call hold, and tells the requests that wait. */
+  const giveBack = (state: RunState, owner: CallOwner): void => {
+    const kept = state.pending.filter((reservation) => reservation.owner !== owner);
+    if (kept.length === state.pending.length) return;
+    state.pending = kept;
+    wake();
   };
 
   return {
@@ -290,6 +322,21 @@ export function createSpendGuard(args: {
       state.onStop = onStop;
     },
 
+    async scope(work) {
+      const state = stateOfCurrentRun();
+      // A call outside a run has nothing to give back: its requests are refused.
+      if (state === undefined) return work();
+      const owner: CallOwner = {};
+      try {
+        return await ownerStore.run(owner, work);
+      } finally {
+        // A response that reported no usable usage (a gateway's reply that is not a Messages reply,
+        // a stream that broke) never reaches `onUsage`, so this is the one place its share is
+        // certain to come back.
+        giveBack(state, owner);
+      }
+    },
+
     guardFetch(inner) {
       return async (...request: Parameters<typeof globalThis.fetch>): Promise<Response> => {
         const state = stateOfCurrentRun();
@@ -297,6 +344,11 @@ export function createSpendGuard(args: {
         if (state === undefined) throw new SpendStop("no_run_scope");
         const worst = worstCaseUsd(request[1]?.body, price);
         if (!Number.isFinite(worst)) throw stopRun(state, "unsizable_request");
+        // The requests of one call run one after another (a retry, or the next attempt, starts
+        // after the last one was answered), so whatever an earlier request of this call still holds
+        // is settled. Waiting for it would wait for a wake that nothing is left to send.
+        const owner = ownerStore.getStore() ?? null;
+        if (owner !== null) giveBack(state, owner);
         for (;;) {
           let day: number;
           try {
@@ -316,9 +368,10 @@ export function createSpendGuard(args: {
             break;
           await waitForRoom(request[1]?.signal);
         }
-        state.pending.push(worst);
+        const reservation: Reservation = { worst, owner };
+        state.pending.push(reservation);
         const drop = (): void => {
-          const at = state.pending.indexOf(worst);
+          const at = state.pending.indexOf(reservation);
           if (at !== -1) state.pending.splice(at, 1);
           wake();
         };
@@ -337,27 +390,46 @@ export function createSpendGuard(args: {
 
     onUsage(usage) {
       const state = stateOfCurrentRun();
-      // Responses can settle in any order and the reservations differ only by prompt size, so the
-      // oldest of the run is given back. The total returns to zero once every response settled.
+      // The response answers the oldest request of its call, or of its run when it was made outside
+      // a call: the reservations of a call differ only by prompt size, and the total returns to
+      // zero once every response settled.
+      let held: number | undefined;
       if (state !== undefined) {
-        state.pending.shift();
+        const owner = ownerStore.getStore() ?? null;
+        const at = state.pending.findIndex((reservation) => reservation.owner === owner);
+        if (at !== -1) held = state.pending.splice(at, 1)[0]?.worst;
         wake();
       }
-      // A figure that is not a count is not the provider's accounting: nothing is added for it.
+      // A figure that is not a count is not the provider's accounting. It does not make the
+      // response free: nothing is known of its cost but the most its request could have cost, so
+      // that is charged, with no token counts in the ledger (a count would be an invented one).
+      // With no request to take that figure from, a run has nothing to bound the response by and
+      // is stopped as for a request that cannot be sized.
+      let counts = usage;
+      let costUsd: number;
       if (
-        !isCount(usage.inputTokens) ||
-        !isCount(usage.outputTokens) ||
-        !isCount(usage.cacheReadTokens) ||
-        !isCount(usage.cacheWriteTokens)
-      )
+        isCount(usage.inputTokens) &&
+        isCount(usage.outputTokens) &&
+        isCount(usage.cacheReadTokens) &&
+        isCount(usage.cacheWriteTokens)
+      ) {
+        costUsd = costOf(usage, price);
+      } else if (held !== undefined) {
+        counts = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+        costUsd = held;
+        log(
+          "spend guard: a response reported usage that could not be read, so the most its request could cost was charged",
+        );
+      } else {
+        if (state !== undefined) stopRun(state, "unsizable_request");
         return;
-      const costUsd = costOf(usage, price);
+      }
       write({
         responses: 1,
-        inputTokens: usage.inputTokens,
-        outputTokens: usage.outputTokens,
-        cacheReadTokens: usage.cacheReadTokens,
-        cacheWriteTokens: usage.cacheWriteTokens,
+        inputTokens: counts.inputTokens,
+        outputTokens: counts.outputTokens,
+        cacheReadTokens: counts.cacheReadTokens,
+        cacheWriteTokens: counts.cacheWriteTokens,
         costUsd,
         unpricedResponses: 0,
       });
