@@ -75,6 +75,8 @@ export function createReviewService(deps: ServiceDeps, present: Presenter): Revi
         findingContentSha256: request.findingContentSha256,
         edits: request.edits ?? null,
         reason: request.reason ?? null,
+        reasonCode: request.reasonCode ?? null,
+        minorEdit: request.minorEdit ?? null,
       });
       const decided = repo.getFinding(am.matterId, findingId);
       if (decided === undefined) throw new NotFoundError("finding");

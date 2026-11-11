@@ -1,8 +1,19 @@
-import { EVIDENCE_ROLES, REVIEW_DECISIONS, STATUSES, type EvidenceRole } from "../../contracts.js";
+import {
+  EVIDENCE_ROLES,
+  REASON_CODES,
+  REVIEW_DECISIONS,
+  STATUSES,
+  type EvidenceRole,
+} from "../../contracts.js";
 import type { DecisionRequest, FindingView } from "../../services/views.js";
 import { ValidationError } from "../../store/errors.js";
 import { formString, type FormFields } from "../http.js";
-import { FIELDS, evidenceIdOfRoleField, normalizeNewlines } from "../pages/forms.js";
+import {
+  FIELDS,
+  MINOR_EDIT_VALUE,
+  evidenceIdOfRoleField,
+  normalizeNewlines,
+} from "../pages/forms.js";
 import type { DecisionDraft } from "../pages/finding.js";
 import {
   DecisionBody,
@@ -35,6 +46,11 @@ const reasonOf = (value: string | null | undefined): string | null =>
  *
  * A passage that is not one of this finding's is not skipped. It is passed on so that the store
  * refuses it as an id it does not know (404), the same answer the JSON API gives.
+ *
+ * The reason code and the minor-edit box are read the same way: the form posts every field whatever
+ * was chosen, so the code is kept only for an edit or a reject and the box only for an edit, as the
+ * edits are. A code that is not one of the listed ones is refused here (`bad_reason_code`); a blank
+ * code is passed on as none, and the store says that an edit or a reject needs one.
  */
 export function decisionFromForm(form: FormFields, finding: FindingView): DecisionRequest {
   const text = (name: string): string | undefined => {
@@ -79,11 +95,23 @@ export function decisionFromForm(form: FormFields, finding: FindingView): Decisi
     if (roles.length > 0) changed.evidenceRoles = roles;
     edits = Object.keys(changed).length === 0 ? null : changed;
   }
+
+  let reasonCode: DecisionRequest["reasonCode"] = null;
+  if (decision === "edit" || decision === "reject") {
+    const posted = text(FIELDS.reasonCode);
+    if (posted !== undefined && posted.trim() !== "") {
+      reasonCode = REASON_CODES.find((candidate) => candidate === posted) ?? null;
+      if (reasonCode === null)
+        throw new ValidationError("bad_reason_code", "choose one of the listed reason codes");
+    }
+  }
   return {
     decision,
     findingContentSha256: hash.data,
     edits,
     reason: reasonOf(text(FIELDS.reason)),
+    reasonCode,
+    minorEdit: decision === "edit" ? text(FIELDS.minorEdit) === MINOR_EDIT_VALUE : null,
   };
 }
 
@@ -119,6 +147,9 @@ export function draftFromForm(form: FormFields): DecisionDraft {
     if (role !== undefined) roles[evidenceId] = role;
   }
   if (Object.keys(roles).length > 0) draft.roles = roles;
+  const reasonCode = REASON_CODES.find((candidate) => candidate === text(FIELDS.reasonCode, 40));
+  if (reasonCode !== undefined) draft.reasonCode = reasonCode;
+  if (text(FIELDS.minorEdit, 10) === MINOR_EDIT_VALUE) draft.minorEdit = true;
   return draft;
 }
 
@@ -144,5 +175,7 @@ export function decisionFromBody(body: unknown): DecisionRequest {
     findingContentSha256: parsed.findingContentSha256,
     edits,
     reason: reasonOf(parsed.reason),
+    reasonCode: parsed.reasonCode ?? null,
+    minorEdit: parsed.minorEdit ?? null,
   };
 }

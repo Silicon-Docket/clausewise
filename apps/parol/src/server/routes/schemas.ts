@@ -3,6 +3,7 @@ import {
   DOCUMENT_KINDS,
   EVIDENCE_ROLES,
   MATTER_ROLES,
+  REASON_CODES,
   REVIEW_DECISIONS,
   STATUSES,
 } from "../../contracts.js";
@@ -140,6 +141,10 @@ export const DecisionBody = z.strictObject({
   findingContentSha256: sha256,
   edits: EditsInput.nullable().optional(),
   reason: z.string().max(MAX_REASON).nullable().optional(),
+  /** Required for edit and reject, not allowed for accept and escalate (the store says which). */
+  reasonCode: z.enum(REASON_CODES).nullable().optional(),
+  /** Only an edit may carry it. */
+  minorEdit: z.boolean().nullable().optional(),
 });
 export type DecisionBody = z.infer<typeof DecisionBody>;
 

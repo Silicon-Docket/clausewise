@@ -10,6 +10,7 @@ import type {
   MatterRole,
   MatterStatus,
   PlaybookRuleRecord,
+  ReasonCode,
   ReviewDecision,
   RunManifest,
   RunStatus,
@@ -265,6 +266,16 @@ export interface ReviewRecord {
   /** Changed fields only. */
   edits: ReviewEdits | null;
   reason: string | null;
+  /**
+   * Why an edit or a reject was made. Null for the other decisions, and for a decision made before
+   * the code existed (migration 006).
+   */
+  reasonCode: ReasonCode | null;
+  /**
+   * Whether an edit was marked as a minor one. Null for the other decisions, and for an edit made
+   * before the mark existed (migration 006), which counts as not minor.
+   */
+  minorEdit: boolean | null;
   findingContentSha256: string;
   supersedesReviewId: string | null;
   validity: "current" | "stale";

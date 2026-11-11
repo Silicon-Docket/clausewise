@@ -1,11 +1,13 @@
 import {
   FORCES_UNDETERMINED,
+  REASON_CODES,
   REVIEW_DECISIONS,
   type CheckResult,
   type DeterminedStatus,
   type Escalation,
   type EvidenceRole,
   type FallbackBasis,
+  type ReasonCode,
   type ReviewDecision,
   type Status,
   type VerifiedFinding,
@@ -98,6 +100,8 @@ interface RawReview {
   decision: ReviewDecision;
   edited_json: string | null;
   reason: string | null;
+  reason_code: ReasonCode | null;
+  minor_edit: 0 | 1 | null;
   finding_content_sha256: string;
   supersedes_review_id: string | null;
   validity: "current" | "stale";
@@ -136,6 +140,8 @@ const toReview = (r: RawReview): ReviewRecord => ({
   decision: r.decision,
   edits: r.edited_json === null ? null : (JSON.parse(r.edited_json) as ReviewEdits),
   reason: r.reason,
+  reasonCode: r.reason_code,
+  minorEdit: r.minor_edit === null ? null : r.minor_edit === 1,
   findingContentSha256: r.finding_content_sha256,
   supersedesReviewId: r.supersedes_review_id,
   validity: r.validity,
@@ -666,6 +672,14 @@ export function createFindingsApi(
    * given where one is required, and that no other reviewer's decision is current on the finding
    * (`ConflictError` `decision_conflict`). The finding's previous current decision, the same
    * reviewer's, becomes stale and the new one records `supersedesReviewId`. The matter's `in_review` / `review_complete` status follows.
+   *
+   * An edit or a reject carries a reason code (`reason_code_required` when it has none), the other
+   * decisions carry none (`reason_code_not_allowed`), and a code outside `REASON_CODES` is
+   * `bad_reason_code`. Only an edit carries a minor-edit mark (`minor_edit_not_allowed`), stored as
+   * false when an edit says nothing, and never true for an edit that changes the status
+   * (`minor_edit_status`). The code and the mark are stored with the decision, bound like it to the
+   * finding content it was made on, and the database refuses a decision that breaks these rules
+   * (migration 006). The messages name the rule and never the value that was sent.
    */
   function recordReview(
     matterId: string,
@@ -676,6 +690,8 @@ export function createFindingsApi(
       findingContentSha256: string;
       edits?: ReviewEdits | null;
       reason?: string | null;
+      reasonCode?: ReasonCode | null;
+      minorEdit?: boolean | null;
     },
   ): ReviewRecord {
     if (!(REVIEW_DECISIONS as readonly string[]).includes(input.decision))
@@ -697,6 +713,34 @@ export function createFindingsApi(
       throw new ValidationError("edits_required", "an edit decision needs the edits");
     if (input.decision !== "edit" && hasEdits)
       throw new ValidationError("edits_not_allowed", "only an edit decision carries edits");
+
+    // The reason code and the minor-edit mark. The value sent is never repeated in a message.
+    const reasonCode = input.reasonCode === undefined ? null : input.reasonCode;
+    if (reasonCode !== null && !(REASON_CODES as readonly unknown[]).includes(reasonCode))
+      throw new ValidationError(
+        "bad_reason_code",
+        "the reason code is not one of the listed codes",
+      );
+    const needsReasonCode = input.decision === "edit" || input.decision === "reject";
+    if (needsReasonCode && reasonCode === null)
+      throw new ValidationError(
+        "reason_code_required",
+        `a decision to ${input.decision} needs a reason code`,
+      );
+    if (!needsReasonCode && reasonCode !== null)
+      throw new ValidationError(
+        "reason_code_not_allowed",
+        "only an edit or a reject carries a reason code",
+      );
+    const markGiven = input.minorEdit !== undefined && input.minorEdit !== null;
+    // A value that is not a plain true or false cannot be a mark, so it is refused as one that
+    // is not allowed rather than stored as something else.
+    if (markGiven && (input.decision !== "edit" || typeof input.minorEdit !== "boolean"))
+      throw new ValidationError(
+        "minor_edit_not_allowed",
+        "only an edit carries a minor-edit mark, and the mark is true or false",
+      );
+    const minorEdit = input.decision === "edit" ? input.minorEdit === true : null;
 
     return tx(() => {
       const finding = getFinding(matterId, findingId);
@@ -730,6 +774,13 @@ export function createFindingsApi(
 
       requireUser(input.reviewerId);
       const edits = hasEdits ? normaliseEdits(input.edits, finding) : null;
+      // A change of status is a change of substance, so it is never a minor edit. `normaliseEdits`
+      // has already dropped a status equal to the finding's own.
+      if (minorEdit === true && edits !== null && edits.status !== undefined)
+        throw new ValidationError(
+          "minor_edit_status",
+          "an edit that changes the status is not a minor edit",
+        );
 
       // The content hash says the reviewer read this finding; it says nothing of whether they read
       // the decision on it. Replacing another reviewer's decision would leave them unaware, and the
@@ -744,9 +795,9 @@ export function createFindingsApi(
       const id = newId("rev");
       run(
         `INSERT INTO reviews
-           (id, finding_id, matter_id, reviewer_id, decision, edited_json, reason, finding_content_sha256,
-            supersedes_review_id, validity, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'current', ?)`,
+           (id, finding_id, matter_id, reviewer_id, decision, edited_json, reason, reason_code,
+            minor_edit, finding_content_sha256, supersedes_review_id, validity, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'current', ?)`,
         id,
         findingId,
         matterId,
@@ -754,6 +805,8 @@ export function createFindingsApi(
         input.decision,
         edits === null ? null : canonicalJson(edits),
         reason,
+        reasonCode,
+        minorEdit === null ? null : minorEdit ? 1 : 0,
         finding.contentSha256,
         previous?.id ?? null,
         ctx.now(),
@@ -774,6 +827,8 @@ export function createFindingsApi(
           reviewId: id,
           ruleKey: finding.ruleKey,
           decision: input.decision,
+          reasonCode,
+          minorEdit,
           findingContentSha256: finding.contentSha256,
           supersedesReviewId: previous?.id ?? null,
           matterStatus: target,

@@ -50,6 +50,7 @@ describe("a decision", () => {
 
     const edited = w.services.reviews.decide(reviewerAm, dur.findingId, {
       decision: "edit",
+      reasonCode: "bad_fallback",
       findingContentSha256: seen.contentSha256,
       edits: {
         fallbackLanguage: "6.1 The obligations continue for two (2) years from each disclosure.",
@@ -68,6 +69,8 @@ describe("a decision", () => {
         at: expect.any(String),
         reason: "The parties agreed two years in February.",
         validity: "current",
+        reasonCode: "bad_fallback",
+        minorEdit: false,
         edits: {
           fallbackLanguage: "6.1 The obligations continue for two (2) years from each disclosure.",
         },
@@ -80,6 +83,7 @@ describe("a decision", () => {
     // A second decision replaces the first, which stays in the history as stale.
     const rejected = w.services.reviews.decide(reviewerAm, dur.findingId, {
       decision: "reject",
+      reasonCode: "wrong_status",
       findingContentSha256: seen.contentSha256,
       edits: null,
       reason: "On reflection, not a deviation.",
@@ -87,6 +91,11 @@ describe("a decision", () => {
     expect(rejected.reviews.map((r) => [r.decision, r.validity])).toEqual([
       ["edit", "stale"],
       ["reject", "current"],
+    ]);
+    // Each decision keeps its own code, and a reject carries no minor-edit mark.
+    expect(rejected.reviews.map((r) => [r.reasonCode, r.minorEdit])).toEqual([
+      ["bad_fallback", false],
+      ["wrong_status", null],
     ]);
     expect(w.services.matters.view(am).matter.status).toBe("in_review");
   });
@@ -108,14 +117,21 @@ describe("a decision", () => {
       );
     for (const decision of ["reject", "escalate"] as const)
       expect(await decide({ decision, reason: null })).toMatchObject({ code: "reason_required" });
-    expect(await decide({ decision: "reject", reason: "   " })).toMatchObject({
+    expect(await decide({ decision: "reject", reasonCode: "other", reason: "   " })).toMatchObject({
       code: "reason_required",
     });
-    expect(await decide({ decision: "edit", reason: "why", edits: null })).toMatchObject({
+    expect(
+      await decide({ decision: "edit", reasonCode: "other", reason: "why", edits: null }),
+    ).toMatchObject({
       code: "edits_required",
     });
     expect(
-      await decide({ decision: "edit", reason: "why", edits: { discrepancy: "" } }),
+      await decide({
+        decision: "edit",
+        reasonCode: "other",
+        reason: "why",
+        edits: { discrepancy: "" },
+      }),
     ).toMatchObject({ name: "ValidationError" });
     expect(await decide({ decision: "accept", edits: { discrepancy: "x" } })).toMatchObject({
       code: "edits_not_allowed",
@@ -257,6 +273,7 @@ describe("export", () => {
         issue.ruleKey === "dur-1"
           ? {
               decision: "edit",
+              reasonCode: "other",
               findingContentSha256: view.contentSha256,
               edits: {
                 fallbackLanguage:
@@ -307,6 +324,7 @@ describe("export", () => {
         issue.ruleKey === "dur-1" && supporting !== undefined
           ? {
               decision: "edit",
+              reasonCode: "other",
               findingContentSha256: view.contentSha256,
               edits: { evidenceRoles: [{ evidenceId: supporting.evidenceId, role: "definition" }] },
               reason: "That passage defines the term; it does not support the finding.",
@@ -360,6 +378,7 @@ describe("export", () => {
         const view = w.services.runs.finding(reviewerAm, issues[0]!.findingId);
         w.services.reviews.decide(reviewerAm, issues[0]!.findingId, {
           decision: "reject",
+          reasonCode: "other",
           findingContentSha256: view.contentSha256,
           edits: null,
           reason: "changed my mind",

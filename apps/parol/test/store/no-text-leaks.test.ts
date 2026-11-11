@@ -117,6 +117,7 @@ describe("the audit log", () => {
     const review = w.repo.recordReview(matter.id, (saved as { id: string }).id, {
       reviewerId: ACTORS.reviewer,
       decision: "edit",
+      reasonCode: "other",
       reason: `Reason mentioning ${MARK}`,
       edits: { discrepancy: `Edited ${MARK}`, fallbackLanguage: `Fallback ${MARK}` },
       findingContentSha256: (saved as { contentSha256: string }).contentSha256,
@@ -158,6 +159,10 @@ describe("the audit log", () => {
     w.repo.deleteMatter(matter.id, { actorId: ACTORS.associate });
 
     // The marker did get into the places that are meant to hold it, so a clean result below means something.
+    // The decision is audited by its code and its mark, which are words of a closed list, and not by its reason.
+    expect(
+      w.repo.listAuditEvents({ matterId: matter.id, action: "review.decide" })[0]?.detail,
+    ).toMatchObject({ decision: "edit", reasonCode: "other", minorEdit: false });
     expect(dumpTable("audit_events")).not.toContain(MARK);
     expect(dumpTable("model_calls")).not.toContain(MARK);
     expect(dumpTable("spend_ledger")).not.toContain(MARK);

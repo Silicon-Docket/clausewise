@@ -349,6 +349,8 @@ export function createPresenter(
       at: r.createdAt,
       reason: r.reason,
       validity: r.validity,
+      reasonCode: r.reasonCode,
+      minorEdit: r.minorEdit,
       edits: r.edits,
     }));
     return {

@@ -194,6 +194,7 @@ describe("no document text outside the places that hold it by design", () => {
       const view = w.services.runs.finding(reviewerAm, issue.findingId);
       w.services.reviews.decide(reviewerAm, issue.findingId, {
         decision: "reject",
+        reasonCode: "other",
         findingContentSha256: view.contentSha256,
         edits: null,
         reason: `${REASON_MARKER}: ${view.evidence[0]?.quote ?? "nothing cited"}`,
@@ -203,6 +204,19 @@ describe("no document text outside the places that hold it by design", () => {
       await caught(() =>
         w.services.reviews.decide(reviewerAm, issues[0]!.findingId, {
           decision: "reject",
+          reasonCode: "other",
+          findingContentSha256: "0".repeat(64),
+          edits: null,
+          reason: `${REASON_MARKER}`,
+        }),
+      ),
+    );
+    // A reason code that is not one of the list is refused without being repeated or kept.
+    errors.push(
+      await caught(() =>
+        w.services.reviews.decide(reviewerAm, issues[0]!.findingId, {
+          decision: "reject",
+          reasonCode: MARKER as never,
           findingContentSha256: "0".repeat(64),
           edits: null,
           reason: `${REASON_MARKER}`,

@@ -109,6 +109,7 @@ describe("the decision form", () => {
     const response = await reviewer.submit(page, urls.review(ids.matterId, dur.issue.findingId), {
       set: {
         [FIELDS.decision]: "edit",
+        [FIELDS.reasonCode]: "other",
         [FIELDS.reason]: "The status is wrong.",
         [FIELDS.status]: "compliant",
       },
@@ -125,6 +126,7 @@ describe("the decision form", () => {
     const response = await reviewer.submit(page, urls.review(ids.matterId, dur.issue.findingId), {
       set: {
         [FIELDS.decision]: "edit",
+        [FIELDS.reasonCode]: "other",
         [FIELDS.reason]: "Added a line.",
         [FIELDS.discrepancy]: edited,
       },
@@ -139,7 +141,11 @@ describe("the decision form", () => {
     const { ids, pty, ptyPage } = await open();
     expect(pty.fallbackLanguage).toBeNull();
     const none = await reviewer.submit(ptyPage, urls.review(ids.matterId, pty.issue.findingId), {
-      set: { [FIELDS.decision]: "edit", [FIELDS.reason]: "No change, really." },
+      set: {
+        [FIELDS.decision]: "edit",
+        [FIELDS.reasonCode]: "other",
+        [FIELDS.reason]: "No change, really.",
+      },
     });
     // Nothing changed: the empty text area is "none" and not an edit.
     expect(none.status).toBe(400);
@@ -147,6 +153,7 @@ describe("the decision form", () => {
     const given = await reviewer.submit(ptyPage, urls.review(ids.matterId, pty.issue.findingId), {
       set: {
         [FIELDS.decision]: "edit",
+        [FIELDS.reasonCode]: "other",
         [FIELDS.reason]: "Add wording.",
         [FIELDS.fallbackLanguage]: "The Receiving Party shall be Lanternfish Software, Inc.",
       },
@@ -165,6 +172,7 @@ describe("the decision form", () => {
     const response = await reviewer.submit(page, urls.review(ids.matterId, dur.issue.findingId), {
       set: {
         [FIELDS.decision]: "edit",
+        [FIELDS.reasonCode]: "other",
         [FIELDS.reason]: "The survival clause only supports.",
         [evidenceRoleField(second!.evidenceId)]: "supporting",
       },
@@ -180,12 +188,17 @@ describe("the decision form", () => {
     const { ids, dur, page } = await open();
     const action = urls.review(ids.matterId, dur.issue.findingId);
     const same = await reviewer.submit(page, action, {
-      set: { [FIELDS.decision]: "edit", [FIELDS.reason]: "Nothing to change." },
+      set: {
+        [FIELDS.decision]: "edit",
+        [FIELDS.reasonCode]: "other",
+        [FIELDS.reason]: "Nothing to change.",
+      },
     });
     expect(same.status).toBe(400);
     // The select has no such option; posting one by hand is refused.
     const bad = await byHand(action, {
       [FIELDS.decision]: "edit",
+      [FIELDS.reasonCode]: "other",
       [FIELDS.reason]: "A made-up label.",
       [FIELDS.findingContentSha256]: dur.contentSha256,
       [evidenceRoleField(dur.evidence[0]!.evidenceId)]: "decisive",
@@ -200,7 +213,11 @@ describe("the decision form", () => {
     for (const decision of ["reject", "escalate"])
       for (const reason of ["", "   ", "\r\n \r\n"]) {
         const response = await reviewer.submit(page, action, {
-          set: { [FIELDS.decision]: decision, [FIELDS.reason]: reason },
+          set: {
+            [FIELDS.decision]: decision,
+            [FIELDS.reason]: reason,
+            [FIELDS.reasonCode]: "other",
+          },
         });
         expect(response.status, `${decision} ${JSON.stringify(reason)}`).toBe(400);
       }
@@ -219,6 +236,7 @@ describe("the decision form", () => {
     const response = await reviewer.submit(page, urls.review(ids.matterId, dur.issue.findingId), {
       set: {
         [FIELDS.decision]: "reject",
+        [FIELDS.reasonCode]: "other",
         [FIELDS.reason]: "Not acceptable.\r\nSecond line.",
         [FIELDS.status]: "compliant",
         [FIELDS.discrepancy]: "Something else entirely.",
@@ -242,7 +260,13 @@ describe("the decision form", () => {
       { [FIELDS.decision]: "accept" },
       { [FIELDS.decision]: "accept", [FIELDS.findingContentSha256]: "not a hash" },
       { [FIELDS.decision]: "accept", [FIELDS.findingContentSha256]: "" },
-      { ...hash, [FIELDS.decision]: "edit", [FIELDS.reason]: "x", [FIELDS.status]: "perfect" },
+      {
+        ...hash,
+        [FIELDS.decision]: "edit",
+        [FIELDS.reasonCode]: "other",
+        [FIELDS.reason]: "x",
+        [FIELDS.status]: "perfect",
+      },
     ]) {
       const response = await byHand(action, fields);
       expect(response.status, JSON.stringify(fields)).toBe(400);
@@ -315,6 +339,7 @@ describe("the decision form, when the server refuses it", () => {
         set: {
           [FIELDS.decision]: decision,
           [FIELDS.reason]: "",
+          [FIELDS.reasonCode]: "other",
           [FIELDS.status]: decision === "edit" ? "compliant" : dur.issue.status,
         },
       });
@@ -332,7 +357,11 @@ describe("the decision form, when the server refuses it", () => {
     const { ids, dur, page } = await open();
     const action = urls.review(ids.matterId, dur.issue.findingId);
     const same = await reviewer.submit(page, action, {
-      set: { [FIELDS.decision]: "edit", [FIELDS.reason]: "Nothing to change." },
+      set: {
+        [FIELDS.decision]: "edit",
+        [FIELDS.reasonCode]: "other",
+        [FIELDS.reason]: "Nothing to change.",
+      },
     });
     expect((await refused(same, 400)).notices).toEqual([
       "Problem Nothing was changed. Change the status, a text or a label to edit this finding, or choose another decision.",
@@ -349,6 +378,7 @@ describe("the decision form, when the server refuses it", () => {
     const typed = "A reason typed against content that moved.";
     const response = await byHand(urls.review(ids.matterId, dur.issue.findingId), {
       [FIELDS.decision]: "reject",
+      [FIELDS.reasonCode]: "other",
       [FIELDS.reason]: typed,
       [FIELDS.findingContentSha256]: "0".repeat(64),
     });
@@ -419,6 +449,7 @@ describe("the decision form, after a refusal, gives back what was typed", () => 
       await reviewer.submit(page, action, {
         set: {
           [FIELDS.decision]: "edit",
+          [FIELDS.reasonCode]: "other",
           [FIELDS.reason]: "",
           [FIELDS.status]: "compliant",
           [FIELDS.discrepancy]: note,
@@ -482,7 +513,11 @@ describe("the decision form, after a refusal, gives back what was typed", () => 
     const action = urls.review(ids.matterId, dur.issue.findingId);
     const refused = await refusedPage(
       await reviewer.submit(page, action, {
-        set: { [FIELDS.decision]: "edit", [FIELDS.reason]: "Typed, but nothing was edited." },
+        set: {
+          [FIELDS.decision]: "edit",
+          [FIELDS.reasonCode]: "other",
+          [FIELDS.reason]: "Typed, but nothing was edited.",
+        },
       }),
     );
     expect(refused.html).toContain("Nothing was changed");
@@ -508,6 +543,7 @@ describe("the decision form, after a refusal, gives back what was typed", () => 
     const hostile = '</textarea><script>alert("typed")</script>';
     const response = await byHand(action, {
       [FIELDS.decision]: "edit",
+      [FIELDS.reasonCode]: "other",
       [FIELDS.findingContentSha256]: dur.contentSha256,
       [FIELDS.status]: "not-a-status",
       [FIELDS.reason]: "",
@@ -540,6 +576,7 @@ describe("the decision JSON", () => {
     const { ids, dur } = await open();
     const response = await reviewer.api("POST", path(ids, dur.issue.findingId), {
       decision: "edit",
+      reasonCode: "wrong_status",
       findingContentSha256: dur.contentSha256,
       edits: {
         status: "undetermined",
@@ -554,6 +591,8 @@ describe("the decision JSON", () => {
       reviewerName: "Dana Whitfield (reviewing attorney)",
       validity: "current",
       reason: "Needs a second look.",
+      reasonCode: "wrong_status",
+      minorEdit: false,
       edits: {
         status: "undetermined",
         evidenceRoles: [{ evidenceId: dur.evidence[1]!.evidenceId, role: "supporting" }],
@@ -580,15 +619,16 @@ describe("the decision JSON", () => {
   it("answers 400 where the store says the decision is not complete", async () => {
     const { ids, dur } = await open();
     const base = { findingContentSha256: dur.contentSha256 };
+    const code = { reasonCode: "other" };
     const cases: [object, string][] = [
-      [{ ...base, decision: "edit", reason: "r" }, "edits_required"],
-      [{ ...base, decision: "edit", reason: "r", edits: {} }, "edit_changes_nothing"],
+      [{ ...base, ...code, decision: "edit", reason: "r" }, "edits_required"],
+      [{ ...base, ...code, decision: "edit", reason: "r", edits: {} }, "edit_changes_nothing"],
       [
-        { ...base, decision: "edit", reason: "r", edits: { status: dur.issue.status } },
+        { ...base, ...code, decision: "edit", reason: "r", edits: { status: dur.issue.status } },
         "edit_changes_nothing",
       ],
       [{ ...base, decision: "accept", edits: { status: "compliant" } }, "edits_not_allowed"],
-      [{ ...base, decision: "reject" }, "reason_required"],
+      [{ ...base, ...code, decision: "reject" }, "reason_required"],
       [{ ...base, decision: "escalate", reason: "  " }, "reason_required"],
     ];
     for (const [body, code] of cases) {
@@ -649,6 +689,7 @@ describe("the two readings of a decision", () => {
     const fromForm = decisionFromForm(
       {
         decision: "edit",
+        reasonCode: "other",
         reason: "Because.\r\nAnd more.",
         findingContentSha256: dur.contentSha256,
         status: "compliant",
@@ -661,6 +702,8 @@ describe("the two readings of a decision", () => {
     );
     const fromBody = decisionFromBody({
       decision: "edit",
+      reasonCode: "other",
+      minorEdit: false,
       reason: "Because.\nAnd more.",
       findingContentSha256: dur.contentSha256,
       edits: {

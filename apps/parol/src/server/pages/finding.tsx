@@ -1,5 +1,11 @@
 import { EVIDENCE_ROLES, REVIEW_DECISIONS, STATUSES } from "../../contracts.js";
-import type { CheckResult, EvidenceRole, ReviewDecision, Status } from "../../contracts.js";
+import type {
+  CheckResult,
+  EvidenceRole,
+  ReasonCode,
+  ReviewDecision,
+  Status,
+} from "../../contracts.js";
 import type {
   EvidenceView,
   FindingView,
@@ -7,6 +13,7 @@ import type {
   ReviewHistoryItem,
 } from "../../services/views.js";
 import { urls } from "../urls.js";
+import { MINOR_EDIT_MARKED, reasonCodeLabel } from "../views/feedback.js";
 import { shortHash } from "../views/format.js";
 import { confirmedRange, type Offsets } from "../views/highlight.js";
 import {
@@ -45,6 +52,7 @@ import {
   idPart,
   textareaValue,
 } from "./components.js";
+import { MinorEditField, ReasonCodeField } from "./feedback.js";
 import { FIELDS, evidenceRoleField } from "./forms.js";
 import { ContextHelp } from "./help.js";
 import { Layout, csrfField, type Chrome } from "./layout.js";
@@ -63,6 +71,10 @@ export interface DecisionDraft {
   fallbackLanguage?: string;
   /** Labels by evidence id. */
   roles?: Readonly<Record<string, EvidenceRole>>;
+  /** The reason code that was chosen (package W2.6a). */
+  reasonCode?: ReasonCode;
+  /** Whether the minor-edit box was ticked (package W2.6a). */
+  minorEdit?: boolean;
 }
 
 export interface FindingPaneProps {
@@ -528,6 +540,8 @@ function DecisionForm({ chrome, matterId, finding, draft }: FindingPaneProps) {
         </textarea>
       </Field>
 
+      <ReasonCodeField draft={draft} />
+
       <fieldset class="edits">
         <legend>Edits, used only when you choose Edit</legend>
         <Field id="edit-status" label="Status">
@@ -579,6 +593,7 @@ function DecisionForm({ chrome, matterId, finding, draft }: FindingPaneProps) {
             })}
           </fieldset>
         )}
+        <MinorEditField draft={draft} />
       </fieldset>
 
       <p class="binding">
@@ -705,6 +720,10 @@ function HistorySection({ finding, level }: { finding: FindingView; level: Lv })
                   <RevealedText value={item.reason} />
                 </blockquote>
               )}
+              {item.reasonCode === undefined || item.reasonCode === null ? null : (
+                <p class="muted">Reason code: {reasonCodeLabel(item.reasonCode)}</p>
+              )}
+              {item.minorEdit === true ? <p class="muted">{MINOR_EDIT_MARKED}</p> : null}
               <EditSummary item={item} finding={finding} />
             </li>
           ))}

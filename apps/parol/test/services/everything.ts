@@ -146,6 +146,8 @@ export async function everything(w: World, name: string): Promise<Everything> {
         findingContentSha256: view.contentSha256,
         edits: { discrepancy: `Edited by the reviewer. ${marker}` },
         reason: `The wording was changed. ${marker}`,
+        reasonCode: "bad_fallback",
+        minorEdit: true,
       });
     else if (index === 1)
       w.services.reviews.decide(reviewerAm, issue.findingId, {
@@ -153,6 +155,7 @@ export async function everything(w: World, name: string): Promise<Everything> {
         findingContentSha256: view.contentSha256,
         edits: null,
         reason: `The finding does not hold. ${marker}`,
+        reasonCode: "wrong_evidence",
       });
     else w.services.reviews.decide(reviewerAm, issue.findingId, decisionFor(view));
   });

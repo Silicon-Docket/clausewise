@@ -435,13 +435,16 @@ describe("recordReview", () => {
       expect(() => decide(m.id, f, { decision, reason: "   " })).toThrow(/needs a reason/);
       expect(() => decide(m.id, f, { decision, reason: null })).toThrow(/needs a reason/);
     }
-    expect(() => decide(m.id, f, { decision: "edit", edits: { discrepancy: "x" } })).toThrow(
-      /needs a reason/,
-    );
+    expect(() =>
+      decide(m.id, f, { decision: "edit", reasonCode: "other", edits: { discrepancy: "x" } }),
+    ).toThrow(/needs a reason/);
     expect(w.repo.listReviews(m.id, f.id)).toEqual([]);
     expect(
-      decide(m.id, f, { decision: "reject", reason: "The clause is not what the finding says." })
-        .reason,
+      decide(m.id, f, {
+        decision: "reject",
+        reasonCode: "other",
+        reason: "The clause is not what the finding says.",
+      }).reason,
     ).toBe("The clause is not what the finding says.");
     expect(decide(m.id, f, { decision: "accept", reason: "Agreed." }).reason).toBe("Agreed.");
   });
@@ -449,10 +452,12 @@ describe("recordReview", () => {
   it("requires edits for an edit and forbids them otherwise", () => {
     const { m, findings } = setup();
     const f = findings[1] as NonNullable<(typeof findings)[0]>;
-    expect(() => decide(m.id, f, { decision: "edit", reason: "r" })).toThrow(/needs the edits/);
-    expect(() => decide(m.id, f, { decision: "edit", reason: "r", edits: null })).toThrow(
+    expect(() => decide(m.id, f, { decision: "edit", reasonCode: "other", reason: "r" })).toThrow(
       /needs the edits/,
     );
+    expect(() =>
+      decide(m.id, f, { decision: "edit", reasonCode: "other", reason: "r", edits: null }),
+    ).toThrow(/needs the edits/);
     expect(() => decide(m.id, f, { decision: "accept", edits: { status: "deviation" } })).toThrow(
       /only an edit/,
     );
@@ -465,6 +470,7 @@ describe("recordReview", () => {
     expect(() =>
       decide(m.id, f, {
         decision: "edit",
+        reasonCode: "other",
         reason: "r",
         edits: { status: "compliant", discrepancy: "" },
       }),
@@ -472,6 +478,7 @@ describe("recordReview", () => {
     const evidence = f.evidence[0] as NonNullable<(typeof f.evidence)[0]>;
     const review = decide(m.id, f, {
       decision: "edit",
+      reasonCode: "other",
       reason: "The amendment changes it.",
       edits: {
         status: "deviation",
@@ -483,6 +490,7 @@ describe("recordReview", () => {
     expect(review.edits).toEqual({ status: "deviation", discrepancy: "No end is stated." });
     const roleEdit = decide(m.id, f, {
       decision: "edit",
+      reasonCode: "other",
       reason: "r",
       edits: { evidenceRoles: [{ evidenceId: evidence.id, role: "supporting" }] },
     });
@@ -501,15 +509,26 @@ describe("recordReview", () => {
     expect(() =>
       decide(m.id, a, {
         decision: "edit",
+        reasonCode: "other",
         reason: "r",
         edits: { evidenceRoles: [{ evidenceId: foreign.id, role: "supporting" }] },
       }),
     ).toThrow(NotFoundError);
     expect(() =>
-      decide(m.id, a, { decision: "edit", reason: "r", edits: { status: "bogus" } }),
+      decide(m.id, a, {
+        decision: "edit",
+        reasonCode: "other",
+        reason: "r",
+        edits: { status: "bogus" },
+      }),
     ).toThrow(ValidationError);
     expect(() =>
-      decide(m.id, a, { decision: "edit", reason: "r", edits: { severity: "low" } }),
+      decide(m.id, a, {
+        decision: "edit",
+        reasonCode: "other",
+        reason: "r",
+        edits: { severity: "low" },
+      }),
     ).toThrow(ValidationError);
     expect(w.repo.listReviews(m.id, a.id)).toEqual([]);
   });
@@ -519,7 +538,11 @@ describe("recordReview", () => {
     const f = findings[0] as NonNullable<(typeof findings)[0]>;
     const first = decide(m.id, f);
     w.clock.tick();
-    const second = decide(m.id, f, { decision: "reject", reason: "On reflection, no." });
+    const second = decide(m.id, f, {
+      decision: "reject",
+      reasonCode: "other",
+      reason: "On reflection, no.",
+    });
     expect(second.supersedesReviewId).toBe(first.id);
     const all = w.repo.listReviews(m.id, f.id);
     expect(all.map((r) => [r.id, r.validity])).toEqual([
@@ -578,9 +601,9 @@ describe("recordReview", () => {
     expect(() => decide(m.id, findings[0] as never)).toThrow(/not open for review|running/);
     const done = exported(w);
     const f = done.findings[0] as NonNullable<(typeof done.findings)[0]>;
-    expect(() => decide(done.m.id, f, { decision: "reject", reason: "Too late." })).toThrow(
-      /exported/,
-    );
+    expect(() =>
+      decide(done.m.id, f, { decision: "reject", reasonCode: "other", reason: "Too late." }),
+    ).toThrow(/exported/);
   });
 
   it("moves the matter to review_complete when the last finding is decided, and back when it is reopened", () => {
@@ -596,7 +619,11 @@ describe("recordReview", () => {
     w.repo.setMatterStatus(m.id, "in_review", { actorId: ACTORS.reviewer });
     expect(status()).toBe("in_review");
     // ...and deciding again, on the same content, completes it again.
-    decide(m.id, findings[0] as never, { decision: "reject", reason: "Reopened." });
+    decide(m.id, findings[0] as never, {
+      decision: "reject",
+      reasonCode: "other",
+      reason: "Reopened.",
+    });
     expect(status()).toBe("review_complete");
     // A decision that is refused changes nothing.
     expect(() =>
@@ -842,6 +869,7 @@ describe("recordMemo", () => {
     w.repo.recordReview(m.id, findings[0]?.id as string, {
       reviewerId: ACTORS.reviewer,
       decision: "reject",
+      reasonCode: "other",
       reason: "Changed.",
       findingContentSha256: findings[0]?.contentSha256 as string,
     });

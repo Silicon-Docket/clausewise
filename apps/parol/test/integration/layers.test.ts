@@ -15,6 +15,7 @@ import { WORKFLOWS } from "../../src/prompts/workflows.js";
 import {
   CATEGORY_IDS,
   EVIDENCE_ROLES,
+  REASON_CODES,
   REVIEW_DECISIONS,
   RUN_STATUSES,
   STATUSES,
@@ -47,6 +48,7 @@ import {
   type Chrome,
 } from "../../src/server/pages/index.js";
 import { idPart } from "../../src/server/pages/components.js";
+import { MINOR_EDIT_VALUE } from "../../src/server/pages/forms.js";
 import { RUN_ALREADY_ACTIVE } from "../../src/server/pages/matter.js";
 import { urls } from "../../src/server/urls.js";
 import * as labels from "../../src/server/views/labels.js";
@@ -773,11 +775,20 @@ function decisionFromForm(
     if (roles.length > 0) changed.evidenceRoles = roles;
     edits = Object.keys(changed).length === 0 ? null : changed;
   }
+  // The reason code of an edit or a reject, and the minor-edit box of an edit; the form posts both
+  // whatever was chosen, so the others drop them as they drop the edits.
+  const posted = text(FIELDS.reasonCode);
+  const reasonCode =
+    decision === "edit" || decision === "reject"
+      ? (REASON_CODES.find((code) => code === posted) ?? null)
+      : null;
   return {
     decision,
     findingContentSha256: formString(form, FIELDS.findingContentSha256) ?? "",
     edits,
     reason: reason === undefined || reason.trim() === "" ? null : reason,
+    reasonCode,
+    minorEdit: decision === "edit" ? text(FIELDS.minorEdit) === MINOR_EDIT_VALUE : null,
   };
 }
 
@@ -1344,6 +1355,7 @@ describe("the real shell around the real services", () => {
       const supporting = finding.evidence.find((e) => e.role === "supporting")!;
       const set = {
         decision: "edit",
+        reasonCode: "wrong_evidence",
         reason: "The third passage is a definition, not support.",
         [`evidenceRole:${supporting.evidenceId}`]: "definition",
       };
@@ -2923,7 +2935,7 @@ describe("text a person typed or uploaded, through the pages, the shell and the 
     const row = w.services.runs.issues(reviewerAm, run.id).find((i) => i.ruleKey === "dur-1")!;
     const open = await pageOf(reviewer, urls.finding(matterId, row.findingId));
     const decided = await submit(reviewer, open.root, urls.review(matterId, row.findingId), {
-      set: { decision: "reject", reason: `${REASON} the term is wrong` },
+      set: { decision: "reject", reasonCode: "other", reason: `${REASON} the term is wrong` },
     });
     expect(decided.status).toBe(303);
     expect(w.services.runs.finding(reviewerAm, row.findingId).reviews[0]!.reason).toContain(REASON);
@@ -3472,6 +3484,8 @@ describe("every choice the decision form offers is one the services take", () =>
     ).map((el) => attr(el, "value")!);
     expect(decisions).toEqual([...REVIEW_DECISIONS]);
     expect(optionsOf(FIELDS.status)).toEqual([...STATUSES]);
+    // The reason code: a placeholder first, then the six codes in the order of REASON_CODES.
+    expect(optionsOf(FIELDS.reasonCode)).toEqual(["", ...REASON_CODES]);
     const supporting = finding.evidence.find((e) => e.role === "supporting")!;
     expect(optionsOf(`evidenceRole:${supporting.evidenceId}`)).toEqual([...EVIDENCE_ROLES]);
 
@@ -3486,18 +3500,24 @@ describe("every choice the decision form offers is one the services take", () =>
       );
     for (const decision of ["accept", "reject", "escalate"])
       expect(
-        decide({ decision, reason: "A reason." }).reviews.find((x) => x.validity === "current"),
+        decide({ decision, reasonCode: "other", reason: "A reason." }).reviews.find(
+          (x) => x.validity === "current",
+        ),
         decision,
       ).toMatchObject({ decision });
     for (const status of STATUSES.filter((s) => s !== finding.issue.status)) {
-      const current = decide({ decision: "edit", reason: "Corrected.", status }).reviews.find(
-        (x) => x.validity === "current",
-      );
+      const current = decide({
+        decision: "edit",
+        reasonCode: "wrong_status",
+        reason: "Corrected.",
+        status,
+      }).reviews.find((x) => x.validity === "current");
       expect(current?.edits, status).toEqual({ status });
     }
     for (const role of EVIDENCE_ROLES.filter((x) => x !== supporting.role)) {
       const current = decide({
         decision: "edit",
+        reasonCode: "wrong_evidence",
         reason: "Relabelled.",
         [`evidenceRole:${supporting.evidenceId}`]: role,
       }).reviews.find((x) => x.validity === "current");
@@ -3508,8 +3528,10 @@ describe("every choice the decision form offers is one the services take", () =>
     // The rule of the form, said on the page: an edit that changes nothing, and a reject or an
     // escalation with no reason, are refused by the store and not recorded.
     const before = r.w.services.runs.finding(r.reviewerAm, finding.issue.findingId).reviews.length;
-    expect(() => decide({ decision: "edit", reason: "Nothing changed." })).toThrow(/edit/);
-    expect(() => decide({ decision: "reject", reason: "" })).toThrow(/reason/);
+    expect(() =>
+      decide({ decision: "edit", reasonCode: "other", reason: "Nothing changed." }),
+    ).toThrow(/edit/);
+    expect(() => decide({ decision: "reject", reasonCode: "other", reason: "" })).toThrow(/reason/);
     expect(() => decide({ decision: "escalate", reason: "   " })).toThrow(/reason/);
     expect(r.w.services.runs.finding(r.reviewerAm, finding.issue.findingId).reviews).toHaveLength(
       before,
