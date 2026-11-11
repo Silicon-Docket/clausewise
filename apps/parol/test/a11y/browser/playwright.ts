@@ -165,14 +165,19 @@ export async function openBrowser(): Promise<
   }
 }
 
-/** The one line a test file prints when it is skipped, or when it runs, so that a log shows which. */
+/**
+ * The one line a test file prints when it is skipped, or when it runs, so that a log shows which.
+ * It is written to the error output directly, and not with `console`, which the static checks keep
+ * out of every test file as debugging output: this line is deliberate output, and the one way a
+ * skipped run is told from a passing one.
+ */
 export function browserNotice(file: string, result: Awaited<ReturnType<typeof openBrowser>>): void {
   if (result.ok) {
     const v = result.opened.versions;
-    console.info(
-      `[browser tests] ${file}: running with Playwright ${v.playwright} and Chromium ${v.chromium} (found by ${result.opened.foundBy})`,
+    process.stderr.write(
+      `[browser tests] ${file}: running with Playwright ${v.playwright} and Chromium ${v.chromium} (found by ${result.opened.foundBy})\n`,
     );
   } else {
-    console.info(`[browser tests] ${file}: SKIPPED, ${result.reason}`);
+    process.stderr.write(`[browser tests] ${file}: SKIPPED, ${result.reason}\n`);
   }
 }

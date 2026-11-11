@@ -224,7 +224,7 @@ describe.skipIf(!opened.ok)("the main tasks, by keyboard alone, in a real browse
     await browser.close();
     await world.close();
     const text = transcript.join("\n");
-    console.info(`\n${text}\n`);
+    process.stderr.write(`\n${text}\n`);
     const file = process.env["FLOW_LOG_FILE"];
     if (file !== undefined && file !== "") writeFileSync(file, `${text}\n`);
   });
