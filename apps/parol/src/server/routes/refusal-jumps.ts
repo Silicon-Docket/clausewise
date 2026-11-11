@@ -21,7 +21,7 @@ import { sendPage } from "./shared.js";
  */
 
 /** The notice as it is, without its link to a place on the page. */
-function withoutJump(notice: Notice): Notice {
+export function withoutJump(notice: Notice): Notice {
   const { jump: _jump, ...rest } = notice;
   return rest;
 }

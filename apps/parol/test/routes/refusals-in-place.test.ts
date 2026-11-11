@@ -192,6 +192,11 @@ describe("a refused matter form", () => {
       `${M}/runs/:runId/missed-issues`,
       `${M}/findings/:findingId/notes`,
       `${M}/rating`,
+      // The timer and the reference list answer in place too, but the reference list is for the
+      // reviewer and this test sends every probe as the associate (package W2.6b, routes/pilot.ts;
+      // their refusals are tested in test/routes/pilot.test.ts).
+      `${M}/timer`,
+      `${M}/reference-list`,
     ];
     expect([...posts].sort()).toEqual([...IN_PLACE.map((r) => r.template), ...elsewhere].sort());
   });

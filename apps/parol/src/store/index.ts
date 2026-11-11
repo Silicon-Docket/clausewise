@@ -68,6 +68,19 @@ export {
   inputsDigestOf,
   type InputsParts,
 } from "./repo-matters.js";
+export {
+  MAX_OUTSIDE_ISSUES,
+  MAX_PARTICIPANTS,
+  PILOT_REFUSAL_CODES,
+  type PilotAdminRow,
+  type PilotCalendarRow,
+  type PilotParticipantRow,
+  type PilotRefusalCode,
+  type ReferenceIssueRow,
+  type ReferenceListRow,
+  type TimeEntryRow,
+  type TimerState,
+} from "./repo-pilot.js";
 export type { PlaybookImport } from "./repo-playbooks.js";
 export type { NewIngestWarning, StoredIngestWarning } from "./repo-warnings.js";
 

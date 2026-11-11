@@ -57,6 +57,7 @@ export function stubServices(): Services {
     evaluations: group<Services["evaluations"]>(),
     audit: group<Services["audit"]>(),
     feedback: group<Services["feedback"]>(),
+    pilot: group<Services["pilot"]>(),
   };
 }
 
@@ -306,6 +307,8 @@ export const EXPECTED_ROLES: Record<MatterAction, readonly MatterRole[]> = {
   "memo.export": ["reviewer"],
   "memo.read": ["associate", "reviewer", "viewer"],
   "feedback.add": ["associate", "reviewer", "viewer"],
+  "time.record": ["associate", "reviewer"],
+  "reference.write": ["reviewer"],
   "matter.delete": [],
 };
 

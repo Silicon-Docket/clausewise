@@ -195,6 +195,57 @@ const scenarios: Scenario[] = [
       }),
   },
   {
+    // The calendar row and its event are written together: refusing the event leaves no date.
+    action: "pilot.calendar",
+    call: "setPilotCalendar",
+    prepare: (w) => () =>
+      w.repo.setPilotCalendar({ startDate: "2026-11-09", actorId: ACTORS.admin }),
+  },
+  {
+    action: "pilot.participants",
+    call: "setPilotParticipants",
+    prepare: (w) => () =>
+      w.repo.setPilotParticipants([ACTORS.associate, ACTORS.reviewer], { actorId: ACTORS.admin }),
+  },
+  {
+    action: "time.start",
+    call: "startTimer",
+    prepare: (w) => {
+      const m = addMatter(w);
+      return () => w.repo.startTimer(m.id, { userId: ACTORS.associate });
+    },
+  },
+  {
+    // The stop and its event are written together: refusing the event leaves the timer running.
+    action: "time.stop",
+    call: "stopTimer",
+    prepare: (w) => {
+      const m = addMatter(w);
+      w.repo.startTimer(m.id, { userId: ACTORS.associate });
+      return () => w.repo.stopTimer(m.id, { userId: ACTORS.associate });
+    },
+  },
+  {
+    // The list replaces the old one (a delete and several inserts) and writes one event: all or nothing.
+    action: "reference.save",
+    call: "saveReferenceList",
+    prepare: (w) => {
+      const m = addMatter(w);
+      w.repo.addMember(m.id, ACTORS.reviewer, "reviewer", actor);
+      return () =>
+        w.repo.saveReferenceList(
+          m.id,
+          {
+            rules: [{ ruleKey: "dur-1", severity: "high" }],
+            outsideHigh: 1,
+            outsideMedium: 0,
+            outsideLow: 0,
+          },
+          { userId: ACTORS.reviewer },
+        );
+    },
+  },
+  {
     action: "inputs.changed",
     call: "applyInputChange",
     prepare: (w) => {

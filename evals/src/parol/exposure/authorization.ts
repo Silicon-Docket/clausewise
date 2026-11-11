@@ -194,6 +194,8 @@ export const DOCUMENTED_ROLES: Record<MatterAction, readonly MatterRole[]> = {
   "memo.export": ["reviewer"],
   "memo.read": ["associate", "reviewer", "viewer"],
   "feedback.add": ["associate", "reviewer", "viewer"],
+  "time.record": ["associate", "reviewer"],
+  "reference.write": ["reviewer"],
   "matter.delete": [],
 };
 

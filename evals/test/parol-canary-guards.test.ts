@@ -486,9 +486,12 @@ describe("a leak that only one direction or one channel can show", () => {
     ).toEqual(["case eval_slot_results", "case feedback"]);
   });
 
-  it("holds rows in every table of the scan after a review, but those two", async () => {
+  it("holds rows in every table of the scan after a review, but those four", async () => {
     // A table that is scanned for nothing because it is empty is a table whose leak cannot be seen:
-    // so a review fills all but two, and a change that empties one of the others is noticed.
+    // so a review fills all but four, and a change that empties one of the others is noticed. The
+    // four: feedback and evaluation results, which a review does not write, and the timers and the
+    // reference list of the pilot measures (W2.6b), which a person writes by hand and which hold no
+    // text (a role, a rule key, a severity and times).
     let empty: string[] = [];
     await scan({
       afterReview: (site, context) => {
@@ -497,7 +500,12 @@ describe("a leak that only one direction or one channel can show", () => {
           .map((table) => table.label);
       },
     });
-    expect(empty.sort()).toEqual(["eval_slot_results", "feedback"]);
+    expect(empty.sort()).toEqual([
+      "eval_slot_results",
+      "feedback",
+      "reference_issues",
+      "time_entries",
+    ]);
     expect(STORE_SCOPES.map(([table]) => table)).toEqual(
       expect.arrayContaining(["audit_events", "runs", "model_calls", "findings", "matter_members"]),
     );

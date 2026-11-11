@@ -40,7 +40,17 @@ const SIGNED_IN = buildChrome();
 const TRAINER_HINT =
   "A trainer can open the matter and read it. Like any member they can add notes, report a missed issue and rate the matter. They cannot decide a finding, start or change a review, export the memo or change the matter.";
 
-type VisibleAction = Exclude<MatterAction, "matter.delete">;
+/**
+ * Actions the hint does not name because a training matter has no panel for them: the timer and
+ * the reference list of the pilot measures are not offered on it, and no measure counts it
+ * (test/routes/pilot-panels.test.ts, "gives the training matter neither").
+ */
+const NOT_ON_A_TRAINING_MATTER = ["time.record", "reference.write"] as const;
+
+type VisibleAction = Exclude<
+  MatterAction,
+  "matter.delete" | (typeof NOT_ON_A_TRAINING_MATTER)[number]
+>;
 
 /** The words by which the hint above names each action of the role table. */
 const VIEWER_PHRASES: Record<VisibleAction, readonly string[]> = {
@@ -242,7 +252,11 @@ describe("the quickstart, for a signed-in person without a training matter", () 
     const [can, cannot] = hint.split("They cannot ") as [string, string];
     expect(cannot).toBeDefined();
     // Every action of the table is covered by a phrase, so a new action cannot go unsaid.
-    const actions = Object.keys(MATTER_ACTIONS).filter((a) => a !== "matter.delete");
+    const actions = Object.keys(MATTER_ACTIONS).filter(
+      (a) => a !== "matter.delete" && !(NOT_ON_A_TRAINING_MATTER as readonly string[]).includes(a),
+    );
+    // The exemptions are real actions of the table, so a renamed action cannot hide in the list.
+    for (const action of NOT_ON_A_TRAINING_MATTER) expect(MATTER_ACTIONS).toHaveProperty(action);
     expect(actions.sort()).toEqual(Object.keys(VIEWER_PHRASES).sort());
     for (const action of actions as VisibleAction[]) {
       const allowed = roleAllows("viewer", action);

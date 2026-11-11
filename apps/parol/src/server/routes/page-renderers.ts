@@ -1,6 +1,7 @@
 import type { Context } from "hono";
 import { roleAllows } from "../../auth/actions.js";
 import type { AuthorizedMatter, Principal } from "../../auth/types.js";
+import type { ReferenceView, TimerView } from "../../services/views.js";
 import type { AppDeps } from "../deps.js";
 import {
   FindingPage,
@@ -11,10 +12,11 @@ import {
   RunPage,
 } from "../pages/index.js";
 import type { Chrome } from "../pages/layout.js";
+import { PILOT_ANCHORS } from "../pages/pilotfields.js";
 import type { MissedIssueDraft, NoteDraft, RatingDraft } from "../pages/feedback.js";
 import type { DecisionDraft } from "../pages/finding.js";
 import { refusalOf, type Refusal } from "./notices.js";
-import { sendPageWithLiveJump } from "./refusal-jumps.js";
+import { sendPageWithLiveJump, withoutJump } from "./refusal-jumps.js";
 import { exportBlockedReason, mayDeleteMatter, pageChrome, sendPage } from "./shared.js";
 
 /**
@@ -34,6 +36,30 @@ import { exportBlockedReason, mayDeleteMatter, pageChrome, sendPage } from "./sh
 function chromeFor(c: Context, principal: Principal, refusal: Refusal | undefined): Chrome {
   const chrome = pageChrome(c, principal);
   return refusal === undefined ? chrome : { ...chrome, notice: refusal.notice };
+}
+
+/**
+ * Whether the place a refusal's link leads to (`href`, as `#id`) is on the matter page for this
+ * person. The links of the pilot fragment lead to the timer section (there when the person may time
+ * the matter), to the reference list (there for the role that writes it) and to its counts of
+ * issues no rule covers (there while the list is not closed). Any other link is not this fragment's
+ * to judge and is left as it is.
+ */
+export function pilotJumpHasTarget(
+  href: string | undefined,
+  timer: TimerView,
+  reference: ReferenceView | null,
+): boolean {
+  switch (href) {
+    case `#${PILOT_ANCHORS.timer}`:
+      return timer.allowed;
+    case `#${PILOT_ANCHORS.referenceList}`:
+      return reference !== null;
+    case `#${PILOT_ANCHORS.referenceOutside}`:
+      return reference !== null && reference.state !== "locked";
+    default:
+      return true;
+  }
 }
 
 /**
@@ -111,20 +137,34 @@ export interface PageRenderers {
 
 export function createPageRenderers(deps: AppDeps): PageRenderers {
   const { services, repo } = deps;
-  const { matters, runs, reviews, feedback } = services;
+  const { matters, runs, reviews, feedback, pilot } = services;
 
-  const matterPage: PageRenderers["matterPage"] = (c, am, refusal) =>
-    sendPage(
+  const matterPage: PageRenderers["matterPage"] = (c, am, refusal) => {
+    // The person's own timer, and the reference list for the role that writes it (null for any
+    // other). Both are read by the service for this matter and this person only.
+    const timer = pilot.timer(am);
+    const reference = pilot.referenceList(am);
+    // A refusal of the timer or of the reference list leads to a place in that panel. A panel that
+    // this person does not have, or a form it does not hold in this state, leaves the link nowhere
+    // to go, so it is dropped and the words stand alone (as the finding and memos pages do).
+    const shown =
+      refusal === undefined || pilotJumpHasTarget(refusal.notice.jump?.href, timer, reference)
+        ? refusal
+        : { ...refusal, notice: withoutJump(refusal.notice) };
+    return sendPage(
       c,
       MatterPage({
-        chrome: chromeFor(c, am.principal, refusal),
+        chrome: chromeFor(c, am.principal, shown),
         view: matters.view(am),
         // Only the person who can add someone is shown the list of people to add.
         users: roleAllows(am.role, "member.add") ? matters.users() : undefined,
         canDelete: mayDeleteMatter(repo, am.principal, am.matterId),
+        timer,
+        reference,
       }),
       refusal?.status,
     );
+  };
 
   const mattersPage: PageRenderers["mattersPage"] = (c, principal, refusal) =>
     sendPage(

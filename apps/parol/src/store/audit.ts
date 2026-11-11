@@ -53,6 +53,12 @@ export const AUDIT_ACTIONS = [
   "eval.record",
   "matter.retention",
   "retention.run",
+  // The pilot measures (W2.6b): ids, codes and counts only, never a note, a name or a text.
+  "pilot.calendar",
+  "pilot.participants",
+  "time.start",
+  "time.stop",
+  "reference.save",
 ] as const;
 
 export interface AuditInput {

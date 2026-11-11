@@ -17,6 +17,10 @@ import { baseWorld, decisionFor, type World } from "./support.js";
  * issue, a comment, the words of a rating). The exported memo and the stages' own
  * output carry it on from there. After the matter is deleted, the marker is nowhere.
  *
+ * The pilot measures' two matter tables hold no text, so they carry no marker: a reference list
+ * (a rule of the playbook and a severity, and issues no rule covers) and a timer for each of the two
+ * people. They are here so that the deletion is tested for them as for every other table.
+ *
  * THIS FUNCTION IS THE ONE EXTENSION POINT FOR A NEW TABLE. A package that adds a table with a
  * matter's rows adds the lines that fill it here, and its entry in `STORE_SCOPES`
  * (evals/src/parol/exposure/canary.ts); `deletion-leaves-nothing.test.ts` fails for a scoped table
@@ -110,6 +114,23 @@ export async function everything(w: World, name: string): Promise<Everything> {
   const am = w.grant(w.associate, matterId);
   const reviewerAm = w.grant(w.reviewer, matterId);
 
+  // The shadow-mode reference list: the reviewer records it before any review has started (it is
+  // closed from then on). It holds rule keys and severities and no words, so it carries no marker.
+  const rule = w.repo.listRules(w.playbookVersionId)[0];
+  if (rule === undefined) throw new Error("the world's playbook has no rule");
+  w.repo.saveReferenceList(
+    matterId,
+    {
+      rules: [{ ruleKey: rule.key, severity: "high" }],
+      outsideHigh: 1,
+      outsideMedium: 0,
+      outsideLow: 1,
+    },
+    { userId: w.reviewer.userId },
+  );
+  // Timers: the associate's runs from the first upload to the end, the reviewer's around the decisions.
+  w.repo.startTimer(matterId, { userId: w.associate.userId });
+
   // Two documents: the case's NDA, and its amendment with the marker in its title and its words,
   // and a paragraph that reads like an instruction.
   await w.services.matters.addDocument(am, {
@@ -138,6 +159,7 @@ export async function everything(w: World, name: string): Promise<Everything> {
 
   // The reviewer decides every finding: one edited, one rejected, with reasons in their own words
   // (the marker is in them); the others as the case allows.
+  w.repo.startTimer(matterId, { userId: w.reviewer.userId });
   const issues: IssueRow[] = w.services.runs.issues(am, run.id);
   issues.forEach((issue, index) => {
     const view = w.services.runs.finding(reviewerAm, issue.findingId);
@@ -163,6 +185,8 @@ export async function everything(w: World, name: string): Promise<Everything> {
 
   // The memo, a Word package on disk with the matter's words in it.
   await w.services.reviews.exportMemo(reviewerAm);
+  w.repo.stopTimer(matterId, { userId: w.reviewer.userId });
+  w.repo.stopTimer(matterId, { userId: w.associate.userId });
 
   // The date is moved once, so that the log holds a retention change as well.
   w.repo.setRetention(matterId, 45, { actorId: w.associate.userId });

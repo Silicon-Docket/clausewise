@@ -1129,6 +1129,10 @@ export const STORE_SCOPES: readonly (readonly [table: string, where: string])[] 
   ["reviews", "matter_id = ?"],
   ["memos", "matter_id = ?"],
   ["feedback", "matter_id = ?"],
+  // The pilot measures (W2.6b): a timer is a role and two timestamps, a reference issue a rule key
+  // and a severity. Neither holds text, and both go with their matter.
+  ["time_entries", "matter_id = ?"],
+  ["reference_issues", "matter_id = ?"],
   ["audit_events", "matter_id = ? OR matter_id IS NULL"],
 ];
 
@@ -1150,6 +1154,10 @@ export const NO_MATTER_DATA: readonly string[] = [
   // A date and numbers (tokens, a cost, counts of responses): the spend guard's ledger of the day.
   // It names no matter, run, user or text, and it is kept when a matter is deleted, on purpose.
   "spend_ledger",
+  // The pilot measures (W2.6b): the start date of the pilot, and the user ids the trainer recorded
+  // as trained. Neither names a matter, and a matter's deletion leaves both alone, on purpose.
+  "pilot_calendar",
+  "pilot_participants",
 ];
 
 /**

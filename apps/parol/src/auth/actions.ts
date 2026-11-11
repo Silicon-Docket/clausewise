@@ -20,6 +20,10 @@ export const MATTER_ACTIONS = {
   "memo.export": ["reviewer"],
   "memo.read": ALL,
   "feedback.add": ALL,
+  /** Starting and stopping the person's own timer on a matter (the pilot measures, package W2.6b). */
+  "time.record": ["associate", "reviewer"],
+  /** Recording the reference list of a matter, the issues a manual review found (package W2.6b). */
+  "reference.write": ["reviewer"],
   /** Deletion is a creator or admin act and is decided apart from this table. */
   "matter.delete": [],
 } as const satisfies Record<string, readonly MatterRole[]>;

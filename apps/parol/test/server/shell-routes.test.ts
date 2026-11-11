@@ -410,6 +410,8 @@ describe("a state-changing action", () => {
     "review.decide",
     "memo.export",
     "feedback.add",
+    "time.record",
+    "reference.write",
     "matter.delete",
   ];
 

@@ -4,7 +4,9 @@ import type {
   DocumentView,
   DocumentVersionView,
   MatterView,
+  ReferenceView,
   RunSummary,
+  TimerView,
   UploadWarningView,
   UserOption,
   WorkflowOption,
@@ -43,7 +45,9 @@ import {
 import { CONFIRM_VALUE, FIELDS } from "./forms.js";
 import { Layout, csrfField, type Chrome } from "./layout.js";
 import { ExportMemoForm, MemoList } from "./memos.js";
+import { ReferencePanel } from "./reference.js";
 import { RetentionSection } from "./retention.js";
+import { TimerPanel } from "./timer.js";
 import { TrainingBanner, TrainingSection } from "./training.js";
 
 export interface MatterPageProps {
@@ -58,6 +62,16 @@ export interface MatterPageProps {
    * does not say, so the route works it out from the database and passes it in.
    */
   canDelete: boolean;
+  /**
+   * The signed-in person's own timer on this matter (package W2.6b). Leave out, or give a view
+   * with `allowed` false, to show no timer section.
+   */
+  timer?: TimerView | undefined;
+  /**
+   * The reference list of this matter for the reviewing attorney (package W2.6b). `null` for a
+   * role that may not write it, and left out when the service did not fill it: no section.
+   */
+  reference?: ReferenceView | null | undefined;
 }
 
 /**
@@ -972,6 +986,10 @@ export function MatterPage(props: MatterPageProps) {
           <p class="hint">Only the reviewing attorney can export a memo.</p>
         )}
       </Section>
+
+      <TimerPanel chrome={chrome} matterId={matter.id} timer={props.timer} />
+
+      <ReferencePanel chrome={chrome} matterId={matter.id} reference={props.reference} />
 
       <PeopleSection chrome={chrome} view={view} users={props.users} canAdd={canAddMember} />
 
