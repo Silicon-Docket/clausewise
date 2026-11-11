@@ -19,6 +19,7 @@ party, document and passage was written for this project. Never paste text from 
 | `calibration/pairs.ts`               | The 40 (finding, evidence) pairs of the support calibration set.              |
 | `calibration.json`                   | Generated. The pairs with each quote resolved to a paragraph and pinned.      |
 | `../../tools/make-parol-fixtures.ts` | The command: `pnpm fixtures:parol`.                                           |
+| `../../tools/make-parol-training.ts` | The command `pnpm fixtures:parol:training`, for the training matter T01.      |
 
 ## What is built
 
@@ -41,6 +42,16 @@ No baseline has been run.
 case and twin of both splits through the real parser, ingest and stages against an oracle that
 answers from the keys. It is perfect only if every anchor resolves in the real ingest and no check
 raises an escalation the key does not expect. It says nothing about any model.
+
+**The training matter is not in the dataset.** The application's training matter T01 is built from
+two of these cases: the NDA of `PAROL-D05` with the instruction paragraph of `PAROL-D08` as its
+second paragraph, and the amendment of `PAROL-D05` as it is. `pnpm fixtures:parol:training` builds
+its two files, `t01-nda.docx` and `t01-amendment-1.txt`, into `apps/parol/training` and not here;
+`--check` writes nothing and exits 1 when what is on disk differs from what the cases build, and a
+test does the same comparison in memory. They are kept outside this folder on purpose: the builder
+here treats a file that no case names as stale, and the evaluation reads only this folder, so T01 is
+never scored. A change to `PAROL-D05` or `PAROL-D08` that changes T01's documents fails that check
+until the files are rebuilt. T01 appears in no split, no hash and no answer key.
 
 ## Building
 
@@ -251,6 +262,13 @@ canary matter's own pages and rows, the other way round, for the case's ids and 
 strings are that matter's own data and are not looked for there). Each string has the matter's
 name in upper case and twelve lower case hex digits; match them case insensitively to be safe.
 The `fact` is not secret: it shows an attempt, not a breach.
+
+The scan reads every table of stored rows, so a table that is empty on both sides could never show a
+leak. A review fills most of them. A timer and a reference list are written by hand, so the scan
+writes one of each, through the application's services, for the case's matter and for each canary
+matter: one closed timer and a reference list of two issues. Neither table holds text, so a canary
+string cannot appear in them, and only ids can. The authorization half of the suite does not do
+this for the matters it probes (gap 32 of [document 7](../../docs/parol/07-delivery-plan.md)).
 
 **What the builder refuses.** A case that names a matter of the other split, a matter that does
 not exist, the same matter twice, or an empty list. A matter with fewer than three strings, a
