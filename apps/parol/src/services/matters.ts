@@ -14,6 +14,7 @@ import { startReadiness } from "./readiness.js";
 import type { Uploads } from "./uploads.js";
 import type { MatterService } from "./types.js";
 import type { MatterRole } from "../contracts.js";
+import { trainingProgress } from "../training/progress.js";
 import type { MatterSummary, MatterView, RetentionView, WorkflowOption } from "./views.js";
 
 const DAY_MS = 86_400_000;
@@ -84,6 +85,9 @@ export function createMatterService(
       segregationRelaxed: config.relaxedSegregation,
       workflows: workflowOptions(),
       retention: retentionView(matter),
+      // Read from this matter's own rows after the role check above, and only for a matter made
+      // for the training exercise.
+      ...(matter.trainingKey === null ? {} : { training: trainingProgress(repo, matter.id) }),
     };
   }
 

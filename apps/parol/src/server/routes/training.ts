@@ -8,12 +8,14 @@ import { formString, readForm, type FormFields } from "../http.js";
 import { defineRoute } from "../matter-route.js";
 import { HelpPage } from "../pages/help.js";
 import { QuickstartPage } from "../pages/quickstart.js";
+import { TrainerKeyPage } from "../pages/training.js";
 import { FIELDS } from "../pages/forms.js";
 import type { Chrome } from "../pages/layout.js";
 import { urls } from "../urls.js";
 import {
   QUICKSTART_STEPS,
   T01,
+  TRAINER_NOTES,
   TRAINING_STEPS,
   publicStep,
   startTraining,
@@ -43,6 +45,7 @@ export type StartTrainingInput = z.infer<typeof StartTrainingInput>;
  *
  * `GET /quickstart` and `GET /help` are open to everyone, a visitor included: they hold fixed text
  * and, for a signed-in person, the link to their own training matter and the form that makes it.
+ * `GET /training/key` is the trainer's key, for the legal engineer and the administrators only.
  * The page lists the person's matters through the services, which return only matters the person
  * is a member of, so it never names another person's training matter.
  *
@@ -143,6 +146,35 @@ export function registerTrainingRoutes(app: Hono, deps: AppDeps): void {
         principal === null ? { userName: null, csrfToken: csrfToken(c) } : pageChrome(c, principal);
       return sendPage(c, HelpPage({ chrome }));
     },
+  });
+
+  /**
+   * The trainer's key. The guard answers 403 to a person whose global role is not the legal
+   * engineer's or an administrator's (`training.key`) and sends a visitor to sign in, so the
+   * handler runs only for a trainer role, and this is the one place the answers are handed to a
+   * page. A read: no token, no write, no audit event. The page holds fixed text and no matter id.
+   */
+  defineRoute(app, {
+    method: "GET",
+    path: urls.trainerKey(),
+    access: "principal",
+    globalAction: "training.key",
+    handler: (c, principal) =>
+      sendPage(
+        c,
+        TrainerKeyPage({
+          chrome: pageChrome(c, principal),
+          steps: TRAINING_STEPS.map(({ n, title, who, task, teaches, key }) => ({
+            n,
+            title,
+            who,
+            task,
+            teaches,
+            key,
+          })),
+          notes: TRAINER_NOTES.map(({ heading, text }) => ({ heading, text })),
+        }),
+      ),
   });
 
   defineRoute(app, {

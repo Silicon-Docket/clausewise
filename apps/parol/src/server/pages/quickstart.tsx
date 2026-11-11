@@ -1,6 +1,8 @@
+import { globalRoleAllows } from "../../auth/actions.js";
 import { urls } from "../urls.js";
 import {
   TRAINING_WHO_LABEL,
+  asSentence,
   strongSegments,
   type QuickstartStepView,
   type TrainingStartView,
@@ -37,9 +39,6 @@ export interface QuickstartPageProps {
   /** What the start form needs; given only to a signed-in person who has no training matter. */
   start?: TrainingStartView | undefined;
 }
-
-/** A phrase as a sentence: the full stop is added unless the text already ends a sentence. */
-const sentence = (text: string): string => (/[.?!]$/.test(text) ? text : `${text}.`);
 
 /** Text with its `**` pairs as bold. The pieces are escaped like every other text. */
 function Strong({ text }: { text: string }) {
@@ -179,6 +178,20 @@ function BeginExercise(props: QuickstartPageProps) {
   return <StartForm chrome={chrome} start={start} />;
 }
 
+/**
+ * The way to the trainer's key, for the roles the key page is open to. The page answers anyone else
+ * with a refusal, so showing the link only to these roles is a courtesy and the route is the control.
+ */
+function TrainerLink({ chrome }: { chrome: Chrome }) {
+  if (chrome.globalRole === undefined || !globalRoleAllows(chrome.globalRole, "training.key"))
+    return null;
+  return (
+    <p>
+      For the trainer: <a href={urls.trainerKey()}>Trainer's key</a>, the answer to each step.
+    </p>
+  );
+}
+
 function Exercise(props: QuickstartPageProps) {
   return (
     <Section
@@ -207,11 +220,12 @@ function Exercise(props: QuickstartPageProps) {
               Step {step.n}: {step.title}
             </h3>
             <p class="muted">Who: {TRAINING_WHO_LABEL[step.who]}</p>
-            <p>{sentence(step.task)}</p>
-            <p class="muted">What it teaches: {sentence(step.teaches)}</p>
+            <p>{asSentence(step.task)}</p>
+            <p class="muted">What it teaches: {asSentence(step.teaches)}</p>
           </li>
         ))}
       </ol>
+      <TrainerLink chrome={props.chrome} />
     </Section>
   );
 }

@@ -477,6 +477,17 @@ bdi {
   color: var(--info-ink);
 }
 
+/* The training matter: a note about what the exercise is, in the colour of a note. */
+.banner-training {
+  border-color: var(--info-edge);
+  background: var(--info-bg);
+  color: var(--info-ink);
+}
+
+.banner-training a {
+  color: var(--info-ink);
+}
+
 .banner-failed {
   border-color: var(--bad-edge);
   background: var(--bad-bg);
@@ -1715,4 +1726,20 @@ kbd {
 .words-help,
 .context-help {
   max-width: 46rem;
+}
+
+/* The progress of the training exercise and the trainer's key: tables whose notes are sentences. */
+.progress-table td:last-child,
+.training-key td {
+  min-width: 14rem;
+  max-width: 34rem;
+  overflow-wrap: anywhere;
+}
+
+.progress-table tbody th {
+  min-width: 11rem;
+}
+
+.training-key td p {
+  margin: 0 0 0.25rem;
 }

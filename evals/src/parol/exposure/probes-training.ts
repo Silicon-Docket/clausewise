@@ -10,6 +10,10 @@
  *   them as every caller and scans the bodies for a token or an id that is not the caller's: the
  *   quickstart lists only the caller's own training matter, taken from the matters the caller is a
  *   member of, and the help holds fixed words.
+ * - `GET /training/key`, the trainer's key. It names no matter and takes no id, and it is for the
+ *   legal engineer and the administrators (`training.key`): a visitor is sent to sign in, a member
+ *   gets 403, and the administrator is let in. The page holds fixed text, no matter id and no
+ *   document text, so the suite reads it as the administrator and finds nothing of a matter in it.
  * - `POST /training`, the form that starts the signed-in person's own training matter. It names no
  *   matter and takes no id from the request: the reviewer is a user id looked up in the store, so it
  *   has no forged-id body, and it writes to no existing matter, so it has no effect body (it makes a
@@ -41,6 +45,13 @@ export const MATTER_PROBES_TRAINING: readonly Probe[] = [];
 export const OTHER_PROBES_TRAINING: readonly OtherProbe[] = [
   { method: "GET", template: "/quickstart", access: "public", body: NONE },
   { method: "GET", template: "/help", access: "public", body: NONE },
+  {
+    method: "GET",
+    template: "/training/key",
+    access: "principal",
+    body: NONE,
+    globalAction: "training.key",
+  },
   {
     method: "POST",
     template: "/training",

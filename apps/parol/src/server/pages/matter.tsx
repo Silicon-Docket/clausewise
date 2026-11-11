@@ -44,6 +44,7 @@ import { CONFIRM_VALUE, FIELDS } from "./forms.js";
 import { Layout, csrfField, type Chrome } from "./layout.js";
 import { ExportMemoForm, MemoList } from "./memos.js";
 import { RetentionSection } from "./retention.js";
+import { TrainingBanner, TrainingSection } from "./training.js";
 
 export interface MatterPageProps {
   chrome: Chrome;
@@ -865,6 +866,8 @@ export function MatterPage(props: MatterPageProps) {
         </p>
       </header>
 
+      <TrainingBanner training={matter.training} />
+
       {view.staleReason === null ? null : (
         <section class="banner banner-stale" aria-labelledby="stale-heading">
           <h2 id="stale-heading">Results are out of date</h2>
@@ -898,6 +901,8 @@ export function MatterPage(props: MatterPageProps) {
       {view.activeRun === null ? null : (
         <ActiveRun chrome={chrome} matterId={matter.id} run={view.activeRun} canStart={canStart} />
       )}
+
+      <TrainingSection progress={view.training} />
 
       <Section
         id="documents"
