@@ -1,5 +1,11 @@
 import type { AuthorizedMatter } from "../auth/types.js";
-import { ConflictError, NotFoundError, type FeedbackRow, type RunRow } from "../store/index.js";
+import {
+  ConflictError,
+  NotFoundError,
+  ValidationError,
+  type FeedbackRow,
+  type RunRow,
+} from "../store/index.js";
 import { requireRole, type ServiceDeps } from "./deps.js";
 import type { Presenter } from "./present.js";
 import type {
@@ -18,8 +24,8 @@ import type {
  * Contract commit CC2: the interface is the design's (W2.6a section 3.4). The views it returns are
  * declared in `services/views.ts`.
  *
- * Slice B (a missed issue) fills `reportMissedIssue`, `ruleChoices` and `list`. `addNote` (slice D),
- * `rate` and `myRating` (slice C) are still the stubs of the contract commit.
+ * Slice B (a missed issue) fills `reportMissedIssue`, `ruleChoices` and `list`. Slice C (the rating)
+ * fills `rate` and `myRating`. `addNote` (slice D) is still the stub of the contract commit.
  */
 export interface FeedbackService {
   /** A missed issue against one run of the matter. 404 for a run of another matter; 409 run_has_no_findings. */
@@ -48,6 +54,14 @@ export interface FeedbackService {
  * changes no finding, no decision and no gate of the export, and it is not part of the memo. It is
  * bound to a run and not to a content hash, so it stays true of the run it was made about, which is
  * shown as out of date when the documents change.
+ *
+ * What a rating is: a person's mark, from 1 to 5, of how far they agree that they would use the
+ * review for their next NDA, with words of their own if they choose. It is given once the matter has
+ * a memo, once by each person, and it is final. It is read by the person who gave it and by no other
+ * member: `list` and `myRating` return the caller's own and nothing else, and no function here
+ * returns another person's. It changes no finding, no decision and no gate of the export, and it is
+ * not part of the memo. It is bound to the matter and to the person, with the run of the newest memo
+ * recorded alongside (the review the matter had been exported from when it was given).
  */
 export function createFeedbackService(deps: ServiceDeps, present: Presenter): FeedbackService {
   const { repo, config } = deps;
@@ -90,8 +104,30 @@ export function createFeedbackService(deps: ServiceDeps, present: Presenter): Fe
       throw new Error("stub: W2.6a"); // STUB(W2.6a)
     },
 
-    rate() {
-      throw new Error("stub: W2.6a"); // STUB(W2.6a)
+    rate(am, input) {
+      requireRole(am, "feedback.add", config);
+      // What was sent is checked before the state of the matter is, as in every other write: a
+      // mark that is no mark is a refusal whether or not the matter has been exported.
+      if (!Number.isInteger(input.rating) || input.rating < 1 || input.rating > 5)
+        throw new ValidationError("bad_rating", "rating must be a whole number from 1 to 5");
+      // A matter is rated once it has a memo: until then there is nothing the person has used. The
+      // newest memo is first, and its run is the review the rating is recorded against, whether or
+      // not the memo has since been superseded.
+      const [newest] = repo.listMemos(am.matterId);
+      if (newest === undefined)
+        throw new ConflictError("not_exported", "the matter has no memo to rate yet");
+      const row = repo.addFeedback(am.matterId, {
+        // The person is the signed-in one; nothing in the request names anyone.
+        userId: am.principal.userId,
+        kind: "rating",
+        runId: newest.runId,
+        rating: input.rating,
+        text: input.comment,
+      });
+      const view = present.ratingView(row);
+      // The database holds a rating to 1 to 5, so a row that was just written is always a rating.
+      if (view === null) throw new Error("a rating that was just written is not a rating");
+      return view;
     },
 
     list(am) {
@@ -132,8 +168,14 @@ export function createFeedbackService(deps: ServiceDeps, present: Presenter): Fe
         .map((rule) => ({ ruleKey: rule.key, title: rule.title }));
     },
 
-    myRating() {
-      throw new Error("stub: W2.6a"); // STUB(W2.6a)
+    myRating(am) {
+      requireRole(am, "memo.read", config);
+      // Asked for by the caller's own id and no other: nothing here can return another person's.
+      const [mine] = repo.listFeedback(am.matterId, {
+        kind: "rating",
+        userId: am.principal.userId,
+      });
+      return mine === undefined ? null : present.ratingView(mine);
     },
   };
 }

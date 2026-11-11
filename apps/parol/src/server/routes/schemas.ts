@@ -169,3 +169,18 @@ export const MissedIssueBody = z.strictObject({
   note: z.string().optional(),
 });
 export type MissedIssueBody = z.infer<typeof MissedIssueBody>;
+
+/**
+ * `POST /api/matters/:id/rating` (package W2.6a). The matter is the path's and the person the
+ * session's. The body is checked here for its shape only: no key but these two, and each of the
+ * type it has. What a value may be (a mark that is a whole number from 1 to 5, a comment that is not
+ * too long) is checked by `ratingFromBody` (feedback.ts), the function the form shares its rules
+ * with, so that a script is refused with the same codes as a person at the form. A mark that is
+ * left out or `null` is `rating_required`; a mark that is a number but not one of the five is
+ * `bad_rating`; a mark that is not a number at all is refused here.
+ */
+export const RatingBody = z.strictObject({
+  rating: z.number().nullable().optional(),
+  comment: z.string().nullable().optional(),
+});
+export type RatingBody = z.infer<typeof RatingBody>;

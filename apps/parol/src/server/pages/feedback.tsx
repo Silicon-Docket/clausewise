@@ -1,5 +1,5 @@
 import { REASON_CODES, type ReasonCode } from "../../contracts.js";
-import type { MissedIssueView, RuleChoice } from "../../services/views.js";
+import type { MissedIssueView, RatingView, RuleChoice } from "../../services/views.js";
 import { urls } from "../urls.js";
 import {
   MINOR_EDIT_HINT,
@@ -19,8 +19,20 @@ import {
   MISSED_ISSUE_RULE_LABEL,
   MISSED_ISSUE_RULE_PLACEHOLDER,
   NOT_COVERED_LABEL,
+  RATING_BUTTON,
+  RATING_COMMENT_HINT,
+  RATING_COMMENT_LABEL,
+  RATING_FORM_HINT,
+  RATING_HEADING,
+  RATING_MARKS,
+  RATING_MISSED_ISSUE_LINK,
+  RATING_NO_MEMO,
+  RATING_QUESTION,
+  RATING_SCALE_HINT,
   REASON_CODE_LABEL,
   REASON_CODE_MEANING,
+  ratingChoiceLabel,
+  ratingLabel,
   ruleChoiceLabel,
 } from "../views/feedback.js";
 import { RevealedText, ScrollBox, Section, Time, textareaValue, Field } from "./components.js";
@@ -34,7 +46,8 @@ import { csrfField, type Chrome } from "./layout.js";
  *
  * The decision form is `finding.tsx`'s; it calls these and adds nothing else of its own. The
  * report of a missed issue is a section of the review page (`run.tsx`), which calls
- * `MissedIssueSection` and adds nothing else of its own.
+ * `MissedIssueSection` and adds nothing else of its own. The rating is a section of the memos page
+ * (`memos.tsx`), which calls `RatingSection` and adds nothing else of its own.
  */
 
 export interface ReasonCodeDraft {
@@ -288,6 +301,112 @@ export function MissedIssueSection(props: MissedIssueSectionProps) {
           </table>
         </ScrollBox>
       )}
+    </Section>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Rate this matter (slice C)
+// ---------------------------------------------------------------------------------------------
+
+/** What the person had chosen and typed in the rating form when it was refused. */
+export interface RatingDraft {
+  /** The mark that was chosen, when it was one of the five. */
+  rating?: number | undefined;
+  comment?: string | undefined;
+}
+
+export interface RatingSectionProps {
+  chrome: Chrome;
+  matterId: string;
+  /** Whether the matter has a memo. Until it has one there is nothing to rate. */
+  hasMemo: boolean;
+  /** The signed-in person's own rating, or null. Nobody else's is ever given to this page. */
+  given: RatingView | null;
+  /** The review the newest memo was made from, for the link to report a missed issue, or null. */
+  runId: string | null;
+  draft?: RatingDraft | undefined;
+}
+
+/**
+ * The rating of the matter by the signed-in person, in the four states it can be in: no memo yet
+ * (a sentence says why there is no form), a memo and no rating (the form), a rating given (what
+ * the person gave, with its denominator, and no form, because a rating is final), and, under the
+ * last two, the link that leads to the report of a missed issue.
+ *
+ * The question is the legend of one group of five radios, so the group is one tab stop and the
+ * arrow keys move between the marks; the comment and the button follow in the order of use. The
+ * comment is shown through `RevealedText`, and nowhere as markup.
+ */
+export function RatingSection(props: RatingSectionProps) {
+  const { chrome, matterId, draft, given } = props;
+  return (
+    <Section id="rating" title={RATING_HEADING}>
+      {!props.hasMemo ? (
+        <p class="empty">{RATING_NO_MEMO}</p>
+      ) : given !== null ? (
+        <>
+          <p>
+            You rated this matter{" "}
+            <strong>
+              {given.rating} of {RATING_MARKS.length}
+            </strong>{" "}
+            ({ratingLabel(given.rating)}) on <Time value={given.at} />.
+          </p>
+          {given.comment === null ? null : (
+            <div class="doc-text">
+              <RevealedText value={given.comment} />
+            </div>
+          )}
+        </>
+      ) : (
+        <form method="post" action={urls.rating(matterId)} class="stack">
+          {csrfField(chrome.csrfToken)}
+          <fieldset class="choices" id="rating-choice" aria-describedby="rating-scale-hint">
+            <legend>{RATING_QUESTION}</legend>
+            <p class="hint" id="rating-scale-hint">
+              {RATING_SCALE_HINT}
+            </p>
+            <div class="rating-scale">
+              {RATING_MARKS.map((mark) => (
+                <div class="check">
+                  <input
+                    type="radio"
+                    id={`rating-${mark}`}
+                    name={FIELDS.rating}
+                    value={String(mark)}
+                    checked={draft?.rating === mark}
+                    required
+                  />
+                  <label for={`rating-${mark}`}>{ratingChoiceLabel(mark)}</label>
+                </div>
+              ))}
+            </div>
+          </fieldset>
+          <Field id="rating-comment" label={RATING_COMMENT_LABEL} hint={RATING_COMMENT_HINT}>
+            <textarea
+              id="rating-comment"
+              name={FIELDS.comment}
+              rows={3}
+              maxlength={4000}
+              aria-describedby="rating-comment-hint"
+            >
+              {textareaValue(draft?.comment ?? "")}
+            </textarea>
+          </Field>
+          <div class="actions">
+            <button type="submit" class="button button-primary">
+              {RATING_BUTTON}
+            </button>
+          </div>
+          <p class="hint">{RATING_FORM_HINT}</p>
+        </form>
+      )}
+      {props.hasMemo && props.runId !== null ? (
+        <p>
+          <a href={`${urls.run(matterId, props.runId)}#missed-issue`}>{RATING_MISSED_ISSUE_LINK}</a>
+        </p>
+      ) : null}
     </Section>
   );
 }

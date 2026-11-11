@@ -1028,6 +1028,11 @@ export function createFindingsApi(
    *   run's playbook is refused (`unknown_rule`), and one person may report 50 against a run
    *   (`feedback_limit`).
    * - `rule` and `location` belong to a missed issue and to no other kind.
+   * - `rating` is a person's mark of a whole matter: it needs the mark (1 to 5), may carry words of
+   *   the person's own, and names no finding and carries no reason code. A person rates a matter
+   *   once and the rating is final (`already_rated`; the unique index
+   *   `feedback_one_rating_per_user` of migration 006 is the second line). Words that say nothing
+   *   are none.
    *
    * Every message names a rule and never what the caller sent. The audit event holds ids, codes and
    * flags: the text and the location are never in it, only whether they were given.
@@ -1055,7 +1060,11 @@ export function createFindingsApi(
       throw new ValidationError("bad_rating", "rating must be a whole number from 1 to 5");
     if (input.kind === "rating" && rating === null)
       throw new ValidationError("rating_required", "a rating needs a rating");
-    const text = input.text ?? null;
+    if (input.kind !== "rating" && rating !== null)
+      throw new ValidationError("field_not_allowed", "a mark belongs to a rating only");
+    const typedText = input.text ?? null;
+    // The words of a rating are optional, so words that say nothing are no words at all.
+    const text = input.kind === "rating" && typedText?.trim() === "" ? null : typedText;
     if (text !== null) cleanProse("feedback text", text, MAX_FEEDBACK_TEXT);
     if (
       (input.kind === "missed_issue" || input.kind === "comment") &&
@@ -1084,6 +1093,13 @@ export function createFindingsApi(
       // and is answered in the same words.
       if (ruleKey !== null && !RULE_KEY_PATTERN.test(ruleKey))
         throw new ValidationError("unknown_rule", UNKNOWN_RULE_MESSAGE);
+    }
+    if (input.kind === "rating") {
+      // A rating is about the matter. It names no finding, and a reason code is a decision's.
+      if (input.findingId !== undefined && input.findingId !== null)
+        throw new ValidationError("finding_not_allowed", "a rating names no finding");
+      if (reasonCode !== null)
+        throw new ValidationError("field_not_allowed", "a rating carries no reason code");
     }
     const location = given === null ? null : cleanLabel("location", given, MAX_LOCATION);
 
@@ -1114,6 +1130,18 @@ export function createFindingsApi(
             "feedback_limit",
             "the most missed issues that one person can report on a review have been reported",
           );
+      }
+      if (input.kind === "rating") {
+        // One rating for each person and matter, and it is final: a second is a conflict, not a
+        // replacement. The unique index of migration 006 holds the same rule for code that bypasses
+        // this function.
+        const rated = get<{ n: number }>(
+          "SELECT COUNT(*) AS n FROM feedback WHERE matter_id = ? AND user_id = ? AND kind = 'rating'",
+          matterId,
+          input.userId,
+        );
+        if ((rated?.n ?? 0) > 0)
+          throw new ConflictError("already_rated", "this person has already rated this matter");
       }
       const id = newId("fbk");
       run(

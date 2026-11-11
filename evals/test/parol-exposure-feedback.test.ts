@@ -2,9 +2,12 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   missedIssueFromBody,
   missedIssueFromForm,
+  ratingFromBody,
+  ratingFromForm,
 } from "../../apps/parol/src/server/routes/feedback.js";
 import type { FindingView } from "../../apps/parol/src/services/views.js";
 import type { Dataset } from "../src/parol/dataset.js";
+import type { SiteHooks } from "../src/parol/exposure/site.js";
 import { decisionFor } from "../src/parol/exposure/review.js";
 import { probeKey, type ProbeBody, type Scratch } from "../src/parol/exposure/probe-kit.js";
 import {
@@ -28,8 +31,12 @@ import { completeDataset } from "./parol-exposure-support.js";
  *
  * Slice B adds the two probe rows of the report of a missed issue (the form and the JSON), each with
  * its forged-id body and its effect body, and proves on the real application that the effect body
- * writes when a let-in caller sends it and is seen when a hole lets a refused caller send it. The
- * later slices add the probe rows of a note and the rating below.
+ * writes when a let-in caller sends it and is seen when a hole lets a refused caller send it.
+ *
+ * Slice C adds the rating (a form and JSON, each with an effect body that needs a scratch matter
+ * with a memo) and the read of a matter's feedback. The rating takes no id in its path, so it has
+ * no forged-id body; the read changes nothing, so it has no effect body. The later slice (a note)
+ * adds its probe rows below.
  */
 
 const REVIEW_ROUTES = [
@@ -259,9 +266,146 @@ describe("the report of a missed issue on the real application", () => {
       },
       ["matrix", "effects"],
     );
-    // The outsider is a viewer in the planted guard, and the one write a viewer may make is this
-    // one: its effect body, sent by the outsider on each route in each mode, changed the store.
-    expect(result.byReason.changed_state).toBe(REPORT_ROUTES.length * 2);
+    // The outsider is a viewer in the planted guard, and the writes a viewer may make are these: its
+    // effect body, sent by the outsider on each route in each mode, changed the store. The reports
+    // are two routes and the rating two more, the rating on a scratch matter that has a memo.
+    expect(result.byReason.changed_state).toBe((REPORT_ROUTES.length + RATING_ROUTES.length) * 2);
     expect(result.probesAnsweredWithData).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Slice C: the rating of a matter, and the read of a matter's feedback
+// ---------------------------------------------------------------------------------------------
+
+const RATING_ROUTES = [
+  "POST /matters/:matterId/rating",
+  "POST /api/matters/:matterId/rating",
+] as const;
+const FEEDBACK_READ = "GET /api/matters/:matterId/feedback";
+
+/** Runs the application's own reading of a rating body, so that a body it refuses is found here. */
+const readsAsRating = (key: (typeof RATING_ROUTES)[number], body: ProbeBody): void => {
+  if (body.kind === "form") ratingFromForm(body.fields);
+  else if (body.kind === "json") ratingFromBody(body.json);
+  else throw new Error(`${key} has a body that is neither a form nor JSON`);
+};
+
+describe("the rating in the probe tables", () => {
+  const scratch: Scratch = {
+    matterId: "mat_1",
+    documentId: "doc_1",
+    versionId: "ver_1",
+    earlierVersionId: "ver_0",
+    amendmentId: "doc_2",
+    invitee: "usr_1",
+    workflow: "v2",
+    runId: "run_1",
+    findingId: "fnd_1",
+  };
+
+  it("has a row for the form and one for the JSON, for the action every role holds, reaching 400 with its own empty body", () => {
+    for (const key of RATING_ROUTES) {
+      const probe = MATTER_PROBES.find((p) => probeKey(p) === key);
+      expect(probe, key).toBeDefined();
+      expect(probe).toMatchObject({ action: "feedback.add", reaches: 400, method: "POST" });
+      expect(probe!.fresh, key).toBeUndefined();
+      expect(probe!.body.kind, key).toBe(key.includes("/api/") ? "json" : "form");
+      expect(Object.keys(fieldsOf(probe!.body)), key).toEqual([]);
+      // The empty body is refused by the application itself: no rating was chosen.
+      expect(() => readsAsRating(key, probe!.body), key).toThrow();
+    }
+  });
+
+  it("names no id in its path, so the suite forges none and the table holds no forged-id body for it", () => {
+    for (const key of RATING_ROUTES) {
+      expect(FORGED_BODY_KEYS, key).not.toContain(key);
+      expect(
+        FORGED_PROBES.filter((p) => `${p.method} ${p.template}` === key),
+        key,
+      ).toEqual([]);
+      // The path holds the matter and nothing else.
+      expect(
+        key.split("/").filter((part) => part.startsWith(":")),
+        key,
+      ).toEqual([":matterId"]);
+    }
+  });
+
+  it("has an effect body for each, on a scratch matter that has a memo, that the application accepts and the probe's own is not", () => {
+    for (const key of RATING_ROUTES) {
+      const probe = MATTER_PROBES.find((p) => probeKey(p) === key)!;
+      expect(EFFECT_KEYS, key).toContain(key);
+      const effect = effectOf(probe, scratch)!;
+      expect(effect.target, key).toBe("scratch");
+      // A rating is given once the matter has a memo, so the matter must have been exported.
+      expect(effect.needs, key).toBe("exported");
+      expect(JSON.stringify(effect.body), key).not.toBe(JSON.stringify(probe.body));
+      // It is aimed at the scratch matter, not at ids of no record.
+      expect(effect.ids(scratch, noRecordIds("mat_other")).matterId, key).toBe("mat_1");
+      expect(() => readsAsRating(key, effect.body), key).not.toThrow();
+      // A mark of 4 and no words: the one body that is a rating and says nothing else.
+      expect(fieldsOf(effect.body)["rating"], key).toEqual(key.includes("/api/") ? 4 : "4");
+    }
+  });
+
+  it("send no field that names a person, a matter or a run in the body: those are the session's and the path's", () => {
+    for (const key of RATING_ROUTES) {
+      const probe = MATTER_PROBES.find((p) => probeKey(p) === key)!;
+      const names = Object.keys(fieldsOf(effectOf(probe, scratch)!.body));
+      expect(names.sort(), key).toEqual(["comment", "rating"]);
+      for (const forbidden of ["userId", "matterId", "runId", "role", "kind"])
+        expect(names, key).not.toContain(forbidden);
+    }
+  });
+
+  it("has the read of a matter's feedback as a GET for the read action, with no effect body and no forged id", () => {
+    const probe = MATTER_PROBES.find((p) => probeKey(p) === FEEDBACK_READ);
+    expect(probe).toMatchObject({
+      method: "GET",
+      action: "matter.read",
+      reaches: 200,
+      body: { kind: "none" },
+    });
+    expect(EFFECT_KEYS).not.toContain(FEEDBACK_READ);
+    expect(FORGED_BODY_KEYS).not.toContain(FEEDBACK_READ);
+    expect(FORGED_PROBES.filter((p) => `${p.method} ${p.template}` === FEEDBACK_READ)).toEqual([]);
+  });
+});
+
+describe("the rating on the real application", () => {
+  let dataset: Dataset;
+  beforeAll(async () => {
+    dataset = await completeDataset();
+  });
+  vi.setConfig({ testTimeout: 180_000, hookTimeout: 180_000 });
+  const run = runWith(() => dataset);
+
+  it("is shown to change the store for the caller who is let in, on a matter that has a memo, and is clean when the guard is whole", async () => {
+    const result = await run({}, ["matrix", "effects"]);
+    expect(result.mismatches).toBe(0);
+    expect(result.letInNotReached).toBe(0);
+    expect(result.writesUnproven).toBe(0);
+    expect(result.byReason.changed_state).toBe(0);
+    for (const key of RATING_ROUTES) expect(result.writesWithoutBody, key).not.toContain(key);
+    // The read has a cell for each caller like any other route, and it sent nothing that writes.
+    expect(result.probesAnsweredWithData).toBe(0);
+  });
+
+  it("sees a route that answers the read of a matter's feedback to a caller with no part in the matter: four refused callers, in two modes", async () => {
+    // The hole the row is for: a route in front of the real one that answers whoever asks, with the
+    // shape of the answer and none of the guard. The three members are let in anyway; the outsider,
+    // the stranger, the administrator and the visitor are not, and each of them is answered.
+    const answers: SiteHooks = {
+      beforeRoutes: (app) =>
+        app.get("/api/matters/:matterId/feedback", (c) =>
+          c.json({ missedIssues: [], notes: [], myRating: null }),
+        ),
+    };
+    const whole = await run({}, ["matrix"]);
+    expect(whole.byReason.handler_answered).toBe(0);
+    const holed = await run(answers, ["matrix"]);
+    expect(holed.byReason.handler_answered).toBe(4 * 2);
+    expect(holed.exposed.every((cell) => cell.probe === FEEDBACK_READ)).toBe(true);
   });
 });

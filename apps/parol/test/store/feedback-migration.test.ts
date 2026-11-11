@@ -912,9 +912,20 @@ describe("migration 006, the part of the feedback table", () => {
         text: "A new one.",
       }),
     ).toMatchObject({ ruleKey: "dur-1", location: "NDA section 6.1", runId: run.id });
-    // One more rating by a person who has rated is refused from now on.
+    // One more rating by a person who has rated is refused from now on: by the store, which says so
+    // in its own words, and by the database, which holds the same rule for anything that writes to
+    // it another way (the index is the second line, and this is the proof that the old rows did
+    // not stop it from being made).
     expect(() =>
       after.addFeedback(m.id, { userId: ACTORS.reviewer, kind: "rating", rating: 4 }),
+    ).toThrow(/already rated/);
+    expect(() =>
+      upgraded
+        .prepare(
+          `INSERT INTO feedback (id, matter_id, user_id, kind, rating, created_at)
+           VALUES ('fbk_new_second_rating', ?, ?, 'rating', 4, '2026-11-03T10:00:00.000Z')`,
+        )
+        .run(m.id, ACTORS.reviewer),
     ).toThrow(/UNIQUE constraint failed/);
     upgraded.close();
   });

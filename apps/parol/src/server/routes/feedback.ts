@@ -2,8 +2,8 @@ import { ValidationError } from "../../store/errors.js";
 import { RULE_KEY_PATTERN } from "../../store/schemas.js";
 import { formString, type FormFields } from "../http.js";
 import { FIELDS, NOT_COVERED_VALUE, normalizeNewlines } from "../pages/forms.js";
-import type { MissedIssueDraft } from "../pages/feedback.js";
-import { MAX_FEEDBACK_TEXT, MAX_LOCATION, MissedIssueBody } from "./schemas.js";
+import type { MissedIssueDraft, RatingDraft } from "../pages/feedback.js";
+import { MAX_FEEDBACK_TEXT, MAX_LOCATION, MissedIssueBody, RatingBody } from "./schemas.js";
 
 /**
  * Reading what the feedback forms and the feedback JSON carry (package W2.6a), parallel to
@@ -116,4 +116,79 @@ export function missedIssueFromBody(body: unknown): MissedIssueInput {
     location: locationOf(parsed.location ?? undefined),
     note: noteOf(parsed.note),
   };
+}
+
+// ---------------------------------------------------------------------------------------------
+// The rating of a matter (slice C)
+// ---------------------------------------------------------------------------------------------
+
+/** What the rating of a matter is made of, as the service takes it. */
+export interface RatingInput {
+  /** A whole number from 1 to 5. */
+  rating: number;
+  /** The person's words about it, or null when they gave none. */
+  comment: string | null;
+}
+
+/**
+ * The mark. Nothing given is `rating_required`; something given that is not a whole number from 1
+ * to 5 is `bad_rating`. `given` is what the form posted (a string) or what the body carried (a
+ * number), and a string is a mark only when it is the plain digit of one: "4" is, "4.0", " 4" and
+ * "04" are not, so a mark is one thing in one spelling. A blank string is nothing given.
+ */
+function markOf(given: string | number | null | undefined): number {
+  if (given === undefined || given === null || (typeof given === "string" && blank(given)))
+    throw new ValidationError("rating_required", "choose a rating from 1 to 5");
+  const mark = typeof given === "number" ? given : /^[1-5]$/.test(given) ? Number(given) : NaN;
+  if (!Number.isInteger(mark) || mark < 1 || mark > 5)
+    throw new ValidationError("bad_rating", "the rating is not a whole number from 1 to 5");
+  return mark;
+}
+
+/** The comment, as the store keeps it: left empty it is none; too long it is refused. */
+function commentOf(posted: string | null | undefined): string | null {
+  if (posted === undefined || posted === null || blank(posted)) return null;
+  if (posted.length > MAX_FEEDBACK_TEXT)
+    throw new ValidationError("comment_too_long", "the comment is too long");
+  return posted;
+}
+
+/**
+ * The rating form. The first thing wrong, in the order the form is laid out (the mark, then the
+ * comment), is what the refusal names. The comment goes through `normalizeNewlines` first.
+ */
+export function ratingFromForm(form: FormFields): RatingInput {
+  const comment = formString(form, FIELDS.comment);
+  return {
+    rating: markOf(formString(form, FIELDS.rating)),
+    comment: commentOf(comment === undefined ? undefined : normalizeNewlines(comment)),
+  };
+}
+
+/**
+ * What had been chosen and typed in the rating form, to show it again when it was refused. Only a
+ * mark that is one of the five is kept, and the comment is cut to twice what the store accepts, so
+ * that a comment that was too long is shown to be and a crafted post cannot put more on the page
+ * than the form could have held. The text is the person's own, returned to the person who typed it,
+ * and goes through the same escaping as every other text on the page. It is never logged or stored.
+ */
+export function ratingDraftFromForm(form: FormFields): RatingDraft {
+  const draft: RatingDraft = {};
+  const mark = formString(form, FIELDS.rating);
+  if (mark !== undefined && /^[1-5]$/.test(mark)) draft.rating = Number(mark);
+  const comment = formString(form, FIELDS.comment);
+  if (comment !== undefined)
+    draft.comment = normalizeNewlines(comment).slice(0, MAX_FEEDBACK_TEXT * 2);
+  return draft;
+}
+
+/**
+ * The rating as JSON. The body is a strict object (an unknown key or a wrong type is a `ZodError`,
+ * which the shell answers with 400), and past that it is refused for the same reasons as the form,
+ * with the same codes: a mark left out is `rating_required`, a number that is not one of the five is
+ * `bad_rating`, a comment that is too long is `comment_too_long`, and an empty comment is none.
+ */
+export function ratingFromBody(body: unknown): RatingInput {
+  const parsed = RatingBody.parse(body);
+  return { rating: markOf(parsed.rating), comment: commentOf(parsed.comment) };
 }

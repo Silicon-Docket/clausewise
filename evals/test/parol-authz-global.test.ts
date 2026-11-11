@@ -11,6 +11,7 @@ import {
   GLOBAL_ROLE_OF,
   classifyListing,
   expectedList,
+  SCRATCH_LEVELS_BUILT,
   requireScratchLevelBuilt,
   tableDrift,
   type Observed,
@@ -269,24 +270,39 @@ describe("the levels a scratch matter can be taken to", () => {
     documents: true,
     run: true,
     decided: true,
-    exported: false,
+    // The rating of a matter needs a memo, and the package that probes it (W2.6a) filled the branch
+    // of `makeScratch` that exports one.
+    exported: true,
   };
 
-  it("are built for the first three, and refused for `exported` until the package that needs it fills the branch", () => {
+  it("are all built: the list the suite builds from is the levels of the type, and none is refused", () => {
     for (const [level, built] of Object.entries(LEVELS) as [ScratchLevel, boolean][]) {
       if (built) expect(() => requireScratchLevelBuilt(level), level).not.toThrow();
-      else
-        expect(() => requireScratchLevelBuilt(level), level).toThrow(
-          /needs a scratch matter taken to the level "exported", which the authorization probes cannot build yet/,
-        );
+      else expect(() => requireScratchLevelBuilt(level), level).toThrow();
     }
+    // The list is the record's keys that are built, so a level the record says is built but the
+    // suite does not list (or the other way about) is found here.
+    expect([...SCRATCH_LEVELS_BUILT].sort()).toEqual(
+      Object.entries(LEVELS)
+        .filter(([, built]) => built)
+        .map(([level]) => level)
+        .sort(),
+    );
   });
 
-  it("stop the suite with the error of an unavailable suite, and not an exposure", () => {
+  it("still stop the suite, with the error of an unavailable suite and not an exposure, for a level that is not built", () => {
+    // No level of the type is unbuilt today, so a level the type does not name stands for one that
+    // a package added to the type without a branch of `makeScratch`. The refusal is what it meets.
+    const unbuilt = "sealed" as unknown as ScratchLevel;
+    expect(SCRATCH_LEVELS_BUILT).not.toContain(unbuilt);
     try {
-      requireScratchLevelBuilt("exported");
+      requireScratchLevelBuilt(unbuilt);
     } catch (error) {
       expect(error).toMatchObject({ name: "ExposureSuiteUnavailable" });
+      expect((error as Error).message).toMatch(
+        /needs a scratch matter taken to the level "sealed", which the authorization probes cannot build/,
+      );
+      expect((error as Error).message).toContain("Nothing was sent for it");
       return;
     }
     throw new Error("the level should have been refused");

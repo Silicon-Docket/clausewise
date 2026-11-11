@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { cleanup, makeWorld, reviewed, type World } from "./support.js";
+import { cleanup, decideAll, makeWorld, reviewed, type World } from "./support.js";
 
 afterAll(cleanup);
 
@@ -9,13 +9,17 @@ afterAll(cleanup);
  * not into the audit trail, a log line, an error message, a file name, or any column of the database
  * but the two that hold them (`feedback.text` and `feedback.location`). The check is the one of
  * `privacy.test.ts`: plant a marker in every field a person can fill, make the refusals that involve
- * the marker too, and look for it everywhere. The later slices add the note and the rating comment.
+ * the marker too, and look for it everywhere. Slice C adds the comment of a rating, which is as
+ * private as a report and more so: no member reads another member's rating at all. The later slice
+ * adds the note.
  */
 
 const NOTE = "QZXNOTE-4d19a7";
 const PLACE = "QZXPLACE-82c0e3";
 const RULE = "QZXRULE-17b6f5";
 const RUN = "QZXRUN-6e3d92";
+const WORDS = "QZXWORDS-5a08c1";
+const OTHER_WORDS = "QZXOTHER-93f7b2";
 
 /** Every column of every table that holds `needle`, as `table.column`. */
 function where(w: World, needle: string): string[] {
@@ -132,5 +136,72 @@ describe("the words of a report of a missed issue", () => {
 
     // Every line the services logged is a sentence of ours around ids and closed codes.
     for (const line of w.logs) expect(line).not.toContain("QZX");
+  });
+});
+
+describe("the comment of a rating", () => {
+  it("is in feedback.text and in no other column, log line, event, error or file name, and is read by the person who wrote it", async () => {
+    const w = makeWorld();
+    const { matterId, am, reviewerAm, runId } = await reviewed(w);
+    decideAll(w, reviewerAm, w.services.runs.issues(am, runId));
+    await w.services.reviews.exportMemo(reviewerAm);
+
+    const given = w.services.feedback.rate(am, { rating: 4, comment: `Useful. ${WORDS}` });
+    // Refusals that involve the words: a second rating and a mark that is no mark.
+    const errors = [
+      caught(() => w.services.feedback.rate(am, { rating: 5, comment: `Again. ${WORDS}` })),
+      caught(() => w.services.feedback.rate(reviewerAm, { rating: 9, comment: WORDS })),
+      caught(() => w.services.feedback.rate(reviewerAm, { rating: 3, comment: WORDS.repeat(400) })),
+    ];
+    expect(errors.map((e) => e.name)).toEqual([
+      "ConflictError",
+      "ValidationError",
+      "ValidationError",
+    ]);
+
+    const audit = JSON.stringify(w.repo.listAuditEvents({ limit: 10000 }));
+    const logs = w.logs.join("\n");
+    const errorText = errors.map((e) => `${e.name}: ${e.message}\n${JSON.stringify(e)}`).join("\n");
+    for (const [name, haystack] of Object.entries({ audit, logs, errors: errorText }))
+      expect(haystack.includes(WORDS), `${name} holds the words`).toBe(false);
+
+    // The words are in the one column meant to hold them, and in no other.
+    expect(where(w, WORDS)).toEqual(["feedback.text"]);
+    expect(JSON.stringify(given)).toContain(WORDS);
+    expect(JSON.stringify(w.services.feedback.myRating(am))).toContain(WORDS);
+    // The refusals kept nothing: one rating is all there is.
+    expect(w.repo.listFeedback(matterId, { kind: "rating" })).toHaveLength(1);
+    for (const line of w.logs) expect(line).not.toContain("QZX");
+  });
+
+  it("is read by nobody but the person who gave it: not by another member, in no view the services make", async () => {
+    const w = makeWorld();
+    const { matterId, am, reviewerAm, runId } = await reviewed(w);
+    decideAll(w, reviewerAm, w.services.runs.issues(am, runId));
+    await w.services.reviews.exportMemo(reviewerAm);
+    w.services.feedback.rate(am, { rating: 1, comment: WORDS });
+    w.services.feedback.rate(reviewerAm, { rating: 5, comment: OTHER_WORDS });
+
+    // Everything the services let each of the two read of the matter, as text.
+    const readBy = (caller: typeof am): string =>
+      JSON.stringify({
+        mine: w.services.feedback.myRating(caller),
+        list: w.services.feedback.list(caller),
+        matter: w.services.matters.view(caller),
+        memos: w.services.reviews.listMemos(caller),
+        issues: w.services.runs.issues(caller, runId),
+        run: w.services.runs.get(caller, runId),
+      });
+    expect(readBy(am)).toContain(WORDS);
+    expect(readBy(am)).not.toContain(OTHER_WORDS);
+    expect(readBy(reviewerAm)).toContain(OTHER_WORDS);
+    expect(readBy(reviewerAm)).not.toContain(WORDS);
+    // The marks themselves: each reads their own and the list agrees with it.
+    expect(w.services.feedback.list(am).myRating?.rating).toBe(1);
+    expect(w.services.feedback.list(reviewerAm).myRating?.rating).toBe(5);
+    // And nothing outside the feedback table has them, so no other read can reach them.
+    expect(where(w, WORDS)).toEqual(["feedback.text"]);
+    expect(where(w, OTHER_WORDS)).toEqual(["feedback.text"]);
+    expect(matterId).toBeTruthy();
   });
 });

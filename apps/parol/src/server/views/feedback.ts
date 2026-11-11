@@ -2,10 +2,10 @@ import type { ReasonCode } from "../../contracts.js";
 
 /**
  * The words the feedback panes use (package W2.6a): the reason codes and the minor-edit mark on a
- * decision, and the report of a missed issue. They are project-authored guidance, not a quotation of
- * the pilot documents, and the
- * wording is to be agreed with the reviewing attorneys before a pilot: a change of wording during a
- * pilot changes what the counts mean.
+ * decision, the report of a missed issue and the rating of a matter. They are project-authored
+ * guidance, not a quotation of the pilot documents, and the wording is to be agreed with the
+ * reviewing attorneys before a pilot: a change of wording during a pilot changes what the counts
+ * mean.
  *
  * Each table is a complete record of its vocabulary, so a code added to `REASON_CODES` does not
  * compile until it has a label and a meaning. A code that arrives from the database is looked up
@@ -77,3 +77,45 @@ export const MISSED_ISSUE_NO_LOCATION = "Not given";
 
 /** The text of one rule in the list: its key, then its title in the playbook. */
 export const ruleChoiceLabel = (ruleKey: string, title: string): string => `${ruleKey}, ${title}`;
+
+// ---------------------------------------------------------------------------------------------
+// Rate the matter (slice C)
+// ---------------------------------------------------------------------------------------------
+
+/** The five marks of the scale, the lowest first. */
+export const RATING_MARKS = [1, 2, 3, 4, 5] as const;
+export type RatingMark = (typeof RATING_MARKS)[number];
+
+export const RATING_HEADING = "Rate this matter";
+/** The statement that is rated, and the legend of the five choices. */
+export const RATING_QUESTION = "I would use this for my next NDA";
+export const RATING_LABEL: Record<RatingMark, string> = {
+  1: "Strongly disagree",
+  2: "Disagree",
+  3: "Neither agree nor disagree",
+  4: "Agree",
+  5: "Strongly agree",
+};
+/** The words of one choice, as the radio is labelled: its mark, then its meaning. */
+export const ratingChoiceLabel = (mark: RatingMark): string => `${mark} ${RATING_LABEL[mark]}`;
+export const RATING_SCALE_HINT = "Choose from 1, strongly disagree, to 5, strongly agree.";
+export const RATING_COMMENT_LABEL = "Comment";
+export const RATING_COMMENT_HINT =
+  "Optional. Say why, in your own words. Do not paste text from the documents.";
+export const RATING_BUTTON = "Save rating";
+/** Said under the form: where the rating is kept, who sees it, that it is final, and what it is not. */
+export const RATING_FORM_HINT =
+  "Your rating is stored with this matter and deleted with it. Other people on this matter cannot see it, and it cannot be changed once it is saved. In this demonstration every matter is synthetic, so a rating given here is not a pilot result.";
+/** Shown in place of the form while the matter has no memo. */
+export const RATING_NO_MEMO = "You can rate the matter once a memo has been exported.";
+/** The words that follow the link to the report of a missed issue, under the rating. */
+export const RATING_MISSED_ISSUE_LINK = "Anything Parol missed? Report a missed issue";
+/** The label of a mark that this build does not know (the database does not let one in). */
+const UNKNOWN_MARK = "A rating this version does not know";
+
+/** The meaning of a mark, or a fixed phrase for a value that is not one of the five. */
+export function ratingLabel(mark: number): string {
+  return RATING_MARKS.find((known) => known === mark) === undefined
+    ? UNKNOWN_MARK
+    : RATING_LABEL[mark as RatingMark];
+}

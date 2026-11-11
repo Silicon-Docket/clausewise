@@ -185,13 +185,9 @@ export async function everything(w: World, name: string): Promise<Everything> {
     location: `NDA section 6.1 ${marker}`,
     note: `A clause the review missed. ${marker}`,
   });
-  w.repo.addFeedback(matterId, {
-    userId: reviewer,
-    kind: "rating",
-    runId: run.id,
-    rating: 4,
-    text: `Useful. ${marker}`,
-  });
+  // The rating is given through its service, which needs the memo exported above and records the
+  // review the memo was made from; its words, typed by a person, carry the marker.
+  w.services.feedback.rate(reviewerAm, { rating: 4, comment: `Useful. ${marker}` });
   w.repo.addFeedback(matterId, {
     userId: reviewer,
     kind: "comment",

@@ -28,6 +28,19 @@ import type { RefusalFragment } from "./notices.js";
  * that each of their jumps leads to their own control and none dangles on a page that has no such
  * control; `note_required` and `note_too_long` here are the report form's.
  *
+ * Slice C (the rating of a matter). The form is the section `#rating` of the memos page. A mark that
+ * is missing or is not one of the five is fixed at the choices, so `rating_required` and
+ * `bad_rating` jump to `#rating-choice`; a comment that is too long is fixed at `#rating-comment`.
+ * The comment takes a code of its own, `comment_too_long`, because the note of a report is another
+ * control on another page and a jump must lead to the control that is wrong. `already_rated` and
+ * `not_exported` are about the matter and not about a control (the page shows a rating that was given
+ * and the sentence that there is no memo yet), so they have no jump; each says what the person can do
+ * instead. A rating is final, so there is nothing to mend in `already_rated`: the todo points to
+ * the report of a missed issue, which is the other way to say more. All four are raised in the order
+ * the form is laid out and the service checks: the mark and the comment by the parsers of the form
+ * and the JSON body (routes/feedback.ts), `bad_rating` also by the service, `not_exported` and
+ * `already_rated` as conflicts by the service and the store.
+ *
  * `rule_required`, `note_required`, `note_too_long` and `location_too_long` are raised by the
  * parsers of the report form and the JSON body (routes/feedback.ts); `unknown_rule` by the store
  * when the rule is not one of the run's playbook (and by the parser when what was posted cannot be a
@@ -56,6 +69,13 @@ export const REFUSALS_FEEDBACK = {
       "This review has no findings, so there is nothing to report a miss against. Open a review that has findings.",
     feedback_limit:
       "The most that can be added here has been added. Raise anything more with the people running the pilot.",
+    rating_required: "No rating was chosen. Choose a rating from 1 to 5.",
+    bad_rating: "That is not a rating the form offers. Choose a rating from 1 to 5.",
+    comment_too_long: "The comment is longer than 4,000 characters. Shorten it.",
+    already_rated:
+      "You have already rated this matter, and a rating cannot be changed. To say more, report a missed issue on a review.",
+    not_exported:
+      "A matter can be rated once a memo has been exported. Ask a reviewer to export the memo, then rate the matter.",
   },
   todo: {
     reason_code_required: "Choose a reason code.",
@@ -70,6 +90,11 @@ export const REFUSALS_FEEDBACK = {
     location_too_long: "Shorten it.",
     run_has_no_findings: "Open a review that has findings.",
     feedback_limit: "Raise anything more with the people running the pilot.",
+    rating_required: "Choose a rating from 1 to 5.",
+    bad_rating: "Choose a rating from 1 to 5.",
+    comment_too_long: "Shorten it.",
+    already_rated: "To say more, report a missed issue on a review.",
+    not_exported: "Ask a reviewer to export the memo, then rate the matter.",
   },
   jump: {
     reason_code_required: { href: "#decision-reason-code", label: "Go to the reason code" },
@@ -81,8 +106,12 @@ export const REFUSALS_FEEDBACK = {
     note_required: { href: "#missed-issue-note", label: "Go to the note" },
     note_too_long: { href: "#missed-issue-note", label: "Go to the note" },
     location_too_long: { href: "#missed-issue-location", label: "Go to the location" },
+    rating_required: { href: "#rating-choice", label: "Go to the rating" },
+    bad_rating: { href: "#rating-choice", label: "Go to the rating" },
+    comment_too_long: { href: "#rating-comment", label: "Go to the comment" },
   },
   notices: {
     "missed-issue-saved": "Your report was saved. It does not change any finding or decision.",
+    "rating-saved": "Your rating was saved. Thank you.",
   },
 } as const satisfies RefusalFragment;

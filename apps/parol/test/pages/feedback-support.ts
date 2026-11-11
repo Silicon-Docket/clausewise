@@ -1,14 +1,26 @@
 import type { ReasonCode } from "../../src/contracts.js";
-import { FindingPage, FindingPane, RunPage, render } from "../../src/server/pages/index.js";
-import type { MissedIssueDraft } from "../../src/server/pages/feedback.js";
+import {
+  FindingPage,
+  FindingPane,
+  MemosPage,
+  RunPage,
+  render,
+} from "../../src/server/pages/index.js";
+import type { MissedIssueDraft, RatingDraft } from "../../src/server/pages/feedback.js";
+import type { MemosPageProps } from "../../src/server/pages/memos.js";
 import type { DecisionDraft } from "../../src/server/pages/finding.js";
 import type { Chrome } from "../../src/server/pages/layout.js";
+import { RatingSection } from "../../src/server/pages/feedback.js";
+import { auditPage, expectAccessible, formatViolations } from "../a11y/rules.js";
+import { byId, parseHtml, type El } from "./html.js";
 import type { RunPageProps } from "../../src/server/pages/run.js";
 import { refusalOf } from "../../src/server/routes/notices.js";
 import type {
   FindingView,
   IssueRow,
+  MemoSummary,
   MissedIssueView,
+  RatingView,
   ReviewHistoryItem,
   RuleChoice,
   RunSummary,
@@ -22,6 +34,7 @@ import {
   buildFindingView,
   buildIssueRows,
   buildMatterSummary,
+  buildMemo,
   buildRunSummary,
 } from "./support.js";
 
@@ -32,7 +45,8 @@ import {
  * answers a refused decision. `test/pages/support.ts` is not edited by this package, so the finding
  * is built from its builders with the optional fields set. Everything here is synthetic.
  *
- * Slice B adds the review page with the section of reports of missed issues, below.
+ * Slice B adds the review page with the section of reports of missed issues, and slice C the memos
+ * page with the section that rates the matter, below.
  */
 
 /** A decision history item as the review service now makes it. */
@@ -207,4 +221,108 @@ export function refusedRunPage(
       feedback: feedbackProps({ draft }),
     }),
   );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The rating of a matter on the memos page (slice C)
+// ---------------------------------------------------------------------------------------------
+
+/** A rating as the feedback service makes it. */
+export function ratingGiven(over: Partial<RatingView> = {}): RatingView {
+  return {
+    feedbackId: "fbk_0100",
+    rating: 4,
+    comment: "It found the deletion that I had missed.",
+    at: "2026-11-05T10:20:00Z",
+    ...over,
+  };
+}
+
+/** What the memos page is given for the section that rates the matter. */
+export type MemosRating = NonNullable<MemosPageProps["rating"]>;
+
+/** The rating section's state: a memo, no rating, and the run of the memo, unless the test says otherwise. */
+export const ratingProps = (over: Partial<MemosRating> = {}): MemosRating => ({
+  hasMemo: true,
+  given: null,
+  runId: IDS.run,
+  ...over,
+});
+
+/** The memos page of the worked example, with the rating section as given (none when `rating` is null). */
+export function memosPageWith(
+  rating: MemosRating | null,
+  options: {
+    memos?: MemoSummary[];
+    canExport?: boolean;
+    chrome?: Chrome;
+  } = {},
+): string {
+  const hasMemo = rating?.hasMemo ?? true;
+  return render(
+    MemosPage({
+      chrome: options.chrome ?? buildChrome(),
+      matter: buildMatterSummary(),
+      memos: options.memos ?? (hasMemo ? [buildMemo()] : []),
+      canExport: options.canExport ?? true,
+      exportBlockedReason: null,
+      ...(rating === null ? {} : { rating }),
+    }),
+  );
+}
+
+/** The memos page that answers a refused rating: the notice made by the route's own function. */
+export function refusedMemosPage(
+  code: string,
+  draft?: RatingDraft,
+  options: { status?: "conflict" | "validation"; rating?: Partial<MemosRating> } = {},
+): string {
+  const error =
+    options.status === "conflict"
+      ? new ConflictError(code, "refused")
+      : new ValidationError(code, "refused");
+  const refusal = refusalOf(error);
+  if (refusal === null) throw new Error(`${code} is not a refusal the form can answer`);
+  return memosPageWith(ratingProps({ draft, ...options.rating }), {
+    chrome: buildChrome({ notice: refusal.notice }),
+  });
+}
+
+/** The section alone, as a fragment, for the states that need no page around them. */
+export const ratingSectionOf = (rating: MemosRating): string =>
+  render(
+    RatingSection({
+      chrome: buildChrome(),
+      matterId: IDS.matter,
+      hasMemo: rating.hasMemo,
+      given: rating.given,
+      runId: rating.runId,
+      draft: rating.draft,
+    }),
+  );
+
+/**
+ * One problem of the memos page is not this package's: the list of memos names two landmarks
+ * "Exported memos", the heading of its section and the box that scrolls its table, which
+ * `memos.tsx` has had since before the rating and which the sweep of the pages (W2.9-fix) mends.
+ * It is let through here by rule and by name, and nothing else is.
+ */
+export const isKnownProblemOfTheMemoList = (violation: { rule: string; detail: string }): boolean =>
+  violation.rule === "landmark-names-unique" && /"exported memos"/.test(violation.detail);
+
+/**
+ * Audits a page or a pane with the rules of `test/a11y/rules.ts` and fails on any problem but the
+ * one above. The section this package adds to the memos page is audited alone as well, strictly.
+ */
+export function expectAccessibleExceptTheMemoList(
+  html: string,
+  options: { fragment?: boolean } = {},
+): El {
+  const root = parseHtml(html);
+  const violations = auditPage(root, options).filter((v) => !isKnownProblemOfTheMemoList(v));
+  if (violations.length > 0)
+    throw new Error(`accessibility problems:\n${formatViolations(violations)}`);
+  const rating = byId(root, "rating");
+  if (rating !== undefined) expectAccessible(rating, { fragment: true });
+  return root;
 }

@@ -12,7 +12,13 @@ import {
 import { REFUSALS_FEEDBACK } from "../../src/server/routes/refusals-feedback.js";
 import { ConflictError, ValidationError } from "../../src/store/index.js";
 import { byId, parseHtml } from "../pages/html.js";
-import { decisionPane, feedbackProps, runPageWith } from "../pages/feedback-support.js";
+import {
+  decisionPane,
+  feedbackProps,
+  memosPageWith,
+  ratingProps,
+  runPageWith,
+} from "../pages/feedback-support.js";
 
 /**
  * The words of the refusals of the reason code and the minor-edit mark (package W2.6a, slice A):
@@ -20,9 +26,11 @@ import { decisionPane, feedbackProps, runPageWith } from "../pages/feedback-supp
  * control of the decision form where it is mended.
  *
  * Slice B adds the codes of the report of a missed issue: each has a phrase, a sentence inside it
- * that says what to do, and (where one field of the form is to blame) a link to that field. The
- * later slices add the codes of a note and the rating to the same fragment and the tests of their
- * words below.
+ * that says what to do, and (where one field of the form is to blame) a link to that field.
+ *
+ * Slice C adds the codes of the rating of a matter: the mark and the comment have a link to their
+ * controls, and the two conflicts (a rating already given, a matter not yet exported) are told in
+ * words with the thing to do instead. The later slice adds the codes of a note below.
  */
 
 const SLICE_A = [
@@ -236,7 +244,7 @@ describe("the fragment of the feedback package, the report of a missed issue", (
   });
 
   it("has a notice for a saved report that is a success and says the report changes nothing", () => {
-    expect(Object.keys(REFUSALS_FEEDBACK.notices)).toEqual(["missed-issue-saved"]);
+    expect(Object.keys(REFUSALS_FEEDBACK.notices)).toContain("missed-issue-saved");
     expect(NOTICES["missed-issue-saved"]).toEqual({
       kind: "success",
       text: "Your report was saved. It does not change any finding or decision.",
@@ -281,7 +289,7 @@ describe("the refusal of a report the person is shown", () => {
   });
 });
 
-describe("the codes the report can raise", () => {
+describe("the codes the capture can raise", () => {
   const here = join(import.meta.dirname, "../../src");
   const codesIn = (text: string): Set<string> => {
     const found = new Set<string>();
@@ -300,17 +308,22 @@ describe("the codes the report can raise", () => {
     const service = codesIn(readFileSync(join(here, "services/feedback.ts"), "utf8"));
     expect([...parsers].sort()).toEqual(
       [
+        // The report of a missed issue (slice B).
         "location_too_long",
         "note_required",
         "note_too_long",
         "rule_required",
         "unknown_rule",
+        // The rating of a matter (slice C).
+        "bad_rating",
+        "comment_too_long",
+        "rating_required",
       ].sort(),
     );
-    expect([...service]).toEqual(["run_has_no_findings"]);
+    expect([...service].sort()).toEqual(["bad_rating", "not_exported", "run_has_no_findings"]);
     const store = codesIn(addFeedbackText());
     // What the store raises that a person can mend has a phrase.
-    for (const code of ["unknown_rule", "feedback_limit"]) {
+    for (const code of ["unknown_rule", "feedback_limit", "already_rated"]) {
       expect(store, code).toContain(code);
       expect(Object.keys(REFUSAL_PHRASES), code).toContain(code);
     }
@@ -319,20 +332,159 @@ describe("the codes the report can raise", () => {
   });
 
   it("leave only the guards of the store that no route can reach without a phrase, and the list of them is exact", () => {
-    // The service gives the store the person, the matter and the review and nothing else, and the
-    // parsers give it a note that says something, so these are for code that calls the store another way.
+    // The service gives the store the person, the matter, the review and a mark it has checked, and
+    // the parsers give it a note that says something, so these are for code that calls the store
+    // another way. The mark and its absence are not among them: the store's `bad_rating` and
+    // `rating_required` are the same codes the parsers and the service raise, with phrases.
     const guards = [
       "bad_kind",
-      "bad_rating",
       "field_not_allowed",
       "finding_not_allowed",
       "finding_required",
-      "rating_required",
       "run_required",
       "text_required",
     ];
     const store = codesIn(addFeedbackText());
     const withoutPhrase = [...store].filter((code) => !Object.keys(REFUSAL_PHRASES).includes(code));
     expect(withoutPhrase.sort()).toEqual(guards.sort());
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Slice C: the rating of a matter
+// ---------------------------------------------------------------------------------------------
+
+/** The codes of the rating that a control of the form is to blame for, and the control each leads to. */
+const SLICE_C_FIELD = {
+  rating_required: "#rating-choice",
+  bad_rating: "#rating-choice",
+  comment_too_long: "#rating-comment",
+} as const;
+/**
+ * The codes that no control mends: the matter has been rated already, or has no memo yet. They say
+ * what to do instead and lead nowhere, because the page shows the rating that was given or the
+ * sentence that there is no memo, and not the form.
+ */
+const SLICE_C_NO_JUMP = ["already_rated", "not_exported"] as const;
+const SLICE_C = [...Object.keys(SLICE_C_FIELD), ...SLICE_C_NO_JUMP] as (
+  keyof typeof SLICE_C_FIELD | (typeof SLICE_C_NO_JUMP)[number]
+)[];
+const SLICE_C_CONFLICTS: readonly string[] = SLICE_C_NO_JUMP;
+
+describe("the fragment of the feedback package, the rating of a matter", () => {
+  it("defines each code once, with a phrase and a todo, in the merged tables and from this fragment alone", () => {
+    expect(SLICE_C).toHaveLength(5);
+    for (const code of SLICE_C) {
+      expect(Object.keys(REFUSALS_FEEDBACK.phrases), code).toContain(code);
+      expect(Object.keys(REFUSALS_FEEDBACK.todo), code).toContain(code);
+      expect(REFUSAL_PHRASES[code], code).toBe(REFUSALS_FEEDBACK.phrases[code]);
+      expect(REFUSAL_TODO[code], code).toBe(REFUSALS_FEEDBACK.todo[code]);
+    }
+  });
+
+  it("gives each phrase as plain sentences with the todo inside it as a sentence of its own", () => {
+    for (const code of SLICE_C) {
+      const phrase = REFUSAL_PHRASES[code]!;
+      const todo = REFUSAL_TODO[code]!;
+      expect(phrase, code).toMatch(/^[A-Z][^<>&"]*\.$/);
+      expect(phrase, code).toContain(todo);
+      expect(todo.length, code).toBeLessThan(phrase.length);
+      expect(todo, code).toMatch(/^[A-Z][^<>&"]*\.$/);
+      const at = phrase.indexOf(todo);
+      expect(at === 0 || /\.\s$/.test(phrase.slice(0, at)), `${code} starts a sentence`).toBe(true);
+      const end = at + todo.length;
+      expect(end === phrase.length || phrase[end] === " ", `${code} ends a sentence`).toBe(true);
+      expect(phrase, code).not.toMatch(DASH);
+      expect(todo, code).not.toMatch(DASH);
+    }
+  });
+
+  it("leads each code that one control is to blame for to that control, and no other code anywhere", () => {
+    for (const [code, href] of Object.entries(SLICE_C_FIELD)) {
+      const jump = REFUSAL_JUMP[code]!;
+      expect(jump.href, code).toBe(href);
+      expect(jump.label, code).toMatch(/^Go to the [a-z -]+$/);
+      expect(jump.label, code).not.toMatch(DASH);
+      expect(REFUSALS_FEEDBACK.jump[code as keyof typeof SLICE_C_FIELD], code).toEqual(jump);
+    }
+    for (const code of SLICE_C_NO_JUMP) expect(REFUSAL_JUMP[code], code).toBeUndefined();
+  });
+
+  it("leads to a control the rating form has, by the id the link names, of the kind it is about", () => {
+    const page = parseHtml(memosPageWith(ratingProps({ hasMemo: true, given: null })));
+    const kinds = {
+      rating_required: "fieldset",
+      bad_rating: "fieldset",
+      comment_too_long: "textarea",
+    } as const;
+    for (const [code, href] of Object.entries(SLICE_C_FIELD))
+      expect(byId(page, href.slice(1))?.name, code).toBe(kinds[code as keyof typeof kinds]);
+  });
+
+  it("says what to do about the things it asks of the person", () => {
+    expect(REFUSAL_PHRASES["rating_required"]).toBe(
+      "No rating was chosen. Choose a rating from 1 to 5.",
+    );
+    expect(REFUSAL_PHRASES["bad_rating"]).toBe(
+      "That is not a rating the form offers. Choose a rating from 1 to 5.",
+    );
+    expect(REFUSAL_PHRASES["comment_too_long"]).toBe(
+      "The comment is longer than 4,000 characters. Shorten it.",
+    );
+    expect(REFUSAL_PHRASES["not_exported"]).toBe(
+      "A matter can be rated once a memo has been exported. Ask a reviewer to export the memo, then rate the matter.",
+    );
+    // A rating is final, so the phrase says so and points to the other way to say more.
+    expect(REFUSAL_PHRASES["already_rated"]).toBe(
+      "You have already rated this matter, and a rating cannot be changed. To say more, report a missed issue on a review.",
+    );
+  });
+
+  it("has a notice for a saved rating that is a success and thanks the person", () => {
+    expect(Object.keys(REFUSALS_FEEDBACK.notices).sort()).toEqual([
+      "missed-issue-saved",
+      "rating-saved",
+    ]);
+    expect(NOTICES["rating-saved"]).toEqual({
+      kind: "success",
+      text: "Your rating was saved. Thank you.",
+    });
+    expect(noticeFor("rating-saved")).toEqual(NOTICES["rating-saved"]);
+  });
+});
+
+describe("the refusal of a rating the person is shown", () => {
+  it("is the phrase with its todo and its jump, with the status of the store's error: 400 for the form, 409 for the state", () => {
+    for (const code of SLICE_C) {
+      const conflict = SLICE_C_CONFLICTS.includes(code);
+      const refusal = refusalOf(
+        conflict
+          ? new ConflictError(code, "words the store wrote for itself")
+          : new ValidationError(code, "words the store wrote for itself"),
+      );
+      const jump = REFUSAL_JUMP[code];
+      expect(refusal, code).toEqual({
+        status: conflict ? 409 : 400,
+        code,
+        notice: {
+          kind: "error",
+          text: REFUSAL_PHRASES[code],
+          todo: REFUSAL_TODO[code],
+          ...(jump === undefined ? {} : { jump }),
+        },
+      });
+    }
+  });
+
+  it("never repeats what the store's message said, whatever it said", () => {
+    const hostile = "ZQ-WORDS-OF-THE-REQUEST";
+    for (const code of SLICE_C) {
+      const refusal = refusalOf(
+        SLICE_C_CONFLICTS.includes(code)
+          ? new ConflictError(code, hostile)
+          : new ValidationError(code, hostile),
+      );
+      expect(JSON.stringify(refusal), code).not.toContain(hostile);
+    }
   });
 });

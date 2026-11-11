@@ -4,7 +4,15 @@ import type { AuthorizedMatter } from "../../src/auth/types.js";
 import type { MatterRole } from "../../src/contracts.js";
 import { REASON_CODES } from "../../src/contracts.js";
 import { DEMO_USER_IDS } from "../../src/store/index.js";
-import { cleanup, decisionFor, makeWorld, newMatter, reviewed, uploadCase } from "./support.js";
+import {
+  cleanup,
+  decideAll,
+  decisionFor,
+  makeWorld,
+  newMatter,
+  reviewed,
+  uploadCase,
+} from "./support.js";
 
 afterAll(cleanup);
 
@@ -16,8 +24,11 @@ afterAll(cleanup);
  * Slice B: the report of a missed issue. Any member may make one against a run of their matter that
  * has findings, naming a rule of that run's playbook or none, and it changes nothing about the
  * review: not a finding, not a decision, not the gate of the export. The rules to choose from, and
- * everything the caller may read of the matter's feedback, are read here too. The later slices add
- * the tests of a note and the rating below.
+ * everything the caller may read of the matter's feedback, are read here too.
+ *
+ * Slice C: the rating of a matter. Any member may rate once the matter has a memo, once, for good,
+ * and reads only their own; it changes nothing about the review. The later slice adds the tests of a
+ * note below.
  */
 
 const errorOf = (fn: () => unknown): unknown => {
@@ -381,7 +392,7 @@ describe("list", () => {
       location: null,
       note: "ZQ-SECOND",
     });
-    // A note and two ratings are written through the store: their services are the later slices'.
+    // A note is written through the store: its service is the later slice's.
     w.repo.addFeedback(matterId, {
       userId: w.associate.userId,
       kind: "comment",
@@ -389,18 +400,11 @@ describe("list", () => {
       findingId: dur.findingId,
       text: "ZQ-NOTE",
     });
-    w.repo.addFeedback(matterId, {
-      userId: w.associate.userId,
-      kind: "rating",
-      rating: 5,
-      text: "ZQ-ASSOCIATE-RATING",
-    });
-    w.repo.addFeedback(matterId, {
-      userId: w.reviewer.userId,
-      kind: "rating",
-      rating: 2,
-      text: "ZQ-REVIEWER-RATING",
-    });
+    // The matter is exported, and two of its members rate it.
+    decideAll(w, reviewerAm, w.services.runs.issues(am, runId));
+    await w.services.reviews.exportMemo(reviewerAm);
+    w.services.feedback.rate(am, { rating: 5, comment: "ZQ-ASSOCIATE-RATING" });
+    w.services.feedback.rate(reviewerAm, { rating: 2, comment: "ZQ-REVIEWER-RATING" });
     // A comment with no finding is not a note on a finding.
     w.repo.addFeedback(matterId, { userId: w.associate.userId, kind: "comment", text: "ZQ-LOOSE" });
 
@@ -441,6 +445,203 @@ describe("list", () => {
     const nobody = { ...am, role: "nobody" } as unknown as AuthorizedMatter;
     expect(errorOf(() => w.services.feedback.list(nobody))).toMatchObject({
       name: "ForbiddenError",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Slice C: the rating of a matter
+// ---------------------------------------------------------------------------------------------
+
+/** The matter of `openWithViewer()`, with every finding decided and the memo exported. */
+async function exportedWithViewer() {
+  const r = await openWithViewer();
+  decideAll(r.w, r.reviewerAm, r.w.services.runs.issues(r.am, r.runId));
+  const memo = await r.w.services.reviews.exportMemo(r.reviewerAm);
+  return { ...r, memo };
+}
+
+const ratingsOf = (w: ReturnType<typeof makeWorld>, matterId: string) =>
+  w.repo.listFeedback(matterId, { kind: "rating" });
+
+describe("rate", () => {
+  it("lets an associate, a reviewer and a viewer each rate an exported matter, as themselves, and nobody else", async () => {
+    const { w, am, reviewerAm, viewerAm, memo } = await exportedWithViewer();
+    const by: Record<MatterRole, AuthorizedMatter> = {
+      associate: am,
+      reviewer: reviewerAm,
+      viewer: viewerAm,
+    };
+    // The roles that may are the roles of the table, so a change of the table shows up here.
+    expect(Object.keys(by).sort()).toEqual([...MATTER_ACTIONS["feedback.add"]].sort());
+    const marks: Record<MatterRole, 1 | 2 | 3 | 4 | 5> = { associate: 5, reviewer: 2, viewer: 4 };
+    for (const role of MATTER_ACTIONS["feedback.add"]) {
+      const view = w.services.feedback.rate(by[role], {
+        rating: marks[role],
+        comment: `A comment by the ${role}.`,
+      });
+      expect(view).toMatchObject({ rating: marks[role], comment: `A comment by the ${role}.` });
+      expect(view.at).toMatch(/^\d{4}-\d\d-\d\dT/);
+      expect(view.feedbackId).toMatch(/^fbk_/);
+    }
+    const stored = ratingsOf(w, am.matterId);
+    expect(stored.map((r) => [r.userId, r.rating]).sort()).toEqual(
+      [am, reviewerAm, viewerAm].map((x) => [x.principal.userId, marks[x.role]]).sort(),
+    );
+    // Each is recorded against the review the newest memo was made from, and names no finding.
+    for (const row of stored) expect(row).toMatchObject({ runId: memo.runId, findingId: null });
+    // A caller whose role the table does not list is refused by the service itself.
+    const nobody = { ...am, role: "nobody" } as unknown as AuthorizedMatter;
+    expect(
+      errorOf(() => w.services.feedback.rate(nobody, { rating: 3, comment: null })),
+    ).toMatchObject({ name: "ForbiddenError", action: "feedback.add" });
+    expect(ratingsOf(w, am.matterId)).toHaveLength(3);
+  });
+
+  it("refuses before the first memo with not_exported, writes nothing, and allows it once the memo is exported", async () => {
+    const { w, am, reviewerAm, matterId, runId } = await open();
+    const attempt = () => w.services.feedback.rate(am, { rating: 4, comment: "Not yet." });
+    expect(errorOf(attempt)).toMatchObject({ name: "ConflictError", code: "not_exported" });
+    expect(ratingsOf(w, matterId)).toEqual([]);
+    expect(w.repo.listAuditEvents({ matterId, action: "feedback.add" })).toEqual([]);
+    // The review decided but not exported is still not exported.
+    decideAll(w, reviewerAm, w.services.runs.issues(am, runId));
+    expect(errorOf(attempt)).toMatchObject({ code: "not_exported" });
+    await w.services.reviews.exportMemo(reviewerAm);
+    expect(attempt()).toMatchObject({ rating: 4, comment: "Not yet." });
+  });
+
+  it("checks what was sent before the state of the matter: a mark that is no mark is bad_rating whether or not the matter is exported", async () => {
+    const before = await open();
+    const after = await exportedWithViewer();
+    for (const w of [before, after])
+      for (const rating of [0, 6, 2.5, -3, Number.NaN])
+        expect(
+          errorOf(() => w.w.services.feedback.rate(w.am, { rating, comment: null })),
+          String(rating),
+        ).toMatchObject({ name: "ValidationError", code: "bad_rating" });
+    expect(ratingsOf(before.w, before.matterId)).toEqual([]);
+    expect(ratingsOf(after.w, after.matterId)).toEqual([]);
+  });
+
+  it("is final: a second rating by the same person is already_rated, whatever it says, and the first stays", async () => {
+    const { w, am, reviewerAm } = await exportedWithViewer();
+    const first = w.services.feedback.rate(am, { rating: 2, comment: "ZQ-FIRST" });
+    for (const input of [
+      { rating: 2, comment: "ZQ-FIRST" },
+      { rating: 5, comment: "ZQ-SECOND" },
+      { rating: 5, comment: null },
+    ])
+      expect(errorOf(() => w.services.feedback.rate(am, input))).toMatchObject({
+        name: "ConflictError",
+        code: "already_rated",
+      });
+    expect(w.services.feedback.myRating(am)).toEqual(first);
+    expect(ratingsOf(w, am.matterId)).toHaveLength(1);
+    // Another person is not held to the first one's rating.
+    expect(w.services.feedback.rate(reviewerAm, { rating: 5, comment: null })).toMatchObject({
+      rating: 5,
+    });
+  });
+
+  it("is recorded against the run of the newest memo, and a comment that says nothing is none", async () => {
+    const { w, am, reviewerAm, matterId, runId } = await open();
+    decideAll(w, reviewerAm, w.services.runs.issues(am, runId));
+    const first = await w.services.reviews.exportMemo(reviewerAm);
+    // A review started again on unchanged documents, decided and exported: the newest memo is its.
+    const second = w.services.runs.start(am, { workflowLabel: "v2" });
+    await w.services.runs.idle();
+    decideAll(w, reviewerAm, w.services.runs.issues(am, second.id));
+    const next = await w.services.reviews.exportMemo(reviewerAm);
+    expect(next.runId).toBe(second.id);
+    expect(first.runId).toBe(runId);
+    const view = w.services.feedback.rate(am, { rating: 3, comment: "  \n " });
+    expect(view.comment).toBeNull();
+    expect(ratingsOf(w, matterId)).toMatchObject([{ runId: second.id, text: null, rating: 3 }]);
+  });
+
+  it("writes an audit event with the mark and whether there were words, and the words nowhere", async () => {
+    const { w, am, memo } = await exportedWithViewer();
+    const words = "ZQ-RATING-WORDS the review was useful";
+    const view = w.services.feedback.rate(am, { rating: 4, comment: words });
+    const [event] = w.repo.listAuditEvents({ matterId: am.matterId, action: "feedback.add" });
+    expect(event).toMatchObject({
+      actorId: am.principal.userId,
+      targetType: "feedback",
+      targetId: view.feedbackId,
+      detail: {
+        kind: "rating",
+        rating: 4,
+        hasText: true,
+        hasLocation: false,
+        runId: memo.runId,
+        findingId: null,
+      },
+    });
+    expect(JSON.stringify(event)).not.toContain("ZQ-");
+    expect(w.logs.join("\n")).not.toContain("ZQ-");
+  });
+
+  it("changes no finding, no decision, no status of the matter, no memo and nothing the export waits for", async () => {
+    const { w, am, reviewerAm, viewerAm, matterId, runId } = await exportedWithViewer();
+    const issues = w.services.runs.issues(am, runId);
+    const snapshot = () =>
+      JSON.stringify({
+        matter: w.services.matters.view(am),
+        issues: w.services.runs.issues(am, runId),
+        findings: issues.map((i) => w.services.runs.finding(reviewerAm, i.findingId)),
+        readiness: w.repo.getExportReadiness(matterId, runId),
+        memos: w.services.reviews.listMemos(reviewerAm),
+        hashes: w.repo.listFindings(matterId, runId).map((f) => f.contentSha256),
+      });
+    const before = snapshot();
+    for (const [caller, rating] of [
+      [am, 1],
+      [reviewerAm, 3],
+      [viewerAm, 5],
+    ] as const)
+      w.services.feedback.rate(caller, { rating, comment: "ZQ-NOTHING-CHANGES" });
+    expect(snapshot()).toBe(before);
+    expect(w.services.runs.get(am, runId).current).toBe(true);
+  });
+});
+
+describe("myRating", () => {
+  it("is null until the person has rated, then theirs, and no other person's, for every role", async () => {
+    const { w, am, reviewerAm, viewerAm } = await exportedWithViewer();
+    for (const caller of [am, reviewerAm, viewerAm])
+      expect(w.services.feedback.myRating(caller)).toBeNull();
+    const given = w.services.feedback.rate(reviewerAm, { rating: 2, comment: "ZQ-REVIEWER-ONLY" });
+    expect(w.services.feedback.myRating(reviewerAm)).toEqual(given);
+    // The others have not rated, and the reviewer's rating is nowhere in what they read.
+    for (const caller of [am, viewerAm]) {
+      expect(w.services.feedback.myRating(caller)).toBeNull();
+      expect(JSON.stringify(w.services.feedback.list(caller))).not.toContain("ZQ-REVIEWER-ONLY");
+    }
+    w.services.feedback.rate(am, { rating: 5, comment: "ZQ-ASSOCIATE-ONLY" });
+    expect(w.services.feedback.myRating(am)).toMatchObject({ rating: 5 });
+    expect(w.services.feedback.myRating(reviewerAm)).toMatchObject({ rating: 2 });
+    expect(w.services.feedback.myRating(viewerAm)).toBeNull();
+  });
+
+  it("reads only the matter's own: a rating of another matter is not this matter's", async () => {
+    const { w, am } = await exportedWithViewer();
+    const other = await reviewed(w);
+    decideAll(w, other.reviewerAm, w.services.runs.issues(other.am, other.runId));
+    await w.services.reviews.exportMemo(other.reviewerAm);
+    // The same person rates the other matter and not this one.
+    w.services.feedback.rate(other.am, { rating: 1, comment: "ZQ-ELSEWHERE" });
+    expect(w.services.feedback.myRating(am)).toBeNull();
+    expect(w.services.feedback.list(am).myRating).toBeNull();
+    expect(w.services.feedback.myRating(other.am)).toMatchObject({ rating: 1 });
+  });
+
+  it("is refused to a caller with no role on the matter", async () => {
+    const { w, am } = await exportedWithViewer();
+    const nobody = { ...am, role: "nobody" } as unknown as AuthorizedMatter;
+    expect(errorOf(() => w.services.feedback.myRating(nobody))).toMatchObject({
+      name: "ForbiddenError",
+      action: "memo.read",
     });
   });
 });

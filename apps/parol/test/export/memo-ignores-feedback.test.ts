@@ -18,8 +18,12 @@ afterAll(cleanup);
  *
  * Slice B: the same holds for the report of a missed issue. What a member says the review left out
  * is for the people who run the pilot; it is not part of the memo, so the memo input, the file built
- * from it and the words in the file are the same with reports and without. The later slices add the
- * same test for a note and a rating below.
+ * from it and the words in the file are the same with reports and without.
+ *
+ * Slice C: the same holds for the rating of a matter. A rating is given after the memo is exported,
+ * so the check is made both ways: a memo exported with ratings on record is the file it would have
+ * been without them, and a memo exported again after members have rated is built from the same
+ * input as before. The later slice adds the same test for a note below.
  */
 
 /**
@@ -216,5 +220,50 @@ describe("the memo of a review that has reports of missed issues", () => {
     const text = await textOfMemo((await w.services.reviews.memoFile(am, memo.memoId)).bytes);
     for (const word of ["ZQ-MEMO", "missed issue", "Missed issue", place])
       expect(text, word).not.toContain(word);
+  });
+});
+
+describe("the memo of a matter that has been rated", () => {
+  it("is built from the same input, byte for byte, with the ratings as without them, and says none of their words", async () => {
+    const w = makeWorld();
+    const { matterId, am, reviewerAm, runId } = await reviewed(w);
+    for (const issue of w.services.runs.issues(am, runId)) {
+      const view = w.services.runs.finding(reviewerAm, issue.findingId);
+      w.services.reviews.decide(reviewerAm, issue.findingId, decisionFor(view));
+    }
+    const run = w.repo.getCurrentRun(matterId)!;
+    const inputOf = () =>
+      buildMemoInput({
+        repo: w.repo,
+        matterId,
+        run,
+        exporterId: reviewerAm.principal.userId,
+        exportedAt: "2026-11-04T09:00:00.000Z",
+      }).input;
+
+    const before = inputOf();
+    const fileBefore = await buildMemo(before);
+
+    // A matter is rated once it has a memo, so the first memo is exported, and then it is rated.
+    const first = await w.services.reviews.exportMemo(reviewerAm);
+    const firstText = await textOfMemo((await w.services.reviews.memoFile(am, first.memoId)).bytes);
+    const words = "ZQ-MEMO-RATING a comment on the review";
+    w.services.feedback.rate(reviewerAm, { rating: 2, comment: words });
+    w.services.feedback.rate(am, { rating: 5, comment: "ZQ-MEMO-RATING-2 it was right" });
+    // The ratings are in the store, so the check below is not an empty one.
+    expect(w.repo.listFeedback(matterId, { kind: "rating" })).toHaveLength(2);
+
+    const after = inputOf();
+    expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+    const fileAfter = await buildMemo(after);
+    expect(Buffer.from(fileAfter).equals(Buffer.from(fileBefore))).toBe(true);
+
+    // The file on record is not touched by the ratings, and says none of their words or marks'.
+    const again = await w.services.reviews.memoFile(am, first.memoId);
+    expect(await textOfMemo(again.bytes)).toBe(firstText);
+    for (const word of ["ZQ-MEMO", "rating", "Rating", "I would use this for my next NDA"])
+      expect(firstText, word).not.toContain(word);
+    // And the ratings did not make the memo stale or its export ready or not ready.
+    expect(w.services.reviews.listMemos(am).map((m) => m.status)).toEqual(["current"]);
   });
 });

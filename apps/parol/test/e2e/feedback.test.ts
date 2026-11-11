@@ -3,6 +3,7 @@ import { REASON_CODES } from "../../src/contracts.js";
 import { FIELDS, MINOR_EDIT_VALUE, NOT_COVERED_VALUE } from "../../src/server/pages/forms.js";
 import { urls } from "../../src/server/urls.js";
 import { REASON_CODE_LABEL } from "../../src/server/views/feedback.js";
+import type { MatterFeedbackView } from "../../src/services/views.js";
 import type { FindingView, IssueRow } from "../../src/services/views.js";
 import { all, attr, byId, first, hasClass, readable } from "../pages/html.js";
 import {
@@ -26,7 +27,8 @@ import {
  * decisions only. This is a script and not a measurement of any model; every name is synthetic.
  *
  * Slice B adds a second story below: the report of a missed issue, from the review page to the
- * deletion of the matter. The later slices add theirs.
+ * deletion of the matter. Slice C adds a third: the rating of a matter, from the memos page to the
+ * deletion of the matter. The later slice adds its own.
  */
 
 afterAll(cleanup);
@@ -421,6 +423,191 @@ describe("a missed issue, through HTTP only", () => {
           .get(NOTE_MARK) as {
           n: number;
         }
+      ).n,
+    ).toBe(0);
+    expect(site.w.repo.verifyAuditChain().ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Slice C: the rating of a matter, from the memos page to the deletion of the matter
+// ---------------------------------------------------------------------------------------------
+
+const WORDS_MARK = "ZQ-E2E-RATING-7310";
+
+describe("the rating of a matter, through HTTP only", () => {
+  let site: Site;
+  let associate: Browser;
+  let reviewer: Browser;
+  let viewer: Browser;
+  let ids: Prepared;
+  const memosUrl = (): string => urls.memos(ids.matterId);
+  const sectionOf = (page: { root: ReturnType<typeof byId> }) => byId(page.root!, "rating")!;
+  const readBack = async (who: Browser): Promise<MatterFeedbackView> =>
+    (await (
+      await who.api("GET", `/api/matters/${ids.matterId}/feedback`)
+    ).json()) as MatterFeedbackView;
+
+  beforeAll(async () => {
+    site = makeSite();
+    associate = await site.as(IDS.associate);
+    reviewer = await site.as(IDS.reviewer);
+    viewer = await site.as(VIEWER);
+    // Reviewed, decided and exported, so that there is a memo to rate.
+    ids = await prepareMatter(site);
+  });
+
+  it("is offered to every member on the memos page, with the report of a missed issue beside it", async () => {
+    for (const who of [associate, reviewer, viewer]) {
+      const page = await who.page(memosUrl());
+      checkPage(site, page);
+      const section = sectionOf(page);
+      expect(readable(section)).toContain("I would use this for my next NDA");
+      expect(readable(section)).toContain("not a pilot result");
+      const link = first(
+        section,
+        (el) => el.name === "a" && readable(el).startsWith("Anything Parol missed?"),
+      );
+      expect(attr(link, "href")).toBe(`${urls.run(ids.matterId, ids.runId)}#missed-issue`);
+      // The link leads to a page that has the section it names.
+      const run = await who.page(attr(link, "href")!.split("#")[0]!);
+      expect(byId(run.root, "missed-issue")).toBeDefined();
+    }
+  });
+
+  it("is given by the reviewer through the form, and read back on the page and in JSON", async () => {
+    const page = await reviewer.page(memosUrl());
+    const saved = await reviewer.submit(page, urls.rating(ids.matterId), {
+      set: {
+        [FIELDS.rating]: "2",
+        [FIELDS.comment]: `It missed the amendment's effect on the term. ${WORDS_MARK}`,
+      },
+    });
+    expect(saved.status).toBe(303);
+    const landed = await reviewer.page(saved.headers.get("location")!);
+    checkPage(site, landed);
+    expect(readable(first(landed.root, (el) => attr(el, "role") === "status"))).toContain(
+      "Your rating was saved.",
+    );
+    expect(readable(sectionOf(landed))).toContain("You rated this matter 2 of 5 (Disagree)");
+    expect(readable(sectionOf(landed))).toContain(WORDS_MARK);
+    const mine = await readBack(reviewer);
+    expect(mine.myRating).toMatchObject({ rating: 2 });
+    expect(mine.myRating?.comment).toContain(WORDS_MARK);
+  });
+
+  it("is given by the associate in JSON, and each member reads their own and nobody else's", async () => {
+    const response = await associate.api("POST", `/api/matters/${ids.matterId}/rating`, {
+      rating: 5,
+      comment: null,
+    });
+    expect(response.status).toBe(201);
+    expect((await readBack(associate)).myRating).toMatchObject({ rating: 5, comment: null });
+    expect((await readBack(reviewer)).myRating).toMatchObject({ rating: 2 });
+    // The viewer has not rated, reads none, and finds no trace of the others' words anywhere they look.
+    expect((await readBack(viewer)).myRating).toBeNull();
+    for (const address of [
+      memosUrl(),
+      urls.matter(ids.matterId),
+      urls.run(ids.matterId, ids.runId),
+      `/api/matters/${ids.matterId}/feedback`,
+    ])
+      expect(await (await viewer.get(address)).text(), address).not.toContain(WORDS_MARK);
+    const asAssociate = await associate.page(memosUrl());
+    expect(readable(sectionOf(asAssociate))).toContain(
+      "You rated this matter 5 of 5 (Strongly agree)",
+    );
+    expect(asAssociate.html).not.toContain(WORDS_MARK);
+  });
+
+  it("is final: a second rating by the same person is refused, and the first stands", async () => {
+    const page = await associate.page(memosUrl());
+    // The form is gone from the page; a post made by hand is refused with the page that shows the first.
+    expect(associate.hasForm(page, urls.rating(ids.matterId))).toBe(false);
+    const again = await associate.api("POST", `/api/matters/${ids.matterId}/rating`, {
+      rating: 1,
+      comment: "A second thought.",
+    });
+    expect(again.status).toBe(409);
+    expect((await readBack(associate)).myRating).toMatchObject({ rating: 5 });
+    expect(site.w.repo.listFeedback(ids.matterId, { kind: "rating" })).toHaveLength(2);
+  });
+
+  it("can still be given after the documents change, against the review of the memo, which is out of date", async () => {
+    const fixed = await associate.apiUpload(
+      `/api/matters/${ids.matterId}/documents/${ids.lastDocumentId}/versions`,
+      {},
+      {
+        name: "amendment-corrected.txt",
+        bytes: new TextEncoder().encode(
+          "AMENDMENT NO. 1 TO MUTUAL NONDISCLOSURE AGREEMENT\n\n2. A corrected paragraph of synthetic text.\n",
+        ),
+      },
+    );
+    expect(fixed.status).toBe(201);
+    expect(site.w.repo.listMemos(ids.matterId).map((m) => m.status)).toEqual(["superseded"]);
+    const page = await viewer.page(memosUrl());
+    const saved = await viewer.submit(page, urls.rating(ids.matterId), {
+      set: { [FIELDS.rating]: "4" },
+    });
+    expect(saved.status).toBe(303);
+    expect(
+      site.w.repo.listFeedback(ids.matterId, { kind: "rating", userId: VIEWER })[0],
+    ).toMatchObject({ rating: 4, runId: ids.runId });
+  });
+
+  it("keeps the words in the feedback table only, and the marks and the flag in the audit trail", async () => {
+    const db = site.w.repo.db;
+    const where = (table: string, column: string): number =>
+      (
+        db
+          .prepare(`SELECT count(*) AS n FROM ${table} WHERE instr(CAST(${column} AS TEXT), ?) > 0`)
+          .get(WORDS_MARK) as { n: number }
+      ).n;
+    expect(where("feedback", "text")).toBe(1);
+    expect(where("audit_events", "detail_json")).toBe(0);
+    expect(site.logs.join("\n")).not.toContain("ZQ-E2E-RATING");
+    expect(site.w.logs.join("\n")).not.toContain("ZQ-E2E-RATING");
+    const events = site.w.repo.listAuditEvents({ matterId: ids.matterId, action: "feedback.add" });
+    expect(
+      events.map((e) => [e.detail["kind"], e.detail["rating"], e.detail["hasText"], e.actorId]),
+    ).toEqual([
+      ["rating", 2, true, IDS.reviewer],
+      ["rating", 5, false, IDS.associate],
+      ["rating", 4, false, VIEWER],
+    ]);
+    // The memo that was exported says nothing of the ratings.
+    const memo = site.w.repo.listMemos(ids.matterId)[0]!;
+    const file = await reviewer.send("GET", `/api/matters/${ids.matterId}/memos/${memo.id}/file`);
+    const JSZip = (await import("jszip")).default;
+    const xml = await (
+      await JSZip.loadAsync(Buffer.from(await file.arrayBuffer()))
+    )
+      .file("word/document.xml")!
+      .async("string");
+    expect(xml).not.toContain(WORDS_MARK);
+  });
+
+  it("goes with the matter when it is deleted, and the audit trail keeps the events without the words", async () => {
+    const db = site.w.repo.db;
+    const count = (sql: string): number => (db.prepare(sql).get(ids.matterId) as { n: number }).n;
+    expect(count("SELECT count(*) AS n FROM feedback WHERE matter_id = ?")).toBe(3);
+    const page = await associate.page(urls.matter(ids.matterId));
+    const deleted = await associate.submit(page, urls.matterDelete(ids.matterId), {
+      set: { [FIELDS.confirm]: "yes" },
+    });
+    expect(deleted.status).toBe(303);
+    expect(count("SELECT count(*) AS n FROM feedback WHERE matter_id = ?")).toBe(0);
+    expect(
+      count(
+        "SELECT count(*) AS n FROM audit_events WHERE matter_id = ? AND action = 'feedback.add'",
+      ),
+    ).toBe(3);
+    expect(
+      (
+        db
+          .prepare("SELECT count(*) AS n FROM audit_events WHERE instr(detail_json, ?) > 0")
+          .get(WORDS_MARK) as { n: number }
       ).n,
     ).toBe(0);
     expect(site.w.repo.verifyAuditChain().ok).toBe(true);

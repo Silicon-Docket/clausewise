@@ -4,8 +4,13 @@ import {
   decidedWith,
   editWith,
   feedbackProps,
+  memosPageWith,
   paneOf,
+  ratingGiven,
+  ratingProps,
+  ratingSectionOf,
   refusedFindingPage,
+  refusedMemosPage,
   refusedRunPage,
   report,
   runPageWith,
@@ -213,4 +218,107 @@ export const VARIANTS_FEEDBACK: Variant[] = [
       }),
   ],
   ["run page, no section of reports (a page made without the feedback)", () => runPageWith(null)],
+
+  // --- the rating of a matter (slice C) --------------------------------------------------------
+  [
+    "memos page, rating, the matter has no memo yet",
+    () => memosPageWith(ratingProps({ hasMemo: false, runId: null })),
+  ],
+  ["memos page, rating, the form beside the memo", () => memosPageWith(ratingProps())],
+  [
+    "memos page, rating, the form for a viewer, who cannot export",
+    () => memosPageWith(ratingProps(), { canExport: false }),
+  ],
+  [
+    "memos page, rating, given with words",
+    () => memosPageWith(ratingProps({ given: ratingGiven() })),
+  ],
+  ["memos page, rating, a page made without the rating section", () => memosPageWith(null)],
+  [
+    "pane, rating, the form with nothing chosen",
+    () => ratingSectionOf(ratingProps()),
+    { fragment: true },
+  ],
+  [
+    "pane, rating, a mark and a comment kept after a refusal",
+    () =>
+      ratingSectionOf(
+        ratingProps({
+          draft: { rating: 2, comment: "It missed the amendment.\nI would not rely on it." },
+        }),
+      ),
+    { fragment: true },
+  ],
+  [
+    "pane, rating, a long comment kept after a refusal",
+    () =>
+      ratingSectionOf(
+        ratingProps({ draft: { rating: 5, comment: "A long comment. ".repeat(500) } }),
+      ),
+    { fragment: true },
+  ],
+  [
+    "pane, rating, given with words",
+    () => ratingSectionOf(ratingProps({ given: ratingGiven() })),
+    { fragment: true },
+  ],
+  [
+    "pane, rating, given with no words, the lowest mark",
+    () => ratingSectionOf(ratingProps({ given: ratingGiven({ rating: 1, comment: null }) })),
+    { fragment: true },
+  ],
+  [
+    "pane, rating, given with text a hostile document could hold",
+    () =>
+      ratingSectionOf(
+        ratingProps({
+          given: ratingGiven({
+            comment:
+              "pay \u202e1000\u202c now, con\u200bfi\u200ddential </textarea><script>window.pwned = 1</script>",
+          }),
+        }),
+      ),
+    { fragment: true },
+  ],
+  [
+    "pane, rating, no memo, so no link to the report",
+    () => ratingSectionOf(ratingProps({ hasMemo: false, runId: null })),
+    { fragment: true },
+  ],
+  [
+    "memos page, rating refused: no mark chosen",
+    () => refusedMemosPage("rating_required", { comment: "I kept my words." }),
+  ],
+  [
+    "memos page, rating refused: a mark the form does not offer",
+    () => refusedMemosPage("bad_rating", { comment: "I kept my words." }),
+  ],
+  [
+    "memos page, rating refused: comment too long",
+    () => refusedMemosPage("comment_too_long", { rating: 3, comment: "c".repeat(4001) }),
+  ],
+  [
+    "memos page, rating refused: already rated",
+    () =>
+      refusedMemosPage(
+        "already_rated",
+        { rating: 5 },
+        {
+          status: "conflict",
+          rating: { given: ratingGiven({ rating: 2 }) },
+        },
+      ),
+  ],
+  [
+    "memos page, rating refused: the matter has no memo yet",
+    () =>
+      refusedMemosPage(
+        "not_exported",
+        { rating: 4 },
+        {
+          status: "conflict",
+          rating: { hasMemo: false, runId: null },
+        },
+      ),
+  ],
 ];

@@ -4,8 +4,14 @@ import { accessibleName, expectAccessible, tabStops } from "../a11y/rules.js";
 import { FakeElement, event, runScript } from "./fake-dom.js";
 import {
   decisionPane,
+  expectAccessibleExceptTheMemoList,
   feedbackProps,
+  memosPageWith,
+  ratingGiven,
+  ratingProps,
+  ratingSectionOf,
   refusedFindingPage,
+  refusedMemosPage,
   refusedRunPage,
   report,
   runPageWith,
@@ -24,7 +30,12 @@ import { buildFindingView } from "./support.js";
  * Slice B: the same for the report of a missed issue, a section at the end of the review page: the
  * rule list, the place, the note and the button, in that order, each reached by Tab, named for what
  * it is, and out of reach of the issue table's keys; and the links that lead to the section and to
- * the controls of it. The later slices add the order of their own controls below.
+ * the controls of it.
+ *
+ * Slice C: the same for the rating of a matter, a section at the end of the memos page: the five
+ * marks as one group that Tab visits once and the arrow keys move through, the comment and the
+ * button, in that order, each named for what it is; and the links of a refused rating. The later
+ * slice adds the order of its own controls below.
  */
 
 const decisionForm = (root: El): El =>
@@ -321,5 +332,194 @@ describe("the keys of the issue table, and the report of a missed issue", () => 
     }
     expect(h.doc.querySelectorAll("tr.is-current")).toHaveLength(before);
     expect(h.fetchCalls).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Slice C: the rating of a matter
+// ---------------------------------------------------------------------------------------------
+
+const ratingForm = (root: El): El =>
+  first(byId(root, "rating")!, (el) => el.name === "form", "the rating form");
+const ratingRadios = (root: El): El[] =>
+  all(byId(root, "rating")!, (el) => el.name === "input" && attr(el, "type") === "radio");
+
+describe("the rating of a matter, by keyboard", () => {
+  const html = memosPageWith(ratingProps());
+  const root = expectAccessibleExceptTheMemoList(html);
+
+  it("takes Tab to the group of marks once, then to the comment and the button, in the order they are used", () => {
+    const stopsOfForm = tabStops(ratingForm(root)).map((el) => attr(el, "name") ?? el.name);
+    expect(stopsOfForm.filter((n) => n !== "_csrf")).toEqual([
+      FIELDS.rating,
+      FIELDS.comment,
+      "button",
+    ]);
+    // With the group left whole, each of the five radios is a stop of its own (what the arrow keys
+    // do instead): so the markup is five radios of one name, and the arrow keys move between them.
+    const each = tabStops(ratingForm(root), { groupRadios: false }).filter(
+      (el) => attr(el, "name") === FIELDS.rating,
+    );
+    expect(each).toHaveLength(5);
+    expect(new Set(ratingRadios(root).map((r) => attr(r, "name"))).size).toBe(1);
+    // On the page the section is after the memos and the export, so Tab meets it after the button
+    // that exports, and the link that follows the form comes last.
+    const stopsOfPage = tabStops(root);
+    const section = byId(root, "rating")!;
+    const mine = stopsOfPage.filter((el) => ancestorsOf(root, el).includes(section));
+    expect(mine.map((el) => attr(el, "name") ?? el.name)).toEqual([
+      FIELDS.rating,
+      FIELDS.comment,
+      "button",
+      "a",
+    ]);
+    const exportButton = first(
+      byId(root, "export")!,
+      (el) => el.name === "button",
+      "the export button",
+    );
+    expect(stopsOfPage.indexOf(exportButton)).toBeLessThan(stopsOfPage.indexOf(mine[0]!));
+  });
+
+  it("stops at the mark that was chosen, when one was, and not at the first", () => {
+    const chosen = expectAccessibleExceptTheMemoList(
+      memosPageWith(ratingProps({ draft: { rating: 4 } })),
+    );
+    const radio = tabStops(ratingForm(chosen)).find((el) => attr(el, "name") === FIELDS.rating)!;
+    expect(attr(radio, "value")).toBe("4");
+  });
+
+  it("names the group for the question and each mark for its number and its words", () => {
+    const fieldset = first(ratingForm(root), (el) => el.name === "fieldset");
+    const legend = first(fieldset, (el) => el.name === "legend");
+    expect(accessibleName(root, legend)).toBe("I would use this for my next NDA");
+    expect(attr(fieldset, "aria-describedby")).toBe("rating-scale-hint");
+    expect(ratingRadios(root).map((r) => accessibleName(root, r))).toEqual([
+      "1 Strongly disagree",
+      "2 Disagree",
+      "3 Neither agree nor disagree",
+      "4 Agree",
+      "5 Strongly agree",
+    ]);
+    expect(accessibleName(root, byId(root, "rating-comment")!)).toBe("Comment");
+    expect(
+      accessibleName(
+        root,
+        first(ratingForm(root), (el) => el.name === "button"),
+      ),
+    ).toBe("Save rating");
+  });
+
+  it("uses native controls only: no positive tabindex, nothing removed from the order, no script handler", () => {
+    const controls = [
+      ...ratingRadios(root),
+      byId(root, "rating-comment")!,
+      first(ratingForm(root), (el) => el.name === "button"),
+    ];
+    for (const el of controls) {
+      const name = attr(el, "id") ?? el.name;
+      expect(hasAttr(el, "tabindex"), name).toBe(false);
+      expect(hasAttr(el, "disabled"), name).toBe(false);
+      expect(hasAttr(el, "hidden"), name).toBe(false);
+      expect(
+        el.attrs.filter((a) => /^on/i.test(a.name)),
+        name,
+      ).toEqual([]);
+    }
+    expect(all(root, (el) => Number(attr(el, "tabindex") ?? "0") > 0)).toEqual([]);
+  });
+
+  it("has the targets of its links once each: the section, the group of marks and the comment", () => {
+    for (const [id, tag] of [
+      ["rating", "section"],
+      ["rating-choice", "fieldset"],
+      ["rating-comment", "textarea"],
+    ] as const) {
+      const found = all(root, (el) => attr(el, "id") === id);
+      expect(found, id).toHaveLength(1);
+      expect(found[0]!.name, id).toBe(tag);
+    }
+  });
+
+  it("is a pane that passes the rules alone, in each of its states", () => {
+    for (const rating of [
+      ratingProps(),
+      ratingProps({ draft: { rating: 2, comment: "A comment." } }),
+      ratingProps({ given: ratingGiven() }),
+      ratingProps({ hasMemo: false, runId: null }),
+    ])
+      expectAccessible(ratingSectionOf(rating), { fragment: true });
+  });
+
+  it("leaves nothing to tab to once the rating is given, but the way to report a missed issue", () => {
+    const given = expectAccessibleExceptTheMemoList(
+      memosPageWith(ratingProps({ given: ratingGiven() })),
+    );
+    const section = byId(given, "rating")!;
+    const mine = tabStops(given).filter((el) => ancestorsOf(given, el).includes(section));
+    expect(mine.map((el) => el.name)).toEqual(["a"]);
+  });
+});
+
+describe("the links of a refused rating", () => {
+  it("lead to the control to mend, and are met by Tab before the form", () => {
+    for (const [code, target] of [
+      ["rating_required", "rating-choice"],
+      ["bad_rating", "rating-choice"],
+      ["comment_too_long", "rating-comment"],
+    ] as const) {
+      const page = expectAccessibleExceptTheMemoList(
+        refusedMemosPage(code, { rating: 3, comment: "x" }),
+      );
+      const stopsOfPage = tabStops(page);
+      const link = first(page, (el) => el.name === "a" && hasClass(el, "notice-jump"));
+      expect(attr(link, "href"), code).toBe(`#${target}`);
+      expect(stopsOfPage.indexOf(link), code).toBeGreaterThan(-1);
+      // The notice is above the form: Tab meets the link before any control of the form.
+      for (const stop of tabStops(ratingForm(page)))
+        expect(stopsOfPage.indexOf(link), code).toBeLessThan(stopsOfPage.indexOf(stop));
+      // The target is there once. A group of marks is a stop through its radios, which Tab reaches
+      // after the link; the comment is a stop itself.
+      expect(
+        all(page, (el) => attr(el, "id") === target),
+        code,
+      ).toHaveLength(1);
+    }
+  });
+});
+
+describe("the keys of the issue table, and the rating of a matter", () => {
+  it("have no table on the memos page to act on, so a key typed in a mark or the comment is nobody's", () => {
+    const h = runScript(memosPageWith(ratingProps()));
+    expect(h.doc.querySelector('[data-zone="issues"]')).toBeNull();
+    const fields = [
+      ...h.doc.querySelectorAll("input"),
+      ...h.doc.querySelectorAll("textarea"),
+      ...h.doc.querySelectorAll("button"),
+    ];
+    expect(fields.length).toBeGreaterThanOrEqual(8);
+    for (const field of fields)
+      for (const key of ["j", "k", "?", "Enter", " ", "ArrowDown"]) {
+        const e = event("keydown", field, { key });
+        field.dispatch(e);
+        expect(e.defaultPrevented, `${field.tagName} ${key}`).toBe(false);
+      }
+    expect(h.fetchCalls).toEqual([]);
+  });
+
+  it("do nothing when they are typed into a mark or the comment, even placed where the script listens", () => {
+    const h = runScript(runPageWith(feedbackProps()));
+    const zone = h.doc.querySelector('[data-zone="issues"]')!;
+    const before = h.doc.querySelectorAll("tr.is-current").length;
+    for (const tag of ["input", "textarea"]) {
+      const field = new FakeElement(h.doc, null, tag);
+      field.parent = zone;
+      for (const key of ["j", "k", "?", "Enter"]) {
+        const e = event("keydown", field, { key });
+        field.dispatch(e);
+        expect(e.defaultPrevented, `${tag} ${key}`).toBe(false);
+      }
+    }
+    expect(h.doc.querySelectorAll("tr.is-current")).toHaveLength(before);
   });
 });

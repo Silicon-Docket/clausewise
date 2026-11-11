@@ -23,10 +23,23 @@
  *
  * The action is `feedback.add`, which every role holds, so the refused callers of the matrix are the
  * outsider, the stranger, the administrator and the visitor.
+ *
+ * Slice C, the rating of a matter, as a form and as JSON, and the read of what a caller may see of a
+ * matter's feedback. The rating names no id in its path (the matter is the path's, the person the
+ * session's, and the review it is recorded against is the newest memo's), so it has no forged-id
+ * body; its effect body needs a scratch matter with a memo (`needs: "exported"`, which the
+ * authorization suite builds by exporting a memo as the reviewer after every finding is decided). A
+ * rating is given once by a person, so each probe is aimed at a matter of its own, and the effect
+ * of the rating of a caller who is let in is shown on a matter that nobody has rated. The probe's
+ * own body is empty and reaches the handler, which refuses it with 400 (no rating was chosen) whatever
+ * the state of the matter. The read, `GET /api/matters/:matterId/feedback`, is held by `matter.read`
+ * and sends nothing that changes the store, so it has no effect body; its answer holds the caller's
+ * own rating and no other, which the application's tests prove.
  */
 import {
   A,
   M,
+  NONE,
   form,
   json,
   onScratch,
@@ -51,6 +64,9 @@ export const MATTER_PROBES_FEEDBACK: readonly Probe[] = [
     body: json(),
     reaches: 400,
   },
+  { method: "POST", template: `${M}/rating`, action: "feedback.add", body: form(), reaches: 400 },
+  { method: "POST", template: `${A}/rating`, action: "feedback.add", body: json(), reaches: 400 },
+  { method: "GET", template: `${A}/feedback`, action: "matter.read", body: NONE, reaches: 200 },
 ];
 
 export const OTHER_PROBES_FEEDBACK: readonly OtherProbe[] = [];
@@ -74,5 +90,17 @@ export const EFFECTS_FEEDBACK: Readonly<Record<string, EffectOf>> = {
     needs: "run",
     ids: onScratch,
     body: json({ ruleKey: null, location: null, note: "A missed issue written by a probe." }),
+  }),
+  [`POST ${M}/rating`]: () => ({
+    target: "scratch",
+    needs: "exported",
+    ids: onScratch,
+    body: form({ rating: "4", comment: "" }),
+  }),
+  [`POST ${A}/rating`]: () => ({
+    target: "scratch",
+    needs: "exported",
+    ids: onScratch,
+    body: json({ rating: 4, comment: null }),
   }),
 };

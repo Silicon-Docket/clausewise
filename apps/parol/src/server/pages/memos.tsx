@@ -1,7 +1,8 @@
-import type { MatterSummary, MemoSummary } from "../../services/views.js";
+import type { MatterSummary, MemoSummary, RatingView } from "../../services/views.js";
 import { urls } from "../urls.js";
 import { shortHash } from "../views/format.js";
 import { Chip, Crumbs, RevealedText, ScrollBox, Section, Time } from "./components.js";
+import { RatingSection, type RatingDraft } from "./feedback.js";
 import { Layout, csrfField, type Chrome } from "./layout.js";
 
 /**
@@ -149,6 +150,19 @@ export interface MemosPageProps {
   exportBlockedReason: string | null;
   /** The review the matter shows now, or null when there is none. See `MemoList`. */
   currentRunId?: string | null | undefined;
+  /**
+   * The rating section (package W2.6a), shown to every member, not only to those who can export.
+   * `given` is the signed-in person's own rating and nobody else's; `runId` is the review the newest
+   * memo was made from. A page made without it has no rating section.
+   */
+  rating?:
+    | {
+        hasMemo: boolean;
+        given: RatingView | null;
+        runId: string | null;
+        draft?: RatingDraft | undefined;
+      }
+    | undefined;
 }
 
 export function MemosPage(props: MemosPageProps) {
@@ -178,6 +192,16 @@ export function MemosPage(props: MemosPageProps) {
           />
         </Section>
       ) : null}
+      {props.rating === undefined ? null : (
+        <RatingSection
+          chrome={props.chrome}
+          matterId={props.matter.id}
+          hasMemo={props.rating.hasMemo}
+          given={props.rating.given}
+          runId={props.rating.runId}
+          draft={props.rating.draft}
+        />
+      )}
     </Layout>
   );
 }

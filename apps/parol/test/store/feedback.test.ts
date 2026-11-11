@@ -28,8 +28,13 @@ import {
  * Slice B: a missed issue is feedback about a run, naming a rule of the run's playbook or none, and
  * where it was missed. The store checks its shape before it writes anything, the database checks it
  * again (`feedback-migration.test.ts`), the audit event names the rule and says whether a location
- * was given and never holds the text of either, and a refused report leaves nothing behind. The
- * later slices add the tests of a note and the rating below.
+ * was given and never holds the text of either, and a refused report leaves nothing behind.
+ *
+ * Slice C: a rating is a person's mark, from 1 to 5, of a whole matter, with words of their own if
+ * they choose. The store checks its shape before it writes anything (no finding, no reason code, no
+ * rule, no place), refuses a second rating by the same person on the same matter (the database
+ * refuses it too, in `feedback-migration.test.ts`), and audits the mark and whether there were
+ * words and never the words. The later slice adds the tests of a note below.
  */
 
 let w: World;
@@ -669,5 +674,203 @@ describe("listFeedback", () => {
     expect(ids(w.repo.listFeedback(a.m.id, { findingId: b.findings[0]!.id }))).toEqual([]);
     expect(ids(w.repo.listFeedback(b.m.id, { userId: ACTORS.reviewer }))).toEqual([foreign.id]);
     expect(ids(w.repo.listFeedback(b.m.id, { runId: a.run.id }))).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Slice C: the rating of a matter
+// ---------------------------------------------------------------------------------------------
+
+const rate = (matterId: string, over: Record<string, unknown> = {}) =>
+  w.repo.addFeedback(matterId, {
+    userId: ACTORS.reviewer,
+    kind: "rating",
+    rating: 4,
+    ...over,
+  } as never);
+
+const ratings = (matterId: string) => w.repo.listFeedback(matterId, { kind: "rating" });
+const auditOf = (matterId: string) => w.repo.listAuditEvents({ matterId, action: "feedback.add" });
+
+describe("the rating of a matter", () => {
+  it("is stored with the mark and the words, read back, and audited by the mark and never the words", () => {
+    const { m, run } = setup();
+    w.clock.tick();
+    const words = "ZQ-WORDS-OF-THE-RATING it found what I would have.";
+    const given = rate(m.id, { runId: run.id, text: words });
+    expect(given).toMatchObject({
+      matterId: m.id,
+      userId: ACTORS.reviewer,
+      kind: "rating",
+      rating: 4,
+      text: words,
+      runId: run.id,
+      findingId: null,
+      reasonCode: null,
+      ruleKey: null,
+      location: null,
+    });
+    expect(ratings(m.id)).toEqual([given]);
+    const events = auditOf(m.id);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      actorId: ACTORS.reviewer,
+      targetType: "feedback",
+      targetId: given.id,
+      detail: {
+        kind: "rating",
+        rating: 4,
+        hasText: true,
+        hasLocation: false,
+        ruleKey: null,
+        findingId: null,
+        runId: run.id,
+      },
+    });
+    // The mark is in the event; the words are not.
+    expect(JSON.stringify(events)).not.toContain("ZQ-WORDS-OF-THE-RATING");
+  });
+
+  it("needs no words and no run, and words that say nothing are none", () => {
+    const { m } = setup();
+    const bare = rate(m.id, { userId: ACTORS.reviewer });
+    expect(bare).toMatchObject({ text: null, runId: null, rating: 4 });
+    const blank = rate(m.id, { userId: ACTORS.associate, rating: 2, text: " \n\t " });
+    expect(blank).toMatchObject({ text: null, rating: 2 });
+    expect(auditOf(m.id).map((e) => (e.detail as { hasText: boolean }).hasText)).toEqual([
+      false,
+      false,
+    ]);
+  });
+
+  it("takes each of the five marks and no other number", () => {
+    const first = setup();
+    const marks = [1, 2, 3, 4, 5];
+    marks.forEach((rating, i) => {
+      const { m } = i === 0 ? first : setup();
+      expect(rate(m.id, { rating }).rating).toBe(rating);
+    });
+    const { m } = setup();
+    for (const rating of [0, -1, 6, 7, 2.5, 4.0000001, Number.NaN, Infinity])
+      expect(
+        codeOf(() => rate(m.id, { rating })),
+        String(rating),
+      ).toBe("bad_rating");
+    expect(codeOf(() => rate(m.id, { rating: null }))).toBe("rating_required");
+    expect(codeOf(() => rate(m.id, { rating: undefined }))).toBe("rating_required");
+    expect(ratings(m.id)).toEqual([]);
+    expect(auditOf(m.id)).toEqual([]);
+  });
+
+  it("is about the matter: no finding, no reason code, no rule and no place, and no mark on any other kind", () => {
+    const { m, run, findings } = setup();
+    const refused: [Record<string, unknown>, string][] = [
+      [{ findingId: findings[0]!.id }, "finding_not_allowed"],
+      [{ reasonCode: "other" }, "field_not_allowed"],
+      [{ ruleKey: "dur-1" }, "field_not_allowed"],
+      [{ location: "Section 6.1" }, "field_not_allowed"],
+    ];
+    for (const [over, code] of refused)
+      expect(
+        codeOf(() => rate(m.id, { runId: run.id, ...over })),
+        JSON.stringify(over),
+      ).toBe(code);
+    // A mark belongs to a rating: a report, a comment or a reason does not carry one.
+    for (const kind of ["missed_issue", "comment", "finding_reason"])
+      expect(
+        codeOf(() =>
+          w.repo.addFeedback(m.id, {
+            userId: ACTORS.reviewer,
+            kind,
+            runId: run.id,
+            findingId: kind === "finding_reason" ? findings[0]!.id : null,
+            rating: 3,
+            text: "t",
+          } as never),
+        ),
+        kind,
+      ).toBe("field_not_allowed");
+    expect(w.repo.listFeedback(m.id)).toEqual([]);
+    expect(w.repo.listAuditEvents({ matterId: m.id, action: "feedback.add" })).toEqual([]);
+  });
+
+  it("refuses words that are too long or hold control characters, and a run of another matter, and writes nothing", () => {
+    const first = setup();
+    const second = setup();
+    expect(codeOf(() => rate(first.m.id, { text: "w".repeat(4001) }))).toBe("bad_text");
+    expect(codeOf(() => rate(first.m.id, { text: "a\u0000b" }))).toBe("bad_text");
+    expect(codeOf(() => rate(first.m.id, { text: "a\u0007b" }))).toBe("bad_text");
+    // Exactly the longest the store keeps is kept.
+    expect(rate(first.m.id, { text: "w".repeat(4000) }).text).toHaveLength(4000);
+    expect(() => rate(second.m.id, { runId: first.run.id })).toThrow(NotFoundError);
+    expect(ratings(second.m.id)).toEqual([]);
+    expect(auditOf(second.m.id)).toEqual([]);
+  });
+
+  it("is given once by a person for a matter, whatever the second one says, and it stays as it was", () => {
+    const { m, run } = setup();
+    const first = rate(m.id, { rating: 2, text: "ZQ-FIRST-WORDS" });
+    w.clock.tick();
+    for (const over of [
+      { rating: 2 },
+      { rating: 5, text: "ZQ-SECOND-WORDS" },
+      { rating: 5, runId: run.id },
+    ]) {
+      const refused = (() => {
+        try {
+          rate(m.id, over);
+        } catch (error) {
+          return error;
+        }
+        return undefined;
+      })();
+      expect(refused, JSON.stringify(over)).toBeInstanceOf(ConflictError);
+      expect((refused as ConflictError).code).toBe("already_rated");
+      // The message says the rule and repeats nothing that was sent.
+      expect((refused as ConflictError).message).not.toMatch(/ZQ-|[0-9]/);
+    }
+    expect(ratings(m.id)).toEqual([first]);
+    expect(auditOf(m.id)).toHaveLength(1);
+  });
+
+  it("is one for each person and matter: another person may rate, and the same person another matter", () => {
+    const a = setup();
+    const b = setup();
+    rate(a.m.id, { userId: ACTORS.reviewer, rating: 5 });
+    expect(rate(a.m.id, { userId: ACTORS.associate, rating: 1 })).toMatchObject({ rating: 1 });
+    expect(rate(b.m.id, { userId: ACTORS.reviewer, rating: 3 })).toMatchObject({
+      matterId: b.m.id,
+      rating: 3,
+    });
+    expect(
+      ratings(a.m.id)
+        .map((r) => [r.userId, r.rating])
+        .sort(),
+    ).toEqual(
+      [
+        [ACTORS.reviewer, 5],
+        [ACTORS.associate, 1],
+      ].sort(),
+    );
+    // A report or a comment by a person who has rated is not held to the rating.
+    expect(
+      w.repo.addFeedback(a.m.id, { userId: ACTORS.reviewer, kind: "comment", text: "A remark." }),
+    ).toMatchObject({ kind: "comment" });
+  });
+
+  it("is written with its audit event or not at all, and a refused second rating adds no event", () => {
+    const { m } = setup();
+    w.db.exec(`CREATE TRIGGER zz_refuse_audit BEFORE INSERT ON audit_events
+      WHEN NEW.action = 'feedback.add'
+      BEGIN SELECT RAISE(ABORT, 'parol-test: audit event refused'); END`);
+    expect(() => rate(m.id, { text: "Words." })).toThrow(/audit event refused/);
+    expect(ratings(m.id)).toEqual([]);
+    expect((w.db.prepare("SELECT COUNT(*) AS n FROM feedback").get() as { n: number }).n).toBe(0);
+    // With the trigger gone the same rating is written, with its event, and only once.
+    w.db.exec("DROP TRIGGER zz_refuse_audit");
+    rate(m.id, { text: "Words." });
+    expect(() => rate(m.id)).toThrow(ConflictError);
+    expect(ratings(m.id)).toHaveLength(1);
+    expect(auditOf(m.id)).toHaveLength(1);
   });
 });

@@ -14,8 +14,18 @@ import {
   MISSED_ISSUE_LOCATION_HINT,
   MISSED_ISSUE_NO_FINDINGS,
   NOT_COVERED_LABEL,
+  RATING_BUTTON,
+  RATING_COMMENT_LABEL,
+  RATING_FORM_HINT,
+  RATING_HEADING,
+  RATING_LABEL,
+  RATING_MISSED_ISSUE_LINK,
+  RATING_NO_MEMO,
+  RATING_QUESTION,
   REASON_CODE_LABEL,
   REASON_CODE_MEANING,
+  ratingChoiceLabel,
+  ratingLabel,
   reasonCodeLabel,
   ruleChoiceLabel,
 } from "../../src/server/views/feedback.js";
@@ -27,9 +37,15 @@ import {
   decidedWith,
   decisionPane,
   editWith,
+  expectAccessibleExceptTheMemoList,
   feedbackProps,
+  memosPageWith,
   paneOf,
+  ratingGiven,
+  ratingProps,
+  ratingSectionOf,
   refusedFindingPage,
+  refusedMemosPage,
   refusedRunPage,
   report,
   runPageWith,
@@ -56,8 +72,10 @@ import { VARIANTS_FEEDBACK } from "./variants-feedback.js";
  * page that answers a refused decision.
  *
  * Slice B: the section of the review page that reports a missed issue, in each state it has, and
- * the pages that answer each refusal of a report. The later slices add the tests of their panes
- * below.
+ * the pages that answer each refusal of a report.
+ *
+ * Slice C: the section of the memos page that rates the matter, in the four states it has, and the
+ * pages that answer each refusal of a rating. The later slice adds the tests of its pane below.
  */
 
 const DASH = new RegExp("[" + String.fromCharCode(0x2013, 0x2014) + "]");
@@ -323,8 +341,14 @@ describe("the fixtures of the pane", () => {
     expect(new Set(titles).size).toBe(titles.length);
     for (const [title, make, options] of VARIANTS_FEEDBACK) {
       checkInvariants(make(), options);
+      // The memos page has one problem of its own that is not this package's (see
+      // `isKnownProblemOfTheMemoList`); the section of the rating is audited alone as well.
       expect(
-        () => expectAccessible(make(), options?.fragment === true ? { fragment: true } : {}),
+        () =>
+          expectAccessibleExceptTheMemoList(
+            make(),
+            options?.fragment === true ? { fragment: true } : {},
+          ),
         title,
       ).not.toThrow();
     }
@@ -662,5 +686,290 @@ describe("the report of a missed issue, on a review with no findings", () => {
     );
     expect(all(missedSection(root), (el) => el.name === "form")).toEqual([]);
     expect(all(missedSection(root), (el) => el.name === "tr")).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Slice C: the rating of a matter on the memos page
+// ---------------------------------------------------------------------------------------------
+
+const ratingSection = (root: El): El => byId(root, "rating")!;
+const ratingForm = (root: El): El =>
+  first(
+    ratingSection(root),
+    (el) => el.name === "form" && attr(el, "action") === urls.rating(IDS.matter),
+    "the rating form",
+  );
+const radios = (root: El): El[] =>
+  all(ratingSection(root), (el) => el.name === "input" && attr(el, "type") === "radio");
+const checkedMarks = (root: El): (string | null | undefined)[] =>
+  radios(root)
+    .filter((r) => hasAttr(r, "checked"))
+    .map((r) => attr(r, "value"));
+const memos = (html: string): El => expectAccessibleExceptTheMemoList(html);
+
+describe("the rating of a matter, the form", () => {
+  const page = memos(memosPageWith(ratingProps()));
+
+  it("is a section of the memos page with its own heading, after the memos and the export", () => {
+    const section = ratingSection(page);
+    expect(section.name).toBe("section");
+    expect(attr(section, "aria-labelledby")).toBe("rating-heading");
+    expect(readable(first(section, (el) => el.name === "h2"))).toBe(RATING_HEADING);
+    // After the list of memos and the form that exports one, so a person who reads down meets it last.
+    const order = all(
+      page,
+      (el) =>
+        el.name === "section" && ["memo-list", "export", "rating"].includes(attr(el, "id") ?? ""),
+    ).map((el) => attr(el, "id"));
+    expect(order).toEqual(["memo-list", "export", "rating"]);
+  });
+
+  it("is shown to a person who cannot export too: the section does not depend on the export", () => {
+    const viewer = memos(memosPageWith(ratingProps(), { canExport: false }));
+    expect(byId(viewer, "export")).toBeUndefined();
+    expect(ratingForm(viewer)).toBeDefined();
+    expect(radios(viewer)).toHaveLength(5);
+  });
+
+  it("posts to the matter's rating address with the token, and nowhere else", () => {
+    const form = ratingForm(page);
+    expect(attr(form, "method")).toBe("post");
+    const token = first(form, (el) => el.name === "input" && attr(el, "name") === "_csrf");
+    expect(attr(token, "type")).toBe("hidden");
+    expect(attr(token, "value")).toBeTruthy();
+    // Nothing in the form names a person, a matter or a review: the route takes the first two from
+    // the session and the path, and records the third itself.
+    const names = all(form, (el) => ["input", "select", "textarea"].includes(el.name)).map((el) =>
+      attr(el, "name"),
+    );
+    expect(names).toEqual([
+      "_csrf",
+      FIELDS.rating,
+      FIELDS.rating,
+      FIELDS.rating,
+      FIELDS.rating,
+      FIELDS.rating,
+      FIELDS.comment,
+    ]);
+  });
+
+  it("asks the question as the legend of one group of five marks, in order, each labelled with its mark and its words", () => {
+    const fieldset = first(ratingForm(page), (el) => el.name === "fieldset");
+    expect(readable(first(fieldset, (el) => el.name === "legend"))).toBe(RATING_QUESTION);
+    expect(RATING_QUESTION).toBe("I would use this for my next NDA");
+    const marks = radios(page);
+    expect(marks.map((r) => attr(r, "value"))).toEqual(["1", "2", "3", "4", "5"]);
+    expect(marks.map((r) => attr(r, "id"))).toEqual([1, 2, 3, 4, 5].map((n) => `rating-${n}`));
+    expect(marks.map((r) => readable(labelOf(page, attr(r, "id")!)))).toEqual(
+      [1, 2, 3, 4, 5].map((n) => ratingChoiceLabel(n as 1 | 2 | 3 | 4 | 5)),
+    );
+    expect(RATING_LABEL[1]).toBe("Strongly disagree");
+    expect(RATING_LABEL[5]).toBe("Strongly agree");
+    // Every mark is needed before the form is sent, and none is chosen for the person.
+    for (const mark of marks) expect(hasAttr(mark, "required")).toBe(true);
+    expect(checkedMarks(page)).toEqual([]);
+    // The group says how the scale runs, in a hint the group is described by.
+    const hint = byId(page, "rating-scale-hint")!;
+    expect(attr(fieldset, "aria-describedby")).toBe("rating-scale-hint");
+    expect(readable(hint)).toBe("Choose from 1, strongly disagree, to 5, strongly agree.");
+  });
+
+  it("has a labelled optional comment, limited to what the store keeps, and a button that is not disabled", () => {
+    const comment = control(page, FIELDS.comment);
+    expect(comment.name).toBe("textarea");
+    expect(readable(labelOf(page, "rating-comment"))).toBe(RATING_COMMENT_LABEL);
+    expect(hasAttr(comment, "required")).toBe(false);
+    expect(attr(comment, "maxlength")).toBe("4000");
+    expect(attr(comment, "aria-describedby")).toBe("rating-comment-hint");
+    expect(readable(byId(page, "rating-comment-hint")!)).toMatch(/^Optional\. /);
+    const button = first(ratingForm(page), (el) => el.name === "button");
+    expect(readable(button)).toBe(RATING_BUTTON);
+    expect(attr(button, "type")).toBe("submit");
+    expect(hasAttr(button, "disabled")).toBe(false);
+  });
+
+  it("says where the rating is kept, who cannot see it, that it is final, and that a demonstration rating is not a pilot result", () => {
+    const hint = readable(ratingSection(page));
+    expect(hint).toContain(RATING_FORM_HINT);
+    expect(RATING_FORM_HINT).toContain("stored with this matter and deleted with it");
+    expect(RATING_FORM_HINT).toContain("Other people on this matter cannot see it");
+    expect(RATING_FORM_HINT).toContain("cannot be changed once it is saved");
+    expect(RATING_FORM_HINT).toContain("not a pilot result");
+  });
+
+  it("leads to the report of a missed issue on the review the memo was made from", () => {
+    const link = first(
+      ratingSection(page),
+      (el) => el.name === "a" && readable(el) === RATING_MISSED_ISSUE_LINK,
+    );
+    expect(attr(link, "href")).toBe(`${urls.run(IDS.matter, IDS.run)}#missed-issue`);
+    // The link is the name of what it leads to and says what it is for.
+    expect(RATING_MISSED_ISSUE_LINK).toBe("Anything Parol missed? Report a missed issue");
+    // It follows the run the memo names, and not a run of the page's own.
+    const other = memos(memosPageWith(ratingProps({ runId: "r_0777" })));
+    expect(
+      attr(
+        first(ratingSection(other), (el) => el.name === "a"),
+        "href",
+      ),
+    ).toBe(`${urls.run(IDS.matter, "r_0777")}#missed-issue`);
+  });
+});
+
+describe("the rating of a matter, the other states", () => {
+  it("says there is nothing to rate before a memo exists, and has no form and no link", () => {
+    const root = memos(memosPageWith(ratingProps({ hasMemo: false, runId: null })));
+    const section = ratingSection(root);
+    expect(readable(first(section, (el) => hasClass(el, "empty")))).toBe(RATING_NO_MEMO);
+    expect(RATING_NO_MEMO).toBe("You can rate the matter once a memo has been exported.");
+    expect(
+      all(section, (el) => ["form", "input", "textarea", "button", "a"].includes(el.name)),
+    ).toEqual([]);
+  });
+
+  it("shows the rating that was given with its denominator, its words and the time, and no form: a rating is final", () => {
+    const root = memos(memosPageWith(ratingProps({ given: ratingGiven() })));
+    const section = ratingSection(root);
+    expect(readable(section)).toContain("You rated this matter 4 of 5 (Agree) on ");
+    const time = first(section, (el) => el.name === "time");
+    expect(attr(time, "datetime")).toBe("2026-11-05T10:20:00Z");
+    expect(readable(first(section, (el) => hasClass(el, "doc-text")))).toBe(
+      "It found the deletion that I had missed.",
+    );
+    expect(all(section, (el) => ["form", "input", "textarea", "button"].includes(el.name))).toEqual(
+      [],
+    );
+    // The way to say more is still there.
+    expect(readable(section)).toContain(RATING_MISSED_ISSUE_LINK);
+  });
+
+  it("names the mark in words for each of the five, and a given rating with no words has no quotation box", () => {
+    for (const mark of [1, 2, 3, 4, 5] as const) {
+      const root = memos(
+        memosPageWith(ratingProps({ given: ratingGiven({ rating: mark, comment: null }) })),
+      );
+      expect(readable(ratingSection(root))).toContain(
+        `You rated this matter ${mark} of 5 (${RATING_LABEL[mark]}) on `,
+      );
+      expect(all(ratingSection(root), (el) => hasClass(el, "doc-text"))).toEqual([]);
+    }
+  });
+
+  it("gives a fixed phrase to a mark this version does not know, and never the number", () => {
+    expect(ratingLabel(3)).toBe("Neither agree nor disagree");
+    for (const odd of [0, 6, -1, 2.5, Number.NaN]) {
+      expect(ratingLabel(odd)).toBe("A rating this version does not know");
+    }
+  });
+
+  it("is not there on a page made without it", () => {
+    const root = memos(memosPageWith(null));
+    expect(byId(root, "rating")).toBeUndefined();
+    expect(all(root, (el) => attr(el, "href")?.endsWith("#missed-issue") === true)).toEqual([]);
+  });
+});
+
+describe("the rating of a matter, after a refusal", () => {
+  it("shows again what was chosen and typed: the mark and the comment, the comment with its line breaks", () => {
+    const root = memos(
+      refusedMemosPage("comment_too_long", {
+        rating: 2,
+        comment: "First line.\nSecond line, with <b>markup</b>.",
+      }),
+    );
+    expect(checkedMarks(root)).toEqual(["2"]);
+    expect(radios(root).filter((r) => hasAttr(r, "checked"))).toHaveLength(1);
+    // The box holds the comment exactly: one line feed ahead of it, which a browser drops.
+    const text = control(root, FIELDS.comment)
+      .children.map((c) => (c.type === "text" ? c.text : ""))
+      .join("");
+    expect(text).toBe("\nFirst line.\nSecond line, with <b>markup</b>.");
+  });
+
+  it("keeps the comment when no mark was chosen, and chooses none", () => {
+    const root = memos(refusedMemosPage("rating_required", { comment: "My own words." }));
+    expect(checkedMarks(root)).toEqual([]);
+    expect(readable(control(root, FIELDS.comment))).toBe("My own words.");
+  });
+
+  it("offers back no mark that the scale does not hold", () => {
+    const root = memos(refusedMemosPage("bad_rating", { rating: 9, comment: "x" }));
+    expect(checkedMarks(root)).toEqual([]);
+  });
+
+  it("answers each refusal with its words, the sentence that says what to do marked, and a link to the control it is about", () => {
+    const cases = [
+      ["rating_required", "rating-choice", "fieldset"],
+      ["bad_rating", "rating-choice", "fieldset"],
+      ["comment_too_long", "rating-comment", "textarea"],
+    ] as const;
+    for (const [code, target, tag] of cases) {
+      const root = memos(refusedMemosPage(code, { rating: 3, comment: "A comment." }));
+      const alert = first(root, (el) => attr(el, "role") === "alert");
+      expect(readable(alert), code).toContain(REFUSAL_PHRASES[code]);
+      expect(withClass(alert, "todo"), code).toHaveLength(1);
+      const link = first(alert, (el) => el.name === "a" && hasClass(el, "notice-jump"));
+      expect(attr(link, "href"), code).toBe(`#${target}`);
+      expect(byId(root, target)?.name, code).toBe(tag);
+      expect(
+        all(root, (el) => attr(el, "id") === target),
+        code,
+      ).toHaveLength(1);
+    }
+    // The codes that no control mends say what to do and lead nowhere.
+    for (const [code, rating] of [
+      ["already_rated", { given: ratingGiven({ rating: 2 }) }],
+      ["not_exported", { hasMemo: false, runId: null }],
+    ] as const) {
+      const root = memos(refusedMemosPage(code, { rating: 5 }, { status: "conflict", rating }));
+      const alert = first(root, (el) => attr(el, "role") === "alert");
+      expect(readable(alert), code).toContain(REFUSAL_PHRASES[code]);
+      expect(withClass(alert, "todo"), code).toHaveLength(1);
+      expect(
+        all(alert, (el) => hasClass(el, "notice-jump")),
+        code,
+      ).toEqual([]);
+      // And no form that the refusal could be mended in.
+      expect(
+        all(ratingSection(root), (el) => el.name === "form"),
+        code,
+      ).toEqual([]);
+    }
+  });
+});
+
+describe("the rating of a matter, text a person typed", () => {
+  const hostile =
+    'pay \u202e1000\u202c now, con\u200bfi\u200ddential </textarea><script>window.pwned = 1</script> "quoted"';
+
+  it("is escaped where it is shown as a rating, and its invisible characters are made visible", () => {
+    const html = memosPageWith(ratingProps({ given: ratingGiven({ comment: hostile }) }));
+    expect(html).not.toContain("<script>window.pwned");
+    expect(html).not.toContain("\u202e");
+    expect(html).not.toContain("\u200b");
+    const root = memos(html);
+    expect(readable(ratingSection(root))).toContain("</textarea><script>window.pwned = 1</script>");
+    expect(withClass(ratingSection(root), "invisible").length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("is escaped where it is put back in the form, which closes its own box only where the page does", () => {
+    const html = ratingSectionOf(ratingProps({ draft: { rating: 3, comment: hostile } }));
+    expect(html).not.toContain("<script>window.pwned");
+    const root = expectAccessible(html, { fragment: true });
+    // The text is the person's own, back in the box exactly as it was typed.
+    expect(readable(control(root, FIELDS.comment))).toBe(hostile);
+    expect(all(root, (el) => el.name === "script")).toEqual([]);
+  });
+});
+
+describe("the rating of a matter, in the page's own classes", () => {
+  it("uses the two rules the stylesheet has for the scale, and classes that already exist", () => {
+    const html = ratingSectionOf(ratingProps());
+    const root = expectAccessible(html, { fragment: true });
+    expect(all(root, (el) => hasClass(el, "rating-scale"))).toHaveLength(1);
+    // One box for each mark, in the scale and in no other place.
+    const scale = first(root, (el) => hasClass(el, "rating-scale"));
+    expect(all(scale, (el) => hasClass(el, "check"))).toHaveLength(5);
   });
 });
