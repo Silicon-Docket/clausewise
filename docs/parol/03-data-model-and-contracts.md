@@ -1,15 +1,22 @@
 # 3. Data model and contracts
 
-**Implementation status.** Built and tested: the schema as migrations 001 to 003 (25 tables, 29 named
-indexes and 68 triggers, counted from a fresh database; the migration runner adds its own bookkeeping
+**Implementation status.** Built and tested: the schema as migrations 001 to 008 (30 tables, 38 named
+indexes and 98 triggers, counted from a fresh database; the migration runner adds its own bookkeeping
 table, `schema_migrations`, which is not counted or shown), the shared shapes in `src/contracts.ts`,
-`src/module-contracts.ts` and `src/services`, 21 JSON routes under `/api` beside the page routes,
-invalidation by an inputs digest, and 16 verification check ids in two check sets. Not yet built:
-feedback, the span endpoint, playbook import and approval and workflow promotion over HTTP, the
-evaluation endpoints, carrying findings across a playbook change. The model support check and check
-set C2 are enabled only by workflow v3, which is defined for the evaluation and is not registered by
-the application; the two versions the application ships, v1 and v2, leave both off. Never run live: token counts,
-cost and the provider-reported model are never recorded (NULL), and nothing here is measured.
+`src/module-contracts.ts` and `src/services`, 25 JSON routes under `/api` beside 42 routes that are not
+under `/api` (67 in all, counted once per method and path), invalidation by an inputs digest, and 17
+verification check ids in two check sets. Added in week-two part 3: statuses settled in code,
+usage and the provider-reported model recorded for the `anthropic` provider, the spend ledger,
+retention and the audit check, feedback capture (reason codes, missed-issue reports, notes, ratings),
+the training matter, the pilot measures with their timers and reference list, and the evaluation
+comparison page with its page document. Not yet built: the span endpoint, playbook import and
+approval and workflow promotion over HTTP, JSON evaluation endpoints (`/api/evals/...`; the
+comparison page has no JSON twin, by design), carrying findings across a playbook change. The model
+support check and check set C2 are enabled only by workflow v3, which is defined for the evaluation
+and is not registered by the application; the two versions the application ships, v1 and v2, leave
+both off. Never run live: usage, cost and the provider-reported model are recorded only for the
+`anthropic` provider and have been read only from scripted wires, nothing has been read from a live
+provider, and nothing here is measured.
 
 ## Vocabulary
 
@@ -44,7 +51,12 @@ topic the category does not have.
 **Finding status**: `compliant`, `deviation`, `missing` (a required presence rule with no clause),
 `not_applicable` (a rule that is not required, with no clause), and `undetermined` (the workflow
 will not state a status; always carries at least one escalation). The first four are the
-Clausewise statuses; `undetermined` is new.
+Clausewise statuses; `undetermined` is new. The workflow's `missing` and `not_applicable` are
+settled by code against the rule's flags, for every workflow version (see
+[Required and absence semantics](#deterministic-checks-and-model-judgment)): a clause that is not
+required and that no text covers is `not_applicable`, a required one is `missing`, and a rule that
+forbids something is `compliant` when nothing is found. The status the workflow stated is kept in
+`findings.model_status` whenever code changed it.
 
 **Escalation reasons** (the only way Parol expresses doubt; there are no confidence scores). These
 are the eleven codes in `ESCALATION_CODES`; the check names are those of the verification checks
@@ -138,11 +150,18 @@ erDiagram
   eval_runs ||--o{ eval_slot_results : scores
   eval_slot_results }o--|| runs : read_by
   matters ||--o{ audit_events : logs
+  matters ||--o{ time_entries : times
+  matters ||--o{ reference_issues : lists
+  users ||--o{ time_entries : starts
+  users ||--o{ pilot_participants : names
+  users ||--o{ pilot_calendar : sets
 ```
 
 The link from a workflow version to its prompts is the prompt ids in its manifest and not a foreign
 key (registering a workflow checks that its prompts exist). `audit_events` has no foreign key: it
-keeps the matter id after the matter is deleted, and nothing else.
+keeps the matter id after the matter is deleted, and nothing else. `spend_ledger` stands alone: one
+row for each UTC day, with no id of a matter, a run or a person. `pilot_calendar` and
+`pilot_participants` name users and no matter, and a matter's deletion leaves them alone.
 
 ### Schema (SQLite)
 
@@ -150,12 +169,29 @@ Timestamps are ISO 8601 UTC text. JSON columns are validated by zod on write. Fo
 and so are `recursive_triggers` and `secure_delete`; the database file is in WAL mode and its file
 mode is 0600.
 
-The listing is the schema after migrations `001_init.sql`, `002_integrity.sql` and
-`003_ingest_warnings.sql`, in `apps/parol/migrations`. Migration 001 is the design's SQL as it was and
-is unchanged, because the migration runner records a checksum of every applied file and refuses to
-start if one changed; migration 002 added the columns marked 002, the indexes and the triggers below,
-and 003 added `ingest_warnings`. The runner keeps one more table, `schema_migrations`, which is not
-shown.
+The listing is the schema after the eight migrations in `apps/parol/migrations`. Migration 001 is
+the design's SQL as it was and is unchanged, because the migration runner records a checksum of every
+applied file and refuses to start if one changed. The later ones add to it; a trigger that had to
+change was dropped and created again under the same name, because SQLite cannot alter a trigger.
+Columns are marked with the number of the migration that added them. The runner keeps one more
+table, `schema_migrations`, which is not shown.
+
+| Migration | File                       | Adds (counts applied one file after another to an empty database)                                                                                                                                                |
+| --------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 001       | `001_init.sql`             | 24 tables, as designed                                                                                                                                                                                           |
+| 002       | `002_integrity.sql`        | the columns marked 002; 28 indexes and 66 triggers                                                                                                                                                               |
+| 003       | `003_ingest_warnings.sql`  | `ingest_warnings`; 1 index and 2 triggers                                                                                                                                                                        |
+| 004       | `004_usage_settled.sql`    | `findings.model_status` and its trigger; the table `spend_ledger` and 2 triggers; 3 triggers on `model_calls` and `runs`; 6 triggers in all, counting the replacement of `findings_content_immutable` as nothing |
+| 005       | `005_retention.sql`        | the index `matters_by_retain_until`; the triggers `matters_retention_date_insert` and `matters_retention_date_update`                                                                                            |
+| 006       | `006_feedback_capture.sql` | `reviews.reason_code` and `reviews.minor_edit`; `feedback.rule_key` and `feedback.location`; 3 indexes; 5 triggers net (`reviews_content_immutable` is replaced)                                                 |
+| 007       | `007_training_matter.sql`  | `matters.training_key`; 1 unique index; 4 triggers                                                                                                                                                               |
+| 008       | `008_pilot_measures.sql`   | `pilot_calendar`, `pilot_participants`, `time_entries`, `reference_issues`; 4 indexes; 13 triggers                                                                                                               |
+
+That is 30 tables, 38 named indexes (12 unique) and 98 triggers. Migrations 004 to 008 were written in
+place while the work packages landed, and 006 and 008 were edited again after review, so their
+checksums changed during development: a data folder made by an intermediate commit of part 3 refuses
+to open on the final build, and none was released (known gap 34 of
+[document 7](07-delivery-plan.md#known-gaps)).
 
 ```sql
 -- Identity and permissions --------------------------------------------------------------
@@ -178,11 +214,16 @@ CREATE TABLE matters (
   synthetic                INTEGER NOT NULL DEFAULT 1,
   created_by               TEXT NOT NULL REFERENCES users(id),
   created_at               TEXT NOT NULL,
-  retain_until             TEXT NOT NULL, -- 30 days after creation; nothing deletes an expired matter yet
+  retain_until             TEXT NOT NULL, -- created_at plus 1 to 90 days, 30 by default; an ISO time after
+                                          -- creation (005); changed by an associate; deleted by
+                                          -- `pnpm parol:retain --apply` once it has passed
   deleted_at               TEXT,          -- never set: deleting a matter removes its rows
-  current_inputs_sha256    TEXT           -- 002. The digest of the inputs a run would use, recomputed
+  current_inputs_sha256    TEXT,          -- 002. The digest of the inputs a run would use, recomputed
                                           -- in the same transaction as any input change; NULL while
                                           -- the inputs are incomplete
+  training_key             TEXT           -- 007. 'T01' for the matter made for the training exercise
+                                          -- (CHECK 'T' and two digits); set at creation, never changed,
+                                          -- one per creator, synthetic only; NULL for every other matter
 );
 
 CREATE TABLE matter_members (
@@ -317,15 +358,20 @@ CREATE TABLE runs (
   playbook_version_id    TEXT NOT NULL REFERENCES playbook_versions(id),
   model_provider         TEXT NOT NULL,     -- 'simulated' for the demonstration reader
   model_requested        TEXT NOT NULL,
-  model_reported         TEXT,              -- never written: the model layer does not report it
+  model_reported         TEXT,              -- the model or models the provider named in its responses,
+                                            -- sorted, distinct, joined by a comma and a space; plain text of
+                                            -- at most 300 characters (004). Written as responses arrive and
+                                            -- kept on a failed or cancelled run, for the anthropic provider
+                                            -- only; NULL for a stand-in and for a provider that names none
   input_manifest_json    TEXT NOT NULL,     -- the RunManifest
   input_manifest_sha256  TEXT NOT NULL,     -- its canonical hash; keys the reuse of finished stages
   purpose                TEXT NOT NULL CHECK (purpose IN ('matter','eval')),
   status                 TEXT NOT NULL CHECK (status IN
                            ('queued','ingesting','extracting','retrieving','analyzing',
                             'verifying','succeeded','failed','cancelled','superseded')),
-  error_kind             TEXT,              -- provider_auth, provider_permission, provider_model,
-                                            -- provider_billing, provider_redirect, interrupted, internal
+  error_kind             TEXT,              -- one of nine: provider_auth, provider_permission,
+                                            -- provider_model, provider_billing, provider_redirect,
+                                            -- spend_review_limit, spend_daily_limit, interrupted, internal
   started_by             TEXT NOT NULL REFERENCES users(id),
   started_at             TEXT NOT NULL,
   finished_at            TEXT,
@@ -358,11 +404,13 @@ CREATE TABLE model_calls (                  -- no prompt or response text, by de
   attempt             INTEGER NOT NULL,
   outcome             TEXT NOT NULL CHECK (outcome IN
                         ('ok','schema_error','semantic_error','refusal','cut_off','transport','fatal')),
-  input_tokens        INTEGER, output_tokens INTEGER,        -- always NULL: the model layer does not
-  cache_read_tokens   INTEGER, cache_write_tokens INTEGER,   -- report usage to the stages
+  input_tokens        INTEGER, output_tokens INTEGER,        -- what the provider reported, for the anthropic
+  cache_read_tokens   INTEGER, cache_write_tokens INTEGER,   -- provider only: all four or none (004); NULL
+                                                             -- for a stand-in and for other providers
   latency_ms          INTEGER NOT NULL,
-  cost_usd_estimate   REAL,                 -- always NULL
-  price_table_sha256  TEXT                  -- always NULL
+  cost_usd_estimate   REAL,                 -- the tokens priced with the operator's price file; NULL when
+                                            -- not priced
+  price_table_sha256  TEXT                  -- the hash of that file; set exactly when the cost is (004)
 );
 
 -- Findings, evidence, verification ---------------------------------------------------------
@@ -385,12 +433,18 @@ CREATE TABLE findings (
   verification_state  TEXT NOT NULL CHECK (verification_state IN ('verified','escalated_by_system')),
   content_sha256      TEXT NOT NULL,       -- over rule key, status, texts, fallback basis, conflict,
                                            -- evidence (span, quote, role, quote and support checks)
-                                           -- and escalations;
+                                           -- and escalations, and over model_status when it is set;
                                            -- not abstain reason, offsets or check details
   validity            TEXT NOT NULL DEFAULT 'current' CHECK (validity IN ('current','stale')),
   stale_reason        TEXT,                -- a closed code, such as document_changed
   conflict            TEXT,                -- 002: the model's description of passages that disagree
-  abstain_reason      TEXT                 -- 002: why the model gave no status
+  abstain_reason      TEXT,                -- 002: why the model gave no status
+  model_status        TEXT CHECK (model_status IS NULL OR model_status IN
+                        ('compliant','deviation','missing','not_applicable'))
+                                           -- 004: the status the workflow stated, kept only when code
+                                           -- settled it to another one (a trigger refuses a value equal
+                                           -- to status); NULL otherwise, and for every finding stored
+                                           -- before 004
 );
 
 CREATE TABLE finding_evidence (
@@ -431,7 +485,12 @@ CREATE TABLE reviews (
   finding_content_sha256  TEXT NOT NULL,   -- the exact finding content the reviewer saw
   supersedes_review_id    TEXT REFERENCES reviews(id),
   validity                TEXT NOT NULL DEFAULT 'current' CHECK (validity IN ('current','stale')),
-  created_at              TEXT NOT NULL
+  created_at              TEXT NOT NULL,
+  reason_code             TEXT,            -- 006. wrong_status, wrong_evidence, missed_context, bad_fallback,
+                                           -- unclear or other: set exactly when the decision is an edit or a
+                                           -- reject. NULL on a decision made before 006
+  minor_edit              INTEGER          -- 006. 0 or 1, set exactly when the decision is an edit, and never 1
+                                           -- when the edit changes the status. NULL on an earlier decision
 );
 
 CREATE TABLE memos (
@@ -446,22 +505,29 @@ CREATE TABLE memos (
   exported_at      TEXT NOT NULL
 );
 
-CREATE TABLE feedback (                    -- the table and a store method exist; no route or page
+CREATE TABLE feedback (                    -- append-only (006); written by the feedback service
   id           TEXT PRIMARY KEY,
   matter_id    TEXT NOT NULL REFERENCES matters(id) ON DELETE CASCADE,
   run_id       TEXT REFERENCES runs(id),
   finding_id   TEXT REFERENCES findings(id),
   user_id      TEXT NOT NULL REFERENCES users(id),
   kind         TEXT NOT NULL CHECK (kind IN ('finding_reason','missed_issue','rating','comment')),
-  reason_code  TEXT,                       -- wrong_status, wrong_evidence, bad_fallback, unclear, ...
+                                           -- missed_issue: a report against a run; comment: a note on a
+                                           -- finding; rating: one per person and matter; finding_reason
+                                           -- exists and nothing writes it
+  reason_code  TEXT,                       -- unused: the code of a decision is a column of reviews
   rating       INTEGER CHECK (rating BETWEEN 1 AND 5),
-  text         TEXT,
-  created_at   TEXT NOT NULL
+  text         TEXT,                       -- the words of a person: at most 4000 characters (006)
+  created_at   TEXT NOT NULL,
+  rule_key     TEXT,                       -- 006. A missed issue: the rule of the run's playbook that should
+                                           -- have applied; NULL is "not covered by any rule"
+  location     TEXT                        -- 006. A missed issue: where, in the person's words (1 to 200)
 );
 
 -- Evaluation ------------------------------------------------------------------------------
 -- The three tables and their store methods exist and are tested. The evaluation runner
--- (evals/src/parol) does not write to them: it writes a results file.
+-- (evals/src/parol) does not write to them: it writes a results file, and with --publish a
+-- page document (see "The comparison page document"), which is what the comparison page reads.
 CREATE TABLE eval_datasets (
   id              TEXT PRIMARY KEY,
   label           TEXT NOT NULL,           -- parol-cases v1
@@ -496,50 +562,139 @@ CREATE TABLE eval_slot_results (
   PRIMARY KEY (eval_run_id, case_key, rule_key, repeat)
 );
 
+-- Spend (004) -----------------------------------------------------------------------------
+CREATE TABLE spend_ledger (                -- the spend guard's day: one row for each UTC day
+  day                 TEXT PRIMARY KEY CHECK (day GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+  responses           INTEGER NOT NULL DEFAULT 0 CHECK (responses >= 0),
+  input_tokens        INTEGER NOT NULL DEFAULT 0 CHECK (input_tokens >= 0),
+  output_tokens       INTEGER NOT NULL DEFAULT 0 CHECK (output_tokens >= 0),
+  cache_read_tokens   INTEGER NOT NULL DEFAULT 0 CHECK (cache_read_tokens >= 0),
+  cache_write_tokens  INTEGER NOT NULL DEFAULT 0 CHECK (cache_write_tokens >= 0),
+  cost_usd            REAL    NOT NULL DEFAULT 0 CHECK (cost_usd >= 0),
+  unpriced_responses  INTEGER NOT NULL DEFAULT 0 CHECK (unpriced_responses >= 0),
+  updated_at          TEXT    NOT NULL
+);
+-- Two triggers: no number ever goes down and the day never changes; a row is never deleted. It holds
+-- no id of a matter, a run or a person, so deleting a matter, or the retention command, leaves it alone.
+
+-- The pilot measures (008). None of the four holds text ------------------------------------
+CREATE TABLE pilot_calendar (              -- append-only; the newest row is in force
+  seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+  start_date  TEXT NOT NULL CHECK (start_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+  set_by      TEXT NOT NULL REFERENCES users(id),
+  set_at      TEXT NOT NULL
+);
+
+CREATE TABLE pilot_participants (          -- the people the trainer says were trained; names no matter
+  user_id      TEXT PRIMARY KEY REFERENCES users(id),
+  recorded_by  TEXT NOT NULL REFERENCES users(id),
+  recorded_at  TEXT NOT NULL
+);
+
+CREATE TABLE time_entries (                -- a timer: the server's clock writes both ends
+  id          TEXT PRIMARY KEY,
+  matter_id   TEXT NOT NULL REFERENCES matters(id) ON DELETE CASCADE,
+  user_id     TEXT NOT NULL REFERENCES users(id),
+  role        TEXT NOT NULL CHECK (role IN ('associate','reviewer')),
+  started_at  TEXT NOT NULL,
+  stopped_at  TEXT,                        -- set once, never earlier than started_at; then final
+  CHECK (stopped_at IS NULL OR stopped_at >= started_at)
+);                                         -- one open timer for a person across all matters (unique index)
+
+CREATE TABLE reference_issues (            -- the shadow-mode reference list: issues found by hand
+  id           TEXT PRIMARY KEY,
+  matter_id    TEXT NOT NULL REFERENCES matters(id) ON DELETE CASCADE,
+  rule_key     TEXT CHECK (rule_key IS NULL OR length(rule_key) BETWEEN 1 AND 64),  -- NULL: no rule covers it
+  severity     TEXT NOT NULL CHECK (severity IN ('high','medium','low')),
+  ordinal      INTEGER NOT NULL CHECK (ordinal >= 0),
+  recorded_by  TEXT NOT NULL REFERENCES users(id),   -- a reviewer of the matter (a trigger)
+  recorded_at  TEXT NOT NULL,
+  UNIQUE (matter_id, ordinal)
+);                                         -- at most one issue for a rule in a matter (unique index); the
+                                           -- list is closed by a trigger once any review of the matter exists
+
 -- Audit -----------------------------------------------------------------------------------
 CREATE TABLE audit_events (
   seq          INTEGER PRIMARY KEY AUTOINCREMENT,
   at           TEXT NOT NULL,
   actor_id     TEXT,
   matter_id    TEXT,                       -- kept after matter deletion, as an id only
-  action       TEXT NOT NULL,              -- matter.create, document.add, run.create, review.decide, ...
+  action       TEXT NOT NULL,              -- one of the 30 actions listed under "Audit actions" below
   target_type  TEXT NOT NULL,
   target_id    TEXT NOT NULL,
   detail_json  TEXT NOT NULL,              -- ids, hashes, counts; never document text
   prev_hash    TEXT NOT NULL,
-  hash         TEXT NOT NULL               -- sha256(prev_hash || canonical row); tamper evident only
-                                           -- when verifyAuditChain is run, which no application code does;
+  hash         TEXT NOT NULL               -- sha256(prev_hash || canonical row), not keyed; tamper evident
+                                           -- when the chain is verified: `pnpm parol:audit-verify`, GET /audit,
+                                           -- the start-up notice and the retention command all do it;
                                            -- one chain for the whole database
 );
 ```
 
-**Indexes added by migration 002 and 003.** Eight are unique, and each states a rule that must hold
+**Indexes.** Migrations 002 and 003 added 29. Eight are unique, and each states a rule that must hold
 whatever code writes the rows: one run in flight per matter, one operative version per document, one
 NDA per matter, one current decision per finding, one current memo per matter, one finding per rule
 in a run, and one row per stored file (for versions and for memos). The other 21 are on the child
 side of foreign keys and on the orderings the pages use, because SQLite does not index them itself
-and a matter's deletion would otherwise scan every child table once per cascaded row.
+and a matter's deletion would otherwise scan every child table once per cascaded row. Migrations 005
+to 008 added nine more, four of them unique: one rating for each person and matter, one training
+matter for each creator and key, one open timer for each person, and one reference issue for each
+rule of a matter. The other five are `matters_by_retain_until`, `feedback_by_run`,
+`feedback_by_finding`, `time_entries_by_matter` and `reference_issues_by_matter`. In all, 38 named
+indexes, 12 of them unique.
 
-**Triggers added by migration 002 and 003.** The store refuses changes a bug could make, whatever
+**Triggers.** The store refuses changes a bug could make, whatever
 code runs against the file. Each message starts with `parol:` so that the store can tell a trigger
 from another constraint error, and every immutability trigger has an insert guard too, because an
 `INSERT OR REPLACE` removes the old row without an update ever being seen.
 
-| Area                  | What the triggers enforce                                                                                                                                                                                                                            |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Audit                 | `audit_events` is append only (no update, delete or replace), and each new row's `prev_hash` is the hash of the row before it. The hash itself is checked by `verifyAuditChain`, as SQLite cannot compute SHA-256                                    |
-| Matters               | Identity (id, creator, creation time, synthetic flag) never changes; a matter is never replaced; a matter can pin only an approved playbook version                                                                                                  |
-| Documents             | One NDA and at most two amendments, labelled D1 to D3; identity never changes; never replaced                                                                                                                                                        |
-| Document versions     | Content never changes (only the stated date and the operative flag); at most one operative version per document; a version belongs to its document's matter; the stored file is in the matter's own folder and belongs to one row, never also a memo |
-| Spans and annotations | Written once, in the matter of their version, with the id shape above; never updated                                                                                                                                                                 |
-| Playbooks             | A version is created as a draft; once approved or retired it is frozen with its rules; approval records who and when; an approved version cannot be deleted                                                                                          |
-| Prompts and workflows | A prompt version is immutable and never deleted; a workflow version is created as a candidate, its manifest never changes, its status moves only candidate to pilot to retired, and a pilot needs a promotion record, a promoter and a time          |
-| Runs                  | A run records its inputs digest; its provenance columns never change; a matter has one run in flight                                                                                                                                                 |
-| Findings and evidence | A finding is created current and its content never changes; validity moves from current to stale and never back, with a reason; evidence must cite a span of a document version in the run's manifest; verification results are never replaced       |
-| Reviews               | Immutable except that a current review becomes stale, and never back; a review belongs to the matter of its finding                                                                                                                                  |
-| Memos                 | Immutable except for being superseded; a memo belongs to the matter of its run and its file sits in that matter's folder                                                                                                                             |
-| Feedback, evaluation  | Feedback refers only to its own matter; evaluation results come only from synthetic matters                                                                                                                                                          |
-| Ingest warnings (003) | A warning belongs to a version of its own matter; warnings are replaced, never edited                                                                                                                                                                |
+| Area                             | What the triggers enforce                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Audit                            | `audit_events` is append only (no update, delete or replace), and each new row's `prev_hash` is the hash of the row before it. The hash itself is checked by `verifyAuditChain`, as SQLite cannot compute SHA-256                                                                                                                                                                                                                                                                           |
+| Matters                          | Identity (id, creator, creation time, synthetic flag) never changes; a matter is never replaced; a matter can pin only an approved playbook version. A retention date is an ISO time of the one shape that sorts like time, after the matter was created, on insert and on update (005). The training key is set when the matter is created and never changes, and a training matter is synthetic (007)                                                                                     |
+| Documents                        | One NDA and at most two amendments, labelled D1 to D3; identity never changes; never replaced                                                                                                                                                                                                                                                                                                                                                                                               |
+| Document versions                | Content never changes (only the stated date and the operative flag); at most one operative version per document; a version belongs to its document's matter; the stored file is in the matter's own folder and belongs to one row, never also a memo                                                                                                                                                                                                                                        |
+| Spans and annotations            | Written once, in the matter of their version, with the id shape above; never updated                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Playbooks                        | A version is created as a draft; once approved or retired it is frozen with its rules; approval records who and when; an approved version cannot be deleted                                                                                                                                                                                                                                                                                                                                 |
+| Prompts and workflows            | A prompt version is immutable and never deleted; a workflow version is created as a candidate, its manifest never changes, its status moves only candidate to pilot to retired, and a pilot needs a promotion record, a promoter and a time                                                                                                                                                                                                                                                 |
+| Runs                             | A run records its inputs digest; its provenance columns never change (progress, the end state and the reported model are the columns that do, and the reported model must be one line of plain text of at most 300 characters, 004); a matter has one run in flight; no run for evaluation is made on a training matter (007)                                                                                                                                                               |
+| Findings and evidence            | A finding is created current and its content never changes, the settled status's `model_status` included; `model_status` is kept only when it differs from the status (004); validity moves from current to stale and never back, with a reason; evidence must cite a span of a document version in the run's manifest; verification results are never replaced                                                                                                                             |
+| Reviews                          | Immutable except that a current review becomes stale, and never back; a review belongs to the matter of its finding. A new decision carries a reason code exactly when it is an edit or a reject, and a minor-edit mark exactly when it is an edit, never marked minor when it changes the status (006)                                                                                                                                                                                     |
+| Memos                            | Immutable except for being superseded; a memo belongs to the matter of its run and its file sits in that matter's folder                                                                                                                                                                                                                                                                                                                                                                    |
+| Feedback, evaluation             | Feedback refers only to its own matter, is written once and never edited or replaced, has the shape of its kind (a missed issue needs a run, text and a rule of that run's playbook or none; a rating needs a mark and no finding), and a person rates a matter once (006); evaluation results come only from synthetic matters, and never from a training matter (007)                                                                                                                     |
+| Ingest warnings (003)            | A warning belongs to a version of its own matter; warnings are replaced, never edited                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Usage and the spend ledger (004) | A call's four token counts are all given or all absent, and never negative; a cost needs tokens and a price table hash of 64 characters, and a price table hash needs a cost; a recorded call is never edited. The ledger's numbers only grow, its day never changes, and no row is deleted                                                                                                                                                                                                 |
+| Pilot tables (008)               | The calendar is append-only. A roster entry is never replaced. A timer belongs to a member of the matter in the role held, starts open, takes one stop and is then final, and a person has one open timer. Reference issues are recorded by a reviewer of the matter, are closed once any review of the matter has started, and are replaced and never edited. Every insert guard names every key its table can collide on, because `INSERT OR REPLACE` would otherwise delete a row unseen |
+
+### Audit actions
+
+`AUDIT_ACTIONS` (`apps/parol/src/store/audit.ts`) lists 30 actions; there were 23 before part 3. An
+event holds ids, hashes, counts and closed codes and never text, and is written in the transaction
+of the change it records, so a rollback takes it away. The 23 earlier actions are `matter.create`,
+`matter.update`, `matter.status`, `matter.delete`, `member.add`, `document.add`, `document.remove`,
+`version.add`, `version.operative`, `version.stated_date`, `inputs.changed`, `run.create`,
+`run.status`, `finding.save`, `review.decide`, `memo.export`, `playbook.import`, `playbook.approve`,
+`prompt.register`, `workflow.register`, `workflow.promote`, `feedback.add` and `eval.record`. Part 3
+added seven and changed the detail of six:
+
+| Action               | Detail                                                                                                                                                                                          | Since                            |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `matter.create`      | `synthetic`, `retainUntil`, and `training` (the key, `T01`) for a training matter                                                                                                               | `training` is new                |
+| `matter.delete`      | the number of rows deleted from each table the deletion lists (`timeEntries`, `referenceIssues` and `ingestWarnings` are new), `files`, `reason` (`requested` or `retention`) and `retainUntil` | `reason` is new                  |
+| `finding.save`       | `saved`, `skipped`, `settled` (how many findings code changed the status of) and `ruleKeys`                                                                                                     | `settled` is new                 |
+| `review.decide`      | `reviewId`, `ruleKey`, `decision`, `reasonCode`, `minorEdit`, `findingContentSha256`, `supersedesReviewId`, `matterStatus`                                                                      | the two codes are new            |
+| `feedback.add`       | `kind`, `reasonCode`, `rating`, `hasText`, `hasLocation`, `ruleKey`, `findingId`, `runId`: the text, the place and the comment are never put in the event                                       | `ruleKey`, `hasLocation` are new |
+| `matter.retention`   | `from`, `to` and `days`: a retention date changed by an associate                                                                                                                               | new                              |
+| `retention.run`      | `mode`, `at`, `expired`, `deleted`, `skipped`, `failed`, `orphansRemoved`, `orphansFailed`, `compaction`, `refused`: one event for each `--apply` run, by the system, with no matter            | new                              |
+| `pilot.calendar`     | `startDate` and `previousStartDate`; no matter                                                                                                                                                  | new                              |
+| `pilot.participants` | `added`, `removed` and `total`: counts, not the people; no matter                                                                                                                               | new                              |
+| `time.start`         | `entryId` and `role`                                                                                                                                                                            | new                              |
+| `time.stop`          | `entryId`, `role` and `seconds`                                                                                                                                                                 | new                              |
+| `reference.save`     | `issues`, `ruleKeys`, and `outsideHigh`, `outsideMedium`, `outsideLow` (counts of issues no rule covers)                                                                                        | new                              |
+
+The spend guard writes no audit event: its record is the ledger and the call rows. The retention
+command and the start-up check read the chain; `pnpm parol:audit-verify` and `GET /audit` check it
+and write nothing (the page writes no event when it is opened).
 
 ## Invalidation
 
@@ -628,6 +783,7 @@ type CategoryId =
   | "return-destruction"
   | "governing-law";
 type Status = "compliant" | "deviation" | "missing" | "not_applicable" | "undetermined";
+type DeterminedStatus = Exclude<Status, "undetermined">;
 type EvidenceRole = "governing" | "supporting" | "superseded" | "conflicting" | "definition";
 
 interface RunManifest {
@@ -812,7 +968,8 @@ interface VerifiedFinding {
   }[];
   escalations: { code: EscalationCode; detail: string }[];
   verificationState: "verified" | "escalated_by_system";
-  contentSha256: string;
+  modelStatus?: DeterminedStatus | null; // the status the workflow stated, set only when code settled it to another
+  contentSha256: string; // over status, texts, evidence and escalations, and modelStatus when it is set
 }
 type VerifyFinding = (
   args: VerifyArgs,
@@ -834,22 +991,29 @@ interface CallRecord {
   attempt: number; // 1 for the first answer, 2 for a semantic repair
   outcome: "ok" | "schema_error" | "semantic_error" | "refusal" | "cut_off" | "transport" | "fatal";
   latencyMs: number;
-  inputTokens: number | null; // always null: the generator interface does not report usage
+  inputTokens: number | null; // what the provider reported (anthropic only); null otherwise, all four or none
   outputTokens: number | null;
   cacheReadTokens: number | null;
   cacheWriteTokens: number | null;
 }
 ```
 
-**The checks.** Verification records its checks under these 16 ids (the same as
+**The checks.** Verification records its checks under these 17 ids (the same as
 `verification_results.check_id`), in this order: `quote_exists`, `span_in_bundle`, `evidence_set`,
 `citation_shape`, `numeric_consistency`, `precedence_labels`, `superseded_evidence`, `parties`,
 `missing_confirmation`, `playbook_escalation`, `defined_term`, `instruction_like_text`, `support`,
-`model_abstained`, `status_forced` and `fallback_basis`. Check set `C1` is the baseline and runs
-thirteen of them: all but `superseded_evidence`, `support` and `status_forced`. Set `C2` adds
-`superseded_evidence`. The `support` check (model) runs whenever a support checker is given, which is
-when the workflow pins the prompt `support.p1`. `status_forced` is recorded when an escalation turned
-a determined status into `undetermined`. `instruction_like_text` escalates (`support_not_confirmed`)
+`model_abstained`, `status_settled`, `status_forced` and `fallback_basis`. Check set `C1` is the
+baseline and runs thirteen of them: all but `superseded_evidence`, `support`, `status_settled` and
+`status_forced`. Set `C2` adds `superseded_evidence`. The `support` check (model) runs whenever a
+support checker is given, which is when the workflow pins the prompt `support.p1`.
+**Settlement comes first and is not a check set.** Before any check, verify settles the workflow's
+status against the rule's flags (`settleStatus`, `apps/parol/src/settlement.ts`, for every workflow
+version) and every check then judges the settled claim. `status_settled` is a record and not a
+test: it is always `pass`, raises no escalation, and exists only when code changed the status,
+naming the two statuses and one of three fixed reasons (the rule forbids something and a contract
+without it passes; the rule is required; the rule is not required). It sits before `status_forced`
+in the order. `status_forced` is recorded when an escalation turned a determined status into
+`undetermined`. `instruction_like_text` escalates (`support_not_confirmed`)
 every cited passage, in any role, that sits in a paragraph ingest flagged as reading like an
 instruction to software; its detail names evidence positions and span labels, never the paragraph.
 With no set enabled a finding still has well-formed evidence, a basis and a hash, and an
@@ -861,7 +1025,11 @@ does not register it, so C2 and the model check are built and tested and are on 
 evaluation run of v3. Before a finding is
 formed, NUL characters and lone surrogates in the model's free text (discrepancy, explanation,
 fallback language, conflict, abstain reason) and in its quotes are replaced by U+FFFD, so that the
-content hash taken at verify equals the hash recomputed from the stored row.
+content hash taken at verify equals the hash recomputed from the stored row. The finding's content
+hash also covers the workflow's own status (`modelStatus`) when settlement set it, and only then, so
+a finding that code did not change hashes as it did before settlement existed. The input hash of the
+verify stage carries the version of the settlement rule (`SETTLEMENT_VERSION`), so a run resumed
+after the rule changed does not reuse a verify output made under the old one.
 
 ### Model-facing schemas
 
@@ -953,13 +1121,17 @@ Conventions as built:
   fixed message that does not repeat the input.
 - An error is `{ "error": { "kind", "message", ... } }` with a fixed kind and message and a closed
   `code` where there is one (`invalid_request` 400, `unauthenticated` 401, `forbidden` and `csrf` 403,
-  `not_found` 404, `conflict`, `active_run`, `stale_run`, `not_ready` and `export_blocked` 409,
+  `not_found` 404, `conflict`, `active_run`, `stale_run`, `not_ready`, `export_blocked` and `spend_refused` 409,
   `too_large` 413, `upload_rejected` 422, `internal` 500 with a `requestId`). A `conflict` carries the
   code of what disagreed: `content_mismatch` and `stale_finding` (a decision made on content that
   moved on), `decision_conflict` (another reviewer's decision is current on the finding; a reviewer
   can change only their own), `duplicate_stated_date` (an identical file arrived with a different
   stated date), `memo_file_changed` and `memo_file_missing` (the stored memo no longer matches its
-  record, or is gone), among others.
+  record, or is gone), among others. A `spend_refused` carries `code` (`spend_over_review_limit` or
+  `spend_over_daily_limit`) and `figures` (`boundUsd`, `limitUsd`, `usedUsd`, `heldUsd`): money, and
+  no id. The codes that the packages of part 3 added to the `code` of a 400 or a 409 are closed lists
+  in `apps/parol/src/server/routes/refusals-{retention,feedback,pilot,training}.ts`, one fragment for
+  each package; a code that two fragments define fails when they are merged.
 - The upload limit is `PAROL_MAX_UPLOAD_BYTES` (10 MB by default).
 
 | Method | Path                                           | Purpose                                                                                                                                                                                                                                                                                               | Allowed                           |
@@ -967,17 +1139,17 @@ Conventions as built:
 | GET    | `/api/session`                                 | The signed-in person (or null) and the CSRF token. Built, and not in the design                                                                                                                                                                                                                       | anyone                            |
 | POST   | `/session`, `/session/end`                     | Choose a demo identity (`intent` `sign-in` and `userId`) or sign out; a form or JSON. A caller that posts JSON gets JSON errors (kind and code), a form post gets the HTML page, and a JSON post to any other page still gets HTML. Replaces `POST /api/demo/session`; only with the demo identity on | anyone, with a token              |
 | GET    | `/api/matters`                                 | Matters the user is a member of                                                                                                                                                                                                                                                                       | any user                          |
-| POST   | `/api/matters`                                 | Create a matter; creator becomes associate; optional reviewer and playbook version                                                                                                                                                                                                                    | any user                          |
+| POST   | `/api/matters`                                 | Create a matter; creator becomes associate; optional reviewer and playbook version, and `retainDays` (a whole number from 1 to 90, 30 when left out)                                                                                                                                                  | any user                          |
 | GET    | `/api/matters/:id`                             | Matter, members, documents, upload warnings, playbooks, readiness to start, runs, memos                                                                                                                                                                                                               | A, R, V                           |
-| PATCH  | `/api/matters/:id`                             | One kind of change per request: client name or playbook version, or the operative version of a document, or a stated date                                                                                                                                                                             | A                                 |
+| PATCH  | `/api/matters/:id`                             | One kind of change per request: client name or playbook version, or the operative version of a document, or a stated date, or the retention date (`{ retention: { days } }`, counted from now, strict)                                                                                                | A                                 |
 | POST   | `/api/matters/:id/members`                     | Add a member                                                                                                                                                                                                                                                                                          | A                                 |
 | POST   | `/api/matters/:id/documents`                   | Upload DOCX or TXT (multipart: `title`, `kind`, `statedDate`, `file`); 201, or 200 for a duplicate, or 409 `duplicate_stated_date` for a duplicate whose stated date differs                                                                                                                          | A                                 |
 | POST   | `/api/matters/:id/documents/:docId/versions`   | Upload a new version (multipart: `statedDate`, `file`); the same 200 and 409 as above                                                                                                                                                                                                                 | A                                 |
 | DELETE | `/api/matters/:id/documents/:docId`            | Remove the last document of the matter. Built, and not in the design                                                                                                                                                                                                                                  | A                                 |
-| POST   | `/api/matters/:id/runs`                        | Start a run, body `{ workflow? }`; 202. 409 `active_run` carries the active run's id, 409 `not_ready` the reasons                                                                                                                                                                                     | A                                 |
+| POST   | `/api/matters/:id/runs`                        | Start a run, body `{ workflow? }`; 202. 409 `active_run` carries the active run's id, 409 `not_ready` the reasons, and, for a live provider, 409 `spend_refused` when the planned bound would pass a limit (`{ kind, code, message, figures }`; nothing is created)                                   | A                                 |
 | GET    | `/api/matters/:id/runs`                        | The matter's runs. Built, and not in the design                                                                                                                                                                                                                                                       | A, R, V                           |
 | GET    | `/api/matters/:id/runs/:runId`                 | Run status, stage, progress                                                                                                                                                                                                                                                                           | A, R, V                           |
-| POST   | `/api/matters/:id/runs/:runId/resume`          | Resume from the failed stage                                                                                                                                                                                                                                                                          | A                                 |
+| POST   | `/api/matters/:id/runs/:runId/resume`          | Resume from the failed stage; the same 409 `spend_refused` for the rest of the review                                                                                                                                                                                                                 | A                                 |
 | POST   | `/api/matters/:id/runs/:runId/cancel`          | Cancel a run in flight. Built, and not in the design                                                                                                                                                                                                                                                  | A                                 |
 | GET    | `/api/matters/:id/runs/:runId/findings`        | Issue table: `{ runId, findings: IssueRow[] }`                                                                                                                                                                                                                                                        | A, R, V                           |
 | GET    | `/api/matters/:id/findings/:findingId`         | Finding, evidence, checks, decisions (`FindingView`)                                                                                                                                                                                                                                                  | A, R, V                           |
@@ -987,18 +1159,51 @@ Conventions as built:
 | DELETE | `/api/matters/:id`                             | Delete the matter and its files; 204                                                                                                                                                                                                                                                                  | creator, AD                       |
 | GET    | `/api/playbooks`                               | Approved playbook versions a matter can pin (not every version)                                                                                                                                                                                                                                       | any user                          |
 | GET    | `/api/matters/:id/spans/:spanId`               | Not yet built. The inspector gets each cited paragraph inside the finding (`spanText`)                                                                                                                                                                                                                | A, R, V                           |
-| POST   | `/api/matters/:id/feedback`                    | Not yet built. Rating, reason code, missed issue, comment                                                                                                                                                                                                                                             | A, R, V                           |
+| POST   | `/api/matters/:id/runs/:runId/missed-issues`   | Report an issue a review missed: body `{ ruleKey, location, note }` (`ruleKey` null for "not covered by any rule"); 201 and the report; stored for the signed-in person. 409 `run_has_no_findings`                                                                                                    | A, R, V                           |
+| POST   | `/api/matters/:id/findings/:findingId/notes`   | Add a note to a finding: body `{ note }`; 201; 409 `finding_not_current` when the finding or its review is out of date                                                                                                                                                                                | A, R, V                           |
+| POST   | `/api/matters/:id/rating`                      | Rate the matter once the first memo exists: body `{ rating (1 to 5), comment }`; 201 and the caller's own rating; 409 `not_exported`, 409 `already_rated`                                                                                                                                             | A, R, V                           |
+| GET    | `/api/matters/:id/feedback`                    | The matter's reports and notes, and only the caller's own rating (`MatterFeedbackView`)                                                                                                                                                                                                               | A, R, V                           |
 | POST   | `/api/playbooks/:slug/versions`                | Not yet built. The store can import a draft; at start-up the demo playbook is imported as the demo legal engineer                                                                                                                                                                                     | LE                                |
 | POST   | `/api/playbooks/:slug/versions/:v/approve`     | Not yet built. The store can approve; at start-up the demo admin approves the demo playbook                                                                                                                                                                                                           | AD                                |
 | POST   | `/api/workflows/:id/promote`                   | Not yet built. The store can promote, with a promotion record                                                                                                                                                                                                                                         | AD                                |
-| GET    | `/api/evals/runs`, `/api/evals/compare`        | Not yet built. Evaluation runs from the command line (`pnpm eval:parol`)                                                                                                                                                                                                                              | LE                                |
+| GET    | `/api/evals/runs`, `/api/evals/compare`        | Not built. The comparison page (`GET /evaluations`, below) reads published files and has no JSON twin, by design. Evaluation runs are made from the command line (`pnpm eval:parol`)                                                                                                                  | LE                                |
 
 The page routes are the `GET` and form `POST` routes under `/` and `/matters/...` (matter, settings,
 members, documents, operative version, stated date, runs, a run's status for the progress script,
 findings and decisions, memos), plus `/healthz` and `/assets/:name`. A form post answers with a 303
 redirect to the page that shows its result, carrying a fixed notice code and a short-lived signature
-that binds it to the person and the page, so that a link cannot make a page claim something was done;
-a form that is refused is answered with its own page and the status of the refusal.
+that binds it to the person and the page, so that a link cannot make a page claim something was done.
+A form that is refused is answered with its own page and the status of the refusal: every form of a
+matter does this (settings, members, delete, documents, versions, operative version, stated date,
+removal, run start, resume, cancel, the three feedback forms, the retention date, the timer and the
+reference list), and so does the form that creates a matter, on the list of matters, and the form that
+starts the training matter, on the quickstart. An error notice carries a marked "what to do" sentence
+and, where the page has the control, a link to it.
+
+Counted once per method and path, the application has 67 routes: 25 under `/api` and 42 that are not
+(27 GET, 37 POST, 1 PATCH and 2 DELETE). Sixteen page routes were added in part 3, with no JSON twin
+unless the first table gives one:
+
+| Method | Path                                           | Purpose                                                                                                                                                        | Allowed                                  |
+| ------ | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| GET    | `/evaluations`                                 | The comparison page: the list of published comparisons, or one, selected by the query (`comparison`, `split`, `case` with `rule`). Reads files, writes nothing | LE, AD (global action `evaluation.read`) |
+| GET    | `/audit`                                       | The audit log check, run when the page is opened and never stored. No token, no event                                                                          | AD (`audit.read`)                        |
+| GET    | `/pilot`                                       | The pilot measures; `?scope=synthetic` shows the synthetic scope, and anything else the pilot scope                                                            | LE, AD (`pilot.read`)                    |
+| GET    | `/pilot/measures.csv`                          | The same measures as a CSV download, with a scope column on every row, codes and numbers only                                                                  | LE, AD (`pilot.read`)                    |
+| POST   | `/pilot/calendar`, `/pilot/participants`       | Set the first day of the pilot; replace the roster of people the trainer says were trained                                                                     | LE, AD (`pilot.manage`), with a token    |
+| GET    | `/quickstart`, `/help`                         | The ten-step quickstart and the help page; fixed text, open to a visitor                                                                                       | anyone                                   |
+| GET    | `/training/key`                                | The trainer's key to the training exercise                                                                                                                     | LE, AD (`training.key`)                  |
+| POST   | `/training`                                    | Start the signed-in person's own training matter (T01), with a reviewing attorney and a trainer chosen in the form; idempotent                                 | any signed-in person, with a token       |
+| POST   | `/matters/:matterId/retention`                 | Change the retention date (303 to the matter, notice `retention-saved`)                                                                                        | A (`matter.update`)                      |
+| POST   | `/matters/:matterId/timer`                     | Start or stop the signed-in person's own timer on the matter (`intent`)                                                                                        | A, R (`time.record`)                     |
+| POST   | `/matters/:matterId/reference-list`            | Replace the shadow-mode reference list: one choice for each rule of the playbook and three counts of issues no rule covers                                     | R (`reference.write`)                    |
+| POST   | `/matters/:matterId/rating`                    | Rate the matter (303 to the memos page)                                                                                                                        | A, R, V (`feedback.add`)                 |
+| POST   | `/matters/:matterId/findings/:findingId/notes` | Add a note to a finding (303 back to the review page on that finding)                                                                                          | A, R, V (`feedback.add`)                 |
+| POST   | `/matters/:matterId/runs/:runId/missed-issues` | Report a missed issue (303 to the review page)                                                                                                                 | A, R, V (`feedback.add`)                 |
+
+For a page with a global action, the order is the one in [document 6](06-access-and-governance.md#authorization):
+the person (a visitor is redirected to sign in), the token on a write, the global role (a member gets
+403), then the handler.
 
 Two representative payloads:
 
@@ -1014,7 +1219,11 @@ interface ReviewRequest {
     evidenceRoles?: { evidenceId: string; role: EvidenceRole }[];
   } | null; // required for "edit", null otherwise
   reason: string | null; // required for edit, reject and escalate
+  reasonCode?: ReasonCode | null; // required for edit and reject, not allowed otherwise
+  minorEdit?: boolean | null; // an edit only; never true when the edit changes the status
 }
+type ReasonCode =
+  "wrong_status" | "wrong_evidence" | "missed_context" | "bad_fallback" | "unclear" | "other";
 
 // GET /api/matters/:id/runs/:runId/findings returns { runId, findings: IssueRow[] }
 interface IssueRow {
@@ -1024,6 +1233,8 @@ interface IssueRow {
   category: CategoryId;
   severity: "high" | "medium" | "low";
   status: Status;
+  modelStatus?: DeterminedStatus | null; // the status the workflow stated, only when code settled it
+  settlementReason?: string | null; // a fixed clause such as "the rule is not required"; set with modelStatus
   validity: "current" | "stale";
   verificationState: "verified" | "escalated_by_system";
   escalations: { code: EscalationCode; detail: string }[];
@@ -1034,6 +1245,7 @@ interface IssueRow {
     at: string;
     validity: "current" | "stale";
   } | null;
+  noteCount?: number; // present only when the finding has at least one note
 }
 
 // GET /api/matters/:id/findings/:findingId returns the detail, one finding at a time
@@ -1076,9 +1288,13 @@ interface FindingView {
     reason: string | null;
     validity: "current" | "stale";
     edits: ReviewRequest["edits"];
+    reasonCode?: ReasonCode | null; // null for other decisions and for decisions made before 006
+    minorEdit?: boolean | null;
   }[];
   contentSha256: string; // what a decision must quote back
   canDecide: { allowed: boolean; reason: string | null };
+  notes?: NoteView[]; // oldest first
+  canAddNote?: { allowed: boolean; reason: string | null };
 }
 ```
 
@@ -1097,6 +1313,70 @@ of the current review.", while a real change of documents or playbook gets the p
 A run summary carries an optional `resumable` flag that is true only for a failed run, on unchanged
 inputs, on the provider and model now in use; the pages offer Resume only then and otherwise say the
 review was started on another model.
+
+A run summary also carries `model.reported` (the model or models the provider named, or null) and
+`usage`, which the Usage section of the run page prints: `state` (`stand_in`, `not_reported` or
+`reported`), `calls` (the model calls recorded for the run, the denominator of every other count),
+`callsWithUsage`, the four token sums (null when no call reported any), `cost` (`state` of
+`not_applicable`, `not_priced`, `partly_priced` or `priced`, the sum `usd` over the priced calls only,
+`callsPriced` and the price table's hash), `reportsUsage`, `stoppedBySpend` (the guard stopped the
+run, so the figures are less than was spent) and `lines`, the sentences the page shows. A matter
+view carries `retention` (`retainUntil`, `daysLeft`, `pastDate`, `defaultDays`, `maxDays`) and a
+matter summary `pastRetention`; a training matter's view also carries how far the person has got
+through the exercise. `modelStatus` and `settlementReason` of an issue row, and `reasonCode` and
+`minorEdit` of a decision, are left out of the JSON when there is nothing to say, so a row that
+code did not change reads as it did before part 3.
+
+### The comparison page document
+
+The comparison page (`GET /evaluations`) shows a file and not a table: a page document, written by
+the evaluation command and only read by the application. The contract is owned by the reader,
+`apps/parol/src/evaluations/document.ts`, which is the schema and which the writer
+(`evals/src/parol/page.ts`) must meet. A comparison is published by `pnpm eval:parol --publish
+<data folder>` after `--compare`, or from two results files that already exist with `--baseline` and
+`--candidate`; the file is `<data folder>/evaluations/cmp_<16 hex digits>.json`, the folder is the one
+`PAROL_DATA_DIR` names, and it is made for its owner alone. It is not a table of the database and
+not one of the three `eval_*` tables, which the runner does not write (known gap 12 of
+[document 7](07-delivery-plan.md#known-gaps)).
+
+- **What it holds.** The two runs' pins (mode, workflow label, hash, retrieval and checks, with each
+  prompt as its id and the first 12 hex digits of its hash; model requested and as reported; commit
+  and whether the tree was dirty; repeats; health; contamination), the dataset, playbook and
+  evaluation version, the differences between the pins, one or two sections (`dev` and `heldout`,
+  distinct) and the cases they point at. A section has its metric rows with counts, the 14 gates
+  G1 to G14 on each side, exactly those, once each and in order (or null for a side that has no
+  report), the paired and unpaired slot counts, the slots whose answer changed, and the decision of
+  the rule as a gate result. A changed slot has the answer key's side and, for each side and repeat,
+  a trail: where retrieval looked, what the finding cited, the checks and the escalations. A case has
+  its documents and the passages the key points at, with their text: it is the synthetic text of
+  `fixtures/parol`, and nothing a model wrote.
+- **What it never holds.** A model answer, a quotation a model wrote, a prompt, or text from a
+  matter. A trail is of labels, indexes, offsets and closed codes. A side's `trailsRecorded` and each
+  trail's `recorded` and `whyNot` (`not_recorded` for a results file made before trails existed, or
+  `case_changed` when the case files no longer read as they did) say when there is none.
+- **The held-out set is sealed in the document.** A held-out changed slot is `{ sealed: true }` and
+  its case is left out of `cases`, unless the command was given `--open-heldout-trails`, which
+  records `heldoutTrailsOpened` in the document and makes the page raise the contamination warning
+  in capitals.
+- **The caps** are the constants of `document.ts`: at most 500 changed slots in a section, 40 cases,
+  60 passages for each case, 40 notes, 40 metric rows, 40 lines of evidence for each gate and 200
+  differences; a string at most 2000 characters (a passage's text 8000, a workflow label 100); a
+  count at most 1e9; a file name without a path; the whole file at most 4 MiB (`MAX_PAGE_BYTES`). The
+  writer refuses a list that would pass its cap and does not cut it (about 40 repeats or more
+  would give a gate more than 40 lines of evidence), clips a long string with three full stops, and
+  leaves a paragraph longer than the text limit out of the document, and the page then says that its
+  text is not in the file.
+- **The fingerprint.** `sha256` is the hash of everything but itself and the id, and the id is `cmp_`
+  and its first 16 digits. The reader checks, in order, the size, that the text is JSON, the strict
+  schema, the fingerprint, and that the file is named for its id, and answers a fixed code for the
+  first to fail. It is not authentication: whoever can write the folder can write a valid file, and
+  the page says so. A file in the folder that does not meet the contract is listed as unusable, with
+  a fixed code and none of its content; at most 200 files are listed.
+- **The words belong to the application.** The banners of a scripted run, the labels of the decision
+  rule and the sentence "This is the result of the gates and not a recommendation" are in
+  `apps/parol/src/evaluations/words.ts` and not in the file; the copies of the evaluation's own
+  constants are held equal by `test/evaluations/pins.test.ts`, which fails when `evals/` changes any
+  of them.
 
 ## Retrieval boundaries and provenance
 
@@ -1154,10 +1434,15 @@ headers neutralised.
 **Provenance.** Each finding links to its spans (document version, paragraph, offsets, text hash);
 each run records the manifest, workflow version (and through it the prompt versions and retrieval
 policy), playbook version, the requested model, and each call's request hash. The memo's appendix
-repeats this in readable form. **Not recorded, so not satisfied: the provider-reported model and each
-call's token usage.** The model layer returns only the parsed answer to the stages, so
-`runs.model_reported` and the token and cost columns of `model_calls` stay NULL and the memo says "not
-reported". Recording them needs the layer to report usage per call.
+repeats this in readable form. For the `anthropic` provider each run also records what the provider
+reported: the token counts of each call (`model_calls`), an estimated cost with the hash of the price
+table that priced it, and the model or models the provider named (`runs.model_reported`). The memo
+says "not reported" for a model the provider did not name, prints a `Usage:` line of counts and never
+a cost, and a run made by a scripted stand-in says that no model was called. **Not satisfied for
+other providers, and never met a live one:** the adapters of `openai` and `openai-compatible` report
+no usage, so for them the columns stay NULL and the pages say so; the readers have met only scripted
+wires, whose reply shape is the tests' own reading of the Messages API (known gap 11 of
+[document 7](07-delivery-plan.md#known-gaps)).
 
 **Conflicting sources.** Precedence is settled by rules written down in the analysis prompt and
 checked in code against intake data and annotations, not left to the model's preference:
@@ -1187,24 +1472,24 @@ alarm.
 
 ## Deterministic checks and model judgment
 
-| Concern                                | Deterministic (code)                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Model judgment                                                                                             |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| File acceptance                        | Type, size, structure limits (`@clausewise/docx` and the limits in `src/ingest/parse.ts`), hashing, duplicate detection; a Word package with two parts of one name (compared ignoring ASCII case) is refused, naming no part; text a reader cannot see in Word is left out and reported as hidden                                                                                                                                                                                         |                                                                                                            |
-| Paragraphs, clause numbers, span ids   | `parseDocx` or the TXT reader (`src/ingest/txt.ts`), then `segment`                                                                                                                                                                                                                                                                                                                                                                                                                       |                                                                                                            |
-| Defined terms, cross-references        | Pattern annotations at ingest                                                                                                                                                                                                                                                                                                                                                                                                                                                             |                                                                                                            |
-| Instruction-like text                  | Pattern warning at upload, repeated in the memo's "Document warnings"; a finding that cites a flagged paragraph is escalated (`instruction_like_text`). A signal for the reviewer, not a security control: a model that follows such a paragraph yet cites a genuine clause is not flagged on the finding                                                                                                                                                                                 |                                                                                                            |
-| Which clauses belong to a category     | Keyword hints as a recall backstop                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Locating paraphrased clauses                                                                               |
-| Which rule applies                     | Keyed lookup in the pinned playbook                                                                                                                                                                                                                                                                                                                                                                                                                                                       |                                                                                                            |
-| Whether the text meets the standard    |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Status, discrepancy, explanation                                                                           |
-| Required and absence semantics         | **Not satisfied in full.** The design had status settlement in code (Clausewise's rule: a missing optional clause is not applicable). Code checks the citation shape: `missing` and `not_applicable` must cite nothing as governing or supporting, both need the whole document, and `not_applicable` on a rule the playbook requires is escalated. `settledStatus` is exported by `@clausewise/review` and no stage calls it, so `missing` on the optional rule `ret-1` is not corrected | The model applies it, as the analysis prompt tells it                                                      |
-| Quote validity                         | Normalised match in the cited span (`locateQuote`, the `normalizeForAnchor` normalisation and whole-word rule); span must be in the bundle                                                                                                                                                                                                                                                                                                                                                |                                                                                                            |
-| Substantive support                    | Durations, percentages, amounts and jurisdictions in the discrepancy or explanation must appear in a cited verified quote, or in the rule's own text                                                                                                                                                                                                                                                                                                                                      | Isolated support check over the cited passages only (built; off in v1 and v2, on in v3 for the evaluation) |
-| Missing clause                         | Requires the whole document in the bundle (`citation_shape`) and no uncited keyword hint for the rule's topics (`missing_confirmation`)                                                                                                                                                                                                                                                                                                                                                   | The analysis itself                                                                                        |
-| Precedence between documents           | Rules 1 and 2 above, as label checks (rules 3 and 4 are not in code)                                                                                                                                                                                                                                                                                                                                                                                                                      | Proposing evidence roles                                                                                   |
-| Parties                                | Client legal name from intake must appear in a cited governing or supporting quote, **or in any span of the bundle**: weaker than the design, see below                                                                                                                                                                                                                                                                                                                                   | Whether roles and entities are adequately stated                                                           |
-| Playbook escalation conditions         | The ids returned must exist in the rule                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Whether a condition is met                                                                                 |
-| Fallback language                      | Basis label by word overlap with the approved text (Dice coefficient of at least 0.6, and no figure the approved text does not name); no diff is shown                                                                                                                                                                                                                                                                                                                                    | Adapting approved text to the document's defined terms                                                     |
-| Permissions, export gate, invalidation | Entirely in code                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Never                                                                                                      |
+| Concern                                | Deterministic (code)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Model judgment                                                                                             |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| File acceptance                        | Type, size, structure limits (`@clausewise/docx` and the limits in `src/ingest/parse.ts`), hashing, duplicate detection; a Word package with two parts of one name (compared ignoring ASCII case) is refused, naming no part; text a reader cannot see in Word is left out and reported as hidden                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |                                                                                                            |
+| Paragraphs, clause numbers, span ids   | `parseDocx` or the TXT reader (`src/ingest/txt.ts`), then `segment`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |                                                                                                            |
+| Defined terms, cross-references        | Pattern annotations at ingest                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |                                                                                                            |
+| Instruction-like text                  | Pattern warning at upload, repeated in the memo's "Document warnings"; a finding that cites a flagged paragraph is escalated (`instruction_like_text`). A signal for the reviewer, not a security control: a model that follows such a paragraph yet cites a genuine clause is not flagged on the finding                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |                                                                                                            |
+| Which clauses belong to a category     | Keyword hints as a recall backstop                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Locating paraphrased clauses                                                                               |
+| Which rule applies                     | Keyed lookup in the pinned playbook                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |                                                                                                            |
+| Whether the text meets the standard    |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Status, discrepancy, explanation                                                                           |
+| Required and absence semantics         | **Settled in code, for every workflow version.** The first step of verify applies the playbook's flags (`settledStatus` of `@clausewise/review`, through `settleStatus`): a rule that forbids something is `compliant` when nothing is found, a rule that is not required and that no clause covers is `not_applicable`, a required one is `missing`. The workflow's own status is kept (`findings.model_status`, a `status_settled` row, the content hash). Code still checks the citation shape: `missing` and `not_applicable` must cite nothing as governing or supporting, both need the whole document, and `not_applicable` on a rule the playbook requires is escalated. **Not covered:** a `not_applicable` that the workflow states directly is not tested against keyword hints (a `missing` that settlement turned into `not_applicable` is) | The model applies it first, as the analysis prompt tells it; code settles the result                       |
+| Quote validity                         | Normalised match in the cited span (`locateQuote`, the `normalizeForAnchor` normalisation and whole-word rule); span must be in the bundle                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |                                                                                                            |
+| Substantive support                    | Durations, percentages, amounts and jurisdictions in the discrepancy or explanation must appear in a cited verified quote, or in the rule's own text                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Isolated support check over the cited passages only (built; off in v1 and v2, on in v3 for the evaluation) |
+| Missing clause                         | Requires the whole document in the bundle (`citation_shape`) and no uncited keyword hint for the rule's topics (`missing_confirmation`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | The analysis itself                                                                                        |
+| Precedence between documents           | Rules 1 and 2 above, as label checks (rules 3 and 4 are not in code)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Proposing evidence roles                                                                                   |
+| Parties                                | Client legal name from intake must appear in a cited governing or supporting quote, **or in any span of the bundle**: weaker than the design, see below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Whether roles and entities are adequately stated                                                           |
+| Playbook escalation conditions         | The ids returned must exist in the rule                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Whether a condition is met                                                                                 |
+| Fallback language                      | Basis label by word overlap with the approved text (Dice coefficient of at least 0.6, and no figure the approved text does not name); no diff is shown                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Adapting approved text to the document's defined terms                                                     |
+| Permissions, export gate, invalidation | Entirely in code                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Never                                                                                                      |
 
 **Known gap (parties).** The design said the client's legal name must appear in the parties passage.
 `parties` also passes when the name appears in any span of the bundle, and for a rule whose bundle is
@@ -1274,19 +1559,19 @@ false alarm rate are unknown, and G11 is not evaluated in any report.
 
 ## Structured output, retries and recovery
 
-| Failure                                                                                       | Handling                                                                                                                                                                                                                                                | Bound                   |
-| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
-| Transport error, stream error, schema mismatch                                                | Retried by `@clausewise/llm`                                                                                                                                                                                                                            | `maxRetries`, default 2 |
-| Reply cut off at the output limit                                                             | Not retried (Clausewise behaviour); `output_invalid`                                                                                                                                                                                                    | 0                       |
-| Refusal                                                                                       | Not retried; `output_invalid` with the provider's category                                                                                                                                                                                              | 0                       |
-| Semantic error (unknown clause label, `undetermined` without a reason, unknown escalation id) | One repair attempt that appends the validation message (by label and id, never quoting the answer); then `output_invalid`                                                                                                                               | 1                       |
-| Fatal provider error (401, 402, 403, 404, redirect)                                           | Stops the run with a closed `error_kind`; finished units stay in `run_stages` and a resume skips them, and no findings are saved until every rule is verified                                                                                           | 0                       |
-| Server restart during a run                                                                   | On boot, unfinished runs become `failed` with `interrupted`; the associate resumes, and resume skips finished units by input hash. The matter returns to `ready`, or to `stale` when it holds findings of an earlier review                             | n/a                     |
-| A run's end cannot be written (the database refuses the write)                                | The runner tries again at growing intervals (100 ms to 5 s) until the write works, keeping the run's queue slot, then settles the run `failed` with `internal`; a refusal by the store itself (cancelled, deleted, superseded meanwhile) is not retried | no bound                |
-| A second server on the data folder                                                            | Refused before the database is opened: an exclusive lock on `parol.lock`, dropped by the operating system when the holder ends                                                                                                                          | n/a                     |
-| Upload parse failure                                                                          | Rejected with the reader's reason (HTTP 422); nothing stored                                                                                                                                                                                            | n/a                     |
-| Memo write failure                                                                            | Written to a temporary file and renamed (the Clausewise pattern); the database row is inserted only after, and the file is removed if the row is refused                                                                                                | n/a                     |
-| Spend                                                                                         | Evaluation runs use the Clausewise spend guard (plan first, `--yes`, per-request cap), `--max-cost`. The application has no spend guard of its own: a review through the server is not metered                                                          | `--max-cost`            |
+| Failure                                                                                       | Handling                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Bound                                                                 |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| Transport error, stream error, schema mismatch                                                | Retried by `@clausewise/llm`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `maxRetries`, default 2                                               |
+| Reply cut off at the output limit                                                             | Not retried (Clausewise behaviour); `output_invalid`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | 0                                                                     |
+| Refusal                                                                                       | Not retried; `output_invalid` with the provider's category                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | 0                                                                     |
+| Semantic error (unknown clause label, `undetermined` without a reason, unknown escalation id) | One repair attempt that appends the validation message (by label and id, never quoting the answer); then `output_invalid`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | 1                                                                     |
+| Fatal provider error (401, 402, 403, 404, redirect)                                           | Stops the run with a closed `error_kind`; finished units stay in `run_stages` and a resume skips them, and no findings are saved until every rule is verified                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | 0                                                                     |
+| Server restart during a run                                                                   | On boot, unfinished runs become `failed` with `interrupted`; the associate resumes, and resume skips finished units by input hash. The matter returns to `ready`, or to `stale` when it holds findings of an earlier review                                                                                                                                                                                                                                                                                                                                                                                                                                        | n/a                                                                   |
+| A run's end cannot be written (the database refuses the write)                                | The runner tries again at growing intervals (100 ms to 5 s) until the write works, keeping the run's queue slot, then settles the run `failed` with `internal`; a refusal by the store itself (cancelled, deleted, superseded meanwhile) is not retried                                                                                                                                                                                                                                                                                                                                                                                                            | no bound                                                              |
+| A second server on the data folder                                                            | Refused before the database is opened: an exclusive lock on `parol.lock`, dropped by the operating system when the holder ends                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | n/a                                                                   |
+| Upload parse failure                                                                          | Rejected with the reader's reason (HTTP 422); nothing stored                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | n/a                                                                   |
+| Memo write failure                                                                            | Written to a temporary file and renamed (the Clausewise pattern); the database row is inserted only after, and the file is removed if the row is refused                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | n/a                                                                   |
+| Spend                                                                                         | A live server needs a limit for one review, a limit for one UTC day, a price file and, for a provider other than `anthropic`, `PAROL_SPEND_BOUND_ONLY=1`, or it does not start. A review is planned before it starts and refused (409 `spend_refused`, nothing created) when the bound would pass a limit; for `anthropic`, a request that could take the recorded spend past a limit is held back and the run ends `failed` with `spend_review_limit` or `spend_daily_limit`, and can be resumed. Evaluation runs use the Clausewise spend guard (plan first, `--yes`, per-request cap), `--max-cost`. See [document 6](06-access-and-governance.md#spend-limits) | `PAROL_MAX_REVIEW_COST_USD`, `PAROL_MAX_DAILY_COST_USD`; `--max-cost` |
 
 Worst case per rule: (1 + 2) attempts for the first answer, times two if a repair is needed, so six
 calls; the evaluation plan uses that figure for its retry bound.
