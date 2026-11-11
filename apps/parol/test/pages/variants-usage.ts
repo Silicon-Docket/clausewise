@@ -116,9 +116,34 @@ export function modelOf(
   return { provider, requested: "model-a", reported };
 }
 
-/** The usage of a run by `provider`, as the service builds it from the aggregate of its calls. */
-export function usageOf(aggregate: RunUsageAggregate, provider = "anthropic"): UsageSummary {
-  return summarizeUsage(aggregate, provider);
+/**
+ * The usage of a run by `provider`, as the service builds it from the aggregate of its calls.
+ * `stoppedBySpend` is a run the spend guard stopped.
+ */
+export function usageOf(
+  aggregate: RunUsageAggregate,
+  provider = "anthropic",
+  options: { stoppedBySpend?: boolean } = {},
+): UsageSummary {
+  return summarizeUsage(aggregate, provider, options);
+}
+
+/** What the page says of a run the spend guard stopped, about the calls it cut short. */
+export const CUT_SHORT =
+  "Calls that were cut short when the review stopped are counted in the day's total and are not listed here.";
+
+/** A run that failed because it reached a spend limit, with `kind` the one it reached. */
+export function spendStoppedRun(
+  kind: "spend_review_limit" | "spend_daily_limit" = "spend_review_limit",
+  aggregate: RunUsageAggregate = { ...PRICED, calls: 4, callsWithUsage: 4, callsPriced: 4 },
+): RunSummary {
+  return buildRunSummary({
+    model: modelOf("anthropic"),
+    usage: usageOf(aggregate, "anthropic", { stoppedBySpend: true }),
+    status: "failed",
+    errorKind: kind,
+    findingCount: 0,
+  });
 }
 
 /** A run by a provider that reports usage, with the usage given. */
@@ -184,6 +209,20 @@ export const VARIANTS_USAGE: Variant[] = [
     () =>
       runPage({
         run: usageRun(PRICED, { model: modelOf("simulated", null) }, "simulated"),
+      }),
+  ],
+  ["run, stopped by the limit for one review", () => runPage({ run: spendStoppedRun() })],
+  [
+    "run, stopped by the limit for a day",
+    () => runPage({ run: spendStoppedRun("spend_daily_limit") }),
+  ],
+  [
+    "run, stopped by a limit before a call was recorded",
+    () =>
+      runPage({
+        run: spendStoppedRun("spend_review_limit", { ...UNREPORTED, calls: 0 }),
+        issues: [],
+        selected: null,
       }),
   ],
   [

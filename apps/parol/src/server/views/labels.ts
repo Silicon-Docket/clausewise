@@ -378,6 +378,10 @@ export const RUN_ERROR_MEANING: Record<string, string> = {
     "The model provider reports a billing or quota problem on the account. Fix it, then resume.",
   provider_redirect:
     "The model provider's address redirected the request, which Parol does not follow. Check the configured address, then resume.",
+  spend_review_limit:
+    "The review stopped because its cost reached the limit for one review. What was finished is kept. Ask whoever runs this server to raise the limit, then resume: finished work is not paid for again.",
+  spend_daily_limit:
+    "The review stopped because today's cost limit was reached. What was finished is kept. Resume it after midnight UTC, or ask whoever runs this server to raise the daily limit.",
   internal:
     "The review stopped because of a fault in Parol. Resume it, and report it if it stops again.",
 };

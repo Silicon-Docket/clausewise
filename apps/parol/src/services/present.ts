@@ -235,7 +235,10 @@ export function createPresenter(
           }),
       progress,
       findingCount: repo.listFindings(run.matterId, run.id).length,
-      usage: summarizeUsage(repo.summarizeRunUsage(run.matterId, run.id), run.modelProvider),
+      usage: summarizeUsage(repo.summarizeRunUsage(run.matterId, run.id), run.modelProvider, {
+        stoppedBySpend:
+          run.errorKind === "spend_review_limit" || run.errorKind === "spend_daily_limit",
+      }),
     };
   }
 

@@ -15,7 +15,9 @@
 -- columns exist since 001 and nothing wrote them; these triggers say what a written row may hold
 -- (counts and a hash, never text) and that a recorded call is never edited.
 --
--- Part 3 (the spend ledger) follows below when it is written.
+-- Part 3 (the spend ledger). The application's spend guard keeps the day's total in a table of its
+-- own, so that deleting a matter, which deletes its model calls, cannot lower a limit that was
+-- reached. It holds a date and numbers and nothing that names a matter, a run, a person or text.
 
 -- 1. The model's own status, kept when code settled it to another one.
 --    NULL means the status is the one the model stated (or that no status was stated). It is never
@@ -66,3 +68,28 @@ CREATE TRIGGER runs_model_reported_shape BEFORE UPDATE OF model_reported ON runs
 WHEN NEW.model_reported IS NOT NULL
  AND (length(NEW.model_reported) > 300 OR NEW.model_reported GLOB '*[^ -~]*')
 BEGIN SELECT RAISE(ABORT, 'parol: a reported model is plain text of at most 300 characters'); END;
+
+-- 4. The day's spend, kept apart from matter data so that deleting a matter cannot lower it.
+--    One row per UTC day. It holds counts and a total and nothing that names a matter, a run or a
+--    person. The retention job and the deletion of a matter leave it alone, on purpose.
+CREATE TABLE spend_ledger (
+  day                 TEXT PRIMARY KEY CHECK (day GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+  responses           INTEGER NOT NULL DEFAULT 0 CHECK (responses >= 0),
+  input_tokens        INTEGER NOT NULL DEFAULT 0 CHECK (input_tokens >= 0),
+  output_tokens       INTEGER NOT NULL DEFAULT 0 CHECK (output_tokens >= 0),
+  cache_read_tokens   INTEGER NOT NULL DEFAULT 0 CHECK (cache_read_tokens >= 0),
+  cache_write_tokens  INTEGER NOT NULL DEFAULT 0 CHECK (cache_write_tokens >= 0),
+  cost_usd            REAL    NOT NULL DEFAULT 0 CHECK (cost_usd >= 0),
+  unpriced_responses  INTEGER NOT NULL DEFAULT 0 CHECK (unpriced_responses >= 0),
+  updated_at          TEXT    NOT NULL
+);
+
+CREATE TRIGGER spend_ledger_only_grows BEFORE UPDATE ON spend_ledger
+WHEN NEW.day IS NOT OLD.day OR NEW.responses < OLD.responses
+  OR NEW.input_tokens < OLD.input_tokens OR NEW.output_tokens < OLD.output_tokens
+  OR NEW.cache_read_tokens < OLD.cache_read_tokens OR NEW.cache_write_tokens < OLD.cache_write_tokens
+  OR NEW.cost_usd < OLD.cost_usd OR NEW.unpriced_responses < OLD.unpriced_responses
+BEGIN SELECT RAISE(ABORT, 'parol: the spend ledger only grows'); END;
+
+CREATE TRIGGER spend_ledger_never_emptied BEFORE DELETE ON spend_ledger
+BEGIN SELECT RAISE(ABORT, 'parol: the spend ledger is never emptied'); END;

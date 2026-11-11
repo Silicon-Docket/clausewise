@@ -5,10 +5,12 @@ import { checkInvariants } from "./invariants.js";
 import { runPage } from "./render.js";
 import { buildRunSummary } from "./support.js";
 import {
+  CUT_SHORT,
   PRICED,
   UNREPORTED,
   VARIANTS_USAGE,
   modelOf,
+  spendStoppedRun,
   usageOf,
   usageRun,
 } from "./variants-usage.js";
@@ -161,6 +163,47 @@ describe("the Usage section", () => {
     const html = runPage({ run });
     expect(html.indexOf("banner-standin")).toBeLessThan(html.indexOf("data-issue-table"));
     expect(withClass(checkInvariants(html), "banner-standin")).toHaveLength(1);
+  });
+});
+
+describe("the Usage section of a review the spend guard stopped", () => {
+  it("adds, after the figures, that the calls cut short are in the day's total and not listed", () => {
+    const run = spendStoppedRun();
+    const lines = sentences(usageSection(page(run))!);
+    expect(lines).toEqual(run.usage?.lines);
+    expect(lines.at(-1)).toBe(CUT_SHORT);
+    expect(lines[0]).toContain("from 4 of 4 recorded model calls.");
+    expect(lines).toHaveLength(3);
+  });
+
+  it("says it for the limit of a day as for the limit of one review, and with no call recorded", () => {
+    for (const run of [
+      spendStoppedRun("spend_daily_limit"),
+      spendStoppedRun("spend_review_limit", { ...UNREPORTED, calls: 0 }),
+    ])
+      expect(sentences(usageSection(page(run))!).at(-1)).toBe(CUT_SHORT);
+  });
+
+  it("is not said of a review that was not stopped by a limit, or that no model read", () => {
+    for (const run of [
+      usageRun(PRICED, { status: "failed", errorKind: "provider_auth" }),
+      usageRun(PRICED),
+      usageRun(PRICED, { model: modelOf("simulated", null) }, "simulated"),
+    ])
+      expect(sentences(usageSection(page(run))!).join(" ")).not.toContain("cut short");
+    // A stand-in never has a spend stop, even if its summary is told so.
+    const standIn = usageOf(PRICED, "simulated", { stoppedBySpend: true });
+    expect(standIn.stoppedBySpend).toBe(false);
+    expect(standIn.lines).toEqual(["No model was called, so there is no usage to record."]);
+  });
+
+  it("tells the person what to do, in the words of the kind, on the banner of the failed run", () => {
+    expect(readable(page(spendStoppedRun()))).toContain(
+      "The review stopped because its cost reached the limit for one review. What was finished is kept. Ask whoever runs this server to raise the limit, then resume: finished work is not paid for again.",
+    );
+    expect(readable(page(spendStoppedRun("spend_daily_limit")))).toContain(
+      "The review stopped because today's cost limit was reached. What was finished is kept. Resume it after midnight UTC, or ask whoever runs this server to raise the daily limit.",
+    );
   });
 });
 

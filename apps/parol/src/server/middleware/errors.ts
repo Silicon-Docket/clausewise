@@ -4,7 +4,8 @@ import { HTTPException } from "hono/http-exception";
 import { ZodError } from "zod";
 import { CsrfError } from "../../auth/csrf.js";
 import { UploadError } from "../../module-contracts.js";
-import { ForbiddenError, RunNotReadyError } from "../../services/errors.js";
+import { ForbiddenError, RunNotReadyError, SpendRefusedError } from "../../services/errors.js";
+import { SPEND_REFUSAL_CODES } from "../../usage/errors.js";
 import {
   ActiveRunError,
   AuditDetailError,
@@ -61,10 +62,14 @@ const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 const REASONS: ReadonlySet<string> = new Set(EXPORT_BLOCKER_REASONS);
 const WHY: ReadonlySet<string> = new Set(["superseded", "inputs_changed"]);
+const SPEND_CODES: ReadonlySet<string> = new Set(SPEND_REFUSAL_CODES);
 
 const safeCode = (code: unknown, fallback: string): string =>
   typeof code === "string" && CODE.test(code) ? code : fallback;
 const safeId = (id: unknown): string | null => (typeof id === "string" && ID.test(id) ? id : null);
+/** A figure of money: a finite number of 0 or more, or 0. Nothing else is sent. */
+const safeFigure = (value: unknown): number =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 
 /** Text written for the user, with control characters and length taken out. */
 function userText(value: unknown, max: number): string {
@@ -140,6 +145,20 @@ export function toSafeError(err: unknown): SafeError {
       code: "stale_run",
       ...(WHY.has(err.why) ? { why: err.why } : {}),
     });
+  // A review the spend guard refused. Its words are written for the person (`userText`) from the
+  // two limits and the planned bound: figures of money, never a name, an id or a document.
+  if (err instanceof SpendRefusedError) {
+    const code = SPEND_CODES.has(err.code) ? err.code : "spend_over_review_limit";
+    return safe(409, "spend_refused", userText(err.userText(), 600), {
+      code,
+      figures: {
+        boundUsd: safeFigure(err.figures.boundUsd),
+        limitUsd: safeFigure(err.figures.limitUsd),
+        usedUsd: safeFigure(err.figures.usedUsd),
+        heldUsd: safeFigure(err.figures.heldUsd),
+      },
+    });
+  }
   if (err instanceof ConflictError)
     return safe(409, "conflict", "The request conflicts with the current state.", {
       code: safeCode(err.code, "conflict"),

@@ -5,6 +5,8 @@ import { noteModel } from "../../src/usage/metering.js";
 import { CallCollector, callStore, createRunScope, runStore } from "../../src/usage/scope.js";
 import { createCallPricer, parsePriceTable } from "../../src/usage/prices.js";
 import type { AnalysisAnswer } from "../../src/contracts.js";
+import { SpendRefusedError } from "../../src/services/errors.js";
+import { nearWorst, reviewBound, spendWorld } from "./spend-support.js";
 import { meteredWorld } from "./support.js";
 
 afterAll(cleanup);
@@ -134,5 +136,63 @@ describe("a provider's reply that names something that is not a model", () => {
     // A plain name is kept.
     runStore.run(scope, () => callStore.run(collector, () => noteModel(MARK)));
     expect(collector.models()).toEqual([MARK]);
+  });
+});
+
+describe("a review the spend guard refuses or stops", () => {
+  const BOUND = reviewBound("v2");
+
+  it("leaves no text in the refusal, the ledger, the log, the audit trail or the usage a page shows", async () => {
+    // A review that goes on until its limit stops it, so the ledger, the log and the audit trail
+    // have all been written by the stop; and one that is refused before it begins.
+    const w = spendWorld({
+      limits: { perReviewUsd: BOUND, perDayUsd: BOUND * 10 },
+      usage: nearWorst(0.9),
+      model: { answers: { "ret-1": ANSWER } },
+    });
+    const { matterId, am } = newMatter(w, `Matter named ${MARK}`);
+    await uploadCase(w, matterId);
+    const run = w.services.runs.start(am, { workflowLabel: "v2" });
+    await w.services.runs.idle();
+    expect(w.services.runs.get(am, run.id).errorKind).toBe("spend_review_limit");
+
+    const strict = w.restart({ perReviewUsd: BOUND * 0.5 });
+    let refusal: unknown;
+    try {
+      strict.services.runs.resume(strict.grant(w.associate, matterId), run.id);
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal).toBeInstanceOf(SpendRefusedError);
+    const refused = refusal as SpendRefusedError;
+
+    const sentence = w.repo
+      .listSpans(
+        matterId,
+        w.repo.getRun(matterId, run.id)!.manifest.documents.map((d) => d.documentVersionId),
+      )
+      .map((s) => s.text)
+      .sort((a, b) => b.length - a.length)[0]!
+      .slice(0, 40);
+    const places: Record<string, string> = {
+      "the refusal's words": refused.userText(),
+      "the refusal's message": refused.message,
+      "the refusal's figures": JSON.stringify(refused.figures),
+      "the ledger": JSON.stringify(w.repo.db.prepare("SELECT * FROM spend_ledger").all()),
+      "the service log": w.logs.join("\n"),
+      "the audit trail": JSON.stringify(w.repo.listAuditEvents({ matterId, limit: 100_000 })),
+      "the call rows": JSON.stringify(w.repo.listModelCalls(matterId, run.id)),
+      "the usage a page shows": JSON.stringify(w.services.runs.get(am, run.id).usage),
+    };
+    for (const [where, text] of Object.entries(places)) {
+      expect(text.length, where).toBeGreaterThan(2);
+      expect(text, where).not.toContain(MARK);
+      expect(text, where).not.toContain(sentence);
+      expect(text, where).not.toContain("Matter named");
+      expect(text, where).not.toContain(baseWorld.manifest.clientLegalName);
+    }
+    // The stop is in the places that say why the run ended, so a clean result means something.
+    expect(places["the service log"]).toContain("spend_review_limit");
+    expect(JSON.stringify(w.repo.getMatter(matterId))).toContain(MARK);
   });
 });

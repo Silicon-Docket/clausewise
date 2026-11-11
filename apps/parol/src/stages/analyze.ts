@@ -2,12 +2,15 @@ import {
   AnalysisSchema,
   type AnalysisAnswer,
   type CallRecord,
+  type ContextBundle,
   type DraftEvidence,
   type DraftFinding,
+  type IngestOutput,
   type PlaybookRuleRecord,
+  type RunManifest,
   type SourceSpan,
 } from "../contracts.js";
-import type { RunAnalyze } from "../module-contracts.js";
+import type { RegisteredPrompt, RunAnalyze } from "../module-contracts.js";
 import { getFragment, renderPrompt } from "../prompts/registry.js";
 import {
   describeClient,
@@ -34,13 +37,14 @@ import { callModel, normalizeLabel } from "./analyze-call.js";
 // that shape. The ids the rule does have come from the playbook and are listed.
 const SAFE_LABEL = /^c\d{1,6}$/;
 
-interface Validated {
+export interface Validated {
   problems: string[];
   /** Labels that are not among the clauses shown, for the repair note's reminder. */
   unknownLabels: boolean;
 }
 
-function validate(
+/** What is wrong with an answer, by label and id only. Exported for the spend planner, which assumes one bad label. */
+export function validate(
   answer: AnalysisAnswer,
   shown: ReadonlyMap<string, SourceSpan>,
   rule: PlaybookRuleRecord,
@@ -79,7 +83,11 @@ function validate(
   return { problems, unknownLabels };
 }
 
-function repairNote(validated: Validated, shownLabels: string[], promptId: string): string {
+/**
+ * The note appended to the prompt of the repair call: what was wrong with the first answer, by
+ * label and id only. Exported because the spend planner builds the repair prompt with it.
+ */
+export function repairNote(validated: Validated, shownLabels: string[], promptId: string): string {
   return [
     getFragment(promptId, "repairIntro"),
     ...validated.problems.map((problem) => `- ${problem}`),
@@ -122,6 +130,51 @@ function toDraft(
   };
 }
 
+/** The spans a bundle shows the model, in the bundle's order. */
+export function shownSpans(bundle: ContextBundle, ingest: IngestOutput): SourceSpan[] {
+  const byId = new Map(ingest.spans.map((span) => [span.id, span]));
+  return bundle.spans.map(({ spanId }) => {
+    const span = byId.get(spanId);
+    // A bundle is built from this ingest output. A span that is not in it is a bug in the caller.
+    if (span === undefined)
+      throw new Error(`analyze: the bundle names span ${spanId}, which is not in the run`);
+    return span;
+  });
+}
+
+/** What the first analyze call of one rule sends. Pure; `runAnalyze` and the spend planner share it. */
+export interface AnalyzeRequest {
+  system: string;
+  prompt: string;
+  /** The leading part of `prompt` that a caching provider can reuse. */
+  sharedPrefix: string | undefined;
+}
+
+export function buildAnalyzeRequest(args: {
+  bundle: ContextBundle;
+  ingest: IngestOutput;
+  manifest: RunManifest;
+  prompt: RegisteredPrompt;
+}): AnalyzeRequest {
+  const { bundle, ingest, manifest, prompt } = args;
+  const contractBlock = renderContractBlock(shownSpans(bundle, ingest));
+  const userPrompt = renderPrompt(prompt.definition, {
+    contractBlock,
+    documents: describeDocuments(manifest),
+    client: describeClient(manifest),
+    coverage: getFragment(
+      prompt.definition.id,
+      bundle.fullDocument ? "coverageWhole" : "coverageSelection",
+    ),
+    rule: renderRule(bundle.rule),
+    ruleId: bundle.rule.key,
+  });
+  // The block leads the prompt, so a caching provider can reuse it across rules whose bundles
+  // are alike. If a prompt version were to put something before it, there is no shared prefix.
+  const sharedPrefix = userPrompt.startsWith(contractBlock) ? contractBlock : undefined;
+  return { system: prompt.definition.system, prompt: userPrompt, sharedPrefix };
+}
+
 export const runAnalyze: RunAnalyze = async ({
   generator,
   signal,
@@ -143,31 +196,8 @@ export const runAnalyze: RunAnalyze = async ({
     };
   }
 
-  const byId = new Map(ingest.spans.map((span) => [span.id, span]));
-  const spans = bundle.spans.map(({ spanId }) => {
-    const span = byId.get(spanId);
-    // A bundle is built from this ingest output. A span that is not in it is a bug in the caller.
-    if (span === undefined)
-      throw new Error(`analyze: the bundle names span ${spanId}, which is not in the run`);
-    return span;
-  });
-  const shown = new Map(spans.map((span) => [span.modelLabel, span]));
-
-  const contractBlock = renderContractBlock(spans);
-  const userPrompt = renderPrompt(prompt.definition, {
-    contractBlock,
-    documents: describeDocuments(manifest),
-    client: describeClient(manifest),
-    coverage: getFragment(
-      prompt.definition.id,
-      bundle.fullDocument ? "coverageWhole" : "coverageSelection",
-    ),
-    rule: renderRule(rule),
-    ruleId: rule.key,
-  });
-  // The block leads the prompt, so a caching provider can reuse it across rules whose bundles
-  // are alike. If a prompt version were to put something before it, there is no shared prefix.
-  const sharedPrefix = userPrompt.startsWith(contractBlock) ? contractBlock : undefined;
+  const shown = new Map(shownSpans(bundle, ingest).map((span) => [span.modelLabel, span]));
+  const request = buildAnalyzeRequest({ bundle, ingest, manifest, prompt });
 
   const repairs = Number.isFinite(repairAttempts) ? Math.max(0, Math.floor(repairAttempts)) : 0;
   const calls: CallRecord[] = [];
@@ -181,9 +211,9 @@ export const runAnalyze: RunAnalyze = async ({
       ruleKey: rule.key,
       promptVersionId: prompt.definition.id,
       attempt,
-      system: prompt.definition.system,
-      prompt: note === null ? userPrompt : `${userPrompt}\n\n${note}`,
-      sharedPrefix,
+      system: request.system,
+      prompt: note === null ? request.prompt : `${request.prompt}\n\n${note}`,
+      sharedPrefix: request.sharedPrefix,
       schema: AnalysisSchema,
       schemaName: prompt.definition.schemaName,
     });

@@ -47,6 +47,11 @@ export interface UsageSummary {
   cost: UsageCost;
   /** True when the provider is one whose adapter reports usage. */
   reportsUsage: boolean;
+  /**
+   * True when the spend guard stopped the run. The responses of the calls that were cut short are
+   * counted in the day's total and have no row here, so the figures below are less than was spent.
+   */
+  stoppedBySpend: boolean;
   /** The sentences a page shows, in order. Fixed text and numbers, built by `usageLines`. */
   lines: string[];
 }
@@ -65,6 +70,16 @@ type Basis = Omit<UsageSummary, "lines">;
 
 /** The sentences of the "Usage" section of the run page, from the numbers of `basis`. */
 export function usageLines(basis: Basis): string[] {
+  const lines = usageLinesOf(basis);
+  return basis.stoppedBySpend && basis.state !== "stand_in"
+    ? [
+        ...lines,
+        "Calls that were cut short when the review stopped are counted in the day's total and are not listed here.",
+      ]
+    : lines;
+}
+
+function usageLinesOf(basis: Basis): string[] {
   if (basis.state === "stand_in") return ["No model was called, so there is no usage to record."];
   if (basis.state === "not_reported") {
     if (basis.calls === 0) return ["No model call has been recorded for this review yet."];
@@ -116,7 +131,11 @@ export function memoUsageText(usage: Basis): string | null {
 }
 
 /** The summary of one run, from the aggregate of its call rows and the provider that was asked. */
-export function summarizeUsage(aggregate: RunUsageAggregate, provider: string): UsageSummary {
+export function summarizeUsage(
+  aggregate: RunUsageAggregate,
+  provider: string,
+  options: { stoppedBySpend?: boolean } = {},
+): UsageSummary {
   const standIn = isStandInProvider(provider);
   const reportsUsage = provider === USAGE_PROVIDER;
   const reported = !standIn && aggregate.callsWithUsage > 0;
@@ -149,6 +168,7 @@ export function summarizeUsage(aggregate: RunUsageAggregate, provider: string): 
     cacheWriteTokens: reported ? aggregate.cacheWriteTokens : null,
     cost,
     reportsUsage,
+    stoppedBySpend: options.stoppedBySpend === true && !standIn,
   };
   return { ...basis, lines: usageLines(basis) };
 }

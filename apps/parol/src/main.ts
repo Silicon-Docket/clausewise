@@ -5,7 +5,12 @@ import type { AddressInfo } from "node:net";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { getRequestListener, type ServerType } from "@hono/node-server";
-import { loadLlmConfig, type GenerateObjectRequest, type ObjectGenerator } from "@clausewise/llm";
+import {
+  loadLlmConfig,
+  type GenerateObjectRequest,
+  type LlmConfig,
+  type ObjectGenerator,
+} from "@clausewise/llm";
 import { createScriptedGenerator } from "@clausewise/llm/testing";
 import type { Hono } from "hono";
 import { CATEGORY_IDS } from "./contracts.js";
@@ -29,13 +34,10 @@ import {
   type Database,
   type Repository,
 } from "./store/index.js";
-import { createLiveGenerator } from "./usage/live.js";
-import {
-  PriceFileError,
-  createCallPricer,
-  loadPriceFile,
-  type CallPricer,
-} from "./usage/prices.js";
+import { SpendConfigError } from "./usage/errors.js";
+import type { SpendGuard } from "./usage/guard.js";
+import { checkSpend, createLiveGenerator, spendGuardFor, type SpendSetup } from "./usage/live.js";
+import { DEFAULT_ASSUMED_OUTPUT_TOKENS } from "./usage/plan.js";
 
 /**
  * Starting the server. `parseEnv` turns the environment into settings and refuses the unsafe
@@ -67,11 +69,24 @@ export interface ParolSettings {
   relaxedSegregation: boolean;
   maxUploadBytes: number;
   /**
-   * A JSON file of prices, USD per million tokens, in the format of `evals/prices.json`. With it
-   * the server gives each model call an estimated cost; without it calls are recorded with their
-   * tokens and no cost. Null when the variable is not set.
+   * A JSON file of prices, USD per million tokens, in the format of `evals/prices.json`. A server
+   * that calls a model needs it: it gives each call an estimated cost and the spend limits their
+   * arithmetic. Null when the variable is not set.
    */
   pricesFile: string | null;
+  /** The most one review may cost, USD (PAROL_MAX_REVIEW_COST_USD). No default. Null when not set. */
+  maxReviewCostUsd: number | null;
+  /** The most all reviews may cost in one UTC day, USD (PAROL_MAX_DAILY_COST_USD). No default. */
+  maxDailyCostUsd: number | null;
+  /** Output tokens assumed for each call in the bound planned before a review. */
+  assumedOutputTokens: number;
+  /**
+   * A provider that reports no usage is accepted, so that only the bound planned before each review
+   * is checked (PAROL_SPEND_BOUND_ONLY).
+   */
+  spendBoundOnly: boolean;
+  /** The names of the spend variables the environment sets, for the notice a stand-in reader prints. */
+  spendVariables: string[];
   /** Things the operator should know before the server starts. */
   warnings: string[];
 }
@@ -94,6 +109,15 @@ const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "::1", "localh
 
 type Env = Record<string, string | undefined>;
 
+/** The variables that only a server that calls a model uses. */
+const SPEND_VARIABLES: readonly string[] = [
+  "PAROL_MAX_REVIEW_COST_USD",
+  "PAROL_MAX_DAILY_COST_USD",
+  "PAROL_PRICES_FILE",
+  "PAROL_ASSUMED_OUTPUT_TOKENS",
+  "PAROL_SPEND_BOUND_ONLY",
+];
+
 const read = (env: Env, name: string): string | undefined => {
   const value = env[name]?.trim();
   return value === undefined || value === "" ? undefined : value;
@@ -113,6 +137,22 @@ function readInteger(env: Env, name: string, fallback: number, min: number, max:
   if (!Number.isSafeInteger(value) || value < min || value > max)
     throw new ConfigError(
       `${name} must be a whole number from ${min} to ${max}. Fix the value, or unset it.`,
+    );
+  return value;
+}
+
+const MAX_COST_USD = 100_000;
+
+/**
+ * An amount in US dollars: a positive decimal such as `2` or `0.50`, at most 100000. `raw` is what
+ * `read` found, so an unset variable is `undefined` and gives null.
+ */
+function usdFrom(raw: string | undefined, name: string): number | null {
+  if (raw === undefined) return null;
+  const value = /^\d{1,6}(?:\.\d{1,6})?$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(value) || value <= 0 || value > MAX_COST_USD)
+    throw new ConfigError(
+      `${name} must be a positive amount in US dollars, such as 2 or 0.50, and at most ${MAX_COST_USD}. Fix the value, or unset it.`,
     );
   return value;
 }
@@ -154,6 +194,26 @@ export function parseEnv(env: Env, newSecret: () => string = randomSecret): Paro
         "Use a long random value, or unset it to make one for each start.",
     );
   const pricesFile = read(env, "PAROL_PRICES_FILE");
+  const maxReviewCostUsd = usdFrom(
+    read(env, "PAROL_MAX_REVIEW_COST_USD"),
+    "PAROL_MAX_REVIEW_COST_USD",
+  );
+  const maxDailyCostUsd = usdFrom(
+    read(env, "PAROL_MAX_DAILY_COST_USD"),
+    "PAROL_MAX_DAILY_COST_USD",
+  );
+  if (maxReviewCostUsd !== null && maxDailyCostUsd !== null && maxDailyCostUsd < maxReviewCostUsd)
+    throw new ConfigError(
+      "PAROL_MAX_DAILY_COST_USD must be at least PAROL_MAX_REVIEW_COST_USD. Fix the values.",
+    );
+  const assumedOutputTokens = readInteger(
+    env,
+    "PAROL_ASSUMED_OUTPUT_TOKENS",
+    DEFAULT_ASSUMED_OUTPUT_TOKENS,
+    1,
+    200_000,
+  );
+  const spendBoundOnly = readFlag(env, "PAROL_SPEND_BOUND_ONLY");
   const cookieSecret = given ?? newSecret();
   if (given === undefined)
     warnings.push(
@@ -172,6 +232,11 @@ export function parseEnv(env: Env, newSecret: () => string = randomSecret): Paro
     relaxedSegregation: readFlag(env, "PAROL_RELAXED_SEGREGATION"),
     maxUploadBytes,
     pricesFile: pricesFile === undefined ? null : resolve(pricesFile),
+    maxReviewCostUsd,
+    maxDailyCostUsd,
+    assumedOutputTokens,
+    spendBoundOnly,
+    spendVariables: SPEND_VARIABLES.filter((name) => read(env, name) !== undefined),
     warnings,
   };
 }
@@ -257,6 +322,12 @@ export async function requireModule<T>(load: () => Promise<T>, what: string): Pr
 export interface StartOptions {
   /** Replaces the model, for tests that run the server for real. */
   generator?: ObjectGenerator;
+  /**
+   * The configuration of an injected `generator` that is not a stand-in. The spend guard reads the
+   * provider, the model, `maxOutputTokens`, `maxRetries` and `fallback` from it, so a generator that
+   * calls a model cannot be served without it. Ignored for a stand-in.
+   */
+  llmConfig?: LlmConfig;
   /** Where the access log and the service lines go. Default: standard output. */
   log?: (line: string) => void;
   /** Where start-up notices go. Default: standard error. */
@@ -268,6 +339,8 @@ export interface RunningServer {
   server: ServerType;
   settings: ParolSettings;
   repo: Repository;
+  /** The spend guard of a server that calls a model; undefined for a stand-in reader. */
+  spend: SpendGuard | undefined;
   /** The port actually bound, which differs from the setting when that was 0. */
   port: number;
   /**
@@ -284,32 +357,6 @@ const stderr = (line: string): void => {
   process.stderr.write(`${line}\n`);
 };
 
-/**
- * The prices the server prices its calls with, when the operator named a file. A stand-in reader
- * calls no model, so a file is ignored for it and the operator is told. A file that cannot be used
- * stops the start: a server that was meant to price its calls must not run unpriced without saying
- * so.
- */
-function readPricing(
-  settings: ParolSettings,
-  generator: ObjectGenerator,
-  notice: (line: string) => void,
-): CallPricer | undefined {
-  if (settings.pricesFile === null) return undefined;
-  if (isStandInProvider(generator.provider)) {
-    notice(
-      "notice: PAROL_PRICES_FILE is ignored, because the reader is a stand-in and calls no model",
-    );
-    return undefined;
-  }
-  try {
-    return createCallPricer(loadPriceFile(settings.pricesFile));
-  } catch (error) {
-    if (error instanceof PriceFileError) throw new ConfigError(error.message);
-    throw error;
-  }
-}
-
 export async function start(
   env: Env = process.env,
   options: StartOptions = {},
@@ -319,12 +366,39 @@ export async function start(
   const settings = parseEnv(env);
   for (const warning of settings.warnings) notice(`warning: ${warning}`);
 
-  // The model is chosen first, so a missing key stops the start before anything is opened.
-  const generator =
-    options.generator ??
-    (settings.scripted ? createSimulatedModel() : createLiveGenerator(loadLlmConfig(env)));
-  notice(`Document text is sent to: ${generator.disclosure}`);
-  const pricing = readPricing(settings, generator, notice);
+  // The model is chosen first, so a missing key, a missing limit or a price file that cannot be
+  // used stops the start before anything is opened.
+  let generator: ObjectGenerator | undefined =
+    options.generator ?? (settings.scripted ? createSimulatedModel() : undefined);
+  let llm: LlmConfig | undefined;
+  let setup: SpendSetup | undefined;
+  if (generator === undefined || !isStandInProvider(generator.provider)) {
+    llm = generator === undefined ? loadLlmConfig(env) : options.llmConfig;
+    if (llm === undefined)
+      throw new ConfigError(
+        "a generator that is not a stand-in must be started with its configuration (llmConfig), " +
+          "which the spend limits are read against.",
+      );
+    if (
+      generator !== undefined &&
+      (generator.provider !== llm.provider || generator.model !== llm.model)
+    )
+      throw new ConfigError(
+        "the generator and the llmConfig it was started with name a different provider or model.",
+      );
+    try {
+      setup = checkSpend(settings, llm);
+    } catch (error) {
+      if (error instanceof SpendConfigError) throw new ConfigError(error.message);
+      throw error;
+    }
+  } else if (settings.spendVariables.length > 0) {
+    // A stand-in reader calls no model, so there is nothing to limit or to price.
+    notice(
+      `notice: ${settings.spendVariables.join(", ")} ${settings.spendVariables.length === 1 ? "is" : "are"} ignored, because the reader is a stand-in and calls no model`,
+    );
+  }
+  if (generator !== undefined) notice(`Document text is sent to: ${generator.disclosure}`);
 
   const { createServices } = await requireModule(
     () => import("./services/index.js"),
@@ -359,6 +433,16 @@ export async function start(
 
     const now = (): Date => new Date();
     reportRetentionNotices({ repo, now, notice });
+    // The guard reads and writes the ledger of the database that is now open. A live generator is
+    // built only here, with the guard's two hooks in it, so that no request can leave unmetered.
+    const spend = setup === undefined ? undefined : spendGuardFor(setup, repo, log);
+    if (generator === undefined) {
+      generator = createLiveGenerator(
+        llm as LlmConfig,
+        spend === undefined ? {} : { guard: spend },
+      );
+      notice(`Document text is sent to: ${generator.disclosure}`);
+    }
     const services = createServices({
       repo,
       files,
@@ -367,7 +451,7 @@ export async function start(
       now,
       log,
       evaluations: createComparisonSource(join(settings.dataDir, "evaluations")),
-      ...(pricing === undefined ? {} : { pricing }),
+      ...(spend === undefined ? {} : { spend }),
     });
     const config: AppConfig = {
       demoIdentity: settings.demoIdentity,
@@ -411,7 +495,7 @@ export async function start(
         lock.release();
       })());
 
-    return { app, server, settings, repo, port: bound, close };
+    return { app, server, settings, repo, spend, port: bound, close };
   } catch (error) {
     // The server did not start: give the folder back, so that the next try can have it.
     try {

@@ -6,8 +6,11 @@ import {
   RunStopped,
   fatalKindOf,
   mapLimited,
+  plainRule,
+  spendKindOf,
   watchGenerator,
 } from "../../src/services/run-support.js";
+import { SpendStop, type SpendStopKind } from "../../src/usage/errors.js";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -31,6 +34,71 @@ describe("fatalKindOf", () => {
     const error = new ModelRequestError("provider words", status, fatal, kind);
     expect(fatalKindOf(error)).toBe(expected);
     expect(RUN_ERROR_KINDS).toContain(expected);
+  });
+});
+
+describe("the kinds a spend stop gives a run", () => {
+  it("are one for each limit, and a fault of Parol for the other ways a request is held back", () => {
+    const cases: [SpendStopKind, string][] = [
+      ["review_limit", "spend_review_limit"],
+      ["daily_limit", "spend_daily_limit"],
+      ["unsizable_request", "internal"],
+      ["no_run_scope", "internal"],
+      ["ledger_unreadable", "internal"],
+    ];
+    for (const [stop, kind] of cases) {
+      expect(spendKindOf(new SpendStop(stop)), stop).toBe(kind);
+      expect(RUN_ERROR_KINDS).toContain(kind);
+    }
+  });
+
+  it("are in the closed set of kinds a run can end with, after the provider's and before the engine's", () => {
+    expect(RUN_ERROR_KINDS).toEqual([
+      "provider_auth",
+      "provider_permission",
+      "provider_model",
+      "provider_billing",
+      "provider_redirect",
+      "spend_review_limit",
+      "spend_daily_limit",
+      "interrupted",
+      "internal",
+    ]);
+  });
+});
+
+describe("plainRule", () => {
+  it("keeps the fields the stages read and none of the store's ids", () => {
+    const stored = {
+      id: "rule_1",
+      playbookVersionId: "pbv_1",
+      key: "dur-1",
+      category: "duration",
+      title: "Duration",
+      severity: "high",
+      required: true,
+      kind: "presence",
+      standard: "s",
+      fallback: null,
+      unacceptable: null,
+      guidance: null,
+      fallbackLanguage: null,
+      escalateWhen: [],
+      hintTopics: ["term"],
+    } as unknown as Parameters<typeof plainRule>[0];
+    const plain = plainRule(stored);
+    expect(plain).toMatchObject({
+      key: "dur-1",
+      required: true,
+      kind: "presence",
+      hintTopics: ["term"],
+    });
+    expect(Object.keys(plain)).not.toContain("id");
+    expect(Object.keys(plain)).not.toContain("playbookVersionId");
+    // A rule with no topics has none, and not an empty list.
+    expect(Object.keys(plainRule({ ...stored, hintTopics: undefined } as never))).not.toContain(
+      "hintTopics",
+    );
   });
 });
 

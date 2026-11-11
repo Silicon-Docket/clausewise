@@ -197,3 +197,43 @@ describe("the memo's line", () => {
     expect(memoUsageText(basis)).toBe("not reported (9 recorded model calls).");
   });
 });
+
+describe("a run that the spend guard stopped", () => {
+  const CUT_SHORT =
+    "Calls that were cut short when the review stopped are counted in the day's total and are not listed here.";
+
+  it("says last that the calls cut short are in the day's total and not in the run's calls", () => {
+    const summary = summarizeUsage(
+      aggregate({ calls: 4, callsWithUsage: 4, callsPriced: 4 }),
+      "anthropic",
+      {
+        stoppedBySpend: true,
+      },
+    );
+    expect(summary.stoppedBySpend).toBe(true);
+    expect(summary.lines.at(-1)).toBe(CUT_SHORT);
+    expect(summary.lines.slice(0, -1)).toEqual(
+      summarizeUsage(aggregate({ calls: 4, callsWithUsage: 4, callsPriced: 4 }), "anthropic").lines,
+    );
+  });
+
+  it("says it with no call recorded and with calls that reported nothing, and not for a run no spend stopped", () => {
+    expect(summarizeUsage(NONE, "anthropic", { stoppedBySpend: true }).lines.at(-1)).toBe(
+      CUT_SHORT,
+    );
+    expect(
+      summarizeUsage({ ...NONE, calls: 0 }, "anthropic", { stoppedBySpend: true }).lines,
+    ).toEqual(["No model call has been recorded for this review yet.", CUT_SHORT]);
+    expect(summarizeUsage(aggregate(), "anthropic").stoppedBySpend).toBe(false);
+    expect(
+      summarizeUsage(aggregate(), "anthropic", { stoppedBySpend: false }).lines.join(" "),
+    ).not.toContain("cut short");
+  });
+
+  it("never says it of a stand-in, which called no model and so cut nothing short", () => {
+    const summary = summarizeUsage(aggregate(), "simulated", { stoppedBySpend: true });
+    expect(summary.stoppedBySpend).toBe(false);
+    expect(summary.lines).toEqual(["No model was called, so there is no usage to record."]);
+    expect(usageLines({ ...summary, stoppedBySpend: true })).toEqual(summary.lines);
+  });
+});

@@ -13,3 +13,9 @@ export class RunNotReadyError extends Error {
     super("the matter is not ready for a review");
   }
 }
+
+/**
+ * A review was refused before it began because the spend guard planned a bound above a limit
+ * (`usage/errors.ts`). Maps to HTTP 409, and the words for a person are `userText()`.
+ */
+export { SpendRefusedError } from "../usage/errors.js";

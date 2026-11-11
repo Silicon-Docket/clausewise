@@ -1147,6 +1147,9 @@ export const NO_MATTER_DATA: readonly string[] = [
   "eval_datasets",
   "eval_runs",
   "schema_migrations",
+  // A date and numbers (tokens, a cost, counts of responses): the spend guard's ledger of the day.
+  // It names no matter, run, user or text, and it is kept when a matter is deleted, on purpose.
+  "spend_ledger",
 ];
 
 /**

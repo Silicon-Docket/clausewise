@@ -3,14 +3,18 @@ import {
   ActiveRunError,
   ConflictError,
   NotFoundError,
+  toSourceSpans,
   type Repository,
   type RunRow,
   type WorkflowVersionRow,
 } from "../store/index.js";
+import type { RunManifest } from "../contracts.js";
+import { planRun, type RunPlan } from "../usage/plan.js";
 import { requireRole, type ServiceDeps } from "./deps.js";
 import { RunNotReadyError } from "./errors.js";
 import type { Presenter } from "./present.js";
 import { startReadiness } from "./readiness.js";
+import { plainRule } from "./run-support.js";
 import type { RunEngine } from "./runner.js";
 import type { RunService } from "./types.js";
 import type { IssueRow } from "./views.js";
@@ -39,6 +43,30 @@ export function createRunService(
 ): RunService {
   const { repo, config } = deps;
 
+  /**
+   * What a review of these documents will ask of the model, for the spend guard. Read from the
+   * stored spans and the playbook exactly as the engine reads them when the run executes.
+   */
+  const planFor = (
+    matterId: string,
+    manifest: RunManifest,
+    workflow: WorkflowVersionRow,
+    assumedOutputTokens: number,
+  ): RunPlan => {
+    const versionIds = manifest.documents.map((d) => d.documentVersionId);
+    return planRun({
+      ingest: {
+        spans: toSourceSpans(repo.listSpans(matterId, versionIds)),
+        annotations: repo.listAnnotations(matterId, versionIds),
+        warnings: [],
+      },
+      manifest,
+      rules: repo.listRules(manifest.playbook.versionId).map(plainRule),
+      workflow: workflow.manifest,
+      assumedOutputTokens,
+    });
+  };
+
   const requireRun = (am: AuthorizedMatter, runId: string): RunRow => {
     const run = repo.getRun(am.matterId, runId);
     if (run === undefined) throw new NotFoundError("run");
@@ -64,7 +92,7 @@ export function createRunService(
       if (workflow === undefined) throw new NotFoundError("workflow version");
       const chosen = workflow;
 
-      const run = repo.transaction(() => {
+      const { run, bound } = repo.transaction(() => {
         // A review that already has results, started again, is a re-run: its findings and
         // decisions become stale and its memo, if the inputs are unchanged, stays on record.
         if (
@@ -81,8 +109,25 @@ export function createRunService(
           modelProvider: deps.generator.provider,
           model: deps.generator.model,
         });
-        return repo.createRun(matter.id, { manifest, startedBy: am.principal.userId });
+        // Inside the transaction and before the run exists: a review the guard refuses leaves no
+        // run, and a re-run it refuses leaves the earlier findings current, because the throw
+        // rolls the change of inputs back.
+        const bound =
+          deps.spend?.preflight({
+            kind: "start",
+            plan: planFor(matter.id, manifest, chosen, deps.spend.limits.assumedOutputTokens),
+            finishedUnits: new Set(),
+            spentOnRunUsd: 0,
+          }) ?? null;
+        return {
+          run: repo.createRun(matter.id, { manifest, startedBy: am.principal.userId }),
+          bound,
+        };
       });
+      // Held and queued in one synchronous step, so that no other start can see the day's total
+      // without this review's bound in it.
+      if (deps.spend !== undefined && bound !== null)
+        deps.spend.reserve(run.id, { boundUsd: bound.boundUsd, spentUsd: 0 });
       engine.enqueue(matter.id, run.id);
       deps.log(`run ${run.id} (matter ${matter.id}): queued, workflow ${chosen.label}`);
       return present.runSummary(run);
@@ -113,12 +158,40 @@ export function createRunService(
           "run_model_changed",
           "this run was started on a different provider or model than the one now configured; start a new review instead",
         );
+      // What the rest of the review could cost, counting only the units that did not finish, and
+      // what it has used already. A resume that would pass a limit is refused before anything
+      // changes.
+      let hold: { boundUsd: number; spentUsd: number } | null = null;
+      if (deps.spend !== undefined) {
+        const workflow = repo.getWorkflowVersion(failed.workflowVersionId);
+        if (workflow === undefined) throw new NotFoundError("workflow version");
+        const spentUsd = repo.summarizeRunUsage(am.matterId, runId).costUsd ?? 0;
+        const finished = new Set(
+          repo
+            .listStages(am.matterId, runId)
+            .filter((stage) => stage.status === "succeeded")
+            .map((stage) => `${stage.stage}:${stage.unit}`),
+        );
+        const { boundUsd } = deps.spend.preflight({
+          kind: "resume",
+          plan: planFor(
+            am.matterId,
+            failed.manifest,
+            workflow,
+            deps.spend.limits.assumedOutputTokens,
+          ),
+          finishedUnits: finished,
+          spentOnRunUsd: spentUsd,
+        });
+        hold = { boundUsd, spentUsd };
+      }
       // Back to `queued` only from `failed`, only on the inputs the run was started on, and only
       // with nothing else in flight; the store refuses each, and the engine starts it again where
       // it stopped, skipping the units whose input hash it already has.
       const queued = repo.updateRunStatus(am.matterId, runId, "queued", {
         actorId: am.principal.userId,
       });
+      if (deps.spend !== undefined && hold !== null) deps.spend.reserve(runId, hold);
       engine.enqueue(am.matterId, runId);
       deps.log(`run ${runId} (matter ${am.matterId}): queued again`);
       return present.runSummary(queued);
