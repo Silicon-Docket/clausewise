@@ -108,7 +108,8 @@ export const errorPage = (c: Chrome = chrome): string =>
       chrome: c,
       status: 404,
       title: "Page not found",
-      message: "There is no such page, or you cannot see it.",
+      message: "There is no such page, or you cannot see it. Check the address.",
+      todo: "Check the address.",
     }),
   );
 

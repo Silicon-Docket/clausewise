@@ -45,8 +45,12 @@ const NOTICE = /<div class="notice notice-error"[^>]*>.*?<\/div>/s;
 
 /** The phrases of routes/notices.ts for the codes these forms end in. */
 const NOT_VALID = "That request was not valid. Check the form and try again.";
-const CONFLICT =
-  "That conflicts with the current state of the matter. Reload the page and try again.";
+/**
+ * The words for a review that has finished, asked to be resumed or cancelled (the store's
+ * `invalid_transition`), which have a phrase of their own since package W2.9-err.
+ */
+const REVIEW_NOT_IN_STATE =
+  "The review is no longer in a state where that can be done: it may have finished, failed or been cancelled already. Reload the page to see how the review stands.";
 /** The retention form's refusal: its phrase, then the link to the field that the notice carries. */
 const RETENTION_DAYS = `That is not a number of days a matter can be kept for. Enter a whole number of days from 1 to ${MAX_RETAIN_DAYS}. Go to the retention field`;
 
@@ -81,8 +85,16 @@ const IN_PLACE: { name: string; template: string; words: string }[] = [
     words: NOT_VALID,
   },
   { name: "starting a review", template: `${M}/runs`, words: NOT_VALID },
-  { name: "resuming a review", template: `${M}/runs/:runId/resume`, words: CONFLICT },
-  { name: "cancelling a review", template: `${M}/runs/:runId/cancel`, words: CONFLICT },
+  {
+    name: "resuming a review",
+    template: `${M}/runs/:runId/resume`,
+    words: REVIEW_NOT_IN_STATE,
+  },
+  {
+    name: "cancelling a review",
+    template: `${M}/runs/:runId/cancel`,
+    words: REVIEW_NOT_IN_STATE,
+  },
 ];
 
 const probeOf = (template: string): Probe => {

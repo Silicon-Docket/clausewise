@@ -38,15 +38,17 @@ export const staleWhileRunningPhrase = (code: string | null): string =>
 
 export const CANNOT_DECIDE = {
   role: "Only the reviewing attorney can record a decision.",
-  segregation: "A reviewer cannot decide findings of a review they started.",
+  segregation:
+    "A reviewer cannot decide findings of a review they started. Ask another reviewing attorney to decide them.",
   stale: "The documents or the playbook changed after this finding. Run the review again.",
   // A re-run on unchanged inputs: nothing the review read has changed, so it must not be said to.
   replaced: "A newer review replaced this one. Decide the findings of the current review.",
   exported: "The memo is exported. Decisions can change only after a new review.",
   decidedByAnother:
     "Another reviewer has already decided this finding. Their decision stands until they change it or the review is run again.",
-  notOpen: "The matter is not open for review.",
-  runNotCurrent: "This finding belongs to a review that is no longer current.",
+  notOpen: "The matter is not open for review. Open the matter to see its state.",
+  runNotCurrent:
+    "This finding belongs to a review that is no longer current. Open the current review from the matter page.",
 } as const;
 
 /**

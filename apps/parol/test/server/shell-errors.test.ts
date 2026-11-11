@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { CsrfError } from "../../src/auth/csrf.js";
 import { UploadError } from "../../src/module-contracts.js";
+import { GUIDANCE, type GuidanceKey } from "../../src/server/guidance.js";
 import { defineRoute } from "../../src/server/matter-route.js";
 import { ForbiddenError, RunNotReadyError } from "../../src/services/errors.js";
 import {
@@ -33,6 +34,8 @@ interface Case {
   status: number;
   /** The JSON error body, apart from `message`, which is checked for the marker only. */
   body: Record<string, unknown>;
+  /** The sentence the error page gives (`guidance.ts`), told by the kind of failure. */
+  guidance: GuidanceKey;
   /** The message, when it is meant to be specific. */
   message?: string;
   logged?: string;
@@ -59,79 +62,126 @@ const CASES: Case[] = [
     throws: () => new NotFoundError("run"),
     status: 404,
     body: { kind: "not_found" },
+    guidance: "not_found",
   },
   {
     name: "ForbiddenError",
     throws: () => new ForbiddenError("review.decide"),
     status: 403,
     body: { kind: "forbidden" },
+    guidance: "role",
   },
-  { name: "CsrfError", throws: () => new CsrfError(), status: 403, body: { kind: "csrf" } },
+  {
+    name: "ForbiddenError for a foreign Host header",
+    throws: () => new ForbiddenError("host"),
+    status: 403,
+    body: { kind: "forbidden" },
+    guidance: "host",
+  },
+  {
+    name: "ForbiddenError for a page that is for a global role",
+    throws: () => new ForbiddenError("evaluation.read"),
+    status: 403,
+    body: { kind: "forbidden" },
+    guidance: "global_role",
+  },
+  {
+    name: "HTTPException 403",
+    throws: () => new HTTPException(403),
+    status: 403,
+    body: { kind: "forbidden" },
+    guidance: "role",
+  },
+  {
+    name: "HTTPException 422",
+    throws: () => new HTTPException(422, { message: MARKER }),
+    status: 422,
+    body: { kind: "unprocessable" },
+    guidance: "bad_file",
+  },
+  {
+    name: "CsrfError",
+    throws: () => new CsrfError(),
+    status: 403,
+    body: { kind: "csrf" },
+    guidance: "csrf",
+  },
   {
     name: "ValidationError",
     throws: () => new ValidationError("name_empty", `the name ${MARKER} is empty`),
     status: 400,
     body: { kind: "invalid_request", code: "name_empty" },
+    guidance: "bad_request",
   },
   {
     name: "ValidationError with an unsafe code",
     throws: () => new ValidationError(`Bad Code ${MARKER}`, "x"),
     status: 400,
     body: { kind: "invalid_request", code: "invalid" },
+    guidance: "bad_request",
   },
   {
     name: "ZodError",
     throws: zodFailure,
     status: 400,
     body: { kind: "invalid_request", code: "invalid" },
+    guidance: "bad_request",
   },
   {
     name: "ConflictError",
     throws: () => new ConflictError("member_exists", `${MARKER} is already a member`),
     status: 409,
     body: { kind: "conflict", code: "member_exists" },
+    guidance: "conflict",
   },
   {
     name: "ActiveRunError",
     throws: () => new ActiveRunError("run_0a1b2c"),
     status: 409,
     body: { kind: "active_run", code: "active_run", activeRunId: "run_0a1b2c" },
+    guidance: "conflict",
   },
   {
     name: "ActiveRunError with an id that is not an id",
     throws: () => new ActiveRunError(`<script>${MARKER}</script>`),
     status: 409,
     body: { kind: "active_run", code: "active_run" },
+    guidance: "conflict",
   },
   {
     name: "StaleRunError",
     throws: () => new StaleRunError("inputs_changed"),
     status: 409,
     body: { kind: "stale_run", code: "stale_run", why: "inputs_changed" },
+    guidance: "conflict",
   },
   {
     name: "StaleFindingError",
     throws: () => new StaleFindingError(),
     status: 409,
     body: { kind: "conflict", code: "stale_finding" },
+    guidance: "conflict",
   },
   {
     name: "ContentMismatchError",
     throws: () => new ContentMismatchError(),
     status: 409,
     body: { kind: "conflict", code: "content_mismatch" },
+    guidance: "conflict",
   },
   {
     name: "InputsIncompleteError",
     throws: () => new InputsIncompleteError(),
     status: 409,
     body: { kind: "conflict", code: "inputs_incomplete" },
+    guidance: "conflict",
   },
   {
     name: "InvalidTransitionError",
     throws: () => new InvalidTransitionError("matter", "draft", MARKER),
     status: 409,
     body: { kind: "conflict", code: "invalid_transition" },
+    guidance: "conflict",
   },
   {
     name: "ExportBlockedError",
@@ -146,6 +196,7 @@ const CASES: Case[] = [
         { findingId: null, reason: "unknown" },
       ],
     },
+    guidance: "conflict",
   },
   {
     name: "RunNotReadyError",
@@ -160,6 +211,7 @@ const CASES: Case[] = [
       code: "not_ready",
       reasons: ["Choose which version of the NDA is operative", "Pick a playbook version"],
     },
+    guidance: "conflict",
   },
   {
     name: "UploadError",
@@ -168,30 +220,35 @@ const CASES: Case[] = [
     status: 422,
     body: { kind: "upload_rejected" },
     message: "This Word file is over the 10 MB limit. Check that it is the right file.",
+    guidance: "bad_file",
   },
   {
     name: "HTTPException 413",
     throws: () => new HTTPException(413),
     status: 413,
     body: { kind: "too_large" },
+    guidance: "too_large",
   },
   {
     name: "HTTPException 401",
     throws: () => new HTTPException(401),
     status: 401,
     body: { kind: "unauthenticated" },
+    guidance: "sign_in",
   },
   {
     name: "HTTPException 404",
     throws: () => new HTTPException(404),
     status: 404,
     body: { kind: "not_found" },
+    guidance: "not_found",
   },
   {
     name: "HTTPException 418",
     throws: () => new HTTPException(418, { message: MARKER }),
     status: 400,
     body: { kind: "invalid_request", code: "invalid" },
+    guidance: "bad_request",
   },
   {
     name: "HTTPException 503",
@@ -199,6 +256,7 @@ const CASES: Case[] = [
     status: 500,
     body: { kind: "internal" },
     logged: "HTTPException",
+    guidance: "server",
   },
   {
     name: "an unexpected TypeError",
@@ -206,6 +264,7 @@ const CASES: Case[] = [
     status: 500,
     body: { kind: "internal" },
     logged: "TypeError",
+    guidance: "server",
   },
   {
     name: "a StoreError of no known kind",
@@ -213,6 +272,7 @@ const CASES: Case[] = [
     status: 500,
     body: { kind: "internal" },
     logged: "StoreError",
+    guidance: "server",
   },
   {
     name: "FileStoreError",
@@ -220,6 +280,7 @@ const CASES: Case[] = [
     status: 500,
     body: { kind: "internal" },
     logged: "FileStoreError",
+    guidance: "server",
   },
   {
     name: "MigrationError",
@@ -227,6 +288,7 @@ const CASES: Case[] = [
     status: 500,
     body: { kind: "internal" },
     logged: "MigrationError",
+    guidance: "server",
   },
   {
     name: "AuditDetailError, which is our defect and not the caller's",
@@ -234,6 +296,7 @@ const CASES: Case[] = [
     status: 500,
     body: { kind: "internal" },
     logged: "AuditDetailError",
+    guidance: "server",
   },
   {
     name: "an error whose name is hostile",
@@ -241,6 +304,7 @@ const CASES: Case[] = [
     status: 500,
     body: { kind: "internal" },
     logged: "Error",
+    guidance: "server",
   },
   {
     name: "a thrown string",
@@ -248,6 +312,7 @@ const CASES: Case[] = [
     status: 500,
     body: { kind: "internal" },
     logged: "NonError",
+    guidance: "server",
   },
   {
     name: "a thrown object",
@@ -255,6 +320,7 @@ const CASES: Case[] = [
     status: 500,
     body: { kind: "internal" },
     logged: "NonError",
+    guidance: "server",
   },
   {
     name: "a thrown null",
@@ -262,6 +328,7 @@ const CASES: Case[] = [
     status: 500,
     body: { kind: "internal" },
     logged: "NonError",
+    guidance: "server",
   },
   {
     name: "a thrown number",
@@ -269,13 +336,16 @@ const CASES: Case[] = [
     status: 500,
     body: { kind: "internal" },
     logged: "NonError",
+    guidance: "server",
   },
 ];
 
 function mount() {
   const shell = makeShell({
     app: {
-      renderError: (status, title) => `<!doctype html><title>${title}</title><h1>${status}</h1>`,
+      // The key is in the page so that the test can read which sentence the shell chose.
+      renderError: (status, title, _requestId, guidance) =>
+        `<!doctype html><title>${title}</title><h1>${status}</h1><p data-guidance="${guidance}"></p>`,
     },
   });
   CASES.forEach((entry, index) => {
@@ -335,6 +405,7 @@ describe("the error mapping", () => {
       expect(response.status).toBe(entry.status);
       expect(response.headers.get("content-type")).toMatch(/text\/html/);
       expect(text).toContain(`<h1>${entry.status}</h1>`);
+      expect(text).toContain(`data-guidance="${entry.guidance}"`);
       expect(text).not.toContain(MARKER);
       expect(shell.logs.join("\n")).not.toContain(MARKER);
     });
@@ -393,11 +464,11 @@ describe("the error page", () => {
   });
 
   it("gives the application's renderer the request id for a server fault, and only then", async () => {
-    const calls: [number, string, string | undefined][] = [];
+    const calls: [number, string, string | undefined, string | undefined][] = [];
     const shell = makeShell({
       app: {
-        renderError: (status, title, requestId) => {
-          calls.push([status, title, requestId]);
+        renderError: (status, title, requestId, guidance) => {
+          calls.push([status, title, requestId, guidance]);
           return `<p>${status} ${title} ${requestId ?? ""}</p>`;
         },
       },
@@ -413,8 +484,8 @@ describe("the error page", () => {
     const missing = await shell.anonymous().get("/no/such/page");
     const failed = await shell.anonymous().get("/fail");
     expect(calls).toEqual([
-      [404, "Page not found", undefined],
-      [500, "Something went wrong", failed.headers.get("x-request-id")],
+      [404, "Page not found", undefined, "not_found"],
+      [500, "Something went wrong", failed.headers.get("x-request-id"), "server"],
     ]);
     expect(await missing.text()).not.toContain("req_");
     expect(await failed.text()).toContain(failed.headers.get("x-request-id")!);
@@ -432,21 +503,23 @@ describe("the error page", () => {
     expect(response.status).toBe(404);
     const html = await response.text();
     expect(html).toContain("Page not found");
+    // The page it falls back to says what happened and what to do, not only the title.
+    expect(html).toContain(GUIDANCE.not_found.text);
     expect(html).not.toContain(MARKER);
   });
 
-  it("is given the status and a fixed title, and nothing from the request", async () => {
-    const calls: [number, string][] = [];
+  it("is given the status, a fixed title and the key of a fixed sentence, and nothing from the request", async () => {
+    const calls: unknown[][] = [];
     const shell = makeShell({
       app: {
-        renderError: (status, title) => {
-          calls.push([status, title]);
-          return `<p>${status} ${title}</p>`;
+        renderError: (...args) => {
+          calls.push(args);
+          return `<p>${args[0]} ${args[1]}</p>`;
         },
       },
     });
     await shell.anonymous().get(`/matters/${MARKER}?q=${MARKER}`, { "x-note": MARKER });
-    expect(calls).toEqual([[404, "Page not found"]]);
+    expect(calls).toEqual([[404, "Page not found", undefined, "not_found"]]);
   });
 
   it("is the same page for an unknown path whatever the path is", async () => {

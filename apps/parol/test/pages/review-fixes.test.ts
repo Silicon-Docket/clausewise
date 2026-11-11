@@ -685,7 +685,16 @@ describe("finding 12: props are checked before they are used", () => {
   it("(b) sends 'back' only to a path on this site", () => {
     const back = (backHref: string): string | null | undefined => {
       const root = parseHtml(
-        render(ErrorPage({ chrome, status: 404, title: "Not found", message: "No.", backHref })),
+        render(
+          ErrorPage({
+            chrome,
+            status: 404,
+            title: "Not found",
+            message: "No. Go back.",
+            todo: "Go back.",
+            backHref,
+          }),
+        ),
       );
       return attr(
         first(root, (el) => el.name === "a" && hasClass(el, "button")),

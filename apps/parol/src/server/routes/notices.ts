@@ -229,12 +229,44 @@ const CORE_PHRASES = {
   // it has no place on the page to jump to.
   bad_text:
     "The text cannot be kept as it is: it is empty, too long or has a control character in it. Check it and try again.",
+  // The refusals of the forms of the matter page that a person meets in ordinary use (a second tab,
+  // a click on a review that has just finished) and that used to be answered with the general
+  // sentence of their status. Each says what has happened to the matter and what to do about it.
+  member_exists:
+    "That person is already on this matter, so they were not added again. Check the list of people for the role they have.",
+  remove_later_first:
+    "A document can be removed only after the documents that come after it have been removed. Remove the later documents first.",
+  active_run:
+    "A review is already running on this matter, so another was not started. Follow the review in progress, or cancel it and start a new one.",
+  invalid_transition:
+    "The review is no longer in a state where that can be done: it may have finished, failed or been cancelled already. Reload the page to see how the review stands.",
+  stale_run:
+    "That review is out of date, because the documents or the playbook changed after it started. Start a new review.",
 } as const satisfies Record<string, string>;
 
-/** The core fragment: the codes the application had before packages added their own. */
+/**
+ * The core fragment: the codes the application had before packages added their own. The sentence
+ * that says what to do (`todo`) is written for the codes that gained a phrase with the error pages;
+ * the older codes have none yet, and test/a11y/errors.test.ts lists them so that the list can only
+ * shrink. A jump leads to the place of the matter page where the refusal is fixed or explained.
+ * `invalid_transition` and `stale_run` are about a review and not about a control, so they have
+ * none.
+ */
 const CORE = {
   phrases: CORE_PHRASES,
-  todo: { bad_text: "Check it and try again." },
+  todo: {
+    bad_text: "Check it and try again.",
+    member_exists: "Check the list of people for the role they have.",
+    remove_later_first: "Remove the later documents first.",
+    active_run: "Follow the review in progress, or cancel it and start a new one.",
+    invalid_transition: "Reload the page to see how the review stands.",
+    stale_run: "Start a new review.",
+  },
+  jump: {
+    member_exists: { href: "#people", label: "Go to the people on this matter" },
+    remove_later_first: { href: "#documents", label: "Go to the documents" },
+    active_run: { href: "#active-run", label: "Go to the review in progress" },
+  },
   notices: CORE_NOTICES,
 } as const satisfies RefusalFragment;
 

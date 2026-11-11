@@ -2345,7 +2345,13 @@ describe("the content security policy", () => {
       {
         name: "error",
         html: render(
-          ErrorPage({ chrome, status: 404, title: "Page not found", message: "No such page." }),
+          ErrorPage({
+            chrome,
+            status: 404,
+            title: "Page not found",
+            message: "No such page. Check the address.",
+            todo: "Check the address.",
+          }),
         ),
       },
     );

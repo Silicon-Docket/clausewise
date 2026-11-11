@@ -19,9 +19,12 @@ import { applySecurityHeaders } from "./security-headers.js";
  *  - Node's own Host check, and the framing the parser reports only after it has handed the request
  *    on (`guardRequests`).
  *
- * The page is the built-in one with a fixed title: it names the kind of problem and nothing about
- * what was sent. The log line has the same fixed shape as any other, with no method (the request
- * could not be read), no route and no person, and a fixed name for the refusal.
+ * The page is the built-in one with a fixed title and the fixed sentence for the status
+ * (`guidance.ts`, chosen by the status alone, since nothing of the request was read), so that a
+ * request refused below the application still says what happened and what to do. It names the
+ * kind of problem and nothing about what was sent. The log line has the same fixed shape as any
+ * other, with no method (the request could not be read), no route and no person, and a fixed name
+ * for the refusal.
  */
 
 export interface WireOptions {

@@ -302,6 +302,7 @@ const cases: Case[] = [
           status: 400,
           title: t("title"),
           message: t("message"),
+          todo: t("todo"),
           backLabel: t("back"),
         }),
       ),

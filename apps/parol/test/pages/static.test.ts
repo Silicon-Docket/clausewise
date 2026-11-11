@@ -109,6 +109,8 @@ describe("the page and view sources", () => {
       /^\.\.\/\.\.\/services\/views\.js$/,
       /^\.\.\/\.\.\/ingest\/invisible\.js$/,
       /^\.\.\/urls\.js$/,
+      // The sentences of the error pages: pure data with no imports (pinned in test/a11y/errors.test.ts).
+      /^\.\.\/guidance\.js$/,
       /^\.\.\/views\/[a-z]+\.js$/,
       /^\.\/[a-z]+\.js$/,
     ];
