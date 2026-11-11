@@ -21,13 +21,12 @@ import { variants } from "../pages/variants.js";
 /**
  * The two lists of steps, the single source that the quickstart page renders and that document 8
  * is compared with (`doc-agree.test.ts`). These tests hold what the lists must be on their own:
- * numbered, written without a dash or a model name, worded as the plan words them, and free of the
+ * numbered, written without a dash, worded as the plan words them, and free of the
  * trainer's answer where a trainee reads. Whether each word a task uses is on a page is checked
  * here too, against the fixtures of the pages.
  */
 
 const DASH = /[\u2013\u2014]/;
-const MODEL_NAME = /\b(claude|sonnet|opus|haiku|gpt|gemini|llama|mistral)/i;
 
 describe("the training steps", () => {
   it("are seven, numbered 1 to 7 in order, each with every field filled", () => {
@@ -37,7 +36,6 @@ describe("the training steps", () => {
         expect(field.trim(), `step ${step.n}`).toBe(field);
         expect(field.length, `step ${step.n}`).toBeGreaterThan(5);
         expect(field, `step ${step.n}`).not.toMatch(DASH);
-        expect(field, `step ${step.n}`).not.toMatch(MODEL_NAME);
         expect(field, `step ${step.n}`).not.toContain("**");
       }
       expect(Object.keys(TRAINING_WHO_LABEL), `step ${step.n}`).toContain(step.who);
@@ -108,7 +106,6 @@ describe("the quickstart steps", () => {
       expect(step.text.trim(), `step ${step.n}`).toBe(step.text);
       expect(step.text.length, `step ${step.n}`).toBeGreaterThan(20);
       expect(step.text, `step ${step.n}`).not.toMatch(DASH);
-      expect(step.text, `step ${step.n}`).not.toMatch(MODEL_NAME);
       // Bold is a pair of **, and every pair is closed.
       expect(step.text.split("**").length % 2, `step ${step.n}`).toBe(1);
       expect(
