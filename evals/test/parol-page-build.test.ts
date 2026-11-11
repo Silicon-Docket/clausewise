@@ -11,6 +11,7 @@ import {
   PASSAGE_TEXT_LIMIT,
   PageError,
   buildComparisonPage,
+  mergePassages,
   passageOf,
   serialiseComparisonPage,
   type PageInput,
@@ -186,6 +187,35 @@ describe("the page document of two simulated runs of the worked example", () => 
     });
   });
 
+  it("lists the slots in the comparison's own order, which puts regressions first, and says which are regressions", async () => {
+    // The newer version as the baseline: the two slots it got right are now slots that regressed.
+    const reversed = await buildComparisonPage(
+      input({
+        baseline: { file: "sim-v2.json", results: v2 },
+        candidate: { file: "sim-v1.json", results: v1 },
+        comparison: compared(v2, v1),
+      }),
+    );
+    const ordered = compared(v2, v1).sections[0]!.changes.map(
+      (c) => `${c.caseKey} ${c.ruleKey} ${c.kind}`,
+    );
+    expect(ordered).toEqual(["PAROL-D05 dur-1 regression", "PAROL-D05 ret-1 regression"]);
+    expect(reversed.sections[0]!.changes.map((c) => `${c.caseKey} ${c.ruleKey} ${c.kind}`)).toEqual(
+      ordered,
+    );
+    // The trails go with the sides: the older version is now the candidate.
+    const change = reversed.sections[0]!.changes[0]!;
+    if ("sealed" in change.trail) throw new Error("not sealed");
+    expect(change.trail.baseline.repeats[0]!.cited.map((c) => `${c.doc}${c.paragraph}`)).toEqual([
+      "D23",
+      "D119",
+      "D129",
+    ]);
+    expect(change.trail.candidate.repeats[0]!.cited.map((c) => `${c.doc}${c.paragraph}`)).toEqual([
+      "D119",
+    ]);
+  });
+
   it("shows the answer key's side of a changed slot and the paragraphs it points at, as the run read them", async () => {
     const page = await buildComparisonPage(input());
     const duration = page.sections[0]!.changes[0]!;
@@ -223,8 +253,117 @@ describe("the page document of two simulated runs of the worked example", () => 
     expect(order).toEqual([...order].sort());
   });
 
-  it("says, for each version, what the file recorded of the slot and that it recorded no trail", async () => {
+  it("says, for each version, where it looked and what it cited, as its results file recorded, repeat by repeat", async () => {
     const page = await buildComparisonPage(input());
+    const duration = page.sections[0]!.changes[0]!;
+    if ("sealed" in duration.trail) throw new Error("not sealed");
+    expect(page.sides.baseline.trailsRecorded).toBe(true);
+    expect(page.sides.candidate.trailsRecorded).toBe(true);
+    for (const side of ["baseline", "candidate"] as const) {
+      expect(duration.trail[side]).toMatchObject({ recorded: true, whyNot: null });
+    }
+    // The score facts, and beside them the trail the file holds for the slot: nothing added to it,
+    // nothing left out of it.
+    const recorded = (file: ResultsFile) =>
+      file.trails!.items.find((i) => i.ruleKey === "dur-1" && i.repeat === 1)!;
+    expect(duration.trail.baseline.repeats).toEqual([
+      {
+        repeat: 1,
+        observed: "compliant",
+        correct: false,
+        failure: "silent_miss",
+        silentMiss: true,
+        verifiedQuotes: 1,
+        verificationState: recorded(v1).verificationState,
+        escalations: recorded(v1).escalations,
+        shown: recorded(v1).shown,
+        cited: recorded(v1).cited,
+        checks: recorded(v1).checks,
+      },
+    ]);
+    expect(duration.trail.candidate.repeats[0]).toMatchObject({
+      observed: "deviation",
+      correct: true,
+      failure: null,
+      silentMiss: false,
+      shown: recorded(v2).shown,
+      cited: recorded(v2).cited,
+      checks: recorded(v2).checks,
+    });
+    // The baseline was not shown the amendment's paragraph and the candidate was: the slot's story.
+    const trail = duration.trail;
+    const shownBy = (side: "baseline" | "candidate") =>
+      trail[side].repeats[0]!.shown!.spans.map((s) => `${s.doc}-${s.paragraph}`);
+    expect(shownBy("baseline")).not.toContain("D2-3");
+    expect(shownBy("candidate")).toContain("D2-3");
+  });
+
+  it("puts the paragraphs that a trail cites into the case beside the key's, and no other", async () => {
+    const page = await buildComparisonPage(input());
+    const { spans } = await readCase(world.dataset, "PAROL-D05");
+    const passages = page.cases["PAROL-D05"]!.passages;
+    // Every paragraph cited by a version of a changed slot has its text in the document, whole.
+    for (const change of page.sections[0]!.changes) {
+      if ("sealed" in change.trail) throw new Error("not sealed");
+      for (const side of ["baseline", "candidate"] as const) {
+        for (const cited of change.trail[side].repeats.flatMap((r) => r.cited)) {
+          const passage = passages.find(
+            (p) => p.doc === cited.doc && p.paragraph === cited.paragraph,
+          );
+          const span = spans.find(
+            (x) => x.docLabel === cited.doc && x.paragraphIndex === cited.paragraph,
+          )!;
+          expect(passage, `${change.ruleKey} ${cited.doc} ${cited.paragraph}`).toBeDefined();
+          expect(passage!.text).toBe(span.text);
+        }
+      }
+    }
+    // The paragraphs of the other six rules (which did not change) are not there: a trail pane
+    // shows the slots that changed.
+    expect(passages.some((p) => p.doc === "D1" && p.paragraph === 5)).toBe(false);
+  });
+
+  it("puts in a paragraph that only a trail cites, which the key does not name", async () => {
+    // FABRICATED FOR A TEST: the candidate's file is edited to cite one more paragraph of the NDA
+    // that no key anchor names, so that the path for a cited paragraph can be seen on its own.
+    const edited = clone(v2);
+    const item = edited.trails!.items.find((i) => i.ruleKey === "dur-1")!;
+    item.cited.push({
+      doc: "D1",
+      paragraph: 3,
+      role: "supporting",
+      quoteCheck: "not_found",
+      start: null,
+      end: null,
+    });
+    const { spans } = await readCase(world.dataset, "PAROL-D05");
+    const text = spans.find((s) => s.docLabel === "D1" && s.paragraphIndex === 3)!.text;
+    const bare = await buildComparisonPage(input());
+    expect(bare.cases["PAROL-D05"]!.passages.some((p) => p.doc === "D1" && p.paragraph === 3)).toBe(
+      false,
+    );
+    const page = await buildComparisonPage(
+      input({ candidate: { file: "sim-v2.json", results: edited } }),
+    );
+    const found = page.cases["PAROL-D05"]!.passages.find(
+      (p) => p.doc === "D1" && p.paragraph === 3,
+    );
+    expect(found?.text).toBe(text);
+  });
+
+  it("says for a side whose file has no trails that it recorded none, and keeps the scores", async () => {
+    // A results file written before trails existed: a real file with the field taken away.
+    const old = (file: ResultsFile): ResultsFile => {
+      const copy = clone(file);
+      delete copy.trails;
+      return copy;
+    };
+    const page = await buildComparisonPage(
+      input({
+        baseline: { file: "sim-v1.json", results: old(v1) },
+        candidate: { file: "sim-v2.json", results: old(v2) },
+      }),
+    );
     const duration = page.sections[0]!.changes[0]!;
     if ("sealed" in duration.trail) throw new Error("not sealed");
     expect(page.sides.baseline.trailsRecorded).toBe(false);
@@ -253,7 +392,75 @@ describe("the page document of two simulated runs of the worked example", () => 
       correct: true,
       failure: null,
       silentMiss: false,
+      shown: null,
     });
+    // The key's side is still there, and the page document is one the application reads.
+    expect(duration.trail.key.anchors.length).toBeGreaterThan(0);
+    expect(parseComparisonPage(serialiseComparisonPage(page), pageFileName(page.id)).ok).toBe(true);
+  });
+
+  it("reads each side on its own: an old baseline against a candidate that recorded trails", async () => {
+    const old = clone(v1);
+    delete old.trails;
+    const page = await buildComparisonPage(
+      input({ baseline: { file: "sim-v1.json", results: old } }),
+    );
+    const duration = page.sections[0]!.changes[0]!;
+    if ("sealed" in duration.trail) throw new Error("not sealed");
+    expect(page.sides.baseline.trailsRecorded).toBe(false);
+    expect(page.sides.candidate.trailsRecorded).toBe(true);
+    expect(duration.trail.baseline).toMatchObject({ recorded: false, whyNot: "not_recorded" });
+    expect(duration.trail.candidate).toMatchObject({ recorded: true, whyNot: null });
+  });
+
+  it("does not show a trail for a slot the file holds none for, and shows the others", async () => {
+    // FABRICATED FOR A TEST: the trail of one slot is taken out of a real file.
+    const edited = clone(v2);
+    edited.trails!.items = edited.trails!.items.filter((i) => i.ruleKey !== "dur-1");
+    const page = await buildComparisonPage(
+      input({ candidate: { file: "sim-v2.json", results: edited } }),
+    );
+    const [duration, retention] = page.sections[0]!.changes;
+    if ("sealed" in duration!.trail || "sealed" in retention!.trail) throw new Error("not sealed");
+    expect(duration!.trail.candidate).toMatchObject({ recorded: false, whyNot: "not_recorded" });
+    expect(duration!.trail.candidate.repeats[0]).toMatchObject({
+      observed: "deviation",
+      shown: null,
+    });
+    expect(retention!.trail.candidate).toMatchObject({ recorded: true, whyNot: null });
+  });
+
+  it("does not show a trail of a case whose files on disk read differently from the way the run read them", async () => {
+    // FABRICATED FOR A TEST: the digest of the case's text in the candidate's file is not the one
+    // the files on disk have, as when a case file or the parser changed after the run.
+    const edited = clone(v2);
+    edited.trails!.cases["PAROL-D05"] = "f".repeat(64);
+    const page = await buildComparisonPage(
+      input({ candidate: { file: "sim-v2.json", results: edited } }),
+    );
+    for (const change of page.sections[0]!.changes) {
+      if ("sealed" in change.trail) throw new Error("not sealed");
+      expect(change.trail.candidate, change.ruleKey).toMatchObject({
+        recorded: false,
+        whyNot: "case_changed",
+      });
+      for (const repeat of change.trail.candidate.repeats) {
+        expect(repeat).toMatchObject({
+          verificationState: null,
+          shown: null,
+          cited: [],
+          checks: null,
+          escalations: [],
+        });
+        expect(repeat.observed).toBeDefined();
+      }
+      // The baseline's file is untouched.
+      expect(change.trail.baseline).toMatchObject({ recorded: true, whyNot: null });
+      // The key's side is still shown.
+      expect(change.trail.key.anchors.length).toBeGreaterThan(0);
+    }
+    // The file still has trails, and says so.
+    expect(page.sides.candidate.trailsRecorded).toBe(true);
   });
 
   it("records the mode of each run and not its banner, and applies no decision rule to a scripted run", async () => {
@@ -567,6 +774,43 @@ describe("a paragraph as a passage", () => {
   });
 });
 
+describe("the paragraphs of a case", () => {
+  // FABRICATED FOR A TEST: passages made up to see how the key's and the trails' are put together.
+  const passage = (doc: "D1" | "D2", paragraph: number) => ({
+    doc,
+    paragraph,
+    clauseNumber: null,
+    heading: null,
+    text: `text of ${doc} ${paragraph}`,
+  });
+  const mapOf = (...items: ReturnType<typeof passage>[]) =>
+    new Map(items.map((p) => [`${p.doc}:${p.paragraph}`, p]));
+
+  it("puts all of the key's first, then the cited ones in document order while there is room, sorted", () => {
+    const key = mapOf(passage("D2", 3), passage("D1", 19));
+    const cited = mapOf(passage("D1", 29), passage("D1", 4), passage("D2", 3), passage("D1", 7));
+    const merged = mergePassages(key, cited, 4);
+    // Room for two more: the first two cited in document order. D2 3 is the key's, once.
+    expect(merged.map((p) => `${p.doc}${p.paragraph}`)).toEqual(["D14", "D17", "D119", "D23"]);
+    // With room for all of them every paragraph is there, each once.
+    expect(mergePassages(key, cited).map((p) => `${p.doc}${p.paragraph}`)).toEqual([
+      "D14",
+      "D17",
+      "D119",
+      "D129",
+      "D23",
+    ]);
+  });
+
+  it("never leaves out one of the key's for a cited one, even when the key alone fills the case", () => {
+    const key = mapOf(passage("D1", 1), passage("D1", 2), passage("D1", 3));
+    const cited = mapOf(passage("D1", 0), passage("D2", 1));
+    expect(mergePassages(key, cited, 3).map((p) => p.paragraph)).toEqual([1, 2, 3]);
+    expect(mergePassages(key, cited, 2).map((p) => p.paragraph)).toEqual([1, 2, 3]);
+    expect(mergePassages(key, new Map(), 60)).toHaveLength(3);
+  });
+});
+
 describe("the sealed held-out split (a SIMULATED baseline against a SELFTEST candidate, both scripted)", () => {
   const heldoutWorld = () => readCase(world.dataset, "PAROL-H01");
 
@@ -584,6 +828,17 @@ describe("the sealed held-out split (a SIMULATED baseline against a SELFTEST can
     }
     expect(page.cases).toEqual({});
     expect(page.heldoutTrailsOpened).toBe(false);
+    // The files of both runs hold trails of these slots, and none of them is in the document: not
+    // where a version looked, not what it cited, not which checks it passed.
+    expect(held.sim.trails!.items.length).toBeGreaterThan(0);
+    expect(held.self.trails!.items.length).toBeGreaterThan(0);
+    const sealedText = serialiseComparisonPage(page);
+    for (const field of ['"shown"', '"cited"', '"notApplicable"', '"verificationState"']) {
+      expect(sealedText, field).not.toContain(field);
+    }
+    for (const digest of Object.values(held.self.trails!.cases)) {
+      expect(sealedText).not.toContain(digest);
+    }
 
     // Nothing of the held-out documents or of its key is in the file: not a paragraph, not a
     // basis, not a note.
@@ -607,6 +862,17 @@ describe("the sealed held-out split (a SIMULATED baseline against a SELFTEST can
     }
     expect(Object.keys(page.cases)).toEqual(["PAROL-H01"]);
     expect(page.cases["PAROL-H01"]!.passages.length).toBeGreaterThan(0);
+    // Both files recorded trails, so the trails are there too, for the slots that changed.
+    for (const change of page.sections[0]!.changes) {
+      if ("sealed" in change.trail) throw new Error("opened");
+      for (const side of ["baseline", "candidate"] as const) {
+        expect(change.trail[side], `${change.ruleKey} ${side}`).toMatchObject({
+          recorded: true,
+          whyNot: null,
+        });
+        expect(change.trail[side].repeats[0]!.shown, `${change.ruleKey} ${side}`).not.toBeNull();
+      }
+    }
 
     // The same check as for the sealed document, which here has to find what it looked for:
     // without this the negative test above could not fail.

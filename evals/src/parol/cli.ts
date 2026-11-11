@@ -171,7 +171,10 @@ export interface ParolOptions {
   /** With candidate: compare two results files that already exist, and run nothing. */
   baseline: string | undefined;
   candidate: string | undefined;
-  /** Put the answer key and the passages of the held-out split's changed slots into the page document. */
+  /**
+   * Put the evidence trails of the held-out split's changed slots into the page document: the answer
+   * key and its passages and, for each version, where it looked and what it cited. Sealed otherwise.
+   */
   openHeldoutTrails: boolean;
   help: boolean;
 }
@@ -243,9 +246,10 @@ Options:
                                and --candidate. The page shows what the files say: a selftest, a
                                simulated run or a replay is labelled as such, and a comparison that
                                was refused or is unfinished is not published.
-  --open-heldout-trails        Put the answer key and the passages of the held-out split's changed
-                               slots into the page document. They are left out by default, and the
-                               document records that they were opened. Needs --publish. Read the
+  --open-heldout-trails        Put the evidence trails of the held-out split's changed slots into the
+                               page document: the answer key and its passages and, for each version,
+                               where it looked and what it cited. They are left out by default, and
+                               the document records that they were opened. Needs --publish. Read the
                                warning that is printed.
   --allow-differences <names>  Pins that are expected to differ, comma separated: ${PIN_NAMES.filter((name) => name !== "evaluation").join(", ")}.
                                A difference in the evaluation version is never allowed.
@@ -1553,6 +1557,8 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
               slots: seen.slots,
               extraction: seen.extraction,
               spans: prepared.ingest.spans,
+              trails: seen.trails,
+              textDigest: seen.textDigest,
             });
             const done = record("succeeded", {
               totalMs: mode === "live" ? run.totalMs : null,

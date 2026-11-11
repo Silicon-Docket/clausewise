@@ -4,8 +4,10 @@
  *
  * A results file holds counts, ids, hashes and closed codes. It never holds document text, a
  * quotation, a prompt or a model answer: the scores are made from observations that carry span ids
- * and statuses only. It is plain JSON so that a later comparison, a page and a person can all read
- * it, and `parseResults` validates what it reads, because a file on disk is input.
+ * and statuses only, and the evidence trails (trails.ts: which paragraphs were shown, which were
+ * cited, which checks passed) are labels, indexes, offsets and codes of the same kind. It is plain
+ * JSON so that a later comparison, a page and a person can all read it, and `parseResults`
+ * validates what it reads, because a file on disk is input.
  *
  * Honesty rules built into the shape:
  *  - `mode` says whether the run was a selftest (a scripted oracle that reads the key), simulated
@@ -54,6 +56,7 @@ import {
   type LatencySummary,
   type StageName,
 } from "./timing.js";
+import { trailRecordOf, trailRecordSchema, type SlotTrail, type TrailRecord } from "./trails.js";
 import { evaluationVersion } from "./version.js";
 
 const execFileAsync = promisify(execFile);
@@ -330,6 +333,12 @@ export interface ResultsFile {
   recording: RecordingNote | null;
   /** Plain sentences the report prints under its heading. */
   notes: string[];
+  /**
+   * Where each version looked and what it cited, slot by slot: labels, indexes, offsets and codes,
+   * never text (trails.ts). Files written before trails existed have none, and none is what they
+   * recorded; a reader says "not recorded" for them.
+   */
+  trails?: TrailRecord;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -418,6 +427,10 @@ export interface ObservedRun {
   slots: SlotObservation[];
   extraction: ExtractionObservation;
   spans: readonly SourceSpan[];
+  /** One trail per rule slot of the run (trails.ts). Absent for a run that was not observed this way. */
+  trails?: SlotTrail[];
+  /** Digest of the text of the case's documents as this run read them, which names what a trail's paragraph indexes point at. */
+  textDigest?: string;
 }
 
 export function runnableCount(group: CaseGroup): number {
@@ -1193,6 +1206,8 @@ const resultsSchema = z.object({
   suites: suitesSchema.default({ exposure: null, calibration: null }),
   recording: recordingNote.nullable().default(null),
   notes: z.array(z.string()),
+  // Strict: a trail that carries a field this version does not know, or any text, is refused.
+  trails: trailRecordSchema.optional(),
 });
 
 /**
@@ -1265,6 +1280,7 @@ export interface AssembleInput {
  */
 export function assembleResults(input: AssembleInput): ResultsFile {
   const hashOfSplit = (split: Split): string => input.pins.dataset.splits[split] ?? "";
+  const trails = trailRecordOf(input.observed);
   return {
     format: RESULTS_FORMAT,
     kind: RESULTS_KIND,
@@ -1299,6 +1315,7 @@ export function assembleResults(input: AssembleInput): ResultsFile {
     contamination: input.contamination,
     suites: input.suites ?? NO_SUITES,
     recording: input.recording ?? null,
-    notes: [...input.notes],
+    notes: trails.note === null ? [...input.notes] : [...input.notes, trails.note],
+    ...(trails.record === undefined ? {} : { trails: trails.record }),
   };
 }

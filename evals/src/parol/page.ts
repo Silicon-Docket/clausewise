@@ -13,10 +13,12 @@
  *    points at, as paragraphs of the synthetic case files) is read from the dataset on disk, after
  *    checking that the dataset is the one the runs were made with.
  *  - What each version did with a slot is what the results file recorded: the status it gave,
- *    whether that was right, the kind of failure, and how many quotes verified. A results file holds
- *    no model answer and no quotation (results.ts), so neither does the page document. Where each
- *    version looked and what it cited is not recorded by a results file of this version, and the
- *    document says so for every side (`recorded: false`, `not_recorded`).
+ *    whether that was right, the kind of failure, how many quotes verified and, when the file has
+ *    trails (trails.ts), where the version looked, what it cited, which checks passed and failed and
+ *    which escalations it raised. A results file holds no model answer and no quotation, so neither
+ *    does the page document. A side whose file has no trails (an older file), no trail for the slot,
+ *    or a case whose text on disk is not the text the run read says so (`recorded: false`, with
+ *    `not_recorded` or `case_changed`) and still shows the scores.
  *  - The words of a banner are not here. A document carries the mode of each run and the
  *    application looks the words up, so editing a document cannot change what a page announces.
  *  - The held-out split is sealed: a changed held-out slot is listed (its case, rule and counts),
@@ -49,6 +51,7 @@ import {
   type SplitName,
 } from "../../../apps/parol/src/evaluations/document.js";
 import { buildIngest } from "../../../apps/parol/src/ingest/ingest.js";
+import { documentTextSha256 } from "../../../apps/parol/src/ingest/text-hash.js";
 import type { LoadedPlaybook } from "../../../apps/parol/src/module-contracts.js";
 import type { AnswerKeyCase, RuleExpectation } from "../../../fixtures/parol/types.js";
 import { EvalError, shown } from "../errors.js";
@@ -59,6 +62,7 @@ import type { GateReport } from "./gates.js";
 import { runHealth, type ResultsFile, type SplitSection } from "./results.js";
 import { readCaseDocuments, runnableCases, type ParsedFiles } from "./runner.js";
 import type { SlotScore } from "./score.js";
+import { textDigestOf, type SlotTrail, type TrailRecord } from "./trails.js";
 
 /** A page document could not be built or written. The message is a fixed sentence and names no text. */
 export class PageError extends EvalError {
@@ -69,6 +73,8 @@ export class PageError extends EvalError {
 export const PASSAGE_TEXT_LIMIT = 8000;
 
 const TEXT_LIMIT = 2000;
+/** The most passages one case holds in a page document (the contract's bound). */
+const MAX_PASSAGES = 60;
 const MAX_GATE_EVIDENCE = 40;
 
 export interface PageInput {
@@ -197,8 +203,7 @@ function sideFacts(file: ResultsFile): SideFacts {
       ),
     },
     contamination: typeof note === "string" ? clip(note) : null,
-    // A results file of this version records no trail, so no page can show where a version looked.
-    trailsRecorded: false,
+    trailsRecorded: file.trails !== undefined,
   };
 }
 
@@ -268,6 +273,28 @@ export function passageOf(
   };
 }
 
+const byPlace = (a: PassageView, b: PassageView): number =>
+  a.doc.localeCompare(b.doc) || a.paragraph - b.paragraph;
+
+/**
+ * The paragraphs of one case, sorted: all of the key's, then those that trails cite, in document
+ * order, while there is room. A cited paragraph that is left out is shown as "not in this file",
+ * which is true, and the key is never short of one. `max` is for tests.
+ */
+export function mergePassages(
+  key: ReadonlyMap<string, PassageView>,
+  cited: ReadonlyMap<string, PassageView>,
+  max: number = MAX_PASSAGES,
+): PassageView[] {
+  const merged = new Map(key);
+  for (const passage of [...cited.values()].sort(byPlace)) {
+    if (merged.size >= max) break;
+    const at = `${passage.doc}:${passage.paragraph}`;
+    if (!merged.has(at)) merged.set(at, passage);
+  }
+  return [...merged.values()].sort(byPlace);
+}
+
 interface ReadCase {
   key: AnswerKeyCase;
   spans: readonly SourceSpan[];
@@ -277,7 +304,12 @@ interface ReadCase {
     versionNo: number;
     statedDate: string | null;
   }[];
+  /** Digest of the text as read now, which a trail's digest has to equal (trails.ts). */
+  textDigest: string;
+  /** The paragraphs the key points at. They always go into the document. */
   passages: Map<string, PassageView>;
+  /** The paragraphs that trails cite. They go in after the key's, while there is room. */
+  cited: Map<string, PassageView>;
 }
 
 /** Reads the cases the key names once each, and collects the passages that changed slots point at. */
@@ -311,7 +343,14 @@ function caseReader(dataset: Dataset): (caseKey: string) => Promise<ReadCase> {
             versionNo: doc.versionNo,
             statedDate: doc.statedDate === null ? null : clip(doc.statedDate, 100),
           })),
+          textDigest: textDigestOf(
+            documents.map((doc) => ({
+              label: doc.label,
+              textSha256: documentTextSha256(doc.paragraphs),
+            })),
+          ),
           passages: new Map(),
+          cited: new Map(),
         };
       })();
       cache.set(caseKey, read);
@@ -364,33 +403,112 @@ function keyOf(read: ReadCase, expectation: RuleExpectation, where: string): Slo
 // The slots that changed
 // ---------------------------------------------------------------------------------------------
 
+/** The trails of a file by slot and repeat, looked up without searching the list each time. */
+const trailIndexes = new WeakMap<TrailRecord, Map<string, SlotTrail>>();
+
+function trailAt(
+  record: TrailRecord,
+  at: { split: string; caseKey: string; ruleKey: string; repeat: number },
+): SlotTrail | undefined {
+  let index = trailIndexes.get(record);
+  if (index === undefined) {
+    index = new Map(
+      record.items.map((item) => [
+        `${item.split}\n${item.caseKey}\n${item.ruleKey}\n${item.repeat}`,
+        item,
+      ]),
+    );
+    trailIndexes.set(record, index);
+  }
+  return index.get(`${at.split}\n${at.caseKey}\n${at.ruleKey}\n${at.repeat}`);
+}
+
 /**
- * What one version did with a slot, repeat by repeat, from the scores in its results file. Where it
- * looked and what it cited are not in a results file of this version, so the side says it recorded
- * none.
+ * What one version did with a slot, repeat by repeat. The scores come from the section of its
+ * results file. Where it looked and what it cited come from the file's trails, and only when the
+ * file has trails for the slot and the case files on disk are the ones the run read (their digest
+ * is the recorded one). Otherwise the side says which, and keeps the scores.
  */
-function sideTrail(section: SplitSection, change: SlotChange): SideTrailView {
+function sideTrail(args: {
+  file: ResultsFile;
+  section: SplitSection;
+  change: SlotChange;
+  read: ReadCase;
+}): SideTrailView {
+  const { file, section, change, read } = args;
   const scores: SlotScore[] = (section.metrics?.repeats ?? [])
     .flatMap((repeat) => repeat.slotScores)
     .filter((score) => score.caseKey === change.caseKey && score.ruleKey === change.ruleKey)
     .sort((a, b) => a.repeat - b.repeat);
+  const slot = { split: section.split, caseKey: change.caseKey, ruleKey: change.ruleKey };
+  const record = file.trails;
+  const found =
+    record === undefined
+      ? []
+      : scores.flatMap((score) => {
+          const item = trailAt(record, { ...slot, repeat: score.repeat });
+          return item === undefined ? [] : [item];
+        });
+
+  // Why the trail is not shown, if it is not: none was recorded for this slot, or the case files
+  // on disk read differently from the way the run read them.
+  const whyNot: "not_recorded" | "case_changed" | null =
+    record === undefined || found.length === 0
+      ? "not_recorded"
+      : record.cases[change.caseKey] !== read.textDigest
+        ? "case_changed"
+        : null;
+  const byRepeat = new Map(found.map((item) => [item.repeat, item]));
+  const spanAt = new Map(
+    read.spans.map((span) => [`${span.docLabel}:${span.paragraphIndex}`, span]),
+  );
+
   return {
-    recorded: false,
-    whyNot: "not_recorded",
+    recorded: whyNot === null,
+    whyNot,
     repeats: bounded(
-      scores.map((score) => ({
-        repeat: score.repeat,
-        observed: score.observed,
-        correct: score.statusCorrect,
-        failure: score.failure,
-        silentMiss: score.silentMiss,
-        verifiedQuotes: score.verifiedQuotes,
-        verificationState: null,
-        escalations: [],
-        shown: null,
-        cited: [],
-        checks: null,
-      })),
+      scores.map((score) => {
+        const item = whyNot === null ? byRepeat.get(score.repeat) : undefined;
+        if (item !== undefined) {
+          // The paragraphs a version cited are shown beside its trail, so they go into the case.
+          for (const cited of item.cited) {
+            const span = spanAt.get(`${cited.doc}:${cited.paragraph}`);
+            const passage = span === undefined ? null : passageOf(span);
+            if (passage !== null) read.cited.set(`${passage.doc}:${passage.paragraph}`, passage);
+          }
+        }
+        return {
+          repeat: score.repeat,
+          observed: score.observed,
+          correct: score.statusCorrect,
+          failure: score.failure,
+          silentMiss: score.silentMiss,
+          verifiedQuotes: score.verifiedQuotes,
+          verificationState: item === undefined ? null : item.verificationState,
+          escalations: item === undefined ? [] : [...item.escalations],
+          shown:
+            item === undefined
+              ? null
+              : {
+                  sent: item.shown.sent,
+                  full: item.shown.full,
+                  spans: bounded(
+                    item.shown.spans.map((span) => ({ ...span })),
+                    400,
+                    "paragraphs shown for a slot",
+                  ),
+                },
+          cited: item === undefined ? [] : item.cited.map((cited) => ({ ...cited })),
+          checks:
+            item === undefined
+              ? null
+              : {
+                  pass: [...item.checks.pass],
+                  fail: [...item.checks.fail],
+                  notApplicable: [...item.checks.notApplicable],
+                },
+        };
+      }),
       100,
       "repeats of a slot",
     ),
@@ -416,6 +534,8 @@ async function changeView(args: {
   change: SlotChange;
   baseline: SplitSection;
   candidate: SplitSection;
+  baselineFile: ResultsFile;
+  candidateFile: ResultsFile;
   playbook: LoadedPlaybook;
   dataset: Dataset;
   sealed: boolean;
@@ -448,8 +568,8 @@ async function changeView(args: {
     ...view,
     trail: {
       key: keyOf(read, expectation, where),
-      baseline: sideTrail(args.baseline, change),
-      candidate: sideTrail(args.candidate, change),
+      baseline: sideTrail({ file: args.baselineFile, section: args.baseline, change, read }),
+      candidate: sideTrail({ file: args.candidateFile, section: args.candidate, change, read }),
     },
   };
 }
@@ -517,6 +637,8 @@ async function sectionView(args: {
         change,
         baseline,
         candidate,
+        baselineFile: input.baseline.results,
+        candidateFile: input.candidate.results,
         playbook: input.playbook,
         dataset: input.dataset,
         sealed,
@@ -614,10 +736,8 @@ export async function buildComparisonPage(input: PageInput): Promise<ComparisonP
     cases[caseKey] = {
       documents: entry.documents,
       passages: bounded(
-        [...entry.passages.values()].sort(
-          (a, b) => a.doc.localeCompare(b.doc) || a.paragraph - b.paragraph,
-        ),
-        60,
+        mergePassages(entry.passages, entry.cited),
+        MAX_PASSAGES,
         `passages of ${named(caseKey)}`,
       ),
     };

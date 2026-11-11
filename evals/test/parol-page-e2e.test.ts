@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { DURATION, NOT_THE_EXAMPLE, RETURN } from "../../apps/parol/src/demo/worked-example.js";
@@ -9,6 +9,7 @@ import {
   parseComparisonPage,
   type ComparisonPage,
 } from "../../apps/parol/src/evaluations/index.js";
+import { CHECK_LABEL } from "../../apps/parol/src/server/views/labels.js";
 import { urls } from "../../apps/parol/src/server/urls.js";
 import { expectAccessible, tabStops } from "../../apps/parol/test/a11y/rules.js";
 import {
@@ -53,6 +54,8 @@ let data = "";
 let site: Site;
 let world: Awaited<ReturnType<typeof loadWorld>>;
 let published: { dev: ComparisonPage; sealed: ComparisonPage; opened: ComparisonPage };
+/** The same two runs as results files written before trails existed, published to a folder of their own. */
+let older: { site: Site; page: ComparisonPage };
 
 async function pages(): Promise<ComparisonPage[]> {
   const folder = join(data, "evaluations");
@@ -132,6 +135,37 @@ beforeAll(async () => {
     opened: pick((page) => page.sections[0]!.split === "heldout" && page.heldoutTrailsOpened),
   };
   site = makeSite({ evaluations: join(data, "evaluations") });
+
+  // The same two runs as files from before trails existed: the real files with the field taken
+  // away, which is all that such a file lacks. They are compared and published by the command.
+  const withoutTrails = async (from: string, to: string): Promise<string> => {
+    const file = JSON.parse(await readFile(from, "utf8")) as Record<string, unknown>;
+    expect(file.trails).toBeDefined();
+    delete file.trails;
+    await writeFile(to, JSON.stringify(file, null, 2));
+    return to;
+  };
+  const oldData = join(dir, "data-old");
+  await mkdir(oldData);
+  const oldPublish = await run(
+    [
+      "--baseline",
+      await withoutTrails(v1, join(dir, "old-v1.json")),
+      "--candidate",
+      await withoutTrails(join(dir, "sim-v2.json"), join(dir, "old-v2.json")),
+      "--publish",
+      oldData,
+    ],
+    io,
+  );
+  expect(oldPublish.code, oldPublish.stderr).toBe(0);
+  const [oldName] = await readdir(join(oldData, "evaluations"));
+  const oldParsed = parseComparisonPage(
+    await readFile(join(oldData, "evaluations", oldName!), "utf8"),
+    oldName!,
+  );
+  if (!oldParsed.ok) throw new Error("the application does not accept the page of older files");
+  older = { site: makeSite({ evaluations: join(oldData, "evaluations") }), page: oldParsed.page };
 });
 
 afterAll(async () => {
@@ -231,8 +265,25 @@ describe("a legal engineer, on what the command published", () => {
     expect(pane("Candidate")).toContain("Deviation");
     expect(pane("Candidate")).toContain("Right");
     expect(pane("Candidate")).not.toContain("Compliant");
-    // A results file of this version records no trail, and the page says so, for both versions.
-    expect(text.split(WHY_NOT_LABEL.not_recorded)).toHaveLength(3);
+    // Both files recorded trails, so the page does not say that they did not.
+    expect(text).not.toContain(WHY_NOT_LABEL.not_recorded);
+    expect(text).not.toContain(WHY_NOT_LABEL.case_changed);
+    // Where each version looked. The baseline was shown the NDA's clause and not the amendment's
+    // paragraph, which is why it missed the issue; the candidate was shown it as a cross reference.
+    expect(pane("Baseline")).toContain("Shown to the reader:");
+    expect(pane("Baseline")).toContain("D1-p19 (located by the reader)");
+    expect(pane("Baseline")).not.toContain("D2-p3");
+    expect(pane("Candidate")).toContain("D2-p3 (a cross reference)");
+    // What each cited, with the paragraph and its quote marked, and the checks in the application's words.
+    expect(pane("Baseline")).toContain("Cited:");
+    expect(pane("Candidate")).toContain("Section 6.1 of the Agreement is deleted");
+    for (const side of ["Baseline", "Candidate"]) {
+      expect(pane(side)).toContain("Checks:");
+      expect(pane(side)).toContain(`Passed: ${CHECK_LABEL.quote_exists}`);
+      expect(pane(side)).toContain(CHECK_LABEL.parties);
+    }
+    // It does not show what a version wrote.
+    expect(text).toContain("It does not show what it wrote.");
     expect(html).toContain('id="trail"');
     expectAccessible(html);
     expect(tabStops(parseHtml(html)).length).toBeGreaterThan(5);
@@ -257,6 +308,33 @@ describe("a legal engineer, on what the command published", () => {
         expect(said(html), url).not.toContain(sentence);
       }
     }
+  });
+
+  it("is told, for results files written before trails existed, that they did not record where each version looked, and still sees the scores", async () => {
+    const { page } = older;
+    expect(page.sides.baseline.trailsRecorded).toBe(false);
+    expect(page.sides.candidate.trailsRecorded).toBe(false);
+    const browser = await older.site.as(IDS.legalEngineer);
+    const { html, root } = await browser.page(
+      urls.evaluations({ comparison: page.id, caseKey: "PAROL-D05", ruleKey: "dur-1" }),
+    );
+    const text = said(html);
+    // Said once for each version, in the application's own words, and nothing is made up.
+    expect(text.split(WHY_NOT_LABEL.not_recorded)).toHaveLength(3);
+    expect(text).not.toContain("Shown to the reader:");
+    expect(text).not.toContain("Checks:");
+    // The key and the scores are still there.
+    const marks = all(root, (el) => el.name === "mark").map((mark) => readable(mark));
+    expect(marks.some((mark) => mark.includes("Section 6.1 of the Agreement is deleted"))).toBe(
+      true,
+    );
+    expect(text).toContain("Silent miss");
+    expect(text).toContain("1 of 1 repeat right");
+    expect(html).toContain('id="trail"');
+    expectAccessible(html);
+    // The comparison page itself says so in the version facts.
+    const list = await browser.page(urls.evaluations({ comparison: page.id }));
+    expect(said(list.html)).toContain("not recorded in the results file");
   });
 
   it("is given, in the draft record, the same text the application drafts from the document, with its banner and blank fields", async () => {

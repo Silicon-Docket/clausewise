@@ -15,6 +15,7 @@
 import type { AnthropicUsage, ObjectGenerator } from "@clausewise/llm";
 import type {
   CallRecord,
+  ContextBundle,
   DraftFinding,
   ExtractOutput,
   IngestDocumentInput,
@@ -54,6 +55,7 @@ import { findAnchor } from "./anchors.js";
 import { observeExtraction, observeSlot } from "./observe.js";
 import type { ExtractionObservation, SlotObservation } from "./score.js";
 import type { StageName } from "./timing.js";
+import { textDigestOf, trailOf, type SlotTrail } from "./trails.js";
 
 /** How many rules are analysed, and then verified, at once within one run. Equal to the service's. */
 export const RULE_CONCURRENCY = 3;
@@ -250,6 +252,8 @@ type AnalysisOutcome =
 
 export interface StageRun {
   extract: ExtractOutput;
+  /** What retrieval built for each rule, in the order of `findings`: what the reader was shown. */
+  bundles: ContextBundle[];
   findings: VerifiedFinding[];
   /** The analyze stage's answer per rule, or undefined where the rule could not be analysed. */
   drafts: (DraftFinding | undefined)[];
@@ -422,6 +426,7 @@ export async function runStages(args: StageArgs): Promise<StageRun> {
 
     return {
       extract: extracted.output,
+      bundles,
       findings,
       drafts: analyses.map((a) => (a.outcome === "draft" ? a.draft : undefined)),
       calls,
@@ -441,8 +446,17 @@ export async function runStages(args: StageArgs): Promise<StageRun> {
 export function observeRun(
   prepared: PreparedCase,
   run: StageRun,
-): { slots: SlotObservation[]; extraction: ExtractionObservation } {
-  const { caseKey } = prepared.runnable;
+): {
+  slots: SlotObservation[];
+  extraction: ExtractionObservation;
+  /** One per rule slot, in the order of `run.findings`. Ids, offsets and codes; no text. */
+  trails: SlotTrail[];
+  /** Names the text of the case's documents that the trails' paragraph indexes point into. */
+  textDigest: string;
+} {
+  const { caseKey, split } = prepared.runnable;
+  // Bundles are looked up by rule, so a trail never describes another rule's retrieval.
+  const bundleOf = new Map(run.bundles.map((bundle) => [bundle.ruleKey, bundle]));
   return {
     slots: run.findings.map((finding, index) =>
       observeSlot({
@@ -454,6 +468,17 @@ export function observeRun(
       }),
     ),
     extraction: observeExtraction({ caseKey, repeat: prepared.repeat, extract: run.extract }),
+    trails: run.findings.map((finding) =>
+      trailOf({
+        split,
+        caseKey,
+        repeat: prepared.repeat,
+        finding,
+        bundle: bundleOf.get(finding.ruleKey),
+        spans: prepared.ingest.spans,
+      }),
+    ),
+    textDigest: textDigestOf(prepared.manifest.documents),
   };
 }
 

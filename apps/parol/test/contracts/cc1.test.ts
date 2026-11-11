@@ -226,6 +226,12 @@ describe("the stubs", () => {
       const throws = read(file)
         .split("\n")
         .filter((line) => line.includes('throw new Error("stub:'));
+      // A file whose owner has filled the stub in carries no marker and no stub throw: that is the
+      // goal, and this file does not have to be edited for it. A stub throw without a marker is not.
+      if (!read(file).includes(`${"STUB"}(`)) {
+        expect(throws, file).toEqual([]);
+        continue;
+      }
       expect(throws.length, file).toBeGreaterThan(0);
       for (const line of throws) {
         const named = /throw new Error\("stub: ([^"]+)"\)/.exec(line)?.[1];
