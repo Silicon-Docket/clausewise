@@ -192,6 +192,46 @@ describe("the two forms", () => {
     expect(byTag(form, "button").map((b) => readable(b))).toEqual(["Save the start date"]);
   });
 
+  it("gives the date field the first and the last start date the store takes, as its min and max", () => {
+    const root = rootOf(pilotPage({ admin: adminView() }));
+    const input = byId(root, PILOT_ANCHORS.startDate)!;
+    expect(attr(input, "min")).toBe("1000-01-01");
+    expect(attr(input, "max")).toBe("9999-11-26");
+    expect(hasAttr(input, "required")).toBe(true);
+    const hint = byId(root, `${PILOT_ANCHORS.startDate}-hint`)!;
+    expect(readable(hint)).toContain("The date is from 1000-01-01 to 9999-11-26");
+    // The limits are the view's, not the page's own.
+    const other = rootOf(
+      pilotPage({ admin: adminView({ startDateRange: { min: "2000-01-01", max: "2100-01-01" } }) }),
+    );
+    expect(attr(byId(other, PILOT_ANCHORS.startDate)!, "min")).toBe("2000-01-01");
+    expect(attr(byId(other, PILOT_ANCHORS.startDate)!, "max")).toBe("2100-01-01");
+  });
+
+  it("says a stored start date cannot be used, keeps the form to mend it, and leaves the field empty", () => {
+    const html = pilotPage({
+      unusableStartDate: "0026-01-05",
+      admin: adminView({
+        calendar: {
+          startDate: "0026-01-05",
+          endDate: null,
+          usable: false,
+          setAt: "2026-01-02T09:00:00.000Z",
+          timesSet: 1,
+        },
+      }),
+    });
+    const root = rootOf(html);
+    const calendar = readable(byId(root, "calendar")!);
+    expect(calendar).toContain("The start date that is stored, 0026-01-05, cannot be used");
+    expect(calendar).not.toContain("The pilot starts on");
+    expect(calendar).not.toContain("No pilot calendar is set");
+    expect(
+      all(root, (el) => el.name === "form" && attr(el, "action") === urls.pilotCalendar()),
+    ).toHaveLength(1);
+    expect(attr(byId(root, PILOT_ANCHORS.startDate)!, "value") ?? "").toBe("");
+  });
+
   it("shows what was typed when the date was refused, in place of the date in force", () => {
     const root = rootOf(pilotPage({ admin: adminView(), draft: { startDate: "2026-02-30" } }));
     expect(attr(byId(root, PILOT_ANCHORS.startDate)!, "value")).toBe("2026-02-30");
@@ -416,10 +456,13 @@ describe("every fixture of this package", () => {
       "pilot measures, pilot scope, no data, no calendar",
       "pilot measures, synthetic scope, every row with a value",
       "pilot measures, date refused, what was typed kept",
+      "pilot measures, the stored start date cannot be used, the form to mend it",
       "pilot measures, roster refused, what was ticked kept",
       "matter page, timer not running, associate",
       "matter page, timer running, associate",
       "matter page, timer running on another matter, associate",
+      "matter page, training matter, a timer left running by an earlier build, only the Stop",
+      "pane, timer left running on a training matter",
       "matter page, reference list saved",
       "matter page, reference list closed by a review",
       "matter page, reference list, no playbook chosen",

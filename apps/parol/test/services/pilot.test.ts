@@ -173,6 +173,87 @@ describe("the calendar and the roster, through the service", () => {
   });
 });
 
+describe("a stored start date that the pilot cannot be counted from", () => {
+  /**
+   * A database that holds such a date: the store refuses to write one now, so the row is put in by
+   * hand, the way an earlier build or a file edited outside the application would have left it.
+   */
+  function worldWithStored(startDate: string): World {
+    const w = world();
+    w.repo.db
+      .prepare("INSERT INTO pilot_calendar (start_date, set_by, set_at) VALUES (?, ?, ?)")
+      .run(startDate, DEMO_USER_IDS.admin, "2026-11-04T09:00:00.000Z");
+    return w;
+  }
+  const STORED = ["0026-01-05", "0000-01-01", "0099-12-31", "9999-11-27", "9999-12-31"];
+
+  for (const stored of STORED) {
+    it(`still answers the measures, the file and the form for ${stored}, and says the date cannot be used`, () => {
+      const w = worldWithStored(stored);
+      const { pilot } = w.services;
+      for (const scope of ["pilot", "synthetic"] as const) {
+        const view = pilot.measures(w.admin, scope);
+        expect(view.calendar).toBeNull();
+        expect(view.calendarSentence).toContain(
+          `The start date that is stored, ${stored}, cannot be used`,
+        );
+        expect(view.calendarSentence).not.toContain("No pilot calendar is set");
+        // No row can be placed in a week, and each row says so in its own words.
+        expect(view.measures.rows.every((row) => row.status === "no_data")).toBe(true);
+        expect(view.measures.rows.every((row) => row.reason !== null)).toBe(true);
+        const file = pilot.csv(w.engineer, scope);
+        expect(file.body.split("\r\n").length).toBeGreaterThan(30);
+      }
+      const admin = pilot.admin(w.admin);
+      expect(admin.calendar).toMatchObject({
+        startDate: stored,
+        endDate: null,
+        usable: false,
+        timesSet: 1,
+      });
+      expect(admin.startDateRange).toEqual({ min: "1000-01-01", max: "9999-11-26" });
+    });
+  }
+
+  it("is mended by saving a date that can be used, and then everything reads as for any date", () => {
+    const w = worldWithStored("0026-01-05");
+    const { pilot } = w.services;
+    expect(() => pilot.setCalendar(w.admin, { startDate: "0026-01-05" })).toThrow(ValidationError);
+    pilot.setCalendar(w.admin, { startDate: "2026-11-09" });
+    const view = pilot.measures(w.admin, "pilot");
+    expect(view.calendar).toEqual({ startDate: "2026-11-09", endDate: "2026-12-13" });
+    expect(view.calendarSentence).toBe(
+      "The pilot starts on 2026-11-09 and week 5 ends on 2026-12-13, counted in UTC.",
+    );
+    expect(pilot.admin(w.admin).calendar).toMatchObject({
+      startDate: "2026-11-09",
+      endDate: "2026-12-13",
+      usable: true,
+      timesSet: 2,
+    });
+  });
+
+  it("gives a date that can be used its range and its end, and refuses the edges of the range", () => {
+    const w = world();
+    const { pilot } = w.services;
+    expect(pilot.admin(w.admin).startDateRange).toEqual({ min: "1000-01-01", max: "9999-11-26" });
+    for (const bad of ["0026-01-05", "0999-12-31", "9999-11-27", "9999-12-30", "9999-12-31"]) {
+      const error = errorOf(() => pilot.setCalendar(w.admin, { startDate: bad }));
+      expect(error, bad).toBeInstanceOf(ValidationError);
+      expect((error as ValidationError).code, bad).toBe("bad_calendar_date");
+    }
+    expect(pilot.admin(w.admin).calendar).toBeNull();
+    pilot.setCalendar(w.admin, { startDate: "9999-11-26" });
+    expect(pilot.admin(w.admin).calendar).toMatchObject({
+      startDate: "9999-11-26",
+      endDate: "9999-12-30",
+      usable: true,
+    });
+    expect(() => pilot.measures(w.admin, "synthetic")).not.toThrow();
+    expect(() => pilot.csv(w.admin, "synthetic")).not.toThrow();
+  });
+});
+
 describe("the timer", () => {
   it("is the signed-in person's own: start, a second start refused, stop, and what was timed", () => {
     const w = world();
@@ -289,6 +370,104 @@ describe("a training matter", () => {
     pilot.startTimer(ordinary.am);
     expect(pilot.timer(w.grant(w.associate, training.id)).elsewhere).toBe(false);
     expect(pilot.timer(w.grant(w.associate, training.id)).allowed).toBe(false);
+  });
+});
+
+describe("a training matter, written to by a hand-made request", () => {
+  function twoMatters() {
+    const w = world();
+    const ordinary = newMatter(w);
+    const training = w.services.matters.create(w.associate, {
+      name: "Training: Lanternfish / Corvane NDA (T01)",
+      clientLegalName: "Lanternfish Software, Inc.",
+      playbookVersionId: w.playbookVersionId,
+      reviewerUserId: w.reviewer.userId,
+      training: "T01",
+    });
+    return { w, ordinary, training };
+  }
+  /** A timer as an earlier build left it. */
+  const plant = (w: World, matterId: string): void => {
+    w.repo.db
+      .prepare(
+        "INSERT INTO time_entries (id, matter_id, user_id, role, started_at) VALUES ('tim_earlier', ?, ?, 'associate', '2026-11-01T08:00:00.000Z')",
+      )
+      .run(matterId, DEMO_USER_IDS.associate);
+  };
+
+  it("refuses a timer to the associate and the reviewing attorney, with a closed code, and writes nothing", () => {
+    const { w, ordinary, training } = twoMatters();
+    const { pilot } = w.services;
+    const events = w.repo.countAuditEvents();
+    for (const person of [w.associate, w.reviewer]) {
+      const error = errorOf(() => pilot.startTimer(w.grant(person, training.id)));
+      expect(error, person.userId).toBeInstanceOf(ConflictError);
+      expect((error as ConflictError).code, person.userId).toBe("timer_training");
+    }
+    expect(w.repo.countAuditEvents()).toBe(events);
+    // So the person's only timer slot is not taken, and an ordinary matter can still be timed.
+    expect(pilot.timer(ordinary.am).elsewhere).toBe(false);
+    expect(pilot.startTimer(ordinary.am).running).not.toBeNull();
+  });
+
+  it("refuses a reference list to the reviewing attorney, with a closed code, and writes nothing", () => {
+    const { w, training } = twoMatters();
+    const events = w.repo.countAuditEvents();
+    const error = errorOf(() =>
+      w.services.pilot.saveReferenceList(w.grant(w.reviewer, training.id), {
+        rules: [{ ruleKey: "dur-1", severity: "high" }],
+        outsideHigh: 0,
+        outsideMedium: 0,
+        outsideLow: 2,
+      }),
+    );
+    expect(error).toBeInstanceOf(ConflictError);
+    expect((error as ConflictError).code).toBe("reference_training");
+    expect(w.repo.getReferenceList(training.id).issues).toEqual([]);
+    expect(w.repo.countAuditEvents()).toBe(events);
+  });
+
+  it("offers a Stop, and only a Stop, for a timer that an earlier build let run on a training matter", () => {
+    const { w, ordinary, training } = twoMatters();
+    const { pilot } = w.services;
+    const am = w.grant(w.associate, training.id);
+    plant(w, training.id);
+    const view = pilot.timer(am);
+    expect(view).toMatchObject({
+      allowed: true,
+      training: true,
+      running: { since: "2026-11-01T08:00:00.000Z" },
+      elsewhere: false,
+      closedSeconds: 0,
+      sessions: 0,
+    });
+    // The reviewing attorney has no timer of their own there.
+    expect(pilot.timer(w.grant(w.reviewer, training.id)).allowed).toBe(false);
+    // The ordinary matter says a timer runs elsewhere, as it should, and can start nothing.
+    expect(pilot.timer(ordinary.am)).toMatchObject({
+      allowed: true,
+      running: null,
+      elsewhere: true,
+    });
+    expect((errorOf(() => pilot.startTimer(ordinary.am)) as ConflictError).code).toBe("timer_open");
+    // The stop works, is audited by the person, and frees the slot.
+    const stopped = pilot.stopTimer(am);
+    expect(stopped).toMatchObject({ allowed: false, running: null });
+    const stop = w.repo.listAuditEvents({ matterId: training.id, action: "time.stop" });
+    expect(stop).toHaveLength(1);
+    expect(stop[0]!.actorId).toBe(DEMO_USER_IDS.associate);
+    expect(pilot.startTimer(ordinary.am).running).not.toBeNull();
+  });
+
+  it("has no Stop to offer once nothing runs there, and none to a viewer", () => {
+    const { w, training } = twoMatters();
+    w.repo.addMember(training.id, VIEWER, "viewer", { actorId: DEMO_USER_IDS.associate });
+    plant(w, training.id);
+    const viewerAm = w.grant(w.principal(VIEWER), training.id);
+    expect(w.services.pilot.timer(viewerAm).allowed).toBe(false);
+    expect(errorOf(() => w.services.pilot.stopTimer(viewerAm))).toBeInstanceOf(ForbiddenError);
+    w.services.pilot.stopTimer(w.grant(w.associate, training.id));
+    expect(w.services.pilot.timer(w.grant(w.associate, training.id)).allowed).toBe(false);
   });
 });
 

@@ -57,9 +57,14 @@ const REASON_CODES = [
 ];
 
 /** The page's view of a set of records in a scope, made by the code the service uses. */
-export function measuresView(records: PilotRecords, scope: PilotScope): PilotMeasuresView {
+export function measuresView(
+  records: PilotRecords,
+  scope: PilotScope,
+  unusableStartDate?: string,
+): PilotMeasuresView {
   return presentMeasures(
     computePilotMeasures(records, { scope, asOf: AS_OF, reasonCodes: REASON_CODES }),
+    { unusableStartDate },
   );
 }
 
@@ -75,9 +80,11 @@ export function adminView(overrides: Partial<PilotAdminView> = {}): PilotAdminVi
     calendar: {
       startDate: "2026-01-05",
       endDate: "2026-02-08",
+      usable: true,
       setAt: "2026-01-02T09:00:00.000Z",
       timesSet: 1,
     },
+    startDateRange: { min: "1000-01-01", max: "9999-11-26" },
     participants: PEOPLE,
     ...overrides,
   };
@@ -88,6 +95,8 @@ export interface PilotPageFixture {
   records?: PilotRecords;
   admin?: PilotAdminView;
   draft?: PilotDraft;
+  /** A stored start date that cannot be used, as the service hands it on (the records then hold no calendar). */
+  unusableStartDate?: string;
   /** Default: the legal engineer, who may change the calendar and the roster. */
   globalRole?: GlobalRole;
   /** A chrome that carries no global role, so the page offers no form. */
@@ -106,7 +115,7 @@ export function pilotPage(fixture: PilotPageFixture = {}): string {
           : { globalRole: fixture.globalRole ?? "legal_engineer" }),
         ...fixture.chrome,
       }),
-      view: measuresView(fixture.records ?? emptyRecords(), scope),
+      view: measuresView(fixture.records ?? emptyRecords(), scope, fixture.unusableStartDate),
       admin: fixture.admin ?? adminView({ calendar: null }),
       draft: fixture.draft,
     }),

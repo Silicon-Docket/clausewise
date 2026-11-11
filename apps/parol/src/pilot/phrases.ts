@@ -10,6 +10,7 @@
  * Every sentence that states a number states its denominator beside it. Nothing here describes a
  * figure as adoption, accuracy or time saved, except to say that it is none of them.
  */
+import { START_DATE_MAX, START_DATE_MIN } from "./calendar.js";
 import {
   MEASURE_IDS,
   NO_DATA_REASONS,
@@ -100,9 +101,11 @@ const MEASURES: Record<MeasureId, MeasureWords> = {
       "Ratings given: the latest rating of each associate or reviewer on an exported matter.",
   },
   satisfaction_response: {
-    title: "Response to the rating question",
-    definition: "People who gave a post-matter rating",
-    denominator: "People who could rate: the associates and reviewers of exported matters.",
+    title: "Ratings given out of the ratings that could be given",
+    definition:
+      "Post-matter ratings given, one for each associate and each reviewing attorney of each exported matter",
+    denominator:
+      "Ratings that could be given: one for each associate and each reviewing attorney of each exported matter. A person on two exported matters could give two. This counts ratings, not people.",
   },
   active_time: {
     title: "Active time",
@@ -114,13 +117,13 @@ const MEASURES: Record<MeasureId, MeasureWords> = {
     title: "Shadow-mode agreement",
     definition: "Reference-list issues that Parol flagged or escalated, by severity",
     denominator:
-      "Reference-list issues on matters that have a finished review. An issue no rule covers counts as not flagged.",
+      "Reference-list issues on matters that have a finished review: one that succeeded, or one that was superseded after it saved its findings. An issue no rule covers counts as not flagged.",
   },
 };
 
 const NO_DATA: Record<NoDataReason, string> = {
   no_calendar:
-    "No pilot calendar is set, so no record can be placed in a pilot week. An administrator sets the start date on this page.",
+    "There is no pilot calendar that can be counted from (none is set, or the one that is set cannot be used), so no record can be placed in a pilot week. An administrator sets the start date on this page.",
   all_excluded:
     "Every matter in this database belongs to the other scope, so there is nothing to count in this one.",
   no_denominator:
@@ -147,7 +150,7 @@ const POPULATION: Record<PopulationCode, string> = {
     "Findings of finished reviews of the matters in the measures. The denominator of the escalation rate.",
   findings_decided: "Findings with a current decision. The denominator of the correction rate.",
   decisions_no_longer_current:
-    "Decisions that a change to the documents made out of date. They are not counted.",
+    "Decisions that are no longer current: replaced by a later decision of the same reviewer, or made out of date when the review was started again or when a document, the client name or the playbook changed. They are not counted.",
   missed_reports_counted: "Missed-issue reports counted in the missed-issue rate.",
   missed_reports_outside:
     "Missed-issue reports in this scope on matters that are not in the rate (no memo exported, or the first review outside the pilot weeks). Not counted.",
@@ -156,15 +159,15 @@ const POPULATION: Record<PopulationCode, string> = {
   ratings_by_viewers:
     "Ratings given on an exported matter by a viewer, or by a person who is no longer a member. Not counted.",
   raters_eligible:
-    "People who could rate: the associates and reviewers of exported matters. The denominator of the response.",
+    "Ratings that could be given: one for each associate and each reviewing attorney of each exported matter, so a person on two exported matters counts twice. The denominator of the response.",
   time_entries_counted:
     "Closed timers that started inside the pilot weeks, counted in the active time medians.",
   time_entries_open: "Timers still running. A timer left running is not counted.",
   time_entries_outside_window: `Closed timers that started outside the pilot weeks (${WEEKS}), or at any time while no calendar is set. Not counted.`,
   reference_issues_compared:
-    "Reference-list issues on matters with a finished review. The denominator of shadow-mode agreement.",
+    "Reference-list issues on matters with a finished review (one that succeeded, or was superseded after it saved its findings). The denominator of shadow-mode agreement.",
   reference_issues_not_compared:
-    "Reference-list issues in this scope on matters that cannot be compared (no finished review, or the first review outside the pilot weeks). Never counted as a miss.",
+    "Reference-list issues in this scope on matters that cannot be compared (no finished review, a review superseded before it saved findings being none, or the first review outside the pilot weeks). Never counted as a miss.",
   participants_trained:
     "People the trainer recorded as trained, of the same kind as this scope. The denominator of repeat usage.",
   starters_not_on_roster:
@@ -203,7 +206,7 @@ export const METHOD_LINES: readonly string[] = [
   "Pilot scope: matters not marked synthetic whose creator is not a demonstration identity, and people who are not demonstration identities. Synthetic scope: everything else. This build has demonstration identities only, so the pilot scope is empty here.",
   "Weeks are counted in UTC from the start date. A matter's week is the week its first review started; a timer's week is the week it started. Week 1 is the baseline, week 2 training and shadow mode, weeks 3 to 5 assisted use (document 8).",
   "A matter counts as started when a review was started on it, whatever became of the review, and as exported when a memo was ever exported for it. Repeat usage reads 'started a matter' as 'started a review on it'.",
-  "A decision counts while it counts for the memo. A decision that a change to the documents made out of date is not counted, and the population table says how many there are.",
+  "A decision counts while it counts for the memo. A decision that is no longer current (replaced by a later decision of the same reviewer, or made out of date by a new review or a change to a document, the client name or the playbook) is not counted, and the population table says how many there are.",
   "Matters deleted by their creator, an administrator or retention have no rows and are in no denominator. The population table counts them from the audit log.",
   "A time is the seconds between pressing Start and pressing Stop. It is not measured attention. A timer left running is not counted. A stopped timer cannot be edited.",
   "Times are medians with the number of NDAs behind them. This page computes no mean, no difference between phases and no saving: documents differ between phases and the group is small.",
@@ -275,6 +278,15 @@ export function calendarSentence(calendar: { startDate: string; endDate: string 
   return calendar === null
     ? "No pilot calendar is set. Every measure that depends on a pilot week reads no data until one is. An administrator sets the start date on this page."
     : `The pilot starts on ${calendar.startDate} and week ${PILOT_WEEKS} ends on ${calendar.endDate}, counted in UTC.`;
+}
+
+/**
+ * Said instead of the sentence above when the stored start date is one the pilot cannot be counted
+ * from (a database made before the store refused such dates). The date is the stored one, which the
+ * table holds as digits and hyphens only.
+ */
+export function unusableCalendarSentence(startDate: string): string {
+  return `The start date that is stored, ${startDate}, cannot be used: it is not a real day from ${START_DATE_MIN} to ${START_DATE_MAX}. Every measure that depends on a pilot week reads no data until an administrator saves a start date that can be used, in the form below.`;
 }
 
 export function expiringNote(count: number): string | null {

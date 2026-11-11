@@ -10,7 +10,13 @@ import {
   type PilotRecords,
   type PilotScope,
 } from "../../src/pilot/types.js";
-import { AS_OF, at, f1Records } from "./f1.js";
+import {
+  AS_OF,
+  at,
+  f1LaterRunSupersededInFlight,
+  f1Records,
+  f1RunSupersededInFlight,
+} from "./f1.js";
 
 /**
  * Every expected value below was worked out by hand from the description of fixture F1 in `f1.ts`
@@ -854,6 +860,28 @@ describe("ratings", () => {
     expect(result.population.find((p) => p.code === "raters_eligible")?.count).toBe(2);
   });
 
+  it("count a rating that could be given for each person on each exported matter, not each person", () => {
+    // Worked out by hand. M2 is exported as well, so the exported matters are M1 and M2. The
+    // associate a1 and the reviewer r1 are on both, so four ratings could be given (a1 and r1 on
+    // M1, a1 and r1 on M2; the viewer v1 of M1 is not counted), by two people. Two were given (a1
+    // 4 and r1 5 on M1), so the response is 2 of 4 and not 2 of 2.
+    const records = f1Records();
+    records.memos.push({ matterId: "M2", exportedByDemo: false });
+    const result = compute(records);
+    expect(result.population.find((p) => p.code === "raters_eligible")?.count).toBe(4);
+    expect(result.population.find((p) => p.code === "ratings_counted")?.count).toBe(2);
+    expect(
+      result.rows.find((r) => r.measure === "satisfaction_response" && r.breakdown === "overall"),
+    ).toMatchObject({ numerator: 2, denominator: 4, value: 0.5 });
+    // By phase: M1 started in week 3 and M2 in week 4, both assisted use.
+    expect(
+      result.rows.find(
+        (r) =>
+          r.measure === "satisfaction_response" && r.breakdown === "phase" && r.key === "assisted",
+      ),
+    ).toMatchObject({ numerator: 2, denominator: 4 });
+  });
+
   it("refuse a rating outside 1 to 5 loudly", () => {
     const records = f1Records();
     records.ratings.push({ matterId: "M1", userId: "a1", userDemo: false, rating: 6 });
@@ -1032,6 +1060,93 @@ describe("shadow-mode agreement", () => {
     // a later run that failed does not replace it
     for (const run of records.runs) if (run.runId === "run-3b") run.status = "failed";
     expect(overall(compute(records))).toMatchObject({ numerator: 1, denominator: 3 });
+  });
+
+  it("does not compare a matter whose only run was superseded while in flight and saved no finding", () => {
+    // V1 of fixture F1, worked out by hand. M3 (three reference issues: dur-1 high, pds-1 medium and
+    // one high issue no rule covers) has run-3 only, `superseded` with no finding. Nothing finished
+    // reading M3, so its three issues are not compared and none is a miss: the same as a failed run.
+    // M5's one issue is not compared either (M5 has no run), so four are not compared in all.
+    const result = compute(f1RunSupersededInFlight());
+    expect(overall(result)).toMatchObject({ status: "no_data", reason: "no_denominator" });
+    const severity = (key: string) =>
+      result.rows.find(
+        (r) => r.measure === "shadow_agreement" && r.breakdown === "severity" && r.key === key,
+      );
+    for (const key of ["high", "medium", "low"])
+      expect(severity(key), key).toMatchObject({
+        status: "no_data",
+        numerator: 0,
+        denominator: 0,
+      });
+    const count = (code: string) => result.population.find((p) => p.code === code)?.count;
+    expect(count("reference_issues_compared")).toBe(0);
+    expect(count("reference_issues_not_compared")).toBe(4);
+    // The same four counts as a failed run gives.
+    const failed = f1Records();
+    for (const run of failed.runs) if (run.runId === "run-3") run.status = "failed";
+    expect(
+      JSON.stringify(compute(failed).rows.filter((r) => r.measure === "shadow_agreement")),
+    ).toBe(JSON.stringify(result.rows.filter((r) => r.measure === "shadow_agreement")));
+    // M3 is still a matter on which a review was started, in week 2.
+    expect(count("matters_run_in_window")).toBe(3);
+  });
+
+  it("compares with the latest review that finished, not with a later run superseded in flight", () => {
+    // V2 of fixture F1, worked out by hand. run-3 finished (dur-1 a deviation, pds-1 compliant) and
+    // was superseded with its findings; run-3b is later and was superseded in flight with none. The
+    // review to compare with is run-3: dur-1 (high) is flagged, pds-1 (medium) is not, and the high
+    // issue no rule covers is never flagged. 1 of 3 overall, 1 of 2 for high, 0 of 1 for medium.
+    const result = compute(f1LaterRunSupersededInFlight());
+    expect(overall(result)).toMatchObject({ numerator: 1, denominator: 3, value: 0.3333 });
+    const severity = (key: string) =>
+      result.rows.find(
+        (r) => r.measure === "shadow_agreement" && r.breakdown === "severity" && r.key === key,
+      );
+    expect(severity("high")).toMatchObject({ numerator: 1, denominator: 2, value: 0.5 });
+    expect(severity("medium")).toMatchObject({ numerator: 0, denominator: 1, value: 0 });
+    expect(severity("low")).toMatchObject({ status: "no_data" });
+    const count = (code: string) => result.population.find((p) => p.code === code)?.count;
+    expect(count("reference_issues_compared")).toBe(3);
+    expect(count("reference_issues_not_compared")).toBe(1);
+    // It is the same answer as F1 itself gives for these rows.
+    expect(JSON.stringify(result.rows.filter((r) => r.measure === "shadow_agreement"))).toBe(
+      JSON.stringify(compute(f1Records()).rows.filter((r) => r.measure === "shadow_agreement")),
+    );
+  });
+
+  it("compares with a run that succeeded, whatever it found: finished is succeeded, or superseded with findings", () => {
+    // A review that succeeded read the matter, so an issue it has no finding for is a miss. Only a
+    // superseded run is told apart by its findings, because it may have been cut off before it saved any.
+    const records = f1Records();
+    records.findings = records.findings.filter((f) => f.runId !== "run-3");
+    expect(overall(compute(records))).toMatchObject({ numerator: 0, denominator: 3 });
+  });
+
+  it("still compares with a superseded run that kept its findings, however late a succeeded run is", () => {
+    // run-3 superseded with findings is a review that finished: with no other run it is compared.
+    const records = f1Records();
+    for (const run of records.runs) if (run.runId === "run-3") run.status = "superseded";
+    expect(overall(compute(records))).toMatchObject({ numerator: 1, denominator: 3 });
+    // A later succeeded run with findings replaces it, as before.
+    records.runs.push({
+      runId: "run-3c",
+      matterId: "M3",
+      startedBy: "a2",
+      startedByDemo: false,
+      startedAt: at(8, "11:00:00"),
+      status: "succeeded",
+    });
+    records.findings.push({
+      findingId: "M3c-dur-1",
+      runId: "run-3c",
+      matterId: "M3",
+      ruleKey: "dur-1",
+      severity: "high",
+      status: "compliant",
+      escalatedBySystem: false,
+    });
+    expect(overall(compute(records))).toMatchObject({ numerator: 0, denominator: 3 });
   });
 
   it("does not compare a matter without a finished run, and never counts it as a miss", () => {

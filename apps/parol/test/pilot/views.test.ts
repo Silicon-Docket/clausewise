@@ -140,7 +140,7 @@ describe("the pilot scope of fixture F1", () => {
         "",
       ],
       [
-        "Response to the rating question",
+        "Ratings given out of the ratings that could be given",
         "2 of 2 (100.0%)",
         "2",
         "2",
@@ -191,7 +191,7 @@ describe("the pilot scope of fixture F1", () => {
       ["Escalation by the system", none, "0 of 8 (0.0%)", "4 of 16 (25.0%)"],
       ["Escalation by reviewers", none, "0 of 8 (0.0%)", "1 of 16 (6.3%)"],
       ["Satisfaction", none, none, "4.5 (n = 2, minimum 4, maximum 5)"],
-      ["Response to the rating question", none, none, "2 of 2 (100.0%)"],
+      ["Ratings given out of the ratings that could be given", none, none, "2 of 2 (100.0%)"],
     ]);
     const completion = t.rows[0];
     expect(completion?.cells.map((c) => c.noData)).toEqual([true, false, false]);
@@ -480,5 +480,31 @@ describe("no calendar", () => {
       expect(r.cells[0]?.noData, r.header).toBe(true);
       expect(r.cells[0]?.reason, r.header).toBe(PILOT_PHRASES.noData.no_calendar);
     }
+  });
+});
+
+describe("a stored start date that cannot be used", () => {
+  it("is said in place of the sentence for a calendar that is not set, and the rows read as with none", () => {
+    const records = f1Records();
+    records.calendar = null; // what the service computes with
+    const measures = computePilotMeasures(records, {
+      scope: "pilot",
+      asOf: AS_OF,
+      reasonCodes: SIX,
+    });
+    const v = presentMeasures(measures, { unusableStartDate: "0026-01-05" });
+    expect(v.calendar).toBeNull();
+    expect(v.calendarSentence).toBe(
+      "The start date that is stored, 0026-01-05, cannot be used: it is not a real day from 1000-01-01 to 9999-11-26. Every measure that depends on a pilot week reads no data until an administrator saves a start date that can be used, in the form below.",
+    );
+    for (const r of table(v, "measures").rows) {
+      if (r.header === "Active time") continue;
+      expect(r.cells[0]?.reason, r.header).toBe(PILOT_PHRASES.noData.no_calendar);
+    }
+    // With nothing to say about the stored date the sentence is the usual one.
+    for (const unusableStartDate of [undefined, null])
+      expect(presentMeasures(measures, { unusableStartDate }).calendarSentence).toBe(
+        presentMeasures(measures).calendarSentence,
+      );
   });
 });

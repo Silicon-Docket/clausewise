@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  START_DATE_MAX,
+  START_DATE_MIN,
   calendarEnd,
+  isUsableStartDate,
   parseInstant,
   parseStartDate,
   phaseOfWeek,
@@ -123,5 +126,99 @@ describe("a string that is not a date is a bug and is loud", () => {
       Date.UTC(2026, 0, 5, 9, 30, 15, 250),
     );
     expect(parseInstant("2026-01-05T09:30:15Z")).toBe(Date.UTC(2026, 0, 5, 9, 30, 15));
+  });
+});
+
+describe("the start dates the pilot can count from", () => {
+  const USABLE = [
+    "1000-01-01",
+    "1000-12-31",
+    "2026-01-05",
+    "2026-12-31",
+    "2028-02-29",
+    "9998-12-31",
+    "9999-01-01",
+    "9999-11-25",
+    "9999-11-26",
+  ];
+  const UNUSABLE = [
+    // Years below 1000, the two-digit ones that a date field posts for a typed "26" included.
+    "0000-01-01",
+    "0001-01-01",
+    "0026-01-05",
+    "0099-12-31",
+    "0100-01-01",
+    "0999-12-30",
+    "0999-12-31",
+    // A window that leaves year 9999: the last day of week 5 or the first moment after it.
+    "9999-11-27",
+    "9999-12-01",
+    "9999-12-27",
+    "9999-12-30",
+    "9999-12-31",
+    // Not a real day, or not written year-month-day.
+    "2026-02-30",
+    "2027-02-29",
+    "2026-13-01",
+    "2026-00-10",
+    "2026-1-5",
+    "",
+    " 2026-01-05",
+    "2026-01-05T00:00:00Z",
+  ];
+
+  it("are real days from year 1000 whose whole five weeks, and the moment after, end by 9999-12-31", () => {
+    for (const date of USABLE) expect(isUsableStartDate(date), date).toBe(true);
+    for (const date of UNUSABLE) expect(isUsableStartDate(date), date).toBe(false);
+    for (const value of [null, undefined, 20260105, {}, []])
+      expect(isUsableStartDate(value), String(value)).toBe(false);
+  });
+
+  it("name their own limits, which are the first and the last that are usable", () => {
+    expect(START_DATE_MIN).toBe("1000-01-01");
+    expect(START_DATE_MAX).toBe("9999-11-26");
+    expect(isUsableStartDate(START_DATE_MIN)).toBe(true);
+    expect(isUsableStartDate("0999-12-31")).toBe(false);
+    expect(isUsableStartDate(START_DATE_MAX)).toBe(true);
+    expect(isUsableStartDate("9999-11-27")).toBe(false);
+  });
+
+  it("give an end that the module itself can read back, for every date that is usable", () => {
+    for (const date of USABLE) {
+      expect(() => parseStartDate(date), date).not.toThrow();
+      const end = windowEnd(date);
+      expect(() => parseInstant(end), date).not.toThrow();
+      expect(parseInstant(end) - parseStartDate(date), date).toBe(35 * 86_400_000);
+      expect(calendarEnd(date), date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    }
+    expect(calendarEnd(START_DATE_MAX)).toBe("9999-12-30");
+    expect(windowEnd(START_DATE_MAX)).toBe("9999-12-31T00:00:00.000Z");
+    expect(calendarEnd("1000-01-01")).toBe("1000-02-04");
+  });
+
+  it("are refused loudly by every function that reads one, and never turned into another year", () => {
+    for (const date of UNUSABLE) {
+      expect(() => parseStartDate(date), date).toThrow(RangeError);
+      expect(() => calendarEnd(date), date).toThrow(RangeError);
+      expect(() => windowEnd(date), date).toThrow(RangeError);
+      expect(() => windowPosition({ startDate: date }, "2026-01-05T00:00:00.000Z"), date).toThrow(
+        RangeError,
+      );
+    }
+  });
+
+  it("are built without the two-digit year mapping: year 26 is year 26 and not 1926", () => {
+    // A moment in year 26 is a real moment and reads as itself; Date.UTC would have read 1926.
+    const expected = new Date("0026-01-05T09:30:00.000Z").getTime();
+    expect(parseInstant("0026-01-05T09:30:00.000Z")).toBe(expected);
+    expect(new Date(parseInstant("0026-01-05T09:30:00.000Z")).getUTCFullYear()).toBe(26);
+    expect(parseInstant("0099-12-31T00:00:00.000Z")).toBe(
+      new Date("0099-12-31T00:00:00.000Z").getTime(),
+    );
+    // And the leap rules of those years are the proleptic ones: year 4 has a 29th of February.
+    expect(parseInstant("0004-02-29T00:00:00.000Z")).toBe(
+      new Date("0004-02-29T00:00:00.000Z").getTime(),
+    );
+    expect(() => parseInstant("0100-02-29T00:00:00.000Z")).toThrow(RangeError);
   });
 });

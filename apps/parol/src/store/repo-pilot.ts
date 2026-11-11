@@ -1,4 +1,5 @@
 import { newId } from "../ids.js";
+import { isUsableStartDate } from "../pilot/calendar.js";
 import type {
   AuditMatterRecord,
   DecisionRecord,
@@ -44,9 +45,11 @@ export const PILOT_REFUSAL_CODES = [
   "duplicate_user",
   "too_many_participants",
   "timer_role",
+  "timer_training",
   "timer_open",
   "no_open_timer",
   "reference_role",
+  "reference_training",
   "reference_locked",
   "unknown_rule",
   "duplicate_rule",
@@ -162,13 +165,22 @@ const toReferenceIssue = (r: RawReferenceIssue): ReferenceIssueRow => ({
   recordedAt: r.recorded_at,
 });
 
-/** `YYYY-MM-DD` that is a real calendar date. Unlike a stated date, there is no null: a calendar is set. */
+/**
+ * `YYYY-MM-DD` that the pilot can be counted from. Unlike a stated date, there is no null: a
+ * calendar is set. What a usable date is has one definition, `isUsableStartDate` of the pilot
+ * module (the one value the store takes from it, so the two cannot disagree): a real calendar day
+ * of the years 1000 to 9999 whose five weeks end in those years. A date that only looks like one
+ * (year 0026, or the last days of 9999) is refused here and never stored, because the measures page,
+ * the file and the end of the pilot are all worked out from the stored date.
+ */
 function cleanCalendarDate(value: unknown): string {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value))
     throw new ValidationError("bad_calendar_date", "the pilot start date must be YYYY-MM-DD");
-  const parsed = new Date(`${value}T00:00:00.000Z`);
-  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value)
-    throw new ValidationError("bad_calendar_date", "the pilot start date is not a real date");
+  if (!isUsableStartDate(value))
+    throw new ValidationError(
+      "bad_calendar_date",
+      "the pilot start date is not a real date that the pilot can be counted from",
+    );
   return value;
 }
 
@@ -300,13 +312,17 @@ export function createPilotApi(ctx: Ctx, matters: MattersApi, playbooks: Playboo
    */
   function startTimer(matterId: string, opts: { userId: string }): TimeEntryRow {
     return tx(() => {
-      requireMatter(matterId);
+      const matter = requireMatter(matterId);
       const member = matters.getMember(matterId, opts.userId);
       if (member === undefined || (member.role !== "associate" && member.role !== "reviewer"))
         throw new ValidationError(
           "timer_role",
           "only an associate or a reviewer of the matter can time it",
         );
+      // The measures leave a training matter out and its page offers no timer, so a time on it would
+      // be counted by nothing and would take the one timer slot of the person with no way to stop it.
+      if (matter.trainingKey !== null)
+        throw new ConflictError("timer_training", "a training matter is not timed");
       const open = get<{ n: number }>(
         "SELECT 1 AS n FROM time_entries WHERE user_id = ? AND stopped_at IS NULL LIMIT 1",
         opts.userId,
@@ -337,7 +353,8 @@ export function createPilotApi(ctx: Ctx, matters: MattersApi, playbooks: Playboo
   /**
    * Stops the person's running timer on this matter. The stop is the server's clock, and never
    * earlier than the start, so a clock that stepped back cannot write a negative time. An entry is
-   * final once stopped.
+   * final once stopped. A training matter is no exception: a timer that a database made earlier holds
+   * there (a start is refused now) must always be stoppable.
    */
   function stopTimer(
     matterId: string,
@@ -467,6 +484,9 @@ export function createPilotApi(ctx: Ctx, matters: MattersApi, playbooks: Playboo
           "reference_role",
           "only a reviewer of the matter records its reference list",
         );
+      // A training matter is in no measure and its page offers no list, so a list on it is counted by nothing.
+      if (matter.trainingKey !== null)
+        throw new ConflictError("reference_training", "a training matter has no reference list");
       if (reviewStarted(matterId))
         throw new ConflictError(
           "reference_locked",

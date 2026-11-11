@@ -5,10 +5,11 @@ import { describeRoutes } from "../../src/server/matter-route.js";
 import { renderErrorPage } from "../../src/server/pages/index.js";
 import { trainedField } from "../../src/server/pages/pilotfields.js";
 import { registerRoutes } from "../../src/server/routes/index.js";
+import { calendarFromForm } from "../../src/server/routes/pilot-input.js";
 import { csvDownloadHeaders } from "../../src/server/routes/shared.js";
 import { urls } from "../../src/server/urls.js";
 import { createPilotService } from "../../src/services/pilot.js";
-import { DEMO_USER_IDS } from "../../src/store/index.js";
+import { DEMO_USER_IDS, ValidationError } from "../../src/store/index.js";
 import { expectAccessible, tabStops } from "../a11y/rules.js";
 import { AS_OF, f1Records } from "../pilot/f1.js";
 import { all, attr, byId, byTag, hasClass, readable, type El } from "../pages/html.js";
@@ -371,6 +372,11 @@ describe("the page and its scope", () => {
         action,
       ).toHaveLength(1);
     }
+    // The date field takes the same dates the store does: a min and a max that match.
+    const date = byId(page.root, "start-date")!;
+    expect(attr(date, "type")).toBe("date");
+    expect(attr(date, "min")).toBe("1000-01-01");
+    expect(attr(date, "max")).toBe("9999-11-26");
     // One box for each person, and a label for each.
     const boxes = all(page.root, (el) => el.name === "input" && attr(el, "type") === "checkbox");
     expect(boxes.map((el) => attr(el, "name")).sort()).toEqual(
@@ -557,7 +563,19 @@ describe("the calendar form", () => {
     );
   });
 
-  for (const bad of ["2026-02-30", "09/11/2026", "", "2026-13-01"]) {
+  // The last four are real days that the pilot cannot be counted from: a typed "26" in a date field
+  // posts year 0026, and a start in the last weeks of 9999 puts the end of the pilot in year 10000.
+  const BAD_DATES = [
+    "2026-02-30",
+    "09/11/2026",
+    "",
+    "2026-13-01",
+    "0026-01-05",
+    "0999-12-31",
+    "9999-12-30",
+    "9999-12-31",
+  ];
+  for (const bad of BAD_DATES) {
     it(`answers a date that is not a real one with a page: ${JSON.stringify(bad)}`, async () => {
       const admin = await site.as(IDS.admin);
       const page = await admin.page(urls.pilot());
@@ -637,6 +655,81 @@ describe("the calendar form", () => {
     // A refusal left no calendar and no event of its own.
     const calendarEvents = site.w.repo.listAuditEvents({ action: "pilot.calendar" });
     expect(calendarEvents.length).toBe(site.w.repo.getPilotCalendar()?.timesSet);
+  });
+});
+
+describe("the calendar form's parser", () => {
+  it("refuses a date the pilot cannot be counted from with the store's code, before anything is looked up", () => {
+    for (const bad of ["", "0026-01-05", "0999-12-31", "9999-11-27", "9999-12-31", "2026-02-30"]) {
+      let caught: unknown;
+      try {
+        calendarFromForm({ startDate: bad });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught, bad).toBeInstanceOf(ValidationError);
+      expect((caught as ValidationError).code, bad).toBe("bad_calendar_date");
+    }
+    // A date it can be counted from passes, trimmed, and a field the form does not offer does not.
+    expect(calendarFromForm({ startDate: " 1000-01-01 " })).toEqual({ startDate: "1000-01-01" });
+    expect(calendarFromForm({ startDate: "9999-11-26" })).toEqual({ startDate: "9999-11-26" });
+    expect(() => calendarFromForm({ startDate: "2026-11-09", role: "admin" })).toThrow(
+      ValidationError,
+    );
+  });
+});
+
+describe("a start date stored by a build that did not refuse it", () => {
+  let site: Site;
+  beforeAll(() => {
+    site = makeSite();
+  });
+  const plant = (startDate: string): void => {
+    site.w.repo.db
+      .prepare("INSERT INTO pilot_calendar (start_date, set_by, set_at) VALUES (?, ?, ?)")
+      .run(startDate, IDS.admin, "2026-11-04T09:00:00.000Z");
+  };
+
+  for (const stored of ["0026-01-05", "9999-12-31"]) {
+    it(`keeps the page, the file and the form working for ${stored}, and says the date cannot be used`, async () => {
+      plant(stored);
+      for (const id of [IDS.admin, IDS.legalEngineer]) {
+        const browser = await site.as(id);
+        const page = await browser.page(urls.pilot());
+        expect(page.response.status, id).toBe(200);
+        const text = readable(byTag(page.root, "main")[0]!);
+        expect(text).toContain(`The start date that is stored, ${stored}, cannot be used`);
+        expect(text).not.toContain("No pilot calendar is set");
+        // The form that mends it is on the page, empty, with the limits of the field.
+        expect(browser.hasForm(page, urls.pilotCalendar())).toBe(true);
+        const input = byId(page.root, "start-date")!;
+        expect(attr(input, "value") ?? "").toBe("");
+        expect(attr(input, "min")).toBe("1000-01-01");
+        expect(attr(input, "max")).toBe("9999-11-26");
+        for (const scope of ["pilot", "synthetic"] as const) {
+          const csv = await browser.send("GET", urls.pilotCsv(scope));
+          expect(csv.status, `${id} ${scope}`).toBe(200);
+          expect((await csv.text()).split("\r\n").length).toBeGreaterThan(30);
+        }
+      }
+    });
+  }
+
+  it("answers a refused form with the page and not with a failure, and a good date mends it", async () => {
+    plant("0026-01-05");
+    const admin = await site.as(IDS.admin);
+    const refused = await post(admin, urls.pilotCalendar(), { startDate: "0026-01-05" });
+    expect(refused.status).toBe(400);
+    expect(await refused.text()).toContain("The start date is not a real date.");
+    const roster = await post(admin, urls.pilotParticipants(), { "trained:usr_nobody": "yes" });
+    expect(roster.status).toBe(400);
+    const fixed = await post(admin, urls.pilotCalendar(), { startDate: "2026-11-09" });
+    expect(fixed.status).toBe(303);
+    const page = await admin.page(urls.pilot());
+    expect(readable(byTag(page.root, "main")[0]!)).toContain(
+      "The pilot starts on 2026-11-09 and week 5 ends on 2026-12-13, counted in UTC.",
+    );
+    expect(attr(byId(page.root, "start-date")!, "value")).toBe("2026-11-09");
   });
 });
 
@@ -818,7 +911,7 @@ describe("the timer", () => {
       (el) => attr(el, "role") === "alert",
     )[0]!;
     expect(readable(noneAlert)).toContain(
-      "No timer is running on this matter. Press Start timer to begin one.",
+      "No timer is running on this matter, so there is nothing to stop. The timer section of this page shows what you can do now.",
     );
     expect(attr(all(noneAlert, (el) => el.name === "a")[0]!, "href")).toBe("#time");
 
@@ -1053,6 +1146,134 @@ describe("the reference list", () => {
     expect(readable(alert)).toContain("Report anything the review missed on the review page.");
     expect(counts(site)).toEqual(before);
     expect(rows()).toEqual([{ rule_key: "dur-1", severity: "high" }]);
+  });
+});
+
+describe("a training matter, by a hand-made post", () => {
+  let site: Site;
+  let training: string;
+  let ordinary: string;
+  beforeAll(() => {
+    site = makeSite();
+    ordinary = newMatter(site.w).matterId;
+    training = site.w.services.matters.create(site.w.associate, {
+      name: "Training: Lanternfish / Corvane NDA (T01)",
+      clientLegalName: "Lanternfish Software, Inc.",
+      playbookVersionId: site.w.playbookVersionId,
+      reviewerUserId: site.w.reviewer.userId,
+      training: "T01",
+    }).id;
+  });
+  const timer = (browser: Browser, intent: string, id: string) =>
+    post(browser, urls.matterTimer(id), { intent });
+  const alertOf = async (response: Response): Promise<string> => {
+    const root = accessibleMatterPage(await response.text());
+    return readable(all(root, (el) => attr(el, "role") === "alert")[0]!);
+  };
+  const planted = (): number =>
+    (
+      site.w.repo.db
+        .prepare("SELECT COUNT(*) AS n FROM time_entries WHERE matter_id = ?")
+        .get(training) as { n: number }
+    ).n;
+
+  it("does not start a timer, which nothing counts and no page could stop: 409 in words, nothing written", async () => {
+    for (const userId of [IDS.associate, IDS.reviewer]) {
+      const browser = await site.as(userId);
+      const before = counts(site);
+      const response = await timer(browser, "start", training);
+      expect(response.status, userId).toBe(409);
+      expect(await alertOf(response), userId).toContain(
+        "A training matter is not timed, because the pilot measures leave it out. Time an ordinary matter instead.",
+      );
+      expect(counts(site), userId).toEqual(before);
+    }
+    // The person's timer slot is free: an ordinary matter can be timed, and no entry stands on the other.
+    const associate = await site.as(IDS.associate);
+    expect((await timer(associate, "start", ordinary)).status).toBe(303);
+    expect((await timer(associate, "stop", ordinary)).status).toBe(303);
+    expect(planted()).toBe(0);
+  });
+
+  it("does not save a reference list: 409 in words, nothing written", async () => {
+    const reviewer = await site.as(IDS.reviewer);
+    const before = counts(site);
+    const response = await post(reviewer, urls.matterReferenceList(training), {
+      "severity:dur-1": "high",
+      outsideLow: "2",
+    });
+    expect(response.status).toBe(409);
+    expect(await alertOf(response)).toContain(
+      "A training matter has no reference list, because the pilot measures leave it out. Record the list on an ordinary matter instead.",
+    );
+    expect(counts(site)).toEqual(before);
+    // The refusal has no link: the page it is answered with has no list to lead to.
+    const again = await post(reviewer, urls.matterReferenceList(training), { outsideHigh: "1" });
+    expect(again.status).toBe(409);
+    const root = accessibleMatterPage(await again.text());
+    const alert = all(root, (el) => attr(el, "role") === "alert")[0]!;
+    expect(all(alert, (el) => el.name === "a")).toHaveLength(0);
+  });
+
+  it("lets a person stop a timer an earlier build left on it, from its page, and then time again", async () => {
+    // A database made earlier: the row is put in by hand, the way the code before this change wrote it.
+    site.w.repo.db
+      .prepare(
+        "INSERT INTO time_entries (id, matter_id, user_id, role, started_at) VALUES ('tim_earlier', ?, ?, 'associate', '2026-11-01T08:00:00.000Z')",
+      )
+      .run(training, IDS.associate);
+    const associate = await site.as(IDS.associate);
+    // On an ordinary matter the person is told a timer runs elsewhere and is given no button.
+    const there = await associate.page(urls.matter(ordinary));
+    expect(readable(byId(there.root, "time")!)).toContain("Running elsewhere");
+    expect(byTag(byId(there.root, "time")!, "button")).toHaveLength(0);
+    // The training matter's page offers the Stop, and only the Stop.
+    const page = await associate.page(urls.matter(training));
+    const section = byId(page.root, "time")!;
+    expect(byTag(section, "button").map((b) => readable(b))).toEqual(["Stop timer"]);
+    expect(readable(section)).not.toContain("Start timer");
+    checkPage(site, page);
+    expectAccessible(page.html);
+    // Pressing it, the way a browser does, stops the timer on the server's clock and audits it.
+    const response = await associate.submit(page, urls.matterTimer(training), {
+      submitter: { name: "intent", value: "stop" },
+    });
+    expect(response.status).toBe(303);
+    expect((response.headers.get("location") ?? "").includes("notice=timer-stopped")).toBe(true);
+    const stop = site.w.repo.listAuditEvents({ matterId: training, action: "time.stop" });
+    expect(stop).toHaveLength(1);
+    expect(stop[0]!.actorId).toBe(IDS.associate);
+    // Nothing is left to stop, so the page offers nothing, and an ordinary matter can be timed again.
+    expect(byId((await associate.page(urls.matter(training))).root, "time")).toBeUndefined();
+    expect((await timer(associate, "stop", training)).status).toBe(409);
+    expect((await timer(associate, "start", ordinary)).status).toBe(303);
+    expect((await timer(associate, "stop", ordinary)).status).toBe(303);
+  });
+
+  it("answers a stop with nothing to stop in words that tell nobody to press a button that is not there", async () => {
+    const associate = await site.as(IDS.associate);
+    const first = await timer(associate, "start", ordinary);
+    expect(first.status).toBe(303);
+    // A timer runs on the ordinary matter; a stop on a matter where none runs is refused, and the
+    // answer is the page of that matter. Here: the other matter of the person, with no panel button.
+    const other = newMatter(site.w).matterId;
+    const refused = await timer(associate, "stop", other);
+    expect(refused.status).toBe(409);
+    const root = accessibleMatterPage(await refused.text());
+    const alert = readable(all(root, (el) => attr(el, "role") === "alert")[0]!);
+    expect(alert).toContain("No timer is running on this matter, so there is nothing to stop.");
+    expect(alert).not.toContain("Press Start timer");
+    // The panel under it is the one with no Start button, and the link leads to it.
+    const panel = byId(root, "time")!;
+    expect(readable(panel)).toContain("Running elsewhere");
+    expect(byTag(panel, "button")).toHaveLength(0);
+    expect(
+      attr(
+        all(all(root, (el) => attr(el, "role") === "alert")[0]!, (el) => el.name === "a")[0]!,
+        "href",
+      ),
+    ).toBe("#time");
+    expect((await timer(associate, "stop", ordinary)).status).toBe(303);
   });
 });
 

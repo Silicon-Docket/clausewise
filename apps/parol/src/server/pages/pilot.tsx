@@ -72,7 +72,10 @@ function CalendarSection(props: {
   const { chrome, view, admin, draft } = props;
   const canManage =
     chrome.globalRole !== undefined && globalRoleAllows(chrome.globalRole, "pilot.manage");
-  const typed = draft?.startDate ?? admin.calendar?.startDate ?? "";
+  // A stored date that cannot be used is not put back in the field: the person types a new one.
+  const stored = admin.calendar !== null && admin.calendar.usable ? admin.calendar.startDate : "";
+  const typed = draft?.startDate ?? stored;
+  const { min, max } = admin.startDateRange;
   return (
     <Section id="calendar" title="Pilot calendar">
       <p>{view.calendarSentence}</p>
@@ -89,12 +92,14 @@ function CalendarSection(props: {
           <Field
             id={PILOT_ANCHORS.startDate}
             label="First day of the pilot"
-            hint="Week 1 starts at midnight UTC on this day. The five weeks are counted from it."
+            hint={`Week 1 starts at midnight UTC on this day. The five weeks are counted from it. The date is from ${min} to ${max}, so that the five weeks fit.`}
           >
             <input
               id={PILOT_ANCHORS.startDate}
               name={FIELDS.startDate}
               type="date"
+              min={min}
+              max={max}
               required
               autocomplete="off"
               value={typed}

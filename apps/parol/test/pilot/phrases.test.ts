@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { START_DATE_MAX, START_DATE_MIN } from "../../src/pilot/calendar.js";
 import {
   METHOD_LINES,
   PHRASE_KEYS,
@@ -10,6 +11,7 @@ import {
   percentText,
   pilotEmptyNote,
   resultText,
+  unusableCalendarSentence,
 } from "../../src/pilot/phrases.js";
 import type { MeasureRow } from "../../src/pilot/types.js";
 
@@ -44,6 +46,7 @@ function allWords(): string[] {
     pilotEmptyNote(7),
     calendarSentence(null),
     calendarSentence({ startDate: "2026-01-05", endDate: "2026-02-08" }),
+    unusableCalendarSentence("0026-01-05"),
     expiringNote(1) ?? "",
     expiringNote(3) ?? "",
   );
@@ -98,7 +101,7 @@ describe("the fixed words, pinned", () => {
       "Pilot scope: matters not marked synthetic whose creator is not a demonstration identity, and people who are not demonstration identities. Synthetic scope: everything else. This build has demonstration identities only, so the pilot scope is empty here.",
       "Weeks are counted in UTC from the start date. A matter's week is the week its first review started; a timer's week is the week it started. Week 1 is the baseline, week 2 training and shadow mode, weeks 3 to 5 assisted use (document 8).",
       "A matter counts as started when a review was started on it, whatever became of the review, and as exported when a memo was ever exported for it. Repeat usage reads 'started a matter' as 'started a review on it'.",
-      "A decision counts while it counts for the memo. A decision that a change to the documents made out of date is not counted, and the population table says how many there are.",
+      "A decision counts while it counts for the memo. A decision that is no longer current (replaced by a later decision of the same reviewer, or made out of date by a new review or a change to a document, the client name or the playbook) is not counted, and the population table says how many there are.",
       "Matters deleted by their creator, an administrator or retention have no rows and are in no denominator. The population table counts them from the audit log.",
       "A time is the seconds between pressing Start and pressing Stop. It is not measured attention. A timer left running is not counted. A stopped timer cannot be edited.",
       "Times are medians with the number of NDAs behind them. This page computes no mean, no difference between phases and no saving: documents differ between phases and the group is small.",
@@ -108,8 +111,9 @@ describe("the fixed words, pinned", () => {
   });
 
   it("is the three reasons a row has no data, word for word", () => {
+    // True when none is set and when the one that is set cannot be used.
     expect(noDataText("no_calendar")).toBe(
-      "No pilot calendar is set, so no record can be placed in a pilot week. An administrator sets the start date on this page.",
+      "There is no pilot calendar that can be counted from (none is set, or the one that is set cannot be used), so no record can be placed in a pilot week. An administrator sets the start date on this page.",
     );
     expect(noDataText("all_excluded")).toBe(
       "Every matter in this database belongs to the other scope, so there is nothing to count in this one.",
@@ -158,6 +162,15 @@ describe("sentences built from numbers", () => {
     expect(calendarSentence(null)).toBe(
       "No pilot calendar is set. Every measure that depends on a pilot week reads no data until one is. An administrator sets the start date on this page.",
     );
+  });
+
+  it("says that a stored start date cannot be used, with the dates that can, and what to do", () => {
+    const words = unusableCalendarSentence("0026-01-05");
+    expect(words).toBe(
+      `The start date that is stored, 0026-01-05, cannot be used: it is not a real day from ${START_DATE_MIN} to ${START_DATE_MAX}. Every measure that depends on a pilot week reads no data until an administrator saves a start date that can be used, in the form below.`,
+    );
+    expect(words).toContain("from 1000-01-01 to 9999-11-26");
+    expect(words).not.toContain("No pilot calendar is set");
   });
 
   it("warns about matters that will expire, and says nothing when none will", () => {
@@ -240,6 +253,50 @@ describe("the result of a row, with its denominator", () => {
       reason: "no_denominator",
     });
     expect(resultText(empty)).toBe("No data");
+  });
+});
+
+describe("each count says what it counts", () => {
+  it("names the response to the rating question as ratings, one for each person on each exported matter", () => {
+    const w = PILOT_PHRASES.measures.satisfaction_response;
+    expect(w.title).toBe("Ratings given out of the ratings that could be given");
+    expect(w.definition).toBe(
+      "Post-matter ratings given, one for each associate and each reviewing attorney of each exported matter",
+    );
+    expect(w.denominator).toBe(
+      "Ratings that could be given: one for each associate and each reviewing attorney of each exported matter. A person on two exported matters could give two. This counts ratings, not people.",
+    );
+    expect(PILOT_PHRASES.population.raters_eligible).toBe(
+      "Ratings that could be given: one for each associate and each reviewing attorney of each exported matter, so a person on two exported matters counts twice. The denominator of the response.",
+    );
+    // No line of the response says people: the unit is a rating for a matter.
+    for (const word of [w.title, w.definition, PILOT_PHRASES.population.raters_eligible])
+      expect(word, word).not.toMatch(/\bpeople\b/iu);
+  });
+
+  it("says the decisions that are no longer current were replaced by the reviewer or by a new review or a change", () => {
+    const line = PILOT_PHRASES.population.decisions_no_longer_current;
+    expect(line).toBe(
+      "Decisions that are no longer current: replaced by a later decision of the same reviewer, or made out of date when the review was started again or when a document, the client name or the playbook changed. They are not counted.",
+    );
+    // It claims no single cause: a change to the documents is one of the causes and not the name.
+    expect(line).not.toBe(
+      "Decisions that a change to the documents made out of date. They are not counted.",
+    );
+    expect(line).toContain("same reviewer");
+    expect(METHOD_LINES[4]).toContain("replaced by a later decision of the same reviewer");
+  });
+
+  it("says what a review that finished is, for the comparison with the reference list", () => {
+    expect(PILOT_PHRASES.measures.shadow_agreement.denominator).toBe(
+      "Reference-list issues on matters that have a finished review: one that succeeded, or one that was superseded after it saved its findings. An issue no rule covers counts as not flagged.",
+    );
+    expect(PILOT_PHRASES.population.reference_issues_compared).toContain(
+      "or was superseded after it saved its findings",
+    );
+    expect(PILOT_PHRASES.population.reference_issues_not_compared).toContain(
+      "a review superseded before it saved findings being none",
+    );
   });
 });
 

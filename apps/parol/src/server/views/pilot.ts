@@ -27,6 +27,13 @@ export const TIMER_NOTE =
 export const TIMER_START_LABEL = "Start timer";
 export const TIMER_STOP_LABEL = "Stop timer";
 
+/**
+ * A training matter, where a timer was left running by an earlier build: it counts for nothing, and
+ * the one button is the Stop. No timer can be started on a training matter.
+ */
+export const TIMER_TRAINING_NOTE =
+  "This is a training matter, so the pilot measures page does not use its times. A timer was left running here: press Stop timer to put it away. A timer cannot be started on a training matter.";
+
 export const TIMER_NOT_RUNNING = "No timer is running on this matter.";
 /** A timer of this person is running on another matter: no button, and no matter is named. */
 export const TIMER_ELSEWHERE =

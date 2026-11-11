@@ -18,6 +18,12 @@
 -- ids, codes and counts only.
 --
 -- Messages start with "parol:" so that the store can tell a trigger from other constraint errors.
+--
+-- INSERT OR REPLACE deletes the row that holds a key and then inserts, with no UPDATE and no DELETE
+-- trigger to see it. So the insert guard of every table below names every key its table can collide
+-- on, and not only its id: the sequence number of the calendar; the user of the roster; the id and
+-- the one open timer of a person for the timers; the id, the place in the list and the rule for the
+-- reference issues. Each guard runs before the key's own index, which stays as the second line.
 
 -- The pilot calendar: append-only, the newest row is in force. -------------------------------------
 -- The CHECK fixes the shape of the date. That it is a real date is checked in code, because SQL has
@@ -33,6 +39,7 @@ BEGIN SELECT RAISE(ABORT, 'parol: the pilot calendar is append-only'); END;
 CREATE TRIGGER pilot_calendar_no_delete BEFORE DELETE ON pilot_calendar
 BEGIN SELECT RAISE(ABORT, 'parol: the pilot calendar is append-only'); END;
 -- INSERT OR REPLACE with the number of an existing row would delete that row without a delete trigger.
+-- The sequence number is the only key of this table.
 CREATE TRIGGER pilot_calendar_no_replace BEFORE INSERT ON pilot_calendar
 WHEN NEW.seq IS NOT NULL AND EXISTS (SELECT 1 FROM pilot_calendar WHERE seq = NEW.seq)
 BEGIN SELECT RAISE(ABORT, 'parol: the pilot calendar is append-only'); END;
@@ -43,6 +50,12 @@ CREATE TABLE pilot_participants (
   recorded_by  TEXT NOT NULL REFERENCES users(id),
   recorded_at  TEXT NOT NULL
 );
+-- A person is on the roster once. The roster is replaced by deleting the people who were taken off
+-- and adding the ones who were put on, never by writing a person again, which would overwrite who
+-- recorded them and when. The user is the only key of this table.
+CREATE TRIGGER pilot_participants_no_replace BEFORE INSERT ON pilot_participants
+WHEN NEW.user_id IS NULL OR EXISTS (SELECT 1 FROM pilot_participants WHERE user_id = NEW.user_id)
+BEGIN SELECT RAISE(ABORT, 'parol: a roster entry is never replaced'); END;
 
 -- Timers. The server's clock writes both ends; a stopped entry is final. ---------------------------
 CREATE TABLE time_entries (
@@ -58,8 +71,12 @@ CREATE TABLE time_entries (
 CREATE UNIQUE INDEX time_entries_one_open_per_user ON time_entries (user_id) WHERE stopped_at IS NULL;
 CREATE INDEX time_entries_by_matter ON time_entries (matter_id, started_at);
 
+-- Two keys: the id, and the one open timer of a person (the index above). A replace over the second
+-- would delete the timer that is running, under a new id, and call it a start.
 CREATE TRIGGER time_entries_no_replace BEFORE INSERT ON time_entries
 WHEN NEW.id IS NULL OR EXISTS (SELECT 1 FROM time_entries WHERE id = NEW.id)
+  OR (NEW.stopped_at IS NULL
+      AND EXISTS (SELECT 1 FROM time_entries WHERE user_id = NEW.user_id AND stopped_at IS NULL))
 BEGIN SELECT RAISE(ABORT, 'parol: time entries are never replaced'); END;
 CREATE TRIGGER time_entries_member BEFORE INSERT ON time_entries
 WHEN NOT EXISTS (SELECT 1 FROM matter_members
@@ -91,8 +108,12 @@ CREATE UNIQUE INDEX reference_issues_one_per_rule ON reference_issues (matter_id
   WHERE rule_key IS NOT NULL;
 CREATE INDEX reference_issues_by_matter ON reference_issues (matter_id);
 
+-- Three keys: the id, the place in the list of a matter, and the rule of a matter (the index above).
 CREATE TRIGGER reference_issues_no_replace BEFORE INSERT ON reference_issues
 WHEN NEW.id IS NULL OR EXISTS (SELECT 1 FROM reference_issues WHERE id = NEW.id)
+  OR EXISTS (SELECT 1 FROM reference_issues WHERE matter_id = NEW.matter_id AND ordinal = NEW.ordinal)
+  OR (NEW.rule_key IS NOT NULL
+      AND EXISTS (SELECT 1 FROM reference_issues WHERE matter_id = NEW.matter_id AND rule_key = NEW.rule_key))
 BEGIN SELECT RAISE(ABORT, 'parol: reference issues are never replaced'); END;
 CREATE TRIGGER reference_issues_reviewer BEFORE INSERT ON reference_issues
 WHEN NOT EXISTS (SELECT 1 FROM matter_members

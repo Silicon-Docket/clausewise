@@ -21,8 +21,10 @@ import {
   buildSpans,
   exported,
   fakePath,
+  decideAll,
   findingFor,
   makeWorld,
+  saveAll,
   startRun,
   succeed,
   type MatterFixture,
@@ -106,7 +108,9 @@ interface Scenario {
  *   M7  not synthetic, made by the demo associate, who runs it on day 16: all compliant.
  *   M8  a TRAINING matter made by alex (synthetic, as the database insists), with a reference
  *       list, a run on day 15, decisions, a memo, a rating, a report and a timer. It is in neither
- *       scope and none of its rows may leave the store.
+ *       scope and none of its rows may leave the store. The store takes neither a timer nor a
+ *       reference list for a training matter now, so these two are put in by hand, as a database
+ *       made by an earlier build holds them; the loader must leave them out all the same.
  *   D1, D2  a real and a synthetic matter, deleted.
  *
  * Timers (seconds): M5 ben day 2 1800 and 900, dana day 3 1200, ben day -1 600 (before the
@@ -238,7 +242,14 @@ async function buildScenario(): Promise<Scenario> {
     1,
   );
   list("M5", 1, "11:00:00", [{ ruleKey: "gov-1", severity: "low" }]);
-  list("M8", 14, "10:00:00", [{ ruleKey: "dur-1", severity: "high" }]);
+  // M8 is a training matter, which the store no longer takes a list for: the row is put in by hand.
+  at0(14, "10:00:00");
+  w.db
+    .prepare(
+      `INSERT INTO reference_issues (id, matter_id, rule_key, severity, ordinal, recorded_by, recorded_at)
+       VALUES ('ref_earlier_M8', ?, 'dur-1', 'high', 0, ?, ?)`,
+    )
+    .run(m["M8"]!.id, P.dana, w.clock.iso());
 
   // ---- runs ----
   const SPAN_OF: Record<Rule, number> = { "pty-1": 1, "dur-1": 2, "gov-1": 3 };
@@ -421,7 +432,18 @@ async function buildScenario(): Promise<Scenario> {
   timed("M2", P.alex, 22, "09:00:00", 2700);
   timed("M2", P.dana, 23, "09:00:00", 900);
   timed("M6", P.alex, 15, "11:00:00", 600);
-  timed("M8", P.alex, 15, "12:00:00", 3000);
+  // M8 is a training matter, which the store no longer lets a person time: the timer is put in by hand.
+  at0(15, "12:00:00");
+  w.db
+    .prepare(
+      `INSERT INTO time_entries (id, matter_id, user_id, role, started_at)
+       VALUES ('tim_earlier_M8', ?, ?, 'associate', ?)`,
+    )
+    .run(m["M8"]!.id, P.alex, w.clock.iso());
+  w.clock.set(new Date(w.clock.now().getTime() + 3000 * 1000).toISOString());
+  w.db
+    .prepare("UPDATE time_entries SET stopped_at = ? WHERE id = 'tim_earlier_M8'")
+    .run(w.clock.iso());
   timed("M2", P.alex, 24, "09:00:00", null);
 
   at0(40, "12:00:00");
@@ -949,6 +971,161 @@ describe("no text and no identity reaches the records", () => {
     expect(inside).toEqual(first);
     expect(first).toEqual(records);
     expect(S.w.db.isTransaction).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+describe("the decisions that are no longer current, through the real store", () => {
+  /**
+   * The population line says what the count is: decisions replaced by a later decision of the same
+   * reviewer, or made out of date when the review was started again or when a document, the client
+   * name or the playbook changed. Each cause is made here by the real store, on a matter with three
+   * findings that the reviewer accepted, and the count is read from the measures.
+   */
+  function accepted() {
+    const w = makeWorld();
+    const m = addMatter(w);
+    const run = startRun(w, m);
+    const findings = saveAll(w, m, run);
+    succeed(w, m, run);
+    decideAll(w, m.id, findings);
+    return { w, m, findings };
+  }
+  const stale = (w: World): number =>
+    computePilotMeasures(w.repo.loadPilotRecords(), {
+      scope: "synthetic",
+      asOf: "2026-11-10T12:00:00.000Z",
+      reasonCodes: REASON_CODES,
+    }).population.find((p) => p.code === "decisions_no_longer_current")?.count ?? -1;
+
+  it("counts none while every decision is the reviewer's latest", () => {
+    expect(stale(accepted().w)).toBe(0);
+  });
+
+  it("counts a decision that the same reviewer replaced, with no change to any document", () => {
+    const { w, m, findings } = accepted();
+    const changes = w.repo.listAuditEvents({ matterId: m.id, action: "inputs.changed" }).length;
+    w.repo.recordReview(m.id, findings[0]!.id, {
+      reviewerId: ACTORS.reviewer,
+      decision: "reject",
+      reason: "A reason the reviewer gives.",
+      reasonCode: "wrong_status",
+      findingContentSha256: findings[0]!.contentSha256,
+    });
+    expect(stale(w)).toBe(1);
+    expect(w.repo.listAuditEvents({ matterId: m.id, action: "inputs.changed" })).toHaveLength(
+      changes,
+    );
+  });
+
+  for (const reason of [
+    "document_changed",
+    "client_name_changed",
+    "playbook_changed",
+    "rerun_requested",
+  ])
+    it(`counts every decision made out of date by ${reason}`, () => {
+      const { w, m } = accepted();
+      w.repo.applyInputChange(m.id, { reason, actorId: ACTORS.associate });
+      expect(stale(w)).toBe(3);
+    });
+
+  it("counts a replaced decision and the ones a later change made out of date, once each", () => {
+    const { w, m, findings } = accepted();
+    w.repo.recordReview(m.id, findings[0]!.id, {
+      reviewerId: ACTORS.reviewer,
+      decision: "reject",
+      reason: "A reason the reviewer gives.",
+      reasonCode: "wrong_status",
+      findingContentSha256: findings[0]!.contentSha256,
+    });
+    w.repo.applyInputChange(m.id, { reason: "document_changed", actorId: ACTORS.associate });
+    // 1 replaced, then the 3 current ones (the new reject and the two accepts) made out of date.
+    expect(stale(w)).toBe(4);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+describe("a review superseded while it was still in flight, through the real store", () => {
+  /**
+   * A change of a document supersedes the runs that were still running as well as the ones that
+   * succeeded, and a run superseded in flight saved no finding (the store refuses one for it). The
+   * matter has a reference list (dur-1 high, gov-1 medium, one high issue no rule covers) recorded
+   * before its first run, and the calendar starts on the day of the clock.
+   */
+  function listed() {
+    const w = makeWorld();
+    const m = addMatter(w);
+    w.repo.addMember(m.id, ACTORS.reviewer, "reviewer", { actorId: ACTORS.associate });
+    w.repo.saveReferenceList(
+      m.id,
+      {
+        rules: [
+          { ruleKey: "dur-1", severity: "high" },
+          { ruleKey: "gov-1", severity: "medium" },
+        ],
+        outsideHigh: 1,
+        outsideMedium: 0,
+        outsideLow: 0,
+      },
+      { userId: ACTORS.reviewer },
+    );
+    w.repo.setPilotCalendar({ startDate: "2026-11-01", actorId: ACTORS.admin });
+    return { w, m };
+  }
+  const supersede = (w: World, matterId: string) =>
+    w.repo.applyInputChange(matterId, { reason: "document_changed", actorId: ACTORS.associate });
+  const synthetic = (w: World): PilotMeasures =>
+    computePilotMeasures(w.repo.loadPilotRecords(), {
+      scope: "synthetic",
+      asOf: "2026-11-10T12:00:00.000Z",
+      reasonCodes: REASON_CODES,
+    });
+  const agreement = (m: PilotMeasures, key: string) => {
+    const row = m.rows.find(
+      (r) =>
+        r.measure === "shadow_agreement" &&
+        (key === "" ? r.breakdown === "overall" : r.key === key),
+    );
+    return row === undefined ? null : [row.numerator, row.denominator];
+  };
+
+  it("is no review to compare with: the three issues are not compared, and none is a miss", () => {
+    const { w, m } = listed();
+    const run = startRun(w, m);
+    supersede(w, m.id);
+    expect(w.repo.getRun(m.id, run.id)?.status).toBe("superseded");
+    expect(w.repo.loadPilotRecords().findings).toEqual([]);
+    const result = synthetic(w);
+    expect(population(result)["reference_issues_compared"]).toBe(0);
+    expect(population(result)["reference_issues_not_compared"]).toBe(3);
+    expect(agreement(result, "")).toEqual([0, 0]);
+    expect(measure(result, "shadow_agreement", "overall").status).toBe("no_data");
+  });
+
+  it("is passed over for the latest review that finished, whose findings were kept when it was superseded", () => {
+    const { w, m } = listed();
+    const first = startRun(w, m);
+    const span = (i: number) => ({ id: m.nda.spanIds[i]!, text: m.nda.texts[i]! });
+    w.repo.saveFindings(m.id, first.id, [
+      findingFor("pty-1", span(1)),
+      findingFor("dur-1", span(2), { status: "deviation", discrepancy: "d" }),
+      findingFor("gov-1", span(3)),
+    ]);
+    succeed(w, m, first);
+    supersede(w, m.id);
+    w.clock.tick(60_000);
+    const second = startRun(w, m);
+    supersede(w, m.id);
+    expect(w.repo.getRun(m.id, first.id)?.status).toBe("superseded");
+    expect(w.repo.getRun(m.id, second.id)?.status).toBe("superseded");
+    const result = synthetic(w);
+    // Compared with the first review: dur-1 (high) flagged, gov-1 (medium) not, the uncovered high not.
+    expect(population(result)["reference_issues_compared"]).toBe(3);
+    expect(population(result)["reference_issues_not_compared"]).toBe(0);
+    expect(agreement(result, "")).toEqual([1, 3]);
+    expect(agreement(result, "high")).toEqual([1, 2]);
+    expect(agreement(result, "medium")).toEqual([0, 1]);
   });
 });
 
