@@ -86,8 +86,9 @@ export function createMatterService(
       workflows: workflowOptions(),
       retention: retentionView(matter),
       // Read from this matter's own rows after the role check above, and only for a matter made
-      // for the training exercise.
-      ...(matter.trainingKey === null ? {} : { training: trainingProgress(repo, matter.id) }),
+      // for the training exercise. Null for every other matter, so the page reads a field that is
+      // always there.
+      training: matter.trainingKey === null ? null : trainingProgress(repo, matter.id),
     };
   }
 

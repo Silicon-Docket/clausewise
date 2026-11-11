@@ -144,7 +144,7 @@ describe("a training matter that was just made", () => {
       reviewerUserId: DEMO_USER_IDS.reviewer,
     });
     const ordinaryAm = authorizeMatter(t.w.repo, t.alex, ordinary.id, "matter.read");
-    expect(t.w.services.matters.view(ordinaryAm).training).toBeUndefined();
+    expect(t.w.services.matters.view(ordinaryAm).training).toBeNull();
     // And the function itself refuses a matter that is not a training matter.
     expect(() => trainingProgress(t.w.repo, ordinary.id)).toThrow(NotFoundError);
     expect(() => trainingProgress(t.w.repo, "mat_does_not_exist")).toThrow(NotFoundError);

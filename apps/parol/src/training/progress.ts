@@ -214,9 +214,11 @@ export function trainingProgress(repo: Repository, matterId: string): TrainingPr
  */
 export function trainedUserIds(repo: Repository): string[] {
   const trained = new Set<string>();
-  for (const { id, createdBy } of repo.listTrainingMatters()) {
+  for (const id of repo.listMatterIds()) {
+    const matter = repo.getMatter(id);
+    if (matter === undefined || matter.trainingKey === null) continue;
     const progress = trainingProgress(repo, id);
-    if (progress.checkableDone === progress.checkable) trained.add(createdBy);
+    if (progress.checkableDone === progress.checkable) trained.add(matter.createdBy);
   }
   return [...trained].sort();
 }

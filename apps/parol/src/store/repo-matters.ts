@@ -447,16 +447,6 @@ export function createMattersApi(ctx: Ctx) {
   const listMatterIds = (): string[] =>
     all<{ id: string }>("SELECT id FROM matters ORDER BY id").map((r) => r.id);
 
-  /**
-   * The matters made for the training exercise, with the person who made each. Not scoped to a
-   * user, so it is for the hint of who has completed the exercise (`trainedUserIds`), never for a
-   * request that shows a matter.
-   */
-  const listTrainingMatters = (): { id: string; createdBy: string }[] =>
-    all<{ id: string; created_by: string }>(
-      "SELECT id, created_by FROM matters WHERE training_key IS NOT NULL ORDER BY created_at, id",
-    ).map((r) => ({ id: r.id, createdBy: r.created_by }));
-
   const listMattersForUser = (userId: string): MatterWithRole[] =>
     all<RawMatter & { role: MatterRole }>(
       `SELECT m.*, mm.role AS role
@@ -1426,7 +1416,6 @@ export function createMattersApi(ctx: Ctx) {
     createMatter,
     getMatter,
     listMatterIds,
-    listTrainingMatters,
     listMattersForUser,
     updateClientName,
     setPlaybookVersion,
