@@ -318,6 +318,15 @@ export function auditHead(db: Database): AuditHead | null {
   return row === undefined ? null : { seq: row.seq, hash: row.hash };
 }
 
+/**
+ * How many rows the log holds, whether or not its chain holds: the denominator of every count of
+ * events a page states. After a break the chain check says how many events it passed before the
+ * break; this says how many there are.
+ */
+export function countAuditEvents(db: Database): number {
+  return (db.prepare("SELECT count(*) AS n FROM audit_events").get() as unknown as { n: number }).n;
+}
+
 /** The newest event with this action, or null. */
 export function latestAuditEvent(db: Database, action: string): AuditEvent | null {
   const row = db

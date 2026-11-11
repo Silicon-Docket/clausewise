@@ -11,6 +11,7 @@ import {
   auditHead,
   checkAudit,
   checkAuditAnchor,
+  countAuditEvents,
   latestAuditEvent,
   listAuditEvents,
   openDatabase,
@@ -602,6 +603,33 @@ describe("reconcileMatterEvents and checkAudit", () => {
       ok: false,
       chain: { ok: false, firstBrokenSeq: 1, reason: "hash_mismatch" },
     });
+  });
+});
+
+describe("countAuditEvents", () => {
+  it("is 0 for an empty log and counts each event appended", () => {
+    expect(countAuditEvents(db)).toBe(0);
+    seed(4);
+    expect(countAuditEvents(db)).toBe(4);
+    append();
+    expect(countAuditEvents(db)).toBe(5);
+  });
+
+  it("counts the rows of a log whose chain breaks, which is what the chain check does not", () => {
+    seed(6);
+    dropAuditTriggers();
+    db.exec("UPDATE audit_events SET action = 'review.forged' WHERE seq = 3");
+    const chain = verifyAuditChain(db);
+    expect(chain).toMatchObject({ ok: false, firstBrokenSeq: 3, events: 2 });
+    // The chain check passed 2 events before it broke; the log holds 6. The count is the denominator.
+    expect(countAuditEvents(db)).toBe(6);
+  });
+
+  it("counts a log cut back to what is left", () => {
+    seed(6);
+    db.exec("DROP TRIGGER audit_events_no_delete");
+    db.exec("DELETE FROM audit_events WHERE seq > 4");
+    expect(countAuditEvents(db)).toBe(4);
   });
 });
 

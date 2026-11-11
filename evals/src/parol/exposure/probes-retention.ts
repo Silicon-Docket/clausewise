@@ -1,6 +1,14 @@
 /**
- * The probes that W2.7, retention and the audit log adds. Empty until that package arrives; the package that owns this file
- * is the only one that edits it, and probes.ts composes it after the base tables.
+ * The probes that W2.7, retention and the audit log adds. The package that owns this file is the
+ * only one that edits it, and probes.ts composes it after the base tables.
+ *
+ * What it holds so far: `GET /audit`, the audit log check, a page that names no matter and only an
+ * administrator may open (`audit.read`). The exposure suite expects 303 to sign in for a visitor,
+ * 403 for every signed-in caller whose global role the hand-written table does not list (all five
+ * of its member actors), and 200 for the administrator, and it fetches the page as the
+ * administrator for the canary scan. The page shows counts and fixed text; it lists the ids of at
+ * most 20 matters, and only when the events do not account for a matter, which the suite's own
+ * database never has (the application's tests cover the page with such a database).
  *
  *  - `MATTER_PROBES_RETENTION`: a route that names a matter, with the action it checks and what a
  *    caller who is let in reaches.
@@ -12,11 +20,19 @@
  * A route may be given once in all the probe modules together: composing the tables refuses a
  * route, a forged-id body or an effect body that two owners both give.
  */
-import type { EffectOf, ForgedBody, OtherProbe, Probe } from "./probe-kit.js";
+import { NONE, type EffectOf, type ForgedBody, type OtherProbe, type Probe } from "./probe-kit.js";
 
 export const MATTER_PROBES_RETENTION: readonly Probe[] = [];
 
-export const OTHER_PROBES_RETENTION: readonly OtherProbe[] = [];
+export const OTHER_PROBES_RETENTION: readonly OtherProbe[] = [
+  {
+    method: "GET",
+    template: "/audit",
+    access: "principal",
+    body: NONE,
+    globalAction: "audit.read",
+  },
+];
 
 export const FORGED_BODIES_RETENTION: Readonly<Record<string, ForgedBody>> = {};
 

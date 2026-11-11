@@ -243,6 +243,8 @@ const NOT_MATTER_DATA = [
   "checkAuditAnchor",
   "reconcileMatterEvents",
   "checkAudit",
+  // A count of the rows of the log, the denominator of a count of events: no matter, no text.
+  "countAuditEvents",
   // The spend ledger holds a day, counts and a cost: no matter, run, user or text.
   "addSpend",
   "spendToday",

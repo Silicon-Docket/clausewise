@@ -30,6 +30,7 @@ export {
   auditHead,
   checkAudit,
   checkAuditAnchor,
+  countAuditEvents,
   latestAuditEvent,
   listAuditEvents,
   listMatterAuditEvents,

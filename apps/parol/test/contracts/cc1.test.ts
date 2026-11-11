@@ -223,9 +223,14 @@ describe("the stubs", () => {
 
   it("puts the marker on the line of every stub throw, naming the same package as the message", () => {
     for (const file of new Set(STUB_ROWS.map((row) => row.file))) {
-      const throws = read(file)
-        .split("\n")
-        .filter((line) => line.includes('throw new Error("stub:'));
+      const text = read(file);
+      const throws = text.split("\n").filter((line) => line.includes('throw new Error("stub:'));
+      // A file whose owner has filled in every stub has neither a marker nor a stub throw left.
+      const stillStub = STUB_ROWS.some((row) => row.file === file && text.includes(marker(row.id)));
+      if (!stillStub) {
+        expect(throws, file).toEqual([]);
+        continue;
+      }
       expect(throws.length, file).toBeGreaterThan(0);
       for (const line of throws) {
         const named = /throw new Error\("stub: ([^"]+)"\)/.exec(line)?.[1];

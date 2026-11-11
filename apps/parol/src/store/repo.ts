@@ -4,6 +4,7 @@ import {
   auditHead,
   checkAudit,
   checkAuditAnchor,
+  countAuditEvents,
   latestAuditEvent,
   listAuditEvents,
   listMatterAuditEvents,
@@ -148,6 +149,8 @@ export function createRepository(db: Database, options: RepositoryOptions = {}) 
     verifyAuditChain: () => verifyAuditChain(db),
     /** The newest event: its number and hash, which is all that has to be kept elsewhere to anchor the chain. */
     auditHead: () => auditHead(db),
+    /** How many events the log holds: the denominator of a count of events. */
+    countAuditEvents: () => countAuditEvents(db),
     /** The newest event with this action, or null. The retention command reads its own last run from it. */
     latestAuditEvent: (action: string) => latestAuditEvent(db, action),
     /** The event the anchor names exists and has this hash. */
