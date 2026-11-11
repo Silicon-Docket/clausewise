@@ -1295,6 +1295,8 @@ export function createMattersApi(ctx: Ctx) {
    * text: one is a closed word and the other an ISO time.
    *
    * Every table that holds matter rows is deleted from by a statement of its own, in this order.
+   * That includes the pilot measures' two (migration 8): the timers, and the reference list, which
+   * goes after the runs because a trigger closes it against a delete while a review exists.
    * Whoever adds a table with a `matter_id` column adds its delete here, before the parent it
    * references. The check at the end is what makes a forgotten one loud: it looks, inside the same
    * transaction, for any table with a `matter_id` column that still holds a row of this matter, and
@@ -1338,6 +1340,8 @@ export function createMattersApi(ctx: Ctx) {
         reviews: run("DELETE FROM reviews WHERE matter_id = ?", matterId),
         feedback: run("DELETE FROM feedback WHERE matter_id = ?", matterId),
         memos: run("DELETE FROM memos WHERE matter_id = ?", matterId),
+        // Timers hold a role and two timestamps; they are deleted with the matter they timed.
+        timeEntries: run("DELETE FROM time_entries WHERE matter_id = ?", matterId),
         verificationResults: run(
           "DELETE FROM verification_results WHERE finding_id IN (SELECT id FROM findings WHERE matter_id = ?)",
           matterId,
@@ -1356,6 +1360,9 @@ export function createMattersApi(ctx: Ctx) {
           matterId,
         ),
         runs: run("DELETE FROM runs WHERE matter_id = ?", matterId),
+        // After the runs, on purpose: the reference list is closed by a trigger while a review of the
+        // matter exists (migration 8), and it is the runs' going that opens it to a delete.
+        referenceIssues: run("DELETE FROM reference_issues WHERE matter_id = ?", matterId),
         annotations: run(
           "DELETE FROM span_annotations WHERE span_id IN (SELECT id FROM source_spans WHERE matter_id = ?)",
           matterId,

@@ -22,6 +22,7 @@ import { ConflictError, InvalidTransitionError, ValidationError } from "./errors
 import { createEvalApi } from "./repo-eval.js";
 import { createFindingsApi } from "./repo-findings.js";
 import { createMattersApi } from "./repo-matters.js";
+import { createPilotApi } from "./repo-pilot.js";
 import { createPlaybooksApi } from "./repo-playbooks.js";
 import { createRunsApi } from "./repo-runs.js";
 import { createSpendApi } from "./repo-spend.js";
@@ -32,7 +33,9 @@ import type { MatterRow } from "./types.js";
 /**
  * The repository: typed methods for every table, behind one object. Every method that touches
  * matter data takes the matter id first and filters on it, and treats an id that belongs to another
- * matter exactly as it treats one that does not exist.
+ * matter exactly as it treats one that does not exist. The one named exception is
+ * `loadPilotRecords` (repo-pilot.ts), the read across matters that the pilot measures are computed
+ * from: it returns ids, flags, codes and times and no text.
  *
  * Methods that change state run in a transaction and append their audit event inside it, so the
  * change and its record commit or roll back together.
@@ -44,6 +47,7 @@ export function createRepository(db: Database, options: RepositoryOptions = {}) 
   const runs = createRunsApi(ctx, matters, playbooks);
   const findings = createFindingsApi(ctx, matters, playbooks, runs);
   const evals = createEvalApi(ctx, matters, playbooks, runs);
+  const pilot = createPilotApi(ctx, matters, playbooks);
   const { requireMatter, transitionMatter } = matters.internal;
 
   /**
@@ -144,6 +148,7 @@ export function createRepository(db: Database, options: RepositoryOptions = {}) 
     ...findings,
     ...evals,
     ...createSpendApi(ctx),
+    ...pilot,
     ...createWarningsApi(ctx),
     // audit
     appendAudit: (input: Omit<AuditInput, "at">) => ctx.audit(input),

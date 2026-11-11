@@ -24,10 +24,13 @@ import {
   ACTORS,
   addMatter,
   decideAll,
-  exported,
+  fakePath,
   makeWorld,
   reviewable,
+  saveAll,
   startRun,
+  succeed,
+  exported,
   type World,
 } from "./fixtures.js";
 
@@ -58,11 +61,57 @@ function mentions(db: Db, needle: string): Record<string, string[]> {
   return found;
 }
 
-/** A matter with everything attached: documents, spans, a run, stages, calls, findings, decisions, a memo, feedback and an evaluation result. */
+/**
+ * A matter taken to an exported memo, as `exported` does, with the pilot measures' two matter tables
+ * filled on the way: the reviewer records a reference list before the review starts (it is closed
+ * from then on), and the associate's timer runs from before the review until after the memo.
+ */
+function exportedWithPilotRows(
+  world: World,
+  opts: Parameters<typeof addMatter>[1],
+  during: Parameters<typeof exported>[2],
+) {
+  const { repo } = world;
+  const m = addMatter(world, opts);
+  repo.addMember(m.id, ACTORS.reviewer, "reviewer", { actorId: ACTORS.associate });
+  repo.saveReferenceList(
+    m.id,
+    {
+      rules: [
+        { ruleKey: "dur-1", severity: "high" },
+        { ruleKey: "gov-1", severity: "low" },
+      ],
+      outsideHigh: 1,
+      outsideMedium: 0,
+      outsideLow: 0,
+    },
+    { userId: ACTORS.reviewer },
+  );
+  repo.startTimer(m.id, { userId: ACTORS.associate });
+  const run = startRun(world, m);
+  during?.(run, m);
+  const findings = saveAll(world, m, run);
+  const done = succeed(world, m, run);
+  const reviews = decideAll(world, m.id, findings);
+  const memo = repo.recordMemo(m.id, {
+    runId: done.id,
+    reviewIds: reviews.map((x) => x.id),
+    fileSha256: sha256Hex(`memo:${m.id}`),
+    storagePath: fakePath(m.id),
+    exportedBy: ACTORS.reviewer,
+  });
+  repo.startTimer(m.id, { userId: ACTORS.reviewer });
+  world.clock.tick(90_000);
+  repo.stopTimer(m.id, { userId: ACTORS.reviewer });
+  repo.stopTimer(m.id, { userId: ACTORS.associate });
+  return { m, run: done, findings, reviews, memo };
+}
+
+/** A matter with everything attached: documents, spans, a run, stages, calls, findings, decisions, a memo, feedback, a time entry, a reference list and an evaluation result. */
 function everything(world: World, name: string) {
   const { repo } = world;
   // Stages and model calls are written while the run is in flight, before it is finished.
-  const e = exported(world, { amendment: true, name }, (run, m) => {
+  const e = exportedWithPilotRows(world, { amendment: true, name }, (run, m) => {
     repo.recordStageStart(m.id, run.id, {
       stage: "extract",
       inputSha256: sha256Hex(`in-${name}`),
@@ -141,6 +190,14 @@ function everything(world: World, name: string) {
     ...e.reviews.map((r) => r.id),
     e.memo.id,
     feedback.id,
+    ...world.db
+      .prepare("SELECT id FROM time_entries WHERE matter_id = ? ORDER BY id")
+      .all(e.m.id)
+      .map((row) => (row as { id: string }).id),
+    ...world.db
+      .prepare("SELECT id FROM reference_issues WHERE matter_id = ? ORDER BY id")
+      .all(e.m.id)
+      .map((row) => (row as { id: string }).id),
   ];
   return { ...e, feedback, evalRun, ids };
 }
@@ -197,6 +254,10 @@ describe("deleteMatter", () => {
       memos: 1,
       feedback: 1,
       evalSlotResults: 1,
+      // The two timers (the associate's and the reviewer's) and the three issues of the list
+      // (two rule slots and one that no rule covers), counted in the deletion's own event.
+      timeEntries: 2,
+      referenceIssues: 3,
       files: 3,
     });
     const fell = (table: string) => (before[table] as number) - (after[table] as number);
@@ -208,7 +269,10 @@ describe("deleteMatter", () => {
     expect(fell("reviews")).toBe(3);
     expect(fell("runs")).toBe(1);
     expect(fell("matters")).toBe(1);
-    expect(fell("matter_members")).toBe(1);
+    // The associate who made the matter and the reviewer the fixture added.
+    expect(fell("matter_members")).toBe(2);
+    expect(fell("time_entries")).toBe(2);
+    expect(fell("reference_issues")).toBe(3);
     // Playbooks, prompts, workflows, users and evaluation runs are not matter data.
     for (const table of [
       "playbook_versions",

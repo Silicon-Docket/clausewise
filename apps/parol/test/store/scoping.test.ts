@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { sha256Hex } from "../../src/canonical.js";
-import { NotFoundError, ValidationError, type NewVersionInput } from "../../src/store/index.js";
+import {
+  ConflictError,
+  NotFoundError,
+  ValidationError,
+  type NewVersionInput,
+} from "../../src/store/index.js";
 import {
   ACTORS,
   addMatter,
@@ -198,6 +203,8 @@ function snapshot(matterId: string): string {
     rows("SELECT * FROM reviews WHERE matter_id = ? ORDER BY id"),
     rows("SELECT * FROM memos WHERE matter_id = ? ORDER BY id"),
     rows("SELECT * FROM feedback WHERE matter_id = ? ORDER BY id"),
+    rows("SELECT * FROM time_entries WHERE matter_id = ? ORDER BY id"),
+    rows("SELECT * FROM reference_issues WHERE matter_id = ? ORDER BY id"),
   ].join("\n");
 }
 
@@ -248,6 +255,14 @@ const NOT_MATTER_DATA = [
   // The spend ledger holds a day, counts and a cost: no matter, run, user or text.
   "addSpend",
   "spendToday",
+  // The pilot calendar and the roster of trained people name no matter. `loadPilotRecords` is the
+  // one read across matters, on purpose: ids, flags, codes and times, no text (store/pilot.test.ts).
+  "getPilotCalendar",
+  "setPilotCalendar",
+  "listPilotParticipants",
+  "setPilotParticipants",
+  "getPilotAdmin",
+  "loadPilotRecords",
   "transaction",
   "compact",
   "db",
@@ -728,6 +743,94 @@ const probes: Record<string, () => void> = {
       missing.run,
     );
     expect(w.repo.listEvalSlotResults(evalRun.id)).toEqual([]);
+  },
+  // --- timers and the reference list (W2.6b) ---
+  startTimer: () => {
+    const before = snapshot(b.id);
+    expect(w.repo.startTimer(a.id, { userId: ACTORS.associate }).matterId).toBe(a.id);
+    // It wrote into A and nowhere else, and a matter that does not exist is not found.
+    expect(snapshot(b.id)).toBe(before);
+    expect(() => w.repo.startTimer("mat_ffffffffffffffff", { userId: ACTORS.associate })).toThrow(
+      NotFoundError,
+    );
+  },
+  stopTimer: () => {
+    // A timer open on another matter is not found by a stop on A, and a stop on A leaves it running.
+    const other = addMatter(w);
+    w.repo.startTimer(other.id, { userId: ACTORS.associate });
+    const before = snapshot(b.id);
+    let caught: unknown;
+    try {
+      w.repo.stopTimer(a.id, { userId: ACTORS.associate });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ConflictError);
+    expect((caught as ConflictError).code).toBe("no_open_timer");
+    expect(snapshot(b.id)).toBe(before);
+    expect(w.repo.listTimerState(other.id, ACTORS.associate).running).not.toBeNull();
+  },
+  listTimerState: () => {
+    const other = addMatter(w);
+    w.repo.startTimer(other.id, { userId: ACTORS.associate });
+    // On A the person has no timer and no time; the one on the other matter is "elsewhere", and that
+    // matter is not named.
+    expect(w.repo.listTimerState(a.id, ACTORS.associate)).toEqual({
+      running: null,
+      elsewhere: true,
+      closedSeconds: 0,
+      sessions: 0,
+    });
+    expect(w.repo.listTimerState(other.id, ACTORS.associate).running?.matterId).toBe(other.id);
+    expect(w.repo.listTimerState("mat_ffffffffffffffff", ACTORS.associate).running).toBeNull();
+  },
+  getReferenceList: () => {
+    // A third matter with no review keeps a list; neither A nor B shows any of it.
+    const c = addMatter(w);
+    w.repo.addMember(c.id, ACTORS.reviewer, "reviewer", { actorId: ACTORS.associate });
+    w.repo.saveReferenceList(
+      c.id,
+      {
+        rules: [{ ruleKey: "dur-1", severity: "high" }],
+        outsideHigh: 1,
+        outsideMedium: 0,
+        outsideLow: 0,
+      },
+      { userId: ACTORS.reviewer },
+    );
+    expect(w.repo.getReferenceList(c.id).issues).toHaveLength(2);
+    expect(w.repo.getReferenceList(c.id).issues.every((i) => i.matterId === c.id)).toBe(true);
+    expect(w.repo.getReferenceList(a.id)).toEqual({ matterId: a.id, locked: true, issues: [] });
+    expect(w.repo.getReferenceList("mat_ffffffffffffffff")).toEqual({
+      matterId: "mat_ffffffffffffffff",
+      locked: false,
+      issues: [],
+    });
+  },
+  saveReferenceList: () => {
+    const before = snapshot(b.id);
+    // A has had a review, so its list is closed; the refusal is the same for B's rules as for any.
+    let caught: unknown;
+    try {
+      w.repo.saveReferenceList(
+        a.id,
+        { rules: [], outsideHigh: 0, outsideMedium: 0, outsideLow: 0 },
+        { userId: ACTORS.reviewer },
+      );
+    } catch (error) {
+      caught = error;
+    }
+    // The reviewer is no member of A in this fixture, which is refused before the lock is looked at.
+    expect(caught).toBeInstanceOf(ValidationError);
+    expect((caught as ValidationError).code).toBe("reference_role");
+    expect(() =>
+      w.repo.saveReferenceList(
+        "mat_ffffffffffffffff",
+        { rules: [], outsideHigh: 0, outsideMedium: 0, outsideLow: 0 },
+        { userId: ACTORS.reviewer },
+      ),
+    ).toThrow(NotFoundError);
+    expect(snapshot(b.id)).toBe(before);
   },
 };
 
