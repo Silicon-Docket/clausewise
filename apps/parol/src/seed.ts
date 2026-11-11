@@ -16,9 +16,11 @@ import { createSimulatedModel } from "./demo/simulated-model.js";
 import { ConfigError, parseEnv, type ParolSettings } from "./main.js";
 import { createServices } from "./services/index.js";
 import { RunNotReadyError } from "./services/errors.js";
+import { T01, startTraining } from "./training/index.js";
 import type { RunSummary } from "./services/views.js";
 import { urls } from "./server/urls.js";
 import {
+  ConflictError,
   DEMO_USER_IDS,
   FileStore,
   createRepository,
@@ -36,6 +38,11 @@ import {
  *    not yet run.
  *  - "Heronbridge / Tamarind NDA": another short NDA owned by someone else, so that signing in as
  *    two people shows that neither sees the other's matter.
+ *
+ * With `--training` it also makes the training matter T01 for the demo associate, with the demo
+ * reviewing attorney on it and the demo legal engineer as its trainer (training/start.ts). It is off
+ * by default: the two matters above are what the README's walk-through starts from, and the
+ * quickstart page has a button that makes T01 for whoever is signed in.
  *
  * Running it again changes nothing: a matter is recognised by its name and its owner, and only
  * what is missing is added. It refuses to run unless the demo identity is on, because the data is
@@ -60,6 +67,10 @@ export interface SeedOptions {
   runs?: readonly string[];
   /** The folder of the committed dataset files. Default: the repository's own. */
   fixturesDir?: string;
+  /** Also make the training matter T01 (see above). Default: no. */
+  training?: boolean;
+  /** The folder of T01's committed files. Default: `apps/parol/training`. */
+  trainingDir?: string;
 }
 
 export interface SeededMatter {
@@ -72,6 +83,18 @@ export interface SeededMatter {
   documentsAdded: number;
   ownerName: string;
   reviewerName: string | null;
+}
+
+export interface SeededTraining {
+  matterId: string;
+  name: string;
+  /** False when the matter was already there. */
+  created: boolean;
+  /** Documents uploaded by this call. */
+  documentsAdded: number;
+  ownerName: string;
+  reviewerName: string;
+  trainerName: string;
 }
 
 export interface SeededRun {
@@ -88,6 +111,8 @@ export interface SeededRun {
 export interface SeedReport {
   playbook: { slug: string; version: string };
   matters: SeededMatter[];
+  /** The training matter, when it was asked for, and null when it was not. */
+  training: SeededTraining | null;
   runs: SeededRun[];
   /** Each demo identity and the matters the services list for it, which is all it can see. */
   people: { name: string; matters: string[] }[];
@@ -180,6 +205,45 @@ export async function seedDemo(options: SeedOptions): Promise<SeedReport> {
     });
   }
 
+  let training: SeededTraining | null = null;
+  if (options.training === true) {
+    // Alex prepares, Dana decides, Lee is the trainer and can read it and change nothing.
+    const owner = principalOf(repo, DEMO_USER_IDS.associate);
+    const reviewer = principalOf(repo, DEMO_USER_IDS.reviewer);
+    const trainer = principalOf(repo, DEMO_USER_IDS.legalEngineer);
+    try {
+      const started = await startTraining(
+        {
+          services,
+          repo,
+          relaxedSegregation: false,
+          ...(options.trainingDir === undefined ? {} : { trainingDir: options.trainingDir }),
+        },
+        owner,
+        {
+          playbookVersionId: registered.playbook.id,
+          reviewerUserId: reviewer.userId,
+          trainerUserId: trainer.userId,
+        },
+      );
+      training = {
+        matterId: started.matterId,
+        name: T01.matterName,
+        created: started.created,
+        documentsAdded: started.documentsAdded,
+        ownerName: owner.displayName,
+        reviewerName: reviewer.displayName,
+        trainerName: trainer.displayName,
+      };
+    } catch (error) {
+      if (error instanceof ConflictError && error.code === "training_files_missing")
+        throw new SeedError(
+          "a document of the training matter is missing. Run pnpm fixtures:parol:training, or restore the files in apps/parol/training",
+        );
+      throw error;
+    }
+  }
+
   const runs: SeededRun[] = [];
   const first = DEMO_MATTERS[0]!;
   const firstMatter = matters.find((matter) => matter.key === first.key)!;
@@ -231,6 +295,7 @@ export async function seedDemo(options: SeedOptions): Promise<SeedReport> {
   return {
     playbook: { slug: registered.playbook.slug, version: registered.playbook.version },
     matters,
+    training,
     runs,
     people,
   };
@@ -240,18 +305,24 @@ export async function seedDemo(options: SeedOptions): Promise<SeedReport> {
 // The command
 // ---------------------------------------------------------------------------------------------
 
-const USAGE = "usage: pnpm parol:seed [--run v1] [--run v2]";
+const USAGE = "usage: pnpm parol:seed [--run v1] [--run v2] [--training]";
 
 /**
- * `--run v1 --run v2` or `--run=v1`: workflow versions to run on the first matter. A lone `--` is
+ * `--run v1 --run v2` or `--run=v1`: workflow versions to run on the first matter. `--training`
+ * also makes the training matter T01 (`training` is present, and true, only then). A lone `--` is
  * ignored, because `pnpm parol:seed -- --run v1` hands it on.
  */
-export function parseSeedArgs(argv: readonly string[]): { runs: string[] } {
+export function parseSeedArgs(argv: readonly string[]): { runs: string[]; training?: true } {
   const runs: string[] = [];
+  let training = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     // pnpm passes on the `--` in `pnpm parol:seed -- --run v1`. It only separates, so it is skipped.
     if (arg === "--") continue;
+    if (arg === "--training") {
+      training = true;
+      continue;
+    }
     let label: string | undefined;
     if (arg === "--run") label = argv[++i];
     else if (arg.startsWith("--run=")) label = arg.slice("--run=".length);
@@ -262,7 +333,7 @@ export function parseSeedArgs(argv: readonly string[]): { runs: string[] } {
       );
     if (!runs.includes(label)) runs.push(label);
   }
-  return { runs };
+  return training ? { runs, training } : { runs };
 }
 
 /** The lines the command prints. Ids, names fixed by the seed and counts, never document text. */
@@ -285,6 +356,24 @@ export function describeSeed(report: SeedReport, settings: ParolSettings): strin
       `  associate: ${matter.ownerName}`,
       `  reviewer: ${matter.reviewerName ?? "none, this matter is only for showing that matters are separate"}`,
       `  ${origin}${urls.matter(matter.matterId)}`,
+    );
+  }
+  if (report.training !== null) {
+    const t = report.training;
+    const state = t.created
+      ? `created, ${t.documentsAdded} document${t.documentsAdded === 1 ? "" : "s"} uploaded`
+      : t.documentsAdded > 0
+        ? `already there, ${t.documentsAdded} missing document${t.documentsAdded === 1 ? "" : "s"} uploaded`
+        : "already there, nothing to add";
+    lines.push(
+      `Training matter "${t.name}": ${state}`,
+      `  associate: ${t.ownerName}`,
+      `  reviewer: ${t.reviewerName}`,
+      `  trainer: ${t.trainerName}, who can read it and change nothing`,
+      `  ${origin}${urls.matter(t.matterId)}`,
+      "  No review has been run on it: the exercise starts at step 1 on the quickstart page.",
+      "  The exercise needs the simulated reader (PAROL_SCRIPTED=1). With a provider key the finding it teaches about does not appear.",
+      `  ${origin}${urls.quickstart()}`,
     );
   }
   if (report.runs.length > 0) {
@@ -336,7 +425,7 @@ export async function runSeed(
     throw new SeedError(
       "the demonstration data is only for the demo identity. Set PAROL_DEMO_IDENTITY=1 to seed it",
     );
-  const { runs } = parseSeedArgs(argv);
+  const { runs, training } = parseSeedArgs(argv);
 
   mkdirSync(settings.dataDir, { recursive: true, mode: 0o700 });
   const db = openDatabase(join(settings.dataDir, "parol.sqlite"));
@@ -345,6 +434,7 @@ export async function runSeed(
       repo: createRepository(db),
       files: new FileStore(join(settings.dataDir, "matters")),
       runs,
+      ...(training === true ? { training } : {}),
     });
     for (const line of describeSeed(report, settings)) out(line);
     return report;

@@ -117,6 +117,9 @@ export function createMatterService(
           // Only when given: the store's default (30 days) applies to an absent value, and an
           // explicit undefined is not the same thing under exactOptionalPropertyTypes.
           ...(input.retainDays === undefined ? {} : { retainDays: input.retainDays }),
+          // Only the training start (training/start.ts) passes a key. No route does: the
+          // request schemas of the matter forms have no field for it.
+          ...(input.training === undefined ? {} : { trainingKey: input.training }),
         });
         if (input.playbookVersionId !== null)
           repo.setPlaybookVersion(created.id, input.playbookVersionId, {

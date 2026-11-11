@@ -22,6 +22,11 @@ export interface ShownClause {
 export interface DocumentLine {
   label: string;
   kind: "nda" | "amendment" | "other";
+  /**
+   * The title the line carries (typed at intake, held to one line), or null when it has none. The
+   * reader uses it for one thing: the marker that says a matter is the training matter.
+   */
+  title: string | null;
   /** `YYYY-MM-DD` when the line carries one that parses, else null. */
   statedDate: string | null;
 }
@@ -89,9 +94,13 @@ function parseDocuments(outside: string): DocumentLine[] {
     if (head === null) continue;
     const at = line.lastIndexOf(", stated date ");
     const stated = at === -1 ? "" : line.slice(at + ", stated date ".length);
+    // The title is what the stage wrote between the kind and the date. It may hold commas and
+    // parentheses, and the last ", stated date " is the stage's own.
+    const title = line.slice(head[0].length, at === -1 ? undefined : at).trim();
     lines.push({
       label: head[1]!,
       kind: head[2] === "the NDA" ? "nda" : "amendment",
+      title: title === "" ? null : title,
       statedDate: parseDate(stated),
     });
   }

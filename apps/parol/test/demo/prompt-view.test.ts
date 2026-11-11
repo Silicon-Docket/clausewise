@@ -95,8 +95,40 @@ describe("what follows the block", () => {
   it("reads the documents list the way describeDocuments writes it", () => {
     const view = viewOfPrompt(prompt("x"));
     expect(view.documents).toEqual([
-      { label: "D1", kind: "nda", statedDate: "2026-02-02" },
-      { label: "D2", kind: "amendment", statedDate: "2026-09-15" },
+      { label: "D1", kind: "nda", title: "Mutual NDA", statedDate: "2026-02-02" },
+      { label: "D2", kind: "amendment", title: "Amendment No. 1", statedDate: "2026-09-15" },
+    ]);
+  });
+
+  it("reads the title the stage wrote, with its parentheses, and takes the last stated date for the date", () => {
+    const manifest = {
+      ...world.manifest,
+      documents: world.manifest.documents.map((d, i) => ({
+        ...d,
+        title: i === 0 ? "Mutual NDA (training T01), stated date 1999-01-01" : "Amendment (A)",
+      })),
+    };
+    const view = viewOfPrompt(
+      `<contract>\n\n</contract>\n\nDocuments:\n${describeDocuments(manifest)}\n\nOur client: X`,
+    );
+    expect(view.documents).toEqual([
+      {
+        label: "D1",
+        kind: "nda",
+        title: "Mutual NDA (training T01), stated date 1999-01-01",
+        statedDate: "2026-02-02",
+      },
+      { label: "D2", kind: "amendment", title: "Amendment (A)", statedDate: "2026-09-15" },
+    ]);
+  });
+
+  it("reads a line with no stated date as its title, and a line with no title as null", () => {
+    const view = viewOfPrompt(
+      "<contract>\n\n</contract>\n\nDocuments:\nD1 (the NDA): Just a title\nD2 (an amendment): , stated date 2026-09-15\n",
+    );
+    expect(view.documents).toEqual([
+      { label: "D1", kind: "nda", title: "Just a title", statedDate: null },
+      { label: "D2", kind: "amendment", title: null, statedDate: "2026-09-15" },
     ]);
   });
 
@@ -114,8 +146,8 @@ describe("what follows the block", () => {
       `<contract>\n\n</contract>\n\nDocuments:\n${documents}\n\nOur client: X`,
     );
     expect(view.documents).toEqual([
-      { label: "D1", kind: "nda", statedDate: null },
-      { label: "D2", kind: "amendment", statedDate: null },
+      { label: "D1", kind: "nda", title: "Mutual NDA, restated, for Q3", statedDate: null },
+      { label: "D2", kind: "amendment", title: "Amendment No. 1", statedDate: null },
     ]);
     const impossible = viewOfPrompt(
       "<contract>\n\n</contract>\n\nDocuments:\nD2 (an amendment): A, stated date 2026-13-45\n",
