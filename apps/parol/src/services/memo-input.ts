@@ -2,6 +2,7 @@ import { formatLocation } from "../location.js";
 import type { MemoFinding, MemoInput } from "../module-contracts.js";
 import { loadPlaybook } from "../playbooks/load.js";
 import type { FindingRecord, Repository, RunRow, StoredSpan } from "../store/index.js";
+import { summarizeUsage } from "../usage/summary.js";
 
 /**
  * Everything the memo says, read from the store for one run: its findings with their current
@@ -106,6 +107,7 @@ export function buildMemoInput(args: {
       modelReported: run.modelReported,
       manifestSha256: run.inputManifestSha256,
       startedAt: run.startedAt,
+      usage: summarizeUsage(repo.summarizeRunUsage(matterId, run.id), run.modelProvider),
     },
     documents: run.manifest.documents.map((d) => ({
       label: d.label,
@@ -126,6 +128,9 @@ export function buildMemoInput(args: {
     findings: memoFindings,
     ruleSeverities: Object.fromEntries(rules.map((r) => [r.key, r.severity])),
     ruleTitles: Object.fromEntries(rules.map((r) => [r.key, r.title])),
+    ruleFlags: Object.fromEntries(
+      rules.map((r) => [r.key, { kind: r.kind, required: r.required }]),
+    ),
     exportedBy: repo.getUser(args.exporterId)?.displayName ?? "(unknown user)",
     exportedAt: args.exportedAt,
     segregationRelaxed: sameAsAssociate,

@@ -1,6 +1,7 @@
 import { ZodError } from "zod";
 import { epochSeconds, safeEqual, sign } from "../../auth/crypto.js";
 import { UploadError } from "../../module-contracts.js";
+import { SpendRefusedError } from "../../services/errors.js";
 import type { UploadWarningView } from "../../services/views.js";
 import { ConflictError, ValidationError } from "../../store/errors.js";
 import { toSafeError } from "../middleware/errors.js";
@@ -404,6 +405,22 @@ export function refusalOf(
   error: unknown,
   tables: Pick<RefusalTables, "phrases" | "todo" | "jump"> = MERGED,
 ): Refusal | null {
+  // A review the spend guard refused. The person can act on it (a smaller review, a later day, a
+  // word with whoever runs the server), and the words carry the figures the guard planned. Like
+  // every other refusal here, the status and the words are the shell's: the JSON API sends the same
+  // sentence in the same 409.
+  if (error instanceof SpendRefusedError) {
+    const safe = toSafeError(error);
+    const notice: Notice = { kind: "error", text: safe.message };
+    // What to do about it is a sentence inside the words, which the page shows apart. It is the
+    // error's own, so the words and the todo cannot drift.
+    if (safe.message.includes(error.todoText())) notice.todo = error.todoText();
+    return {
+      status: 409,
+      notice,
+      code: typeof safe.extra.code === "string" ? safe.extra.code : null,
+    };
+  }
   const theirs =
     error instanceof ValidationError ||
     error instanceof ConflictError ||

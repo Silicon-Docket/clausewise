@@ -10,7 +10,14 @@ import type {
   WorkflowOption,
 } from "../../services/views.js";
 import { urls } from "../urls.js";
-import { dateInputValue, formatBytes, formatDate, plural, shortHash } from "../views/format.js";
+import {
+  dateInputValue,
+  formatBytes,
+  formatDate,
+  modelLine,
+  plural,
+  shortHash,
+} from "../views/format.js";
 import {
   documentKindLabel,
   matterRoleLabel,
@@ -542,9 +549,7 @@ function RunsTable(props: {
                 </span>
               </td>
               <td>
-                <RevealedText
-                  value={`${run.model.provider}, ${run.model.reported ?? run.model.requested}`}
-                />
+                <RevealedText value={modelLine(run.model)} />
               </td>
               <td>
                 {props.canStart && run.status === "failed" && (run.resumable ?? run.current) ? (

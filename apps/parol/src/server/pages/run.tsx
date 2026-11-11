@@ -7,9 +7,10 @@ import type {
   MatterSummary,
   RunSummary,
   UploadWarningView,
+  UsageSummary,
 } from "../../services/views.js";
 import { urls } from "../urls.js";
-import { plural } from "../views/format.js";
+import { modelLine, plural } from "../views/format.js";
 import {
   SEVERITY_ORDER,
   STATUS_ORDER,
@@ -18,6 +19,7 @@ import {
   runErrorMeaning,
   runStatusLabel,
   isActiveRun,
+  statusLabel,
 } from "../views/labels.js";
 import {
   Chip,
@@ -194,6 +196,11 @@ function IssueTable(props: {
                 </th>
                 <td>
                   <StatusChip status={row.status} />
+                  {row.modelStatus === undefined || row.modelStatus === null ? null : (
+                    <span class="row-sub" data-settled-row="">
+                      Settled by the playbook; the workflow stated {statusLabel(row.modelStatus)}
+                    </span>
+                  )}
                 </td>
                 <td>
                   <ReviewChip
@@ -285,10 +292,7 @@ export function RunPage(props: RunPageProps) {
             Workflow <RevealedText value={run.workflowLabel} />
           </span>
           <span>
-            Read by{" "}
-            <RevealedText
-              value={`${run.model.provider}, ${run.model.reported ?? run.model.requested}`}
-            />
+            <RevealedText value={modelLine(run.model)} />
           </span>
           <span>
             Playbook <RevealedText value={`${run.playbook.slug} ${run.playbook.version}`} />
@@ -463,6 +467,23 @@ export function RunPage(props: RunPageProps) {
           </div>
         </>
       )}
+
+      {run.usage === undefined ? null : <UsageSection usage={run.usage} />}
     </Layout>
+  );
+}
+
+/**
+ * What the review's model calls used, in the sentences the service built from the recorded calls
+ * (`usage/summary.ts`), so that the page, the JSON and the memo cannot disagree. Static text: no
+ * control, no script. Every figure in it states how many calls it is out of.
+ */
+function UsageSection(props: { usage: UsageSummary }) {
+  return (
+    <Section id="run-usage" title="Usage">
+      {props.usage.lines.map((line) => (
+        <p>{line}</p>
+      ))}
+    </Section>
   );
 }

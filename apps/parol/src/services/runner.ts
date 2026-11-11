@@ -4,11 +4,11 @@ import type {
   DraftFinding,
   ExtractOutput,
   IngestOutput,
-  PlaybookRuleRecord,
   RunStatus,
   VerifiedFinding,
 } from "../contracts.js";
 import { getPrompt } from "../prompts/registry.js";
+import { SETTLEMENT_VERSION } from "../settlement.js";
 import { runAnalyze } from "../stages/analyze.js";
 import { runExtract } from "../stages/extract.js";
 import { buildBundles } from "../stages/retrieve.js";
@@ -21,19 +21,23 @@ import {
   isActiveRunStatus,
   toSourceSpans,
   type RunRow,
-  type StoredRule,
 } from "../store/index.js";
 import { DEFAULT_MAX_CONCURRENT_RUNS, type ServiceDeps } from "./deps.js";
 import {
   ProviderFailure,
   RunStopped,
   mapLimited,
+  plainRule,
+  spendKindOf,
   watchGenerator,
-  type RunErrorKind,
   type StopReason,
+  type StoredRunErrorKind,
 } from "./run-support.js";
 import { createSupportChecker } from "./support-checker.js";
 import type { RunProgress } from "./views.js";
+import { NO_SPEND } from "../usage/guard.js";
+import { NO_PRICING } from "../usage/prices.js";
+import { createRunScope, runStore, type RunScope } from "../usage/scope.js";
 
 /** How many rules are analysed, and then verified, at once within one run. */
 export const RULE_CONCURRENCY = 3;
@@ -57,27 +61,10 @@ interface Job {
   /** Why the run is being stopped from outside (a cancel, a changed document). */
   stopReason: StopReason | null;
   /** Set by the watched generator when the provider rejects the key, the model or the account. */
-  fatal: RunErrorKind | null;
+  fatal: StoredRunErrorKind | null;
+  /** What the provider's responses named while this run was working: the models that answered. */
+  scope: RunScope;
 }
-
-/** A rule as the stages read it: the playbook's fields, without the store's ids. */
-const plainRule = (rule: StoredRule): PlaybookRuleRecord => ({
-  key: rule.key,
-  category: rule.category,
-  title: rule.title,
-  severity: rule.severity,
-  required: rule.required,
-  kind: rule.kind,
-  standard: rule.standard,
-  fallback: rule.fallback,
-  unacceptable: rule.unacceptable,
-  guidance: rule.guidance,
-  fallbackLanguage: rule.fallbackLanguage,
-  escalateWhen: rule.escalateWhen,
-  // The topics of keyword hint that matter to the rule. Dropping them makes every hint of the
-  // category count for every rule, which is the defect topics remove (see hint-topics-runner.test).
-  ...(rule.hintTopics === undefined ? {} : { hintTopics: rule.hintTopics }),
-});
 
 const isAbort = (error: unknown): boolean =>
   typeof error === "object" &&
@@ -114,6 +101,9 @@ function stoppedFrom(error: unknown): RunStopped | undefined {
  */
 export function createRunEngine(deps: ServiceDeps) {
   const { repo } = deps;
+  // Without a guard (a stand-in reader, a test) nothing is held, stopped or priced by it.
+  const spend = deps.spend ?? NO_SPEND;
+  const pricing = deps.spend ?? deps.pricing ?? NO_PRICING;
   const maxConcurrent = deps.config.maxConcurrentRuns ?? DEFAULT_MAX_CONCURRENT_RUNS;
   if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1)
     throw new RangeError("maxConcurrentRuns must be a whole number of at least 1");
@@ -142,6 +132,7 @@ export function createRunEngine(deps: ServiceDeps) {
       controller: new AbortController(),
       stopReason: null,
       fatal: null,
+      scope: createRunScope(runId),
     };
     all.add(job);
     byRun.set(runId, job);
@@ -186,6 +177,8 @@ export function createRunEngine(deps: ServiceDeps) {
       pending.splice(queued, 1);
       all.delete(job);
       byRun.delete(runId);
+      // It never ran, so `runJob` will not give back the bound that was held for it.
+      spend.release(runId);
       settleIdle();
       return;
     }
@@ -216,7 +209,8 @@ export function createRunEngine(deps: ServiceDeps) {
         say("not started, it is no longer queued");
         return;
       }
-      await execute(job, run, say);
+      // The scope tells the metering hooks which run a response belongs to (usage/scope.ts).
+      await runStore.run(job.scope, () => execute(job, run, say));
       say("succeeded");
     } catch (error) {
       try {
@@ -225,12 +219,37 @@ export function createRunEngine(deps: ServiceDeps) {
         // Nothing here may escape as an unhandled rejection. `settle` does not give up on a write
         // that fails, so this is only the log line itself failing.
       }
+    } finally {
+      recordModels(job);
+      // The run is over (or was never started): its bound is no longer held against the day.
+      spend.release(job.runId);
+    }
+  }
+
+  /**
+   * Writes down the model(s) the provider named for this run, whatever way the run ended: a
+   * cancelled or failed run was answered by a model too. A unit writes them with its calls as it
+   * finishes; this catches a response that arrived after the last unit did, such as one for a unit
+   * a cancel cut short. The run may be gone by now (its matter deleted), which is not an error.
+   *
+   * Nothing here may escape: it runs as the job ends, and a rejection from it would be an unhandled
+   * one. A failure is logged by its class name only.
+   */
+  function recordModels(job: Job): void {
+    if (job.scope.models.size === 0) return;
+    try {
+      repo.recordReportedModels(job.matterId, job.runId, [...job.scope.models]);
+    } catch (error) {
+      if (error instanceof StoreError) return;
+      deps.log(
+        `run ${job.runId} (matter ${job.matterId}): could not record the reported model (${error instanceof Error ? error.name : "unknown error"})`,
+      );
     }
   }
 
   /** What a run's end comes to once the error that ended it has been read. */
   type Ending =
-    | { how: "failed"; kind: RunErrorKind }
+    | { how: "failed"; kind: StoredRunErrorKind }
     | { how: "cancelled" }
     | { how: "quiet"; reason: StopReason };
 
@@ -289,7 +308,7 @@ export function createRunEngine(deps: ServiceDeps) {
     else say(`stopped quietly (${ending.reason})`);
   }
 
-  function markFailed(job: Job, kind: RunErrorKind, say: (event: string) => void): void {
+  function markFailed(job: Job, kind: StoredRunErrorKind, say: (event: string) => void): void {
     try {
       repo.updateRunStatus(job.matterId, job.runId, "failed", { errorKind: kind, actorId: null });
       say(`failed (${kind})`);
@@ -315,6 +334,12 @@ export function createRunEngine(deps: ServiceDeps) {
   async function execute(job: Job, start: RunRow, say: (event: string) => void): Promise<void> {
     const { matterId, runId } = job;
     const signal = job.controller.signal;
+    // A review that reaches a limit is stopped like one the provider rejected: the closed kind is
+    // noted first, so that it wins over the abort that unwinds the units in flight.
+    spend.begin(runId, (stop) => {
+      job.fatal ??= spendKindOf(stop);
+      job.controller.abort(stop);
+    });
     const generator = watchGenerator(deps.generator, (kind) => {
       // Noted only. The stages turn the error into a recorded call and return, and the unit that
       // met it stops the run once that record is saved; aborting here would drop the record.
@@ -373,10 +398,15 @@ export function createRunEngine(deps: ServiceDeps) {
       attempt: number,
       calls: readonly CallRecord[],
       result:
-        { status: "succeeded"; output: unknown } | { status: "failed"; errorKind: RunErrorKind },
+        | { status: "succeeded"; output: unknown }
+        | { status: "failed"; errorKind: StoredRunErrorKind },
     ): void => {
       commit(() => {
-        if (calls.length > 0) repo.insertModelCalls(matterId, runId, calls);
+        if (calls.length > 0)
+          repo.insertModelCalls(matterId, runId, pricing.priceCalls(calls, start.modelRequested));
+        // As soon as a model is known, and in the same step as the calls that it answered.
+        if (job.scope.models.size > 0)
+          repo.recordReportedModels(matterId, runId, [...job.scope.models]);
         repo.recordStageResult(matterId, runId, {
           stage,
           unit,
@@ -602,6 +632,10 @@ export function createRunEngine(deps: ServiceDeps) {
           bundle: hashOf(bundle),
           checks: wm.checks,
           support: prompts.support?.sha256 ?? null,
+          // A verify output made before status settlement existed, or under another version of
+          // its rule, is not reused: it would show the model's status where the playbook now
+          // settles it. No model call is repeated for it unless the workflow has a support check.
+          settle: SETTLEMENT_VERSION,
         });
         const saved = reusable("verify", bundle.ruleKey, input);
         if (saved !== undefined) {

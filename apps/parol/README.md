@@ -177,6 +177,22 @@ Other settings, all optional:
 | `PAROL_RELAXED_SEGREGATION` | Set to `1` for a one-person demo in which the associate may also decide findings; the memo then says so.       |
 | `PAROL_MAX_UPLOAD_BYTES`    | The largest accepted upload. Default 10 MB.                                                                    |
 
+A server that calls a real model needs limits on what it may spend and a price file, and does not
+start without them. A reader that is a stand-in (`PAROL_SCRIPTED=1`) calls no model, needs none of
+this, and ignores these variables with a notice.
+
+| Variable                      | Meaning                                                                                                                                                    |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PAROL_MAX_REVIEW_COST_USD`   | The most one review may cost, in US dollars. No default: Parol does not guess a limit that is a statement about money.                                     |
+| `PAROL_MAX_DAILY_COST_USD`    | The most all reviews may cost in one UTC day, in US dollars, and at least the limit for one review. No default.                                            |
+| `PAROL_PRICES_FILE`           | A JSON file of prices, in US dollars per million tokens, in the format of `evals/prices.json`. It must hold a price for the model in use. No default.      |
+| `PAROL_ASSUMED_OUTPUT_TOKENS` | The output tokens assumed for each call when the most a review can cost is planned. Default 1500.                                                          |
+| `PAROL_SPEND_BOUND_ONLY`      | Set to `1` to accept a provider whose adapter reports no usage (`openai`, `openai-compatible`): only the bound planned before each review is then checked. |
+
+The figures in `evals/prices.json` have not been checked against a live price list, and a price
+file is the operator's own input: a wrong price makes every bound and every cost shown wrong in
+the same direction.
+
 ## The data folder, and starting again
 
 Everything Parol stores is in one folder, `./data/parol` unless `PAROL_DATA_DIR` says otherwise,

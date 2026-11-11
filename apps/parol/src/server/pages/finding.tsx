@@ -1,6 +1,11 @@
 import { EVIDENCE_ROLES, REVIEW_DECISIONS, STATUSES } from "../../contracts.js";
 import type { CheckResult, EvidenceRole, ReviewDecision, Status } from "../../contracts.js";
-import type { EvidenceView, FindingView, ReviewHistoryItem } from "../../services/views.js";
+import type {
+  EvidenceView,
+  FindingView,
+  IssueRow,
+  ReviewHistoryItem,
+} from "../../services/views.js";
 import { urls } from "../urls.js";
 import { shortHash } from "../views/format.js";
 import { confirmedRange, type Offsets } from "../views/highlight.js";
@@ -336,6 +341,36 @@ function RuleSection({ finding, level }: { finding: FindingView; level: Lv }) {
   );
 }
 
+/**
+ * Said when the playbook's flags settled the status the workflow stated to another one. It names
+ * both statuses and the fixed reason, so a reviewer sees that code, not the workflow, decided the
+ * status, and that the discrepancy and explanation below were written for the one the workflow
+ * stated. Nothing in it comes from a document. When a flag then left the status undetermined, it
+ * says so and names no settled status.
+ */
+function SettledNote({ issue }: { issue: IssueRow }) {
+  if (issue.modelStatus === undefined || issue.modelStatus === null) return null;
+  const stated = statusLabel(issue.modelStatus);
+  const because = issue.settlementReason ?? "the playbook's flags for this rule";
+  return (
+    <p class="basis" data-settled-note="">
+      {issue.status === "undetermined" ? (
+        <>
+          <strong>Status settled by the playbook, then left open.</strong> The workflow stated{" "}
+          {stated}; {because}, so the playbook settles it differently, and a flag below then made
+          the status undetermined.
+        </>
+      ) : (
+        <>
+          <strong>Status settled by the playbook.</strong> The workflow stated {stated}; {because},
+          so the status is {statusLabel(issue.status)}.
+        </>
+      )}{" "}
+      The discrepancy and explanation below were written for the status the workflow stated.
+    </p>
+  );
+}
+
 function FindingSection({ finding, level }: { finding: FindingView; level: Lv }) {
   const { issue } = finding;
   return (
@@ -343,6 +378,7 @@ function FindingSection({ finding, level }: { finding: FindingView; level: Lv })
       <Heading level={level} id="found-heading">
         What the review found
       </Heading>
+      <SettledNote issue={issue} />
       <p class="muted">{statusMeaning(issue.status)}</p>
       <dl class="facts">
         <dt>Discrepancy</dt>

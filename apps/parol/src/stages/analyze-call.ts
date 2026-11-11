@@ -8,6 +8,7 @@ import {
 import { ZodError, type ZodType } from "zod";
 import { sha256Hex } from "../canonical.js";
 import type { CallRecord } from "../contracts.js";
+import { CallCollector, callStore } from "../usage/scope.js";
 
 /**
  * One model call, the way the extract and analyze stages make it: timed, hashed, classified and
@@ -126,8 +127,16 @@ export const requestSha256 = (system: string, prompt: string): string => sha256H
 
 /**
  * Makes one call. Rethrows an abort (the signal, or an `AbortError` from the generator) and
- * returns every other failure as a value with its call record. Token counts are null because the
- * generator interface does not report usage.
+ * returns every other failure as a value with its call record. The token counts of the record are
+ * what the provider reported while this call was running, through the metering hooks of
+ * `usage/metering.ts` (summed over a retry and a failed attempt), and are null in all four when no
+ * hook reported any: a generator that does not report usage, such as a scripted one, leaves them
+ * null.
+ *
+ * The call runs inside its own collector (`usage/scope.ts`), which is how a hook that carries no
+ * identity reaches the right call when the engine runs several at once. The latency ends before the
+ * collector waits for the copies of the response bodies to be read, so waiting for usage never
+ * counts as the provider's time.
  */
 export async function callModel<T>(call: ModelCall<T>): Promise<ModelCallResult<T>> {
   call.signal?.throwIfAborted();
@@ -139,29 +148,35 @@ export async function callModel<T>(call: ModelCall<T>): Promise<ModelCallResult<
     ...(call.sharedPrefix === undefined ? {} : { sharedPrefix: call.sharedPrefix }),
     ...(call.signal === undefined ? {} : { signal: call.signal }),
   };
-  const recordFor = (outcome: CallRecord["outcome"], latencyMs: number): CallRecord => ({
-    stage: call.stage,
-    ruleKey: call.ruleKey,
-    promptVersionId: call.promptVersionId,
-    requestSha256: requestSha256(call.system, call.prompt),
-    attempt: call.attempt,
-    outcome,
-    latencyMs,
-    inputTokens: null,
-    outputTokens: null,
-    cacheReadTokens: null,
-    cacheWriteTokens: null,
-  });
+  const collector = new CallCollector();
+  const recordFor = (outcome: CallRecord["outcome"], latencyMs: number): CallRecord => {
+    const usage = collector.usage();
+    return {
+      stage: call.stage,
+      ruleKey: call.ruleKey,
+      promptVersionId: call.promptVersionId,
+      requestSha256: requestSha256(call.system, call.prompt),
+      attempt: call.attempt,
+      outcome,
+      latencyMs,
+      inputTokens: usage?.inputTokens ?? null,
+      outputTokens: usage?.outputTokens ?? null,
+      cacheReadTokens: usage?.cacheReadTokens ?? null,
+      cacheWriteTokens: usage?.cacheWriteTokens ?? null,
+    };
+  };
 
   const started = performance.now();
   try {
-    const value = await call.generator.generate(request);
+    const value = await callStore.run(collector, () => call.generator.generate(request));
     const latencyMs = Math.max(0, Math.round(performance.now() - started));
+    await collector.settled();
     return { ok: true, value, record: (outcome) => recordFor(outcome, latencyMs) };
   } catch (error) {
     if (isAbortError(error)) throw error;
     if (call.signal?.aborted) throw call.signal.reason ?? error;
     const latencyMs = Math.max(0, Math.round(performance.now() - started));
+    await collector.settled();
     const failure = classifyFailure(error);
     return { ok: false, failure, record: recordFor(failure.outcome, latencyMs) };
   }

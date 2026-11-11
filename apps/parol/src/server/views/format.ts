@@ -1,3 +1,5 @@
+import { isStandInProvider } from "../../stand-in.js";
+
 /**
  * Dates, sizes and counts as people read them. Everything is computed in UTC from the ISO text the
  * services return, never from the clock or the locale of the machine, so a page renders the same
@@ -109,4 +111,23 @@ export function shortHash(sha: string, length = 8): string {
 
 export function plural(count: number, one: string, many: string = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
+}
+
+/**
+ * Which model answered a review, in words. The provider names the model in its responses, and the
+ * name may differ from the one that was asked for (an alias that moved to a newer snapshot), so
+ * both are shown when they differ. A program that stands in for a model is said to be one, with its
+ * name; it is not described as a model, and the stand-in banner of the run page says the rest.
+ */
+export function modelLine(model: {
+  provider: string;
+  requested: string;
+  reported: string | null;
+}): string {
+  if (isStandInProvider(model.provider))
+    return `Read by a scripted stand-in (${model.provider}, ${model.requested})`;
+  if (model.reported === null)
+    return `Requested ${model.requested}; the provider did not say which model answered`;
+  if (model.reported === model.requested) return `Answered by ${model.reported}`;
+  return `Answered by ${model.reported} (requested ${model.requested})`;
 }

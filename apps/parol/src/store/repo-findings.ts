@@ -2,6 +2,7 @@ import {
   FORCES_UNDETERMINED,
   REVIEW_DECISIONS,
   type CheckResult,
+  type DeterminedStatus,
   type Escalation,
   type EvidenceRole,
   type FallbackBasis,
@@ -12,6 +13,7 @@ import {
 import { canonicalJson, findingContentSha256, hashOf } from "../canonical.js";
 import { newId } from "../ids.js";
 import { verifyQuote } from "../quotes.js";
+import { settleStatus } from "../settlement.js";
 import {
   assertSha256,
   assertShortCode,
@@ -63,6 +65,7 @@ interface RawFinding {
   escalations_json: string;
   verification_state: VerifiedFinding["verificationState"];
   content_sha256: string;
+  model_status: DeterminedStatus | null;
   validity: "current" | "stale";
   stale_reason: string | null;
   conflict: string | null;
@@ -283,6 +286,7 @@ export function createFindingsApi(
         escalations: JSON.parse(f.escalations_json) as Escalation[],
         verificationState: f.verification_state,
         contentSha256: f.content_sha256,
+        modelStatus: f.model_status,
         validity: f.validity,
         staleReason: f.stale_reason,
         rule: rules.get(f.playbook_rule_id) as StoredRule,
@@ -317,7 +321,11 @@ export function createFindingsApi(
    * failed check, and `escalated_by_system` otherwise (as `verifyFinding` decides it); a quote
    * that was not found carries `quote_not_verified`; and a quote marked `verified` or `ambiguous`
    * is looked up again in the stored span text with `verifyQuote`, so the badge and the highlight
-   * a reviewer sees are the ones the text supports.
+   * a reviewer sees are the ones the text supports. A finding that keeps the status the workflow
+   * stated (`modelStatus`) must be one that the rule's flags settle to the status it states (or
+   * that a forcing escalation then made undetermined), and must carry the `status_settled` check;
+   * a `status_settled` check without a model status is refused too. The `finding.save` event
+   * counts how many of the saved findings were settled.
    *
    * Saving a rule that already has a finding with the same content is a no-op, so a resumed run
    * can save again.
@@ -356,6 +364,7 @@ export function createFindingsApi(
 
       const saved: string[] = [];
       let skipped = 0;
+      let settledCount = 0;
       // A finding is named by its position in the batch. Its rule key came from the caller and may not
       // be a real one, so it is not echoed; a number helps whoever reads the error and is safe to print.
       for (const [index, f] of parsed.entries()) {
@@ -382,6 +391,39 @@ export function createFindingsApi(
           );
         if (new Set(f.checks.map((c) => c.id)).size !== f.checks.length)
           throw new ValidationError("duplicate_check", `${at} repeats a check id`);
+
+        // The status the workflow stated is kept only when code changed it, and the change must be
+        // the one the rule's flags make (`settleStatus`): a settled finding is a statement that the
+        // playbook, not the model, decided the status, so it is checked against the playbook here.
+        const settledCheck = f.checks.some((c) => c.id === "status_settled");
+        if (f.modelStatus !== undefined && f.modelStatus !== null) {
+          if (f.modelStatus === f.status)
+            throw new ValidationError(
+              "model_status_same",
+              `${at} keeps a model status that is the status it states`,
+            );
+          const settled = settleStatus(rule, f.modelStatus);
+          if (settled === f.modelStatus)
+            throw new ValidationError(
+              "model_status_not_settled",
+              `${at} keeps a model status that its rule does not change`,
+            );
+          if (f.status !== settled && f.status !== "undetermined")
+            throw new ValidationError(
+              "model_status_mismatch",
+              `${at} has a status that is neither what its rule settles the model status to nor undetermined`,
+            );
+          if (!settledCheck)
+            throw new ValidationError(
+              "model_status_unexplained",
+              `${at} keeps a model status and has no status_settled check`,
+            );
+        } else if (settledCheck) {
+          throw new ValidationError(
+            "model_status_mismatch",
+            `${at} has a status_settled check and keeps no model status`,
+          );
+        }
 
         // The state a reviewer sees must be the one the checks and escalations give.
         const clean = f.escalations.length === 0 && f.checks.every((c) => c.outcome !== "fail");
@@ -449,6 +491,7 @@ export function createFindingsApi(
           conflict: f.conflict,
           evidence: f.evidence,
           escalations: f.escalations,
+          modelStatus: f.modelStatus ?? null,
         });
         if (recomputed !== f.contentSha256)
           throw new ValidationError(
@@ -472,8 +515,8 @@ export function createFindingsApi(
           `INSERT INTO findings
              (id, run_id, matter_id, playbook_rule_id, rule_key, category, severity, status, discrepancy,
               explanation, fallback_language, fallback_basis, escalations_json, verification_state,
-              content_sha256, validity, stale_reason, conflict, abstain_reason)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'current', NULL, ?, ?)`,
+              content_sha256, validity, stale_reason, conflict, abstain_reason, model_status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'current', NULL, ?, ?, ?)`,
           findingId,
           runId,
           matterId,
@@ -491,6 +534,7 @@ export function createFindingsApi(
           f.contentSha256,
           f.conflict,
           f.abstainReason,
+          f.modelStatus ?? null,
         );
         f.evidence.forEach((e, ordinal) =>
           run(
@@ -522,6 +566,7 @@ export function createFindingsApi(
           ),
         );
         saved.push(f.ruleKey);
+        if (f.modelStatus !== undefined && f.modelStatus !== null) settledCount += 1;
       }
 
       if (saved.length > 0)
@@ -531,7 +576,7 @@ export function createFindingsApi(
           action: "finding.save",
           targetType: "run",
           targetId: runId,
-          detail: { saved: saved.length, skipped, ruleKeys: saved },
+          detail: { saved: saved.length, skipped, settled: settledCount, ruleKeys: saved },
         });
       return listFindings(matterId, runId).filter((f) =>
         parsed.some((p) => p.ruleKey === f.ruleKey),

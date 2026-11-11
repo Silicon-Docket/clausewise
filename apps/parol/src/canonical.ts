@@ -35,9 +35,15 @@ export function canonicalJson(value: unknown): string {
 export const hashOf = (value: unknown): string => sha256Hex(canonicalJson(value));
 
 /**
- * What a reviewer saw when they decided: status, texts, evidence and escalations. Check details
- * and offsets are left out because they are derived from these. A review is bound to this hash, so
- * a changed finding is never silently covered by an old decision.
+ * What a reviewer saw when they decided: status, texts, evidence and escalations, and the status
+ * the workflow stated when code settled it to another one (`modelStatus`). Check details and
+ * offsets are left out because they are derived from these. A review is bound to this hash, so a
+ * changed finding is never silently covered by an old decision.
+ *
+ * `modelStatus` joins the hash only when it is set. `canonicalJson` leaves out an `undefined`
+ * member, and an absent or null value is passed as `undefined` here, so a finding that code did
+ * not change hashes exactly as it did before settlement existed, and so does every finding stored
+ * before then.
  */
 export function findingContentSha256(finding: {
   ruleKey: string;
@@ -49,6 +55,7 @@ export function findingContentSha256(finding: {
   conflict: string | null;
   evidence: Pick<VerifiedEvidence, "spanId" | "quote" | "role" | "quoteCheck" | "supportCheck">[];
   escalations: Escalation[];
+  modelStatus?: string | null | undefined;
 }): string {
   return hashOf({
     ruleKey: finding.ruleKey,
@@ -66,5 +73,6 @@ export function findingContentSha256(finding: {
       supportCheck: e.supportCheck,
     })),
     escalations: finding.escalations.map((e) => ({ code: e.code, detail: e.detail })),
+    modelStatus: finding.modelStatus ?? undefined,
   });
 }

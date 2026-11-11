@@ -1,6 +1,7 @@
 import type {
   CheckResult,
   ContextBundle,
+  DeterminedStatus,
   Escalation,
   IngestOutput,
   PlaybookRuleRecord,
@@ -20,9 +21,15 @@ import { clipDetail, fold, listCapped } from "./text.js";
  * said and nothing the model could use to reach anything: strings, a status and a list of ids.
  */
 export interface Claim {
+  /** The status the checks judge: the model's own, or the one the playbook's flags settle it to. */
   status: Status;
   /** False when the draft carried something that is not a status; `status` is then undetermined. */
   statusValid: boolean;
+  /**
+   * The status the model stated, when settlement changed it to another one, and null otherwise.
+   * A check that reads what the model claimed (and not what the playbook makes of it) reads this.
+   */
+  modelStatus: DeterminedStatus | null;
   discrepancy: string;
   explanation: string;
   fallbackLanguage: string | null;
@@ -222,7 +229,10 @@ export function citationShape({ claim, set, bundle, rule }: CheckContext): Check
     // Both come from the analysis prompt, which defines not_applicable as a presence rule that the
     // playbook does not require and no clause covers, and forbids answering it from a selection.
     // Without them one bare answer, which cites nothing and so has nothing to verify, would pass
-    // as a verified finding for any rule at all.
+    // as a verified finding for any rule at all. `verifyFinding` settles a status against the rule
+    // before any check (a required rule's not_applicable is judged here as the missing it settles
+    // to), so the required-rule branch below is reached only by a caller that skips settlement; it
+    // stays as a defence, and the tests of this function call it directly.
     if (status === "not_applicable") {
       if (rule.required) {
         problems.push(
@@ -454,9 +464,12 @@ export function missingConfirmation({
   index,
 }: CheckContext): CheckOutput {
   // An absence rule found compliant by citing no clause is the same claim as `missing`: that
-  // nothing in the documents addresses the topic.
+  // nothing in the documents addresses the topic. So is a `missing` that settlement turned into
+  // `not_applicable` (an optional rule): the model's claim that no clause exists is the thing to
+  // confirm, and the playbook's reading of it does not make the claim any less in need of it.
   const claimsAbsence =
     claim.status === "missing" ||
+    claim.modelStatus === "missing" ||
     (claim.status === "compliant" && rule.kind === "absence" && !set.cited.some(isRelied));
   if (!claimsAbsence) {
     return result(

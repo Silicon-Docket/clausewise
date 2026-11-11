@@ -5,10 +5,11 @@ import {
   type ExtractOutput,
   type IngestOutput,
   type LocatedPassage,
+  type RunManifest,
   type SourceSpan,
   type SpanId,
 } from "../contracts.js";
-import type { RunExtract } from "../module-contracts.js";
+import type { RegisteredPrompt, RunExtract } from "../module-contracts.js";
 import {
   describeClient,
   describeDocuments,
@@ -64,6 +65,38 @@ function emptyOutput(
 }
 
 /**
+ * The extract output of a model that finds nothing in any category (or, with `degraded`, of a call
+ * that failed). Retrieval then reads the whole document for every rule, which is the largest prompt
+ * a rule can get, and that is why the spend planner assumes it.
+ */
+export function emptyExtractOutput(
+  ingest: IngestOutput,
+  options: { degraded: boolean; notFoundReason: string | null },
+): ExtractOutput {
+  return emptyOutput(hintsByCategory(ingest), options);
+}
+
+/** What the one extract call sends. Pure; `runExtract` and the spend planner share it. */
+export interface ExtractRequest {
+  system: string;
+  prompt: string;
+}
+
+export function buildExtractRequest(args: {
+  ingest: IngestOutput;
+  manifest: RunManifest;
+  prompt: RegisteredPrompt;
+}): ExtractRequest {
+  const { ingest, manifest, prompt } = args;
+  const userPrompt = renderPrompt(prompt.definition, {
+    contractBlock: renderContractBlock(ingest.spans),
+    documents: describeDocuments(manifest),
+    client: describeClient(manifest),
+  });
+  return { system: prompt.definition.system, prompt: userPrompt };
+}
+
+/**
  * Locates the passages for each of the seven categories with one model call over every span of
  * every document, then checks the model's work in code.
  *
@@ -94,12 +127,7 @@ export const runExtract: RunExtract = async ({ generator, signal, ingest, manife
     };
   }
 
-  const contractBlock = renderContractBlock(spans);
-  const userPrompt = renderPrompt(prompt.definition, {
-    contractBlock,
-    documents: describeDocuments(manifest),
-    client: describeClient(manifest),
-  });
+  const request = buildExtractRequest({ ingest, manifest, prompt });
 
   const result = await callModel({
     generator,
@@ -108,8 +136,8 @@ export const runExtract: RunExtract = async ({ generator, signal, ingest, manife
     ruleKey: null,
     promptVersionId: prompt.definition.id,
     attempt: 1,
-    system: prompt.definition.system,
-    prompt: userPrompt,
+    system: request.system,
+    prompt: request.prompt,
     sharedPrefix: undefined,
     schema: LocateSchema,
     schemaName: prompt.definition.schemaName,

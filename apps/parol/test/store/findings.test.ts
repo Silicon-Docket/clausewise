@@ -158,7 +158,12 @@ describe("saveFindings", () => {
     const run = startRun(w, m);
     saveAll(w, m, run);
     const event = w.repo.listAuditEvents({ matterId: m.id, action: "finding.save" })[0];
-    expect(event?.detail).toEqual({ saved: 3, skipped: 0, ruleKeys: ["pty-1", "dur-1", "gov-1"] });
+    expect(event?.detail).toEqual({
+      saved: 3,
+      skipped: 0,
+      settled: 0,
+      ruleKeys: ["pty-1", "dur-1", "gov-1"],
+    });
   });
 
   it("is a no-op for a rule already saved with the same content, so a resumed run can save again", () => {

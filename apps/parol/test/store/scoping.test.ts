@@ -68,8 +68,8 @@ function entity(world: World): Ent {
         latencyMs: 5,
         inputTokens: 1,
         outputTokens: 1,
-        cacheReadTokens: null,
-        cacheWriteTokens: null,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
       },
     ]);
   });
@@ -551,6 +551,23 @@ const probes: Record<string, () => void> = {
   listModelCalls: () => {
     expect(w.repo.listModelCalls(a.id, b.runId)).toEqual([]);
     expect(w.repo.listModelCalls(b.id, b.runId)).toHaveLength(1);
+  },
+  recordReportedModels: () => {
+    behavesAsMissing(
+      (id) => w.repo.recordReportedModels(a.id, id, ["model-a"]),
+      b.runId,
+      missing.run,
+    );
+    expect(w.repo.getRun(b.id, b.runId)?.modelReported).toBeNull();
+  },
+  summarizeRunUsage: () => {
+    // A run of another matter adds up to nothing; the run's own matter sees its one call.
+    expect(w.repo.summarizeRunUsage(a.id, b.runId)).toMatchObject({ calls: 0, callsWithUsage: 0 });
+    expect(w.repo.summarizeRunUsage(b.id, b.runId)).toMatchObject({
+      calls: 1,
+      callsWithUsage: 1,
+      inputTokens: 1,
+    });
   },
   // --- findings and reviews ---
   getFinding: () => {

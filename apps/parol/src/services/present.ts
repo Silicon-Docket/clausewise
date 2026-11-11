@@ -4,6 +4,7 @@ import { roleAllows } from "../auth/actions.js";
 import type { DocLabel, MatterRole } from "../contracts.js";
 import { formatLocation } from "../location.js";
 import { loadPlaybook } from "../playbooks/load.js";
+import { settlementReason } from "../settlement.js";
 import {
   INPUT_CHANGE_REASONS,
   type FindingRecord,
@@ -14,6 +15,7 @@ import {
   type RunRow,
   type StoredIngestWarning,
 } from "../store/index.js";
+import { summarizeUsage } from "../usage/summary.js";
 import type { ServiceConfig } from "./deps.js";
 import {
   CANNOT_DECIDE,
@@ -233,6 +235,10 @@ export function createPresenter(
           }),
       progress,
       findingCount: repo.listFindings(run.matterId, run.id).length,
+      usage: summarizeUsage(repo.summarizeRunUsage(run.matterId, run.id), run.modelProvider, {
+        stoppedBySpend:
+          run.errorKind === "spend_review_limit" || run.errorKind === "spend_daily_limit",
+      }),
     };
   }
 
@@ -265,6 +271,11 @@ export function createPresenter(
       category: f.category,
       severity: f.severity,
       status: f.status,
+      // Set for every row, undefined when nothing was settled: the key is there for a page that
+      // reads it, and JSON leaves an undefined member out, so a row nothing settled keeps the
+      // members it had before settlement existed.
+      modelStatus: f.modelStatus ?? undefined,
+      settlementReason: f.modelStatus === null ? undefined : settlementReason(f.rule),
       validity: f.validity,
       verificationState: f.verificationState,
       escalations: f.escalations,

@@ -25,6 +25,7 @@ import type {
   WorkflowManifest,
 } from "./contracts.js";
 import type { Severity } from "@clausewise/playbook";
+import type { UsageSummary } from "./usage/summary.js";
 
 // ---------------------------------------------------------------------------------------------
 // Ingest (src/ingest)
@@ -183,7 +184,11 @@ export interface VerifyResult {
   finding: VerifiedFinding;
   calls: CallRecord[];
 }
-/** `verifyFinding` in src/stages/verify.ts. Never throws for bad model output. */
+/**
+ * `verifyFinding` in src/stages/verify.ts. Never throws for bad model output. It settles the
+ * draft's status against the rule's flags before any check (`settleStatus`), for every workflow
+ * version, and keeps the status the model stated in `VerifiedFinding.modelStatus`.
+ */
 export type VerifyFinding = (args: VerifyArgs) => Promise<VerifyResult>;
 
 /**
@@ -243,6 +248,11 @@ export interface MemoInput {
     modelReported: string | null;
     manifestSha256: string;
     startedAt: string;
+    /**
+     * What the run's model calls used. The memo prints counts with their denominators and never a
+     * cost (see `memoUsageText`). Absent, or for a stand-in reader, the memo has no usage line.
+     */
+    usage?: UsageSummary | null;
   };
   documents: {
     label: string;
@@ -278,6 +288,12 @@ export interface MemoInput {
    * under the name of its category.
    */
   ruleTitles?: Record<string, string>;
+  /**
+   * The flags of each rule that decide how a status is settled (`kind` and `required`), by rule
+   * key. Optional like `ruleTitles`: without them a settled finding is still marked as settled but
+   * the memo does not say why.
+   */
+  ruleFlags?: Record<string, { kind: "presence" | "absence"; required: boolean }>;
   exportedBy: string;
   /** ISO 8601. The memo says this date, so it is an input and not read from the clock. */
   exportedAt: string;

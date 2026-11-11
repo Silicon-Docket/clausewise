@@ -33,7 +33,12 @@ export {
   type ServiceConfig,
   type ServiceDeps,
 } from "./deps.js";
-export { ForbiddenError, RunNotReadyError } from "./errors.js";
-export { RUN_ERROR_KINDS, type RunErrorKind } from "./run-support.js";
+export { ForbiddenError, RunNotReadyError, SpendRefusedError } from "./errors.js";
+export {
+  RUN_ERROR_KINDS,
+  type RunErrorKind,
+  type SpendErrorKind,
+  type StoredRunErrorKind,
+} from "./run-support.js";
 export type { Services, MatterService, RunService, ReviewService } from "./types.js";
 export type * from "./views.js";

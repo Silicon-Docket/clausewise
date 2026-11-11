@@ -138,18 +138,29 @@ describe("the audit log", () => {
         latencyMs: 3,
         inputTokens: 1,
         outputTokens: 1,
-        cacheReadTokens: null,
-        cacheWriteTokens: null,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         prompt: MARK,
         response: MARK,
       } as never,
     ]);
+    // What a call cost goes to the ledger of the day as numbers, apart from the call's own row.
+    w.repo.addSpend({
+      responses: 1,
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      costUsd: 0.000012,
+      unpricedResponses: 0,
+    });
     w.repo.applyInputChange(matter.id, { reason: "document_changed", actorId: ACTORS.associate });
     w.repo.deleteMatter(matter.id, { actorId: ACTORS.associate });
 
     // The marker did get into the places that are meant to hold it, so a clean result below means something.
     expect(dumpTable("audit_events")).not.toContain(MARK);
     expect(dumpTable("model_calls")).not.toContain(MARK);
+    expect(dumpTable("spend_ledger")).not.toContain(MARK);
     expect(w.repo.listAuditEvents({ matterId: matter.id }).length).toBeGreaterThan(15);
     expect(w.repo.verifyAuditChain().ok).toBe(true);
   });
@@ -399,5 +410,31 @@ describe("error messages", () => {
       JSON.stringify(messages.map((x) => x.length)),
     ).toBe(true);
     for (const message of messages) expect(message).not.toContain(MARK);
+  });
+});
+
+describe("the spend ledger", () => {
+  it("holds numbers and a date and nothing else, and no matter, run or person", () => {
+    w.repo.addSpend({
+      responses: 3,
+      inputTokens: 1200,
+      outputTokens: 300,
+      cacheReadTokens: 10,
+      cacheWriteTokens: 5,
+      costUsd: 0.0123,
+      unpricedResponses: 1,
+    });
+    const rows = w.db.prepare("SELECT * FROM spend_ledger").all() as Record<string, unknown>[];
+    expect(rows).toHaveLength(1);
+    for (const [column, value] of Object.entries(rows[0]!)) {
+      if (column === "day") expect(value).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      else if (column === "updated_at") expect(value).toMatch(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/);
+      else expect(typeof value, column).toBe("number");
+    }
+    // No column can hold a name, an id or a sentence: every one is a count, a cost, a date or a time.
+    const columns = (
+      w.db.prepare("PRAGMA table_info(spend_ledger)").all() as { name: string }[]
+    ).map((c) => c.name);
+    expect(columns.some((c) => /matter|run|user|name|text|title|prompt/.test(c))).toBe(false);
   });
 });

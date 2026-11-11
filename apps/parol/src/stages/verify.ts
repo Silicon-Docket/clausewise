@@ -19,6 +19,7 @@ import type {
   VerifyFinding,
   VerifyResult,
 } from "../module-contracts.js";
+import { settleStatus, settlementReason } from "../settlement.js";
 import {
   MAX_EVIDENCE_ITEMS,
   MAX_QUOTE_CHARS,
@@ -53,6 +54,14 @@ import { asText, asTextOrNull, clipDetail } from "./checks/text.js";
  * run's own spans, every span, escalation id and status is validated against the run and the
  * rule, and a finding that fails a check is not repaired but escalated, with the check that
  * failed and where the reviewer should look.
+ *
+ * The first step is status settlement (`settleStatus`): the playbook's flags, not the model, say
+ * when a clause that is absent matters, so a `missing` on a rule that is not required becomes
+ * `not_applicable`, a `not_applicable` on a required rule becomes `missing`, and either on a rule
+ * that forbids something becomes `compliant`. It runs for every workflow version and is not behind
+ * a check set, because it defines the statuses and does not test a claim; every check below then
+ * judges the settled claim. The status the model stated is kept in `modelStatus`, in a
+ * `status_settled` row of the trail and in the content hash, so nothing is changed in silence.
  *
  * Two kinds of work happen here, and they differ in what `enabledChecks` does to them.
  *
@@ -91,6 +100,7 @@ const CHECK_ORDER = [
   "instruction_like_text",
   "support",
   "model_abstained",
+  "status_settled",
   "status_forced",
   "fallback_basis",
 ] as const;
@@ -107,6 +117,7 @@ function readClaim(draft: DraftFinding): Claim {
   return {
     status: valid ? (status as Status) : "undetermined",
     statusValid: valid,
+    modelStatus: null,
     discrepancy: asText(raw["discrepancy"]),
     explanation: asText(raw["explanation"]),
     fallbackLanguage: asTextOrNull(raw["fallbackLanguage"]),
@@ -289,7 +300,15 @@ export const verifyFinding: VerifyFinding = async (args): Promise<VerifyResult> 
   const enabled = new Set(args.enabledChecks);
   const index = buildRunIndex(ingest, manifest);
   const bundleIds = new Set(bundle.spans.map((s) => s.spanId));
-  const claim = readClaim(draft);
+  // Settlement comes first, so that every check judges the claim the playbook makes of the model's
+  // answer. A status the draft did not state validly, and `undetermined`, have nothing to settle.
+  let claim = readClaim(draft);
+  if (claim.statusValid && claim.status !== "undetermined") {
+    const settled = settleStatus(rule, claim.status);
+    if (settled !== claim.status) {
+      claim = { ...claim, status: settled, modelStatus: claim.status };
+    }
+  }
   const set = classifyEvidence(
     (draft as unknown as Record<string, unknown>)["evidence"],
     index,
@@ -328,6 +347,21 @@ export const verifyFinding: VerifyFinding = async (args): Promise<VerifyResult> 
     if (support.verdict !== null) {
       for (const item of items) if (isUsable(item)) item.supportCheck = support.verdict;
     }
+  }
+
+  // The settlement row. It is a record and not a test: it passes, raises no escalation, and exists
+  // only when settlement changed the status (as `status_forced` exists only when it forced one).
+  // Its detail names two statuses and a fixed reason, never document text.
+  if (claim.modelStatus !== null) {
+    outputs.set("status_settled", {
+      result: {
+        id: "status_settled",
+        kind: "deterministic",
+        outcome: "pass",
+        detail: `the workflow stated ${claim.modelStatus} and the playbook settles it to ${claim.status}: ${settlementReason(rule)}`,
+      },
+      escalations: [],
+    });
   }
 
   // Status. A forcing escalation turns any determined status into `undetermined`; the discrepancy
@@ -397,6 +431,7 @@ export const verifyFinding: VerifyFinding = async (args): Promise<VerifyResult> 
     conflict: claim.conflict,
     evidence,
     escalations,
+    modelStatus: claim.modelStatus,
   };
   const finding: VerifiedFinding = {
     ruleKey: rule.key,
@@ -416,6 +451,7 @@ export const verifyFinding: VerifyFinding = async (args): Promise<VerifyResult> 
       escalations.length === 0 && checks.every((c) => c.outcome !== "fail")
         ? "verified"
         : "escalated_by_system",
+    ...(claim.modelStatus === null ? {} : { modelStatus: claim.modelStatus }),
     contentSha256: findingContentSha256(content),
   };
   return { finding, calls };

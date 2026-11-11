@@ -9,6 +9,8 @@ import {
 import type { ComparisonSource } from "../evaluations/source.js";
 import type { BuildMemo, SupportChecker } from "../module-contracts.js";
 import type { FileStore, Repository } from "../store/index.js";
+import type { SpendGuard } from "../usage/guard.js";
+import type { CallPricer } from "../usage/prices.js";
 import { ForbiddenError } from "./errors.js";
 
 export interface ServiceConfig {
@@ -39,6 +41,20 @@ export interface ServiceDeps {
   buildMemo?: BuildMemo;
   /** Where the published evaluation comparisons are read from. Default: a source with none. */
   evaluations?: ComparisonSource;
+  /**
+   * Gives each model call its estimated cost when the engine records it, from the price table the
+   * operator named. Default: none, so tokens are recorded and no cost is (the page says "not
+   * priced"). Stand-in readers report no tokens, so they have no cost either way.
+   */
+  pricing?: CallPricer;
+  /**
+   * The spend guard of a server that calls a model it does not control: it plans a bound before a
+   * review starts or resumes, holds it while the review runs, stops a review that reaches a limit,
+   * and prices the calls. Absent means no guard, which is what a stand-in reader needs and what the
+   * tests build; `main.ts` is the only production site that builds a live generator and it always
+   * passes a guard. When it is set it also prices the calls, so `pricing` is not needed with it.
+   */
+  spend?: SpendGuard;
 }
 
 export const DEFAULT_MAX_CONCURRENT_RUNS = 2;

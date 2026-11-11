@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { findingContentSha256 } from "../../src/canonical.js";
 import { ESCALATION_CODES, FORCES_UNDETERMINED } from "../../src/contracts.js";
+import { citationShape, type CheckContext } from "../../src/stages/checks/suite.js";
 import {
   ADAPTED_THRESHOLD,
   MAX_EVIDENCE_ITEMS,
@@ -485,22 +486,67 @@ describe("citation_shape", () => {
       expect(finding.verificationState).toBe("escalated_by_system");
     });
 
-    it("fails not_applicable on a rule the playbook requires, even over the whole document", async () => {
-      const { finding } = await run(draft({ status: "not_applicable" }), true, rule());
-      expect(check(finding, "citation_shape").outcome).toBe("fail");
-      expect(finding.escalations).toEqual([
+    // The playbook settles a required rule answered not_applicable to missing before any check
+    // (see test/stages/verify-settle.test.ts), so verifyFinding no longer reaches the branch of
+    // citationShape that refuses it. The branch stays as a defence for a caller that skips
+    // settlement, and these two tests call it directly with the draft's status as the claim.
+    const claimOf = (status: "not_applicable") => ({
+      status,
+      statusValid: true,
+      modelStatus: null,
+      discrepancy: "",
+      explanation: "",
+      fallbackLanguage: null,
+      matched: [],
+      conflict: null,
+      abstainReason: null,
+    });
+    const shapeOf = (fullDocument: boolean) => {
+      const required = rule();
+      return citationShape({
+        claim: claimOf("not_applicable"),
+        set: { cited: [], dropped: [], received: 0 },
+        rule: required,
+        bundle: bundle(plain, ["D1-p1", "D1-p2"], { rule: required, fullDocument }),
+      } as unknown as CheckContext);
+    };
+
+    it("citationShape itself fails not_applicable on a rule the playbook requires, even over the whole document", () => {
+      const output = shapeOf(true);
+      expect(output.result.outcome).toBe("fail");
+      expect(output.escalations).toEqual([
         {
           code: "support_not_confirmed",
           detail:
             "status not_applicable is for a rule the playbook does not require, and this rule is required: a required rule that no clause covers is missing",
         },
       ]);
-      expect(finding.verificationState).toBe("escalated_by_system");
     });
 
-    it("names both problems when a required rule is answered not_applicable from a selection", async () => {
+    it("citationShape itself names both problems for a required rule answered not_applicable from a selection", () => {
+      expect(shapeOf(false).escalations).toHaveLength(2);
+    });
+
+    it("settles not_applicable on a required rule to missing, which is then checked as an absence claim over the whole document", async () => {
+      const { finding } = await run(draft({ status: "not_applicable" }), true, rule());
+      expect(finding.status).toBe("missing");
+      expect(finding.modelStatus).toBe("not_applicable");
+      expect(check(finding, "citation_shape").outcome).toBe("pass");
+      expect(finding.escalations).toEqual([]);
+      expect(finding.verificationState).toBe("verified");
+    });
+
+    it("settles it before the shape is judged, so a selection gets the one complaint a missing answer gets", async () => {
       const { finding } = await run(draft({ status: "not_applicable" }), false, rule());
-      expect(finding.escalations).toHaveLength(2);
+      expect(finding.status).toBe("missing");
+      expect(finding.modelStatus).toBe("not_applicable");
+      expect(finding.escalations).toEqual([
+        {
+          code: "support_not_confirmed",
+          detail: "status missing needs the whole document in the bundle, and it was not",
+        },
+      ]);
+      expect(finding.verificationState).toBe("escalated_by_system");
     });
 
     it("still passes missing for a required rule over the whole document", async () => {
@@ -1225,7 +1271,12 @@ describe("fallback basis", () => {
 
   it("drops fallback language on a compliant or not_applicable finding", async () => {
     for (const status of ["compliant", "not_applicable"] as const) {
-      const finding = await basisOf(approved, status);
+      // A not_applicable answer is left alone only on a rule the playbook does not require.
+      const finding = await basisOf(
+        approved,
+        status,
+        rule({ required: status !== "not_applicable" }),
+      );
       expect(finding.fallbackLanguage, status).toBeNull();
       expect(finding.fallbackBasis, status).toBe("none");
       expect(check(finding, "fallback_basis").detail, status).toContain("dropped");
