@@ -44,10 +44,12 @@ Read these four before anything else.
 - **No score has been measured.** This repository holds no accuracy, recall, latency or cost figure
   for any workflow or any model, and the answers of the simulated reader are not one. The dataset
   and the scoring code exist; see the table at the end. Any score, rate, latency or cost
-  you meet in [docs/parol](../../docs/parol/README.md) is a proposed gate, an estimate or an empty
-  cell, not a result. The evaluation comparison page and the pilot measures page are built, and
-  today they can show only what a scripted run or a demonstration identity produced: no live model
-  has ever been called, no pilot has run, and each page says so in its own words.
+  you meet in [docs/parol](../../docs/parol/README.md) for a model is a proposed gate, an estimate or
+  an empty cell, not a result. The only results there are those of the selftest oracle, the
+  scripted simulated reader and the exposure suite, and they say nothing about any model. The
+  evaluation comparison page and the pilot measures page are built, and today they can show only
+  what a scripted run or a demonstration identity produced: no live model has ever been called, no
+  pilot has run, and each page says so in its own words.
 
 ## Run it
 
@@ -234,7 +236,9 @@ them.
   for my next NDA", with an optional comment; one rating per person per matter, and it cannot be
   changed). Notes, reports and rating comments are free text that is not checked against the
   documents and can hold pasted document text; they are stored with the matter, never put in the
-  audit log, deleted with the matter, and part of neither a finding nor the memo.
+  audit log, deleted with the matter, and part of neither a finding nor the memo. A note stays with
+  the finding it was written on, and a missed-issue report with its review: after a re-run neither
+  is carried to the new review.
 - An associate or a reviewing attorney can time the work on a matter (**Start timer**, **Stop
   timer**; one running timer per person), and a reviewing attorney can record the issues they found
   themselves, before any review has run, as the **Reference list for shadow mode**; the first
@@ -290,7 +294,8 @@ on a page. None of this runs a browser, applies the stylesheet or measures a col
 `apps/parol/test/a11y/browser`, with Playwright driving a headless Chromium against the real server
 (the demo identity, the simulated reader, a temporary data folder, the seed with all its options).
 They are opt in, because the audit takes several minutes: a plain `pnpm test` skips the two files
-that start a browser (`audit.test.ts` and `flows.test.ts`) and prints one line that says how to ask;
+that start a browser (`audit.test.ts` and `flows.test.ts`) and prints a line for each of them that
+says how to ask;
 `pnpm test:browser` sets `PAROL_BROWSER_TESTS=1` for them, and the server does not read that
 setting. Playwright is not a dependency of this repository. The tests look for the package in this
 order: the folder named by `PLAYWRIGHT_MODULES_DIR` (a folder that holds a `playwright` folder, for
@@ -312,7 +317,7 @@ in, making a matter and adding its documents, timing the work and recording the 
 starting a review, the issue table, a refused decision and the way to its reason, a note and a
 missed-issue report, deciding and exporting the memo, the rating, deleting a matter, the pilot,
 evaluation and audit pages, and starting the training matter. `judge.test.ts` checks the judging
-with readings made by hand and needs no browser, so it always runs. They were run once, on 11
+with readings made by hand and needs no browser, so it always runs. They were last run on 11
 November 2026 on one machine, with Playwright 1.63.0 and Chromium 153.0.8010.12 (headless) on Node
 22.23.4: the three files, 70 tests, passed in about 7 minutes. The repository's continuous
 integration runs `pnpm test` and not these, so a change that breaks them is not found by it (gap 33
@@ -431,7 +436,7 @@ cannot be used, a damaged database, a database and migrations that disagree (a d
 another version of Parol, see gap 34 of document 7) and a second server on the same data folder.
 Before anything is opened, a missing key, a missing limit or an unusable price file stops it. The
 terminal commands `pnpm parol:seed`, `pnpm parol:retain` and `pnpm parol:audit-verify` do the same
-with `Parol <command> cannot run:`.
+with `Parol seed cannot run:`, `Parol retention cannot run:` and `Parol audit check cannot run:`.
 
 ## Retention and the audit log
 
@@ -569,7 +574,7 @@ of them. What overturning each would cost is in
 | Training matter T01, quickstart page, in-app help                                                                                         | Built. Exercised with the simulated reader only; its planted finding is the reader's script, and no person has done or timed the exercise (gap 35).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | Deletion of expired matters (`pnpm parol:retain`), audit verification (`pnpm parol:audit-verify`, the audit page)                         | Built. No scheduler ships, there is no legal hold, a matter past its date stays usable until an operator runs the command, `--apply` needs the server stopped, and the audit hash is not keyed (gap 17).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | Usage and the reported model recorded by the application, a spend guard for its model calls                                               | Built for the `anthropic` provider and tested against scripted wires only. It has never met a live provider, and it is weaker than the evaluation's guard (gaps 5 and 11).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| Keyboard, contrast and error wording checks                                                                                               | Built. The rules run on every `pnpm test`; the real-browser tests are opt in (`pnpm test:browser`), have run once on one machine in Chromium, and are not run by CI. No screen reader, no other browser, no conformance claim (gaps 21 and 33).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Keyboard, contrast and error wording checks                                                                                               | Built. The rules run on every `pnpm test`; the real-browser tests are opt in (`pnpm test:browser`), have been run on one machine, in Chromium only, and are not run by CI. No screen reader, no other browser, no conformance claim (gaps 21 and 33).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | A live run, a measured baseline, the improvement cycle, freezing EXP-001, qualified review of the dataset, measured numbers for the pilot | Not done. Each needs a provider key and the project owner's decision to spend (gaps 1 and 2). No document here states a result of any of them.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | PDF documents                                                                                                                             | Not built. Word and plain text only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Word add-in                                                                                                                               | Not built.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -579,9 +584,13 @@ of them. What overturning each would cost is in
 
 | Folder                                                      | What it holds                                                                               |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `migrations`                                                | The database schema, one file per version.                                                  |
+| `public`                                                    | The stylesheet and the page script.                                                         |
+| `src/main.ts`, `src/boot`                                   | The server entry behind `pnpm parol`, the data folder lock and the start-up registration.   |
 | `src/ingest`                                                | Parsing, clause spans, annotations, warnings.                                               |
 | `src/stages`                                                | Extract, retrieve, analyze, verify.                                                         |
 | `src/prompts`                                               | The prompts and the workflow versions.                                                      |
+| `src/playbooks`                                             | The playbook loader.                                                                        |
 | `src/services`                                              | Matters, runs, reviews: what the routes call.                                               |
 | `src/auth`                                                  | Matter authorization and the demo identity.                                                 |
 | `src/server`                                                | The shell, the routes and the pages.                                                        |

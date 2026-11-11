@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEMO_PLAYBOOK_SLUG } from "../../src/boot/index.js";
@@ -7,10 +8,10 @@ import { WORKFLOW_LABELS } from "../../src/boot/register.js";
 import { GLOBAL_ACTIONS } from "../../src/auth/actions.js";
 import { PLANTED_RULE_KEY, TRAINING_TITLE_MARKER } from "../../src/demo/training-example.js";
 import { WORKFLOWS } from "../../src/prompts/workflows.js";
-import { parseAuditVerifyArgs } from "../../src/audit-verify.js";
-import { parseRetainArgs } from "../../src/retain.js";
+import { parseAuditVerifyArgs, runAuditVerify } from "../../src/audit-verify.js";
+import { parseRetainArgs, runRetain } from "../../src/retain.js";
 import { DEFAULT_MAX_MATTERS_PER_RUN, MAX_MATTERS_CEILING } from "../../src/retention/job.js";
-import { parseSeedArgs } from "../../src/seed.js";
+import { describeSeedFailure, parseSeedArgs } from "../../src/seed.js";
 import { NAV_ITEMS } from "../../src/server/pages/layout.js";
 import { urls } from "../../src/server/urls.js";
 import { DEFAULT_RETAIN_DAYS, MAX_RETAIN_DAYS } from "../../src/store/repo-matters.js";
@@ -370,6 +371,31 @@ describe("the options, addresses and numbers in the README", () => {
     expect(parseAuditVerifyArgs(["--expect-head", `7:${"a".repeat(64)}`]).anchor?.seq).toBe(7);
   });
 
+  it("names the start of the line each terminal command prints when it cannot run, as the command prints it", async () => {
+    const empty = mkdtempSync(join(tmpdir(), "parol-readme-"));
+    try {
+      const env = { PAROL_DATA_DIR: empty };
+      const lines: string[] = [];
+      const err = (line: string): void => void lines.push(line);
+      expect(await runRetain(env, [], () => undefined, err)).toBe(2);
+      expect(await runAuditVerify(env, [], () => undefined, err)).toBe(2);
+      lines.push(describeSeedFailure(new Error("no matter which")));
+      expect(lines).toHaveLength(3);
+      const named = [
+        "Parol retention cannot run:",
+        "Parol audit check cannot run:",
+        "Parol seed cannot run:",
+      ];
+      named.forEach((prefix, index) => {
+        expect(lines[index], prefix).toMatch(new RegExp(`^${prefix}`));
+        expect(FOLDED, prefix).toContain(`\`${prefix}\``);
+      });
+      expect(FOLDED).not.toContain("Parol <command> cannot run:");
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
   it("names the options of the evaluation command that publish a comparison, and the command has each", () => {
     const cli = readFileSync(join(ROOT, "evals", "src", "parol", "cli.ts"), "utf8");
     for (const option of [
@@ -442,6 +468,14 @@ describe("the options, addresses and numbers in the README", () => {
     expect(ci).toContain("pnpm test");
     expect(ci).not.toContain("test:browser");
     expect(FOLDED).toMatch(/continuous integration runs `pnpm test` and not these/);
+    // A skipped file prints its own line, so the README says a line for each, and not one line.
+    const notice = readFileSync(join(folder, "playwright.ts"), "utf8");
+    expect(notice).toContain("[browser tests] ${file}: SKIPPED");
+    expect(FOLDED).toContain("prints a line for each of them that says how to ask");
+    // The tests were run more than once (an earlier run found defects), so none of the README says
+    // that they were run once.
+    expect(FOLDED).not.toMatch(/\b(?:run|been run) once\b/);
+    expect(FOLDED).toContain("They were last run on 11 November 2026");
   });
 });
 
@@ -587,6 +621,38 @@ describe("the links and paths in the README", () => {
       (token) => !existsSync(join(PAROL, token)) && !existsSync(join(ROOT, token)),
     );
     expect(missing).toEqual([]);
+  });
+});
+
+describe("the table of where things are in the README", () => {
+  const section = README.slice(README.indexOf("## Where things are"));
+  const table = section.slice(
+    section.indexOf("| Folder"),
+    section.indexOf("\n\n", section.indexOf("| Folder")),
+  );
+  // The paths of the table; an option such as `--pilot-demo` in a description is not one.
+  const named = [...table.matchAll(/`([^`\s]+)`/g)]
+    .map((m) => m[1]!)
+    .filter((t) => !t.startsWith("-"));
+
+  it("names only folders and files that exist", () => {
+    expect(named.length).toBeGreaterThanOrEqual(20);
+    for (const token of named)
+      expect(existsSync(join(PAROL, token)) || existsSync(join(ROOT, token)), token).toBe(true);
+  });
+
+  it("has a row for every folder of the source, the migrations and the files the pages are served from", () => {
+    const folders = readdirSync(join(PAROL, "src"), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => `src/${entry.name}`);
+    for (const folder of [...folders, "migrations", "public", "src/main.ts"])
+      expect(named, folder).toContain(folder);
+  });
+});
+
+describe("what a re-run does to what a person wrote, in the README", () => {
+  it("says that a note and a missed-issue report are not carried to the new review", () => {
+    expect(FOLDED).toContain("after a re-run neither is carried to the new review");
   });
 });
 

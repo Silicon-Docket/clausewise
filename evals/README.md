@@ -279,7 +279,8 @@ two options go together and cannot be combined with an option that runs somethin
 `<data folder>/evaluations`, where the data folder is the one `PAROL_DATA_DIR` names (`./data/parol`
 by default), and prints the address of the page. The application's `/evaluations` page (for a legal
 engineer or an administrator) reads only the files in that folder. The document is one JSON file named `cmp_` and 16 hexadecimal digits, at most 4 MiB, whose
-fingerprint the application checks each time it reads it. A comparison that was refused, or whose
+fingerprint the application checks whenever it parses the file (a file whose size and time have not
+changed is not parsed again). A comparison that was refused, or whose
 candidate is not finished and on disk whole, is not published, and publishing the same two files
 again leaves the file as it is. To have one to look at:
 
