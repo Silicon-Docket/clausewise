@@ -32,11 +32,11 @@ held-out plan is 12 cases and 2 twins, 112 rule slots (14 runs, 96 scored) and 1
 has 26 cases (14 development with 112 rule slots, 12 held-out with 96) and a calibration set of 40
 pairs, the demonstration playbook has 8 rules, and the gates are 14. `pnpm typecheck` exited 0 (run
 for this update, at the same commit). `pnpm test`, the default run, reported 461 test files and
-13,360 tests, of which 37 were skipped: 36 are the real-browser tests, which are opt in (below), and 1
-was already skipped before part 3. The run that printed these figures had 2 failures, both stale
-expectations in one test file (`apps/parol/test/routes/pilot-panels.test.ts`) that commit `8995e0d`
-fixed; that folder (39 files, 1,692 tests) passes after the fix. So 13,323 tests pass, 37 are
-skipped and none fail, and the run took 353 seconds. `pnpm test:browser` (which sets
+13,377 tests: 13,340 passed, 37 were skipped and none failed, and the run took 362 seconds. Of the
+skipped tests 36 are the real-browser tests, which are opt in (below), and 1 was already skipped
+before part 3. An earlier run at commit `8995e0d` had 2 failures, both stale expectations in one
+test file (`apps/parol/test/routes/pilot-panels.test.ts`) that the last commit of the code fixed; the
+figures above are those of the run on the merged documents, after that fix. `pnpm test:browser` (which sets
 `PAROL_BROWSER_TESTS=1`) ran 3 files and 70 tests, all passing, in 433 seconds, with Playwright
 1.63.0 and Chromium 153.0.8010.12 (headless) on Node 22.23.4, on one machine. It is opt in: a default
 `pnpm test` skips the two files that start a browser (`audit.test.ts` and `flows.test.ts`) and prints
