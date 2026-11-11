@@ -9,6 +9,7 @@ export {
   inTransaction,
   loadMigrationFiles,
   openDatabase,
+  openDatabaseReadOnly,
   runMigrations,
   transaction,
   type Database,
@@ -19,25 +20,38 @@ export {
 
 export {
   AUDIT_ACTIONS,
+  AUDIT_BREAK_TEXT,
   GENESIS_HASH,
   MAX_DETAIL_DEPTH,
   MAX_DETAIL_ENTRIES,
   MAX_DETAIL_STRING_LENGTH,
+  MAX_RECONCILIATION_IDS,
   appendAudit,
+  auditHead,
+  checkAudit,
+  checkAuditAnchor,
+  latestAuditEvent,
   listAuditEvents,
   listMatterAuditEvents,
+  reconcileMatterEvents,
   validateAuditDetail,
   verifyAuditChain,
+  type AnchorBreak,
+  type AnchorResult,
   type AuditBreak,
   type AuditChainResult,
+  type AuditCheck,
   type AuditDetail,
   type AuditDetailValue,
   type AuditEvent,
   type AuditFilter,
+  type AuditHead,
   type AuditInput,
   type AuditPage,
   type MatterAuditFilter,
+  type MatterReconciliation,
 } from "./audit.js";
+export { tablesHoldingMatter } from "./residue.js";
 
 export { FileStore, MATTER_ID_PATTERN } from "./files.js";
 export { toSourceSpans } from "./model-labels.js";
@@ -48,6 +62,7 @@ export {
   DEFAULT_RETAIN_DAYS,
   DEMO_USER_IDS,
   INPUT_CHANGE_REASONS,
+  MAX_RETAIN_DAYS,
   inputsDigestOf,
   type InputsParts,
 } from "./repo-matters.js";

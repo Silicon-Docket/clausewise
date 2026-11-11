@@ -51,6 +51,8 @@ export const AUDIT_ACTIONS = [
   "workflow.promote",
   "feedback.add",
   "eval.record",
+  "matter.retention",
+  "retention.run",
 ] as const;
 
 export interface AuditInput {
@@ -297,6 +299,145 @@ export function verifyAuditChain(db: Database): AuditChainResult {
     return { ok: false, firstBrokenSeq: expectedSeq, reason: "truncated", events };
   return { ok: true, events };
 }
+
+// ---------------------------------------------------------------------------------------------
+// The head, an anchor kept elsewhere, and the matters the events account for
+// ---------------------------------------------------------------------------------------------
+
+/** The newest event's number and hash: all that has to be kept elsewhere to anchor the whole chain. */
+export interface AuditHead {
+  seq: number;
+  hash: string;
+}
+
+/** The last event of the log, or null when the log is empty. */
+export function auditHead(db: Database): AuditHead | null {
+  const row = db
+    .prepare("SELECT seq, hash FROM audit_events ORDER BY seq DESC LIMIT 1")
+    .get() as unknown as AuditHead | undefined;
+  return row === undefined ? null : { seq: row.seq, hash: row.hash };
+}
+
+/** The newest event with this action, or null. */
+export function latestAuditEvent(db: Database, action: string): AuditEvent | null {
+  const row = db
+    .prepare(
+      `SELECT seq, at, actor_id, matter_id, action, target_type, target_id, detail_json, prev_hash, hash
+       FROM audit_events WHERE action = ? ORDER BY seq DESC LIMIT 1`,
+    )
+    .get(action) as unknown as RawAuditRow | undefined;
+  return row === undefined ? null : toEvent(row);
+}
+
+export type AnchorBreak = "anchor_missing" | "anchor_mismatch";
+export type AnchorResult = { ok: true } | { ok: false; reason: AnchorBreak };
+
+/**
+ * The event numbered `anchor.seq` exists and has exactly this hash. The chain alone cannot tell a
+ * log that was rewritten with every later hash recomputed from the original (the hash is not
+ * keyed), nor one cut back with `sqlite_sequence` edited to match. A head recorded somewhere the
+ * database's writer cannot edit can: a rewrite changes the hash of the event it names, a cut-back
+ * removes it. It protects the history up to the anchored event and nothing after it.
+ */
+export function checkAuditAnchor(db: Database, anchor: AuditHead): AnchorResult {
+  const row = db
+    .prepare("SELECT hash FROM audit_events WHERE seq = ?")
+    .get(anchor.seq) as unknown as { hash: string } | undefined;
+  if (row === undefined) return { ok: false, reason: "anchor_missing" };
+  return row.hash === anchor.hash ? { ok: true } : { ok: false, reason: "anchor_mismatch" };
+}
+
+/** At most this many ids of an anomaly are listed; the count is always exact. */
+export const MAX_RECONCILIATION_IDS = 20;
+
+/**
+ * What the events say about which matters existed, against the matters table. A matter that
+ * vanished without a deletion event, or that exists without a creation event, was changed by
+ * something other than the application. Ids and counts only.
+ */
+export interface MatterReconciliation {
+  /** Distinct matter ids with a `matter.create` event. */
+  created: number;
+  /** Rows in `matters`. */
+  present: number;
+  /** Created, no longer present, with a `matter.delete` event. */
+  deleted: number;
+  goneWithoutDeleteEvent: { count: number; ids: string[] };
+  presentWithoutCreateEvent: { count: number; ids: string[] };
+  /** Has a deletion event and a row. */
+  deletedButPresent: { count: number; ids: string[] };
+}
+
+export function reconcileMatterEvents(db: Database): MatterReconciliation {
+  const ids = (sql: string): { count: number; ids: string[] } => {
+    const rows = db.prepare(sql).all() as unknown as { id: string }[];
+    return { count: rows.length, ids: rows.slice(0, MAX_RECONCILIATION_IDS).map((r) => r.id) };
+  };
+  const count = (sql: string): number => (db.prepare(sql).get() as unknown as { n: number }).n;
+
+  const created = `SELECT DISTINCT matter_id AS id FROM audit_events
+                   WHERE action = 'matter.create' AND matter_id IS NOT NULL`;
+  const deletedEvent = `SELECT DISTINCT matter_id AS id FROM audit_events
+                        WHERE action = 'matter.delete' AND matter_id IS NOT NULL`;
+  return {
+    created: count(`SELECT count(*) AS n FROM (${created})`),
+    present: count("SELECT count(*) AS n FROM matters"),
+    deleted: count(
+      `SELECT count(*) AS n FROM (${created})
+       WHERE id NOT IN (SELECT id FROM matters) AND id IN (${deletedEvent})`,
+    ),
+    goneWithoutDeleteEvent: ids(
+      `SELECT id FROM (${created})
+       WHERE id NOT IN (SELECT id FROM matters) AND id NOT IN (${deletedEvent}) ORDER BY id`,
+    ),
+    presentWithoutCreateEvent: ids(
+      `SELECT id FROM matters WHERE id NOT IN (${created}) ORDER BY id`,
+    ),
+    deletedButPresent: ids(`SELECT id FROM matters WHERE id IN (${deletedEvent}) ORDER BY id`),
+  };
+}
+
+export interface AuditCheck {
+  /** The chain holds, the anchor (if one was given) holds, and no matter is unaccounted for. */
+  ok: boolean;
+  chain: AuditChainResult;
+  head: AuditHead | null;
+  /** Null when no anchor was given. */
+  anchor: AnchorResult | null;
+  matters: MatterReconciliation;
+}
+
+/** The chain, the head, the anchor and the matter reconciliation, in one read. */
+export function checkAudit(db: Database, options: { anchor?: AuditHead } = {}): AuditCheck {
+  const chain = verifyAuditChain(db);
+  const anchor = options.anchor === undefined ? null : checkAuditAnchor(db, options.anchor);
+  const matters = reconcileMatterEvents(db);
+  const anomalies =
+    matters.goneWithoutDeleteEvent.count +
+    matters.presentWithoutCreateEvent.count +
+    matters.deletedButPresent.count;
+  return {
+    ok: chain.ok && (anchor === null || anchor.ok) && anomalies === 0,
+    chain,
+    head: auditHead(db),
+    anchor,
+    matters,
+  };
+}
+
+/**
+ * Fixed words for each way a check can break, for the command and the page. They name no row
+ * content: what a person learns is which kind of break it is and where.
+ */
+export const AUDIT_BREAK_TEXT: Record<AuditBreak | AnchorBreak, string> = {
+  sequence_gap: "an event is missing here",
+  prev_hash_mismatch: "this event does not follow the one before it",
+  hash_mismatch: "this event's content does not match its hash",
+  bad_detail: "this event's detail breaks the limits on what an event may hold",
+  truncated: "the newest events are missing",
+  anchor_missing: "the event the anchor names is not in the log",
+  anchor_mismatch: "the event the anchor names has a different hash",
+};
 
 export interface AuditFilter {
   matterId?: string;

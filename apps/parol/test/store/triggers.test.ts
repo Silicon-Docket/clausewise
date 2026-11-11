@@ -187,6 +187,85 @@ describe("matters", () => {
   });
 });
 
+describe("a matter's retention date", () => {
+  const MESSAGE = /a retention date is an ISO time after the matter was created/;
+  const newMatter = (over: Record<string, SQLInputValue>) =>
+    clone("matters", "id", ids.a.m.id, { id: "mat_bbbbbbbbbbbbbbbb", ...over });
+  const createdAt = (): string =>
+    q<{ created_at: string }>("SELECT created_at FROM matters WHERE id = ?", ids.a.m.id).created_at;
+  const update = (value: SQLInputValue) =>
+    run("UPDATE matters SET retain_until = ? WHERE id = ?", value, ids.a.m.id);
+
+  it("is an ISO time in the one shape that sorts like time, after the matter was made, when the row is inserted", () => {
+    expect(newMatter({ retain_until: "2027-01-01T00:00:00.000Z" })).not.toThrow();
+    expect(count("matters", "id = 'mat_bbbbbbbbbbbbbbbb'")).toBe(1);
+  });
+
+  it("is refused on insert as a date alone, without milliseconds, with an offset, or as a month that does not exist", () => {
+    for (const [name, value] of [
+      ["a date alone", "2027-01-01"],
+      ["no milliseconds", "2027-01-01T00:00:00Z"],
+      ["an offset", "2027-01-01T00:00:00.000+00:00"],
+      ["lower case", "2027-01-01t00:00:00.000z"],
+      ["a month 13", "2027-13-01T00:00:00.000Z"],
+      ["a day 32", "2027-01-32T00:00:00.000Z"],
+      ["text", "never"],
+      ["empty", ""],
+    ] as const)
+      expect(newMatter({ retain_until: value }), name).toThrow(MESSAGE);
+    expect(count("matters", "id = 'mat_bbbbbbbbbbbbbbbb'")).toBe(0);
+  });
+
+  it("is refused on insert when it is before the matter's creation, or the same instant", () => {
+    expect(newMatter({ retain_until: "2000-01-01T00:00:00.000Z" })).toThrow(MESSAGE);
+    expect(newMatter({ retain_until: createdAt() })).toThrow(MESSAGE);
+    // A millisecond after is enough.
+    const after = new Date(Date.parse(createdAt()) + 1).toISOString();
+    expect(newMatter({ retain_until: after })).not.toThrow();
+  });
+
+  it("is refused on update when it takes another shape or falls before the matter's creation, and a later date goes through", () => {
+    expect(update("2027-06-01")).toThrow(MESSAGE);
+    expect(update("2027-06-01T00:00:00Z")).toThrow(MESSAGE);
+    expect(update("2027-06-01T00:00:00.000+02:00")).toThrow(MESSAGE);
+    expect(update("2027-13-01T00:00:00.000Z")).toThrow(MESSAGE);
+    expect(update("2000-01-01T00:00:00.000Z")).toThrow(MESSAGE);
+    expect(update(createdAt())).toThrow(MESSAGE);
+    expect(update(null)).toThrow();
+    expect(update("2027-06-01T00:00:00.000Z")).not.toThrow();
+    expect(
+      q<{ retain_until: string }>("SELECT retain_until FROM matters WHERE id = ?", ids.a.m.id)
+        .retain_until,
+    ).toBe("2027-06-01T00:00:00.000Z");
+    // Other columns are not held to it.
+    expect(run("UPDATE matters SET name = 'renamed' WHERE id = ?", ids.a.m.id)).not.toThrow();
+  });
+
+  it("has its triggers and the index the retention command reads by, under names that are pinned", () => {
+    const names = (type: string): string[] =>
+      (
+        w.db
+          .prepare("SELECT name FROM sqlite_master WHERE type = ? AND tbl_name = 'matters'")
+          .all(type) as { name: string }[]
+      ).map((row) => row.name);
+    expect(names("trigger")).toEqual(
+      expect.arrayContaining(["matters_retention_date_insert", "matters_retention_date_update"]),
+    );
+    expect(names("index")).toContain("matters_by_retain_until");
+    // The query of listExpiredMatters is answered from the index.
+    const plan = (
+      w.db
+        .prepare(
+          "EXPLAIN QUERY PLAN SELECT * FROM matters WHERE retain_until <= ? ORDER BY retain_until, id",
+        )
+        .all("2027-01-01T00:00:00.000Z") as { detail: string }[]
+    )
+      .map((row) => row.detail)
+      .join(" ");
+    expect(plan).toContain("matters_by_retain_until");
+  });
+});
+
 describe("documents", () => {
   it("are never replaced, by id, by label, or by a second NDA", () => {
     const row = (over: Record<string, SQLInputValue>) =>

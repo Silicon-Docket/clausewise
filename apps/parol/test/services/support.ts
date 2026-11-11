@@ -171,14 +171,24 @@ export function makeWorld(
     now?: () => Date;
     supportChecker?: ServiceDeps["supportChecker"];
     buildMemo?: ServiceDeps["buildMemo"];
+    /**
+     * Lay the world out as a data folder: the database is `<root>/parol.sqlite` and the file store
+     * is `<root>/matters`, as the server and the commands have them, so that one folder can be
+     * walked for what a deletion left behind. Without it the database is in memory and the file
+     * store is `<root>/files`.
+     */
+    onDisk?: boolean;
   } = {},
 ): World {
   let tick = Date.parse("2026-11-03T09:00:00.000Z");
-  const repo = createRepository(openDatabase(":memory:"), { now: () => new Date((tick += 1000)) });
-  const registered = registerAll(repo, { seedDemoUsers: true });
   const root = mkdtempSync(join(tmpdir(), "parol-services-"));
   roots.push(root);
-  const files = new FileStore(join(root, "files"));
+  const repo = createRepository(
+    openDatabase(options.onDisk === true ? join(root, "parol.sqlite") : ":memory:"),
+    { now: () => new Date((tick += 1000)) },
+  );
+  const registered = registerAll(repo, { seedDemoUsers: true });
+  const files = new FileStore(join(root, options.onDisk === true ? "matters" : "files"));
   const model = options.model2 ?? controlledModel(options.model);
   const logs: string[] = [];
   const config: ServiceConfig = {
@@ -222,6 +232,13 @@ export function makeWorld(
       return brand<AuthorizedMatter>({ matterId, principal: p, role: member.role });
     },
     close() {
+      if (options.onDisk === true) {
+        try {
+          repo.db.close();
+        } catch {
+          // Already closed by the test, which does so when it opens the file itself.
+        }
+      }
       rmSync(root, { recursive: true, force: true });
     },
   };

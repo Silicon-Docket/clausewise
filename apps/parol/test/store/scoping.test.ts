@@ -237,6 +237,12 @@ const NOT_MATTER_DATA = [
   "appendAudit",
   "listAuditEvents",
   "verifyAuditChain",
+  // The head, the anchor check and the matter reconciliation read the whole log: global by nature.
+  "auditHead",
+  "latestAuditEvent",
+  "checkAuditAnchor",
+  "reconcileMatterEvents",
+  "checkAudit",
   // The spend ledger holds a day, counts and a cost: no matter, run, user or text.
   "addSpend",
   "spendToday",
@@ -452,6 +458,15 @@ const probes: Record<string, () => void> = {
     w.repo.applyInputChange(a.id, { reason: "document_changed", actorId: ACTORS.associate });
     expect(snapshot(b.id)).toBe(before);
     expect(w.repo.getExportReadiness(b.id, b.runId).ready).toBe(true);
+  },
+  setRetention: () => {
+    const before = snapshot(b.id);
+    w.repo.setRetention(a.id, 60, { actorId: ACTORS.associate });
+    // Only A's date moved; B's rows, its date included, are as they were.
+    expect(snapshot(b.id)).toBe(before);
+    expect(() => w.repo.setRetention("mat_ffffffffffffffff", 60, { actorId: null })).toThrow(
+      NotFoundError,
+    );
   },
   deleteMatter: () => {
     const before = snapshot(b.id);
