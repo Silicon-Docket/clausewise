@@ -569,9 +569,12 @@ describe("the API and the pages do the same thing", () => {
     );
     const view = (id: string): MatterView =>
       site.w.services.matters.view(site.w.grant(site.w.associate, id));
+    // The date differs by the seconds the two requests were apart; the days left (30 for a form
+    // that offers the default and for a body that names none) and everything else must not.
     const strip = (v: MatterView): unknown => ({
       ...v,
       matter: { ...v.matter, id: "-", createdAt: "-", retainUntil: "-" },
+      retention: { ...v.retention, retainUntil: "-" },
     });
     expect(strip(view(api.id))).toEqual(strip(view(formId)));
   });

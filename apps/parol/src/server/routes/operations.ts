@@ -38,7 +38,13 @@ export function createMatter(
     clientLegalName: input.clientLegalName,
     playbookVersionId: input.playbookVersionId ?? null,
     reviewerUserId: input.reviewerUserId ?? null,
+    ...(input.retainDays === undefined ? {} : { retainDays: input.retainDays }),
   });
+}
+
+/** Sets the retention date to `days` from now. The same for the form and for the JSON body. */
+export function setRetention(services: Services, am: AuthorizedMatter, days: number): MatterView {
+  return services.matters.setRetention(am, days);
 }
 
 export function updateSettings(

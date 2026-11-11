@@ -6,6 +6,8 @@ import {
   REVIEW_DECISIONS,
   STATUSES,
 } from "../../contracts.js";
+import { MAX_RETAIN_DAYS } from "../../store/index.js";
+import { ValidationError } from "../../store/errors.js";
 
 /**
  * What each operation accepts, written once and used by the page routes (after they have read the
@@ -35,13 +37,52 @@ export const MAX_EDIT_TEXT = 8000;
 /** Most evidence passages one finding has; a decision naming more is not one of ours. */
 export const MAX_ROLE_EDITS = 64;
 
+/** Whole days to keep a matter, from 1 to the store's ceiling (`MAX_RETAIN_DAYS`). */
+export const RetainDays = z.number().int().min(1).max(MAX_RETAIN_DAYS);
+
 export const CreateMatterInput = z.strictObject({
   name: z.string().max(MAX_NAME),
   clientLegalName: z.string().max(MAX_CLIENT_NAME),
   playbookVersionId: id.nullable().optional(),
   reviewerUserId: id.nullable().optional(),
+  /** Days to keep the matter, from creation. Absent: the store's default. */
+  retainDays: RetainDays.optional(),
 });
 export type CreateMatterInput = z.infer<typeof CreateMatterInput>;
+
+/** The body of the retention change: a number of days from now, never a date. */
+export const RetentionInput = z.strictObject({ days: RetainDays });
+export type RetentionInput = z.infer<typeof RetentionInput>;
+
+/** The refusal of a number of days that is not a whole number from 1 to the ceiling. Fixed, quotes nothing. */
+const refusedDays = (): ValidationError =>
+  new ValidationError(
+    "retention_days",
+    `retention must be a whole number of days from 1 to ${MAX_RETAIN_DAYS}`,
+  );
+
+/**
+ * The number of days a form field holds, or undefined when the field is blank (the new-matter form
+ * leaves it blank to take the default). A form posts text, so the shape is checked here (digits
+ * only, at most three) and the range with it. Text that is not a number is refused with the code
+ * the retention form explains and is never turned into the default, so a mistyped field cannot
+ * silently keep a matter for 30 days. The store checks the same range again.
+ */
+export function retainDaysFromForm(text: string | undefined): number | undefined {
+  const trimmed = text?.trim() ?? "";
+  if (trimmed === "") return undefined;
+  if (!/^\d{1,3}$/.test(trimmed)) throw refusedDays();
+  const days = Number(trimmed);
+  if (days < 1 || days > MAX_RETAIN_DAYS) throw refusedDays();
+  return days;
+}
+
+/** The same, for the form that changes the date, where a blank field is a refusal too. */
+export function requiredRetainDaysFromForm(text: string | undefined): number {
+  const days = retainDaysFromForm(text);
+  if (days === undefined) throw refusedDays();
+  return days;
+}
 
 /** The client name and the playbook. At least one must be given, or there is nothing to do. */
 export const SettingsInput = z
@@ -57,12 +98,14 @@ export const StatedDateInput = z.strictObject({ versionId: id, statedDate: date.
 
 /**
  * `PATCH /api/matters/:id`. One kind of change per request, so that a request that fails half way
- * has changed nothing: the settings, or the operative version of a document, or a stated date.
+ * has changed nothing: the settings, or the operative version of a document, or a stated date, or
+ * the retention date.
  */
 export const PatchMatterBody = z.union([
   SettingsInput,
   z.strictObject({ operative: OperativeInput }),
   z.strictObject({ statedDate: StatedDateInput }),
+  z.strictObject({ retention: RetentionInput }),
 ]);
 
 export const AddMemberInput = z.strictObject({

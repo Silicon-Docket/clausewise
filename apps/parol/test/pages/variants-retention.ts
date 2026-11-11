@@ -9,17 +9,44 @@ import {
   withMatters,
   withRetention,
 } from "./audit-support.js";
+import {
+  PAST,
+  buildRetention,
+  newMatterPane,
+  retentionListPage,
+  retentionMatterPage,
+  retentionPane,
+} from "./retention-support.js";
 import type { Variant } from "./variants.js";
 
 /**
- * The page fixtures of the retention section and the audit log page (work package W2.7), in the same shape as the base list in
- * variants.ts, which spreads this list after its own. The package adds an entry for every state of a
- * page that changes what the page shows, and only in this file.
+ * The page fixtures of the retention section and the audit log page (work package W2.7), in the
+ * same shape as the base list in variants.ts, which spreads this list after its own. The package
+ * adds an entry for every state of a page that changes what the page shows, and only in this file.
+ *
+ * The retention section of the matter page and the chip of the list of matters (slice B): the date
+ * kept and the date passed, for the associate who may change it and for those who may not, and one
+ * day left.
  *
  * The audit log page (slice C): an intact log, an empty one, a broken chain, matters the events do
  * not explain, every state of the last retention run, and a head that is not a hash.
  */
 export const VARIANTS_RETENTION: Variant[] = [
+  ["matter, retention kept, associate", () => retentionMatterPage("associate")],
+  ["matter, retention past, associate", () => retentionMatterPage("associate", PAST)],
+  [
+    "matter, retention one day left, associate",
+    () => retentionMatterPage("associate", buildRetention({ daysLeft: 1 })),
+  ],
+  ["matter, retention kept, reviewer", () => retentionMatterPage("reviewer")],
+  ["matter, retention past, reviewer", () => retentionMatterPage("reviewer", PAST)],
+  ["matter, retention kept, viewer", () => retentionMatterPage("viewer")],
+  ["matters, one past its date", () => retentionListPage()],
+  ["pane, retention kept, associate", () => retentionPane("associate"), { fragment: true }],
+  ["pane, retention past, associate", () => retentionPane("associate", PAST), { fragment: true }],
+  ["pane, retention kept, viewer", () => retentionPane("viewer"), { fragment: true }],
+  ["pane, retention past, reviewer", () => retentionPane("reviewer", PAST), { fragment: true }],
+  ["pane, new-matter form", () => newMatterPane(), { fragment: true }],
   ["audit log, intact, nothing recorded", () => auditPage()],
   [
     "audit log, empty",

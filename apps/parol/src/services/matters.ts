@@ -1,5 +1,11 @@
 import type { AuthorizedMatter } from "../auth/types.js";
-import { ConflictError, NotFoundError } from "../store/index.js";
+import {
+  ConflictError,
+  DEFAULT_RETAIN_DAYS,
+  MAX_RETAIN_DAYS,
+  NotFoundError,
+  type MatterRow,
+} from "../store/index.js";
 import { requireRole, type ServiceDeps } from "./deps.js";
 import { ForbiddenError } from "./errors.js";
 import type { RunEngine } from "./runner.js";
@@ -7,7 +13,10 @@ import type { Presenter } from "./present.js";
 import { startReadiness } from "./readiness.js";
 import type { Uploads } from "./uploads.js";
 import type { MatterService } from "./types.js";
-import type { MatterView, WorkflowOption } from "./views.js";
+import type { MatterRole } from "../contracts.js";
+import type { MatterSummary, MatterView, RetentionView, WorkflowOption } from "./views.js";
+
+const DAY_MS = 86_400_000;
 
 /**
  * Matters, their members and their documents. Every function that takes an `AuthorizedMatter`
@@ -28,6 +37,31 @@ export function createMatterService(
     engine.supersedeMatter(matterId);
   }
 
+  /**
+   * Whether the matter's retention date has passed, judged by the same comparison the store makes
+   * (`listExpiredMatters`): both are ISO times written by `toISOString`, so a text comparison is a
+   * comparison in time, and the boundary counts as passed.
+   */
+  const isPast = (matter: MatterRow): boolean => matter.retainUntil <= deps.now().toISOString();
+
+  /** The summary the presenter builds, and the one thing it cannot know: it has no clock. */
+  function summary(matter: MatterRow, role: MatterRole): MatterSummary {
+    return { ...present.matterSummary(matter, role), pastRetention: isPast(matter) };
+  }
+
+  /** The retention date as the matter page explains it: days left are whole and rounded up. */
+  function retentionView(matter: MatterRow): RetentionView {
+    const past = isPast(matter);
+    const left = Math.ceil((Date.parse(matter.retainUntil) - deps.now().getTime()) / DAY_MS);
+    return {
+      retainUntil: matter.retainUntil,
+      daysLeft: past ? 0 : Math.max(left, 1),
+      pastDate: past,
+      defaultDays: DEFAULT_RETAIN_DAYS,
+      maxDays: MAX_RETAIN_DAYS,
+    };
+  }
+
   function view(am: AuthorizedMatter): MatterView {
     requireRole(am, "matter.read", config);
     const matter = repo.getMatter(am.matterId);
@@ -35,7 +69,7 @@ export function createMatterService(
     const active = repo.getActiveRun(matter.id);
     const current = repo.getCurrentRun(matter.id);
     return {
-      matter: present.matterSummary(matter, am.role),
+      matter: summary(matter, am.role),
       members: present.members(matter.id),
       documents: present.documents(matter.id),
       warnings: present.warnings(matter.id),
@@ -49,6 +83,7 @@ export function createMatterService(
       memos: repo.listMemos(matter.id).map(present.memoSummary),
       segregationRelaxed: config.relaxedSegregation,
       workflows: workflowOptions(),
+      retention: retentionView(matter),
     };
   }
 
@@ -79,6 +114,9 @@ export function createMatterService(
           name: input.name,
           clientLegalName: input.clientLegalName,
           createdBy: principal.userId,
+          // Only when given: the store's default (30 days) applies to an absent value, and an
+          // explicit undefined is not the same thing under exactOptionalPropertyTypes.
+          ...(input.retainDays === undefined ? {} : { retainDays: input.retainDays }),
         });
         if (input.playbookVersionId !== null)
           repo.setPlaybookVersion(created.id, input.playbookVersionId, {
@@ -93,13 +131,13 @@ export function createMatterService(
         return repo.getMatter(created.id);
       });
       if (matter === undefined) throw new NotFoundError("matter");
-      return present.matterSummary(matter, "associate");
+      return summary(matter, "associate");
     },
 
     list(principal) {
       return repo
         .listMattersForUser(principal.userId)
-        .map((matter) => present.matterSummary(matter, matter.role));
+        .map((matter) => summary(matter, matter.role));
     },
 
     view,
@@ -117,8 +155,15 @@ export function createMatterService(
       return view(am);
     },
 
-    setRetention() {
-      throw new Error("stub: W2.7"); // STUB(W2.7)
+    /**
+     * The retention date is not an input of the review: nothing here refreshes the annotations or
+     * supersedes a run (`afterInputChange`), so findings, decisions, the memo and a review in
+     * flight keep their state. The store sets the date from its own clock and records the change.
+     */
+    setRetention(am, days) {
+      requireRole(am, "matter.update", config);
+      repo.setRetention(am.matterId, days, { actorId: am.principal.userId });
+      return view(am);
     },
 
     addMember(am, input) {

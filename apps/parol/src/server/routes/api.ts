@@ -7,7 +7,14 @@ import { defineMatterRoute, defineRoute } from "../matter-route.js";
 import { FIELDS } from "../pages/forms.js";
 import { decisionFromBody } from "./decision.js";
 import { uploadStatus } from "./notices.js";
-import { addDocument, addVersion, createMatter, startRun, updateSettings } from "./operations.js";
+import {
+  addDocument,
+  addVersion,
+  createMatter,
+  setRetention,
+  startRun,
+  updateSettings,
+} from "./operations.js";
 import {
   AddMemberInput,
   CreateMatterInput,
@@ -107,6 +114,8 @@ export function registerApiRoutes(app: Hono, deps: AppDeps): void {
         matters.setOperative(am, body.operative.documentId, body.operative.versionId);
       } else if ("statedDate" in body) {
         matters.setStatedDate(am, body.statedDate.versionId, body.statedDate.statedDate);
+      } else if ("retention" in body) {
+        setRetention(services, am, body.retention.days);
       } else {
         updateSettings(services, am, body);
       }

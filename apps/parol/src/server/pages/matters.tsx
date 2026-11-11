@@ -13,6 +13,7 @@ import { FIELDS } from "./forms.js";
 import { Layout, csrfField, type Chrome } from "./layout.js";
 import { formatDate, plural } from "../views/format.js";
 import { globalRoleLabel, matterRoleLabel } from "../views/labels.js";
+import { FORM_RETAIN_DEFAULT_DAYS, FORM_RETAIN_MAX_DAYS } from "../views/retention.js";
 import { revealToString } from "../views/reveal.js";
 
 export interface MattersPageProps {
@@ -86,6 +87,26 @@ export function NewMatterForm(props: {
           ))}
         </select>
       </Field>
+      <div id="retention">
+        <Field
+          id="new-matter-retain"
+          label="Keep for (days)"
+          hint="After this many days the matter can be deleted by the retention command. You can change it later on the matter's page."
+        >
+          <input
+            id="new-matter-retain"
+            name={FIELDS.retainDays}
+            type="number"
+            inputmode="numeric"
+            min={1}
+            max={FORM_RETAIN_MAX_DAYS}
+            value={FORM_RETAIN_DEFAULT_DAYS}
+            required
+            autocomplete="off"
+            aria-describedby="new-matter-retain-hint"
+          />
+        </Field>
+      </div>
       <div class="actions">
         <button type="submit" class="button button-primary">
           Create matter
@@ -157,7 +178,17 @@ export function MattersPage(props: MattersPageProps) {
                     <td>
                       <Time value={matter.createdAt} />
                     </td>
-                    <td>{formatDate(matter.retainUntil)}</td>
+                    <td>
+                      {formatDate(matter.retainUntil)}
+                      {matter.pastRetention === true ? (
+                        <>
+                          {" "}
+                          <Chip tone="warn" shape="triangle">
+                            Past
+                          </Chip>
+                        </>
+                      ) : null}
+                    </td>
                   </tr>
                 ))}
               </tbody>
