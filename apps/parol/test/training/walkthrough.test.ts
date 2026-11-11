@@ -386,9 +386,11 @@ describe("the training exercise, walked through the pages", () => {
     }
     expect(alex.used.length).toBeGreaterThan(8);
     expect(dana.used.length).toBeGreaterThan(30);
-    // The only field the walk sent that a page did not offer is the reason code, which the form of
-    // a rejection gets from package W2.6a; where the page has the control it was filled in as one.
-    expect([...new Set(dana.unoffered)].every((name) => name === FIELDS.reasonCode)).toBe(true);
+    // Every field the walk sent was offered by the page it was sent from. The reason code of a
+    // rejection (package W2.6a) is a control of the decision form, filled in like any other: a
+    // form that lacked it would put its name here.
+    expect(dana.unoffered).toEqual([]);
+    expect(alex.unoffered).toEqual([]);
 
     // --- No page a trainee was shown holds a trainer's answer, and the words of the plant are only
     // where the design puts them.
