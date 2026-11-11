@@ -9,11 +9,13 @@ import {
 } from "./cli-common.js";
 import {
   AUDIT_BREAK_TEXT,
+  MATTER_ID_PATTERN,
   StoreError,
   checkAudit,
   openDatabaseReadOnly,
   type AuditCheck,
   type AuditHead,
+  type MatterReconciliation,
 } from "./store/index.js";
 
 /**
@@ -28,8 +30,10 @@ import {
  * Parol database).
  *
  * The output prints no column of any audit row. What it takes from rows is the number of the first
- * broken event, a fixed reason code and words for it, the head hash (a hash is not content), and
- * counts and ids of matters.
+ * broken event, a fixed reason code and words for it, the head hash, and counts and ids of matters.
+ * The command exists for a log that may have been written by someone else, so a hash is printed
+ * only when it has the shape of one (64 lower-case hex digits) and an id only when it has the shape
+ * of a matter id; anything else is counted and not shown, in the text and in `--json`.
  *
  * What the check cannot show is said in its output: the hash is not keyed, so someone who can write
  * the file and recompute every later hash makes a log that verifies, and the highest number ever
@@ -72,12 +76,36 @@ export function parseAuditVerifyArgs(argv: readonly string[]): AuditVerifyArgs {
   return args;
 }
 
-const idsText = (ids: string[], count: number): string =>
-  ids.join(", ") + (count > ids.length ? ` and ${count - ids.length} more` : "");
+const HASH = /^[0-9a-f]{64}$/;
+
+/** The head with a hash only if it is one: a row can hold any text, and none of it is printed. */
+const shapedHead = (head: AuditHead | null): { seq: number; hash: string | null } | null =>
+  head === null ? null : { seq: head.seq, hash: HASH.test(head.hash) ? head.hash : null };
+
+/** A list of anomalous matters with only the ids that have the shape of a matter id; the count is the whole. */
+const shapedList = (list: { count: number; ids: string[] }): { count: number; ids: string[] } => ({
+  count: list.count,
+  ids: list.ids.filter((id) => MATTER_ID_PATTERN.test(id)),
+});
+
+const shapedMatters = (matters: MatterReconciliation): MatterReconciliation => ({
+  ...matters,
+  goneWithoutDeleteEvent: shapedList(matters.goneWithoutDeleteEvent),
+  presentWithoutCreateEvent: shapedList(matters.presentWithoutCreateEvent),
+  deletedButPresent: shapedList(matters.deletedButPresent),
+});
+
+/** The ids that are shown, then how many are not: the ids cut off by the cap and the ones of another shape. */
+const idsText = (list: { count: number; ids: string[] }): string => {
+  const { count, ids } = shapedList(list);
+  if (ids.length === 0) return `${count} (ids not shown)`;
+  return ids.join(", ") + (count > ids.length ? ` and ${count - ids.length} more` : "");
+};
 
 /** The lines of the text output. Counts, ids of matters, event numbers and one hash. */
 export function describeAuditCheck(check: AuditCheck, dataDir: string): string[] {
-  const { chain, head, anchor, matters } = check;
+  const { chain, anchor, matters } = check;
+  const head = shapedHead(check.head);
   const lines = ["Parol audit log check (read only)", `Data folder: ${dataDir}`];
   if (chain.ok) {
     lines.push(
@@ -93,7 +121,9 @@ export function describeAuditCheck(check: AuditCheck, dataDir: string): string[]
   lines.push(
     head === null
       ? "Head: none, the log has no events"
-      : `Head: seq ${head.seq}, hash ${head.hash}`,
+      : head.hash === null
+        ? `Head: seq ${head.seq}, hash not shown, it is not 64 lower-case hex digits`
+        : `Head: seq ${head.seq}, hash ${head.hash}`,
   );
   if (anchor !== null)
     lines.push(
@@ -106,15 +136,15 @@ export function describeAuditCheck(check: AuditCheck, dataDir: string): string[]
   );
   if (matters.goneWithoutDeleteEvent.count > 0)
     lines.push(
-      `FAILED: matters gone with no deletion event: ${idsText(matters.goneWithoutDeleteEvent.ids, matters.goneWithoutDeleteEvent.count)}`,
+      `FAILED: matters gone with no deletion event: ${idsText(matters.goneWithoutDeleteEvent)}`,
     );
   if (matters.presentWithoutCreateEvent.count > 0)
     lines.push(
-      `FAILED: matters present with no creation event: ${idsText(matters.presentWithoutCreateEvent.ids, matters.presentWithoutCreateEvent.count)}`,
+      `FAILED: matters present with no creation event: ${idsText(matters.presentWithoutCreateEvent)}`,
     );
   if (matters.deletedButPresent.count > 0)
     lines.push(
-      `FAILED: matters with a deletion event that are still present: ${idsText(matters.deletedButPresent.ids, matters.deletedButPresent.count)}`,
+      `FAILED: matters with a deletion event that are still present: ${idsText(matters.deletedButPresent)}`,
     );
   lines.push(
     "This check does not show that the newest events are all still here, or that the log was not rewritten with every later hash recomputed, unless you keep the head line somewhere the database's writer cannot edit and check it with --expect-head.",
@@ -159,9 +189,9 @@ export async function runAuditVerify(
           events: check.chain.events,
           firstBrokenSeq: check.chain.ok ? null : check.chain.firstBrokenSeq,
           reason: check.chain.ok ? null : check.chain.reason,
-          head: check.head,
+          head: shapedHead(check.head),
           anchor: check.anchor,
-          matters: check.matters,
+          matters: shapedMatters(check.matters),
         }),
       );
     } else for (const line of describeAuditCheck(check, folder.dataDir)) out(line);

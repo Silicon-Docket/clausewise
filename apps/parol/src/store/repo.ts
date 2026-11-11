@@ -112,11 +112,22 @@ export function createRepository(db: Database, options: RepositoryOptions = {}) 
    * Checkpoints the write-ahead log and rewrites the file, so the pages a deleted matter occupied
    * are returned and (with `secure_delete`) already zeroed. Run it after `deleteMatter`, outside
    * any transaction.
+   *
+   * A reader that holds a transaction on the log keeps the checkpoint from finishing, and SQLite
+   * does not throw for it: after the busy timeout the pragma returns a row with `busy` set. That
+   * row is read here, because the deleted text is still in the log then; the call fails with
+   * `compact_busy`, so the caller reports a failed compaction and a later run tries again.
    */
   function compact(): void {
     if (db.isTransaction)
       throw new ConflictError("in_transaction", "compact cannot run inside a transaction");
-    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    const checkpoint = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as
+      { busy?: unknown } | undefined;
+    if (checkpoint?.busy !== 0)
+      throw new ConflictError(
+        "compact_busy",
+        "another connection is reading the database, so the log could not be emptied",
+      );
     db.exec("VACUUM");
   }
 
