@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { FIELDS } from "../../src/server/pages/forms.js";
 import { PILOT_ANCHORS, referenceSeverityField } from "../../src/server/pages/pilotfields.js";
+import { REFUSAL_PHRASES, REFUSAL_TODO } from "../../src/server/routes/notices.js";
 import { urls } from "../../src/server/urls.js";
 import { expectAccessible, tabStops } from "../a11y/rules.js";
 import { all, attr, byId, byTag, hasAttr, hasClass, readable, type El } from "../pages/html.js";
@@ -499,7 +500,7 @@ describe("the link of a refusal of the timer or the reference list", () => {
   describe("is kept when the place it leads to is on the page", () => {
     it("the timer: a stop with no timer running leads to the timer, which the associate's page has", async () => {
       const seen = await answered(await stopWithNoTimer(associate, openId), 409);
-      expect(readable(seen.alert)).toContain("No timer is running on this matter.");
+      expect(readable(seen.alert)).toContain(REFUSAL_PHRASES["no_open_timer"]);
       expect(seen.links).toEqual(["#time"]);
       expect(seen.targetsOnPage).toEqual([true]);
       expect(byId(seen.root, PILOT_ANCHORS.timer)).toBeDefined();
@@ -543,8 +544,8 @@ describe("the link of a refusal of the timer or the reference list", () => {
   describe("is dropped, and the words stand, when the place is not on the page", () => {
     it("the timer: a training matter has no timer, so a stop posted by hand has no link", async () => {
       const seen = await answered(await stopWithNoTimer(associate, trainingId), 409);
-      expect(readable(seen.alert)).toContain("No timer is running on this matter.");
-      expect(readable(seen.alert)).toContain("Press Start timer to begin one.");
+      expect(readable(seen.alert)).toContain(REFUSAL_PHRASES["no_open_timer"]);
+      expect(readable(seen.alert)).toContain(REFUSAL_TODO["no_open_timer"]);
       expect(seen.links).toEqual([]);
       expect(byId(seen.root, "time")).toBeUndefined();
     });
