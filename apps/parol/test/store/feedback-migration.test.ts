@@ -647,14 +647,25 @@ describe("feedback, at the database: the other kinds", () => {
       ).not.toThrow();
   });
 
+  it("holds one rating for each person and matter in the index too, if the insert guard is gone", () => {
+    const f = feedbackWorld();
+    const rating = (over: Record<string, SQLInputValue>) =>
+      insertFeedback({ kind: "rating", text: null, rating: 4, matter_id: f.matterId, ...over });
+    w.db.exec("DROP TRIGGER feedback_no_replace");
+    expect(rating({})).not.toThrow();
+    expect(rating({ rating: 5 })).toThrow(/UNIQUE constraint failed/);
+    expect(rating({ user_id: ACTORS.associate })).not.toThrow();
+  });
+
   it("allows one rating for each person and matter, and any number of the rest", () => {
     const f = feedbackWorld();
     const rating = (over: Record<string, SQLInputValue>) =>
       insertFeedback({ kind: "rating", text: null, rating: 4, matter_id: f.matterId, ...over });
     expect(rating({})).not.toThrow();
-    // The same person on the same matter, whatever the number: refused by the index.
-    expect(rating({ rating: 5 })).toThrow(/UNIQUE constraint failed/);
-    expect(rating({ run_id: f.runId })).toThrow(/UNIQUE constraint failed/);
+    // The same person on the same matter, whatever the number: refused by the insert guard, which
+    // runs before the index does (the index is tried on its own in the next test).
+    expect(rating({ rating: 5 })).toThrow(REPLACED_MESSAGE);
+    expect(rating({ run_id: f.runId })).toThrow(REPLACED_MESSAGE);
     // Another person on that matter, and that person on another matter, may rate.
     expect(rating({ user_id: ACTORS.associate })).not.toThrow();
     expect(rating({ matter_id: f.otherMatterId })).not.toThrow();
@@ -735,6 +746,34 @@ describe("feedback, at the database: a table that is written once", () => {
     expect(w.db.prepare("SELECT text FROM feedback WHERE id = 'fbk_once'").get()).toEqual({
       text: "Said once.",
     });
+  });
+
+  it("never replaces a rating either: a new id that meets the one-rating index is refused, and the rating stays", () => {
+    const f = feedbackWorld();
+    const rating = (over: Record<string, SQLInputValue>) =>
+      insertFeedback({ kind: "rating", text: null, matter_id: f.matterId, ...over });
+    rating({ id: "fbk_a", rating: 2 })();
+    // REPLACE on a key other than the id deletes the row that holds it, and no trigger of the other
+    // kinds would see it: the index is the key, so the insert trigger has to.
+    const replace = (id: string, user: string, matter: string) => () =>
+      w.db
+        .prepare(
+          `INSERT OR REPLACE INTO feedback (id, matter_id, user_id, kind, rating, created_at)
+           VALUES (?, ?, ?, 'rating', 5, '2026-11-02T10:00:00.000Z')`,
+        )
+        .run(id, matter, user);
+    expect(replace("fbk_b", ACTORS.reviewer, f.matterId)).toThrow(REPLACED_MESSAGE);
+    expect(
+      w.db.prepare("SELECT id, rating FROM feedback WHERE matter_id = ?").all(f.matterId),
+    ).toEqual([{ id: "fbk_a", rating: 2 }]);
+    // The guard is for the one rating of a person and a matter and for nothing wider: the same
+    // person on another matter, and another person on this one, still rate.
+    expect(replace("fbk_c", ACTORS.reviewer, f.otherMatterId)).not.toThrow();
+    expect(replace("fbk_d", ACTORS.associate, f.matterId)).not.toThrow();
+    // A comment by that person is not a rating, so it is not stopped by the rating they gave.
+    expect(
+      insertFeedback({ matter_id: f.matterId, kind: "comment", text: "A remark." }),
+    ).not.toThrow();
   });
 
   it("still lets the matter go with all of its feedback, and leaves the feedback of another", () => {
@@ -938,14 +977,17 @@ describe("migration 006, the part of the feedback table", () => {
     expect(() =>
       after.addFeedback(m.id, { userId: ACTORS.reviewer, kind: "rating", rating: 4 }),
     ).toThrow(/already rated/);
-    expect(() =>
+    const second = () =>
       upgraded
         .prepare(
           `INSERT INTO feedback (id, matter_id, user_id, kind, rating, created_at)
            VALUES ('fbk_new_second_rating', ?, ?, 'rating', 4, '2026-11-03T10:00:00.000Z')`,
         )
-        .run(m.id, ACTORS.reviewer),
-    ).toThrow(/UNIQUE constraint failed/);
+        .run(m.id, ACTORS.reviewer);
+    expect(second).toThrow(/feedback is never replaced/);
+    // The insert guard runs first. With it gone, the index is what refuses.
+    upgraded.exec("DROP TRIGGER feedback_no_replace");
+    expect(second).toThrow(/UNIQUE constraint failed/);
     upgraded.close();
   });
 

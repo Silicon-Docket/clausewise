@@ -52,9 +52,16 @@ import type { RefusalFragment } from "./notices.js";
  * there: more than one form raises it, so it has no jump; its phrase fits a note as it fits a
  * report. The two codes of the note are raised by the parsers of the note form and the JSON body
  * (routes/feedback.ts), in the order the body is read before the state, and `finding_not_current`
- * and `feedback_limit` by the service and the store, as conflicts. The page of a refused note drops
- * the link when the form is not on it (a note posted by hand to a finding that has since gone out of
- * date), because a link to a control that is not there leads nowhere.
+ * and `feedback_limit` by the service and the store, as conflicts.
+ *
+ * Every jump above is a link to a control of a form, and the form is not always on the page that
+ * answers: a decision for a finding that has gone out of date or whose matter was exported, a note
+ * for a finding that is out of date, a report for a review with no findings or still running, a
+ * rating before a memo or after one was given. The parsers and the store check the fields before the
+ * state, so the refusal of a field reaches such a page, and a link to a control that is not there
+ * leads nowhere. The page that answers a refusal is sent through `routes/refusal-jumps.ts`, which
+ * keeps the words and the todo and drops the link when the page it built has no element with the
+ * id the link names.
  *
  * `rule_required`, `note_required`, `note_too_long` and `location_too_long` are raised by the
  * parsers of the report form and the JSON body (routes/feedback.ts); `unknown_rule` by the store

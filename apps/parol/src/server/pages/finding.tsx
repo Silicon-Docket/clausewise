@@ -1,3 +1,4 @@
+import type { Child } from "hono/jsx";
 import { EVIDENCE_ROLES, REVIEW_DECISIONS, STATUSES } from "../../contracts.js";
 import type {
   CheckResult,
@@ -91,6 +92,12 @@ export interface FindingPaneProps {
    * page of its own it is the page title (1). Everything inside follows from it.
    */
   level?: 1 | 2;
+  /**
+   * Shown straight after the title and its chips and links, before the first section. Only the page
+   * of a finding passes it (the training banner, which has to follow the page's h1); the inspector
+   * beside the issue table passes nothing, so it is unchanged.
+   */
+  afterTitle?: Child;
 }
 
 /** Said when a finding is out of date, whatever the service says, so the reason is never blank. */
@@ -795,6 +802,7 @@ export function FindingPane(props: FindingPaneProps) {
           </p>
         ) : null}
       </header>
+      {props.afterTitle}
       <ContextHelp finding={finding} />
       <EvidenceSection finding={finding} level={level} />
       <FindingSection finding={finding} level={level} />
@@ -831,7 +839,6 @@ export function FindingPage(
           { label: props.finding.issue.ruleTitle },
         ]}
       />
-      <TrainingBanner compact training={props.training} />
       <FindingPane
         chrome={props.chrome}
         matterId={props.matterId}
@@ -839,6 +846,7 @@ export function FindingPage(
         draft={props.draft}
         noteDraft={props.noteDraft}
         level={1}
+        afterTitle={<TrainingBanner compact training={props.training} />}
       />
     </Layout>
   );
