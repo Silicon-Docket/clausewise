@@ -216,7 +216,10 @@ describe("the migration", () => {
     dirs.push(dir);
     const before = join(dir, "migrations-before");
     cpSync(DEFAULT_MIGRATIONS_DIR, before, { recursive: true });
-    for (const name of readdirSync(before)) if (name.startsWith("007_")) rmSync(join(before, name));
+    // The database as migration 6 left it: migration 7 and every later one is taken out, so that
+    // a migration added after this one leaves no gap in the numbers.
+    for (const name of readdirSync(before))
+      if (Number.parseInt(name.slice(0, 3), 10) >= 7) rmSync(join(before, name));
     const file = join(dir, "old.sqlite");
     const old = openDatabase(file, { migrationsDir: before });
     expect(

@@ -131,6 +131,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: "Help", href: urls.help() },
   { label: "Evaluations", href: urls.evaluations(), global: "evaluation.read" },
   { label: "Audit log", href: urls.audit(), global: "audit.read" },
+  { label: "Pilot measures", href: urls.pilot(), global: "pilot.read" },
 ];
 
 /**
