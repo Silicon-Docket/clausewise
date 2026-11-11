@@ -879,6 +879,20 @@ describe("the command with --pilot-demo", () => {
     expect(text).toContain("The pilot scope, http://127.0.0.1:8787/pilot, stays empty");
     expect(text).toContain("Lee Okafor (legal engineer) or Sam Patel (admin)");
     expect(text).toContain(`The pilot calendar starts on ${report.pilotDemo!.startDate} (UTC)`);
+    // What each person can see is asked again once the scenario is in: the associate and the attorney
+    // are on all of its matters, and the legal engineer on none of them.
+    const seen = (name: string) => report.people.find((p) => p.name.startsWith(name))!.matters;
+    for (const made of report.pilotDemo!.matters) {
+      expect(seen("Alex"), made.name).toContain(made.name);
+      expect(seen("Dana"), made.name).toContain(made.name);
+      expect(seen("Lee"), made.name).not.toContain(made.name);
+      expect(seen("Sam"), made.name).not.toContain(made.name);
+    }
+    expect(text).toContain(
+      `Alex Ruiz (associate): ${seen("Alex")
+        .map((n) => `"${n}"`)
+        .join(", ")}`,
+    );
     // It is a demonstration and nothing else: none of the words a result would use.
     expect(text).not.toMatch(/adoption|accuracy|time saved|saving/i);
     // And no passage of a document: the lines name matters, people and counts.

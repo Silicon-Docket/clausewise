@@ -24,6 +24,7 @@ import { createSimulatedModel } from "./demo/simulated-model.js";
 import { ConfigError, parseEnv, type ParolSettings } from "./main.js";
 import { createServices } from "./services/index.js";
 import { RunNotReadyError } from "./services/errors.js";
+import type { Services } from "./services/types.js";
 import { T01, startTraining } from "./training/index.js";
 import type { RunSummary } from "./services/views.js";
 import { urls } from "./server/urls.js";
@@ -169,6 +170,17 @@ export function workedExampleDocuments(
   return worked.documents.map((document) => ({ document, bytes: bytesOf(document, fixturesDir) }));
 }
 
+/** What each demo identity can see is asked of the services, not worked out here. */
+function peopleOf(repo: Repository, services: Services): SeedReport["people"] {
+  return Object.values(DEMO_USER_IDS).map((userId) => {
+    const person = principalOf(repo, userId);
+    return {
+      name: person.displayName,
+      matters: services.matters.list(person).map((matter) => matter.name),
+    };
+  });
+}
+
 export async function seedDemo(options: SeedOptions): Promise<SeedReport> {
   const { repo, files } = options;
   const fixturesDir = options.fixturesDir ?? DEFAULT_FIXTURES_DIR;
@@ -312,14 +324,7 @@ export async function seedDemo(options: SeedOptions): Promise<SeedReport> {
     });
   }
 
-  // What each person can see is asked of the services, not worked out here.
-  const people = Object.values(DEMO_USER_IDS).map((userId) => {
-    const person = principalOf(repo, userId);
-    return {
-      name: person.displayName,
-      matters: services.matters.list(person).map((matter) => matter.name),
-    };
-  });
+  const people = peopleOf(repo, services);
 
   return {
     playbook: { slug: registered.playbook.slug, version: registered.playbook.version },
@@ -492,7 +497,10 @@ const stdout = (line: string): void => {
  * The pilot demonstration, on its own repository and services: they follow a clock the scenario
  * moves, so that every stored time is backdated. The default seed never reaches this.
  */
-async function buildPilotDemo(db: Database, files: FileStore): Promise<PilotDemoReport> {
+async function buildPilotDemo(
+  db: Database,
+  files: FileStore,
+): Promise<{ pilotDemo: PilotDemoReport; people: SeedReport["people"] }> {
   const clock = createSteppingClock(new Date());
   const repo = createRepository(db, { now: clock.now });
   const services = createServices({
@@ -505,7 +513,15 @@ async function buildPilotDemo(db: Database, files: FileStore): Promise<PilotDemo
     log: () => {},
   });
   try {
-    return await seedPilotDemo({ repo, services, clock, documents: workedExampleDocuments() });
+    const pilotDemo = await seedPilotDemo({
+      repo,
+      services,
+      clock,
+      documents: workedExampleDocuments(),
+    });
+    // The scenario's matters belong to the demo identities too, so the list of what each can see
+    // is asked again.
+    return { pilotDemo, people: peopleOf(repo, services) };
   } catch (error) {
     if (error instanceof PilotDemoError) throw new SeedError(error.message);
     throw error;
@@ -539,7 +555,7 @@ export async function runSeed(
       ...(training === true ? { training } : {}),
     });
     const report =
-      pilotDemo === true ? { ...seeded, pilotDemo: await buildPilotDemo(db, files) } : seeded;
+      pilotDemo === true ? { ...seeded, ...(await buildPilotDemo(db, files)) } : seeded;
     for (const line of describeSeed(report, settings)) out(line);
     return report;
   } finally {
