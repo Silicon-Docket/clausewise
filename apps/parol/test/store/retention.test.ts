@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { sha256Hex } from "../../src/canonical.js";
 import {
@@ -648,5 +649,38 @@ describe("compacting after a deletion", () => {
   it("will not run inside a transaction", () => {
     expect(() => w.repo.transaction(() => w.repo.compact())).toThrow(ConflictError);
     expect(() => w.repo.compact()).not.toThrow();
+  });
+
+  it("refuses, and says why, while another connection holds a read transaction on the log", () => {
+    const file = join(dir, "parol.db");
+    // A short wait for the lock: the checkpoint gives up after it and reports busy, it does not throw.
+    const world = makeWorld({ file, busyTimeoutMs: 50 });
+    const e = exported(world, { amendment: true });
+    world.repo.deleteMatter(e.m.id, { actorId: ACTORS.associate });
+
+    // A real second connection, as a dry run or the audit check opens one, inside a read transaction.
+    const reader = new DatabaseSync(file, { readOnly: true });
+    reader.exec("BEGIN");
+    reader.prepare("SELECT count(*) AS n FROM matters").get();
+    try {
+      let thrown: unknown;
+      try {
+        world.repo.compact();
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(ConflictError);
+      expect((thrown as ConflictError).code).toBe("compact_busy");
+      // The message is fixed words: no text of the deleted matter, no path.
+      expect((thrown as ConflictError).message).not.toContain("Quillfeather");
+    } finally {
+      reader.exec("ROLLBACK");
+      reader.close();
+    }
+
+    // The reader is gone: the same call now works, and the deleted text leaves both files.
+    expect(() => world.repo.compact()).not.toThrow();
+    world.db.close();
+    expect(bytesOf(file).includes(Buffer.from("Quillfeather"))).toBe(false);
   });
 });

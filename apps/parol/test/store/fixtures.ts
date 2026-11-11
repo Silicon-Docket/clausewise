@@ -135,8 +135,11 @@ export function seedPrompts(repo: Repository): void {
   }
 }
 
-export function makeWorld(options: { file?: string } = {}) {
-  const db = openDatabase(options.file ?? ":memory:");
+export function makeWorld(options: { file?: string; busyTimeoutMs?: number } = {}) {
+  const db = openDatabase(
+    options.file ?? ":memory:",
+    options.busyTimeoutMs === undefined ? {} : { busyTimeoutMs: options.busyTimeoutMs },
+  );
   const clock = makeClock();
   const repo = createRepository(db, { now: clock.now });
   repo.seedDemoUsers();

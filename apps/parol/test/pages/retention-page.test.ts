@@ -48,9 +48,11 @@ describe("the retention section, for an associate, before the date", () => {
 
   it("says until when the matter is kept, how many days that is from today, and that nothing deletes it by itself", () => {
     const text = readable(section);
-    expect(text).toContain("This matter is kept until 3 December 2026, 30 days from today.");
     expect(text).toContain(
-      "After that date it is deleted, with its documents, findings, decisions and memos, when the operator runs the retention command.",
+      "This matter is kept until 3 December 2026, 09:00 UTC, 30 days from today.",
+    );
+    expect(text).toContain(
+      "From that time it is deleted, with its documents, findings, decisions and memos, when the operator runs the retention command.",
     );
     expect(text).toContain("Nothing deletes it by itself.");
     expect(text).not.toContain("Past its date");
@@ -59,7 +61,7 @@ describe("the retention section, for an associate, before the date", () => {
 
   it("says one day in the singular", () => {
     const { root: one } = read(retentionMatterPage("associate", buildRetention({ daysLeft: 1 })));
-    expect(readable(sectionOf(one))).toContain("3 December 2026, 1 day from today.");
+    expect(readable(sectionOf(one))).toContain("3 December 2026, 09:00 UTC, 1 day from today.");
   });
 
   it("offers a form to the retention route, with the token, one labelled number field and one button", () => {
@@ -110,6 +112,7 @@ describe("the retention section, for an associate, after the date", () => {
     expect(all(chips[0] as El, (el) => hasClass(el, "shape-triangle"))).toHaveLength(1);
     const text = readable(section);
     expect(text).toContain("This matter is past its retention date (3 November 2026).");
+    expect(text).toContain("It became deletable at 3 November 2026, 12:00 UTC.");
     expect(text).toContain(
       "It is still here because nothing deletes a matter by itself; it goes when the operator runs the retention command.",
     );
@@ -142,6 +145,47 @@ describe("the retention section, for those who may not change the date", () => {
       "Ask an associate on the matter to change the date if it should be kept.",
     );
     expect(text).not.toContain("Change the date below");
+  });
+});
+
+describe("the time the page names is the time the job deletes from", () => {
+  // The date is created time plus whole days, so it falls partway through its calendar day, and the
+  // job deletes from that instant. A page that named only the day would say "until 3 December" about
+  // a matter that goes in the afternoon of 3 December.
+  const INSTANT = "2026-12-03T14:05:37.123Z";
+
+  it("names the instant in UTC and says 'from that time', not 'after that date'", () => {
+    const { root } = read(
+      retentionMatterPage("associate", buildRetention({ retainUntil: INSTANT, daysLeft: 30 })),
+    );
+    const text = readable(sectionOf(root));
+    expect(text).toContain(
+      "This matter is kept until 3 December 2026, 14:05 UTC, 30 days from today.",
+    );
+    expect(text).toContain("From that time it is deleted");
+    expect(text).not.toContain("After that date");
+  });
+
+  it("names the instant of a matter that is past it, so the chip and the sentence agree on the day", () => {
+    const { root } = read(
+      retentionMatterPage(
+        "associate",
+        buildRetention({ retainUntil: INSTANT, daysLeft: 0, pastDate: true }),
+      ),
+    );
+    expect(readable(sectionOf(root))).toContain(
+      "This matter is past its retention date (3 December 2026). It became deletable at 3 December 2026, 14:05 UTC.",
+    );
+  });
+
+  it("names a minute that is never later than the instant, so nothing goes before the time it names", () => {
+    // The minute is cut, not rounded: 14:05:37 is shown as 14:05, never as 14:06.
+    const { root } = read(
+      retentionMatterPage("associate", buildRetention({ retainUntil: "2026-12-03T14:05:59.999Z" })),
+    );
+    const text = readable(sectionOf(root));
+    expect(text).toContain("3 December 2026, 14:05 UTC");
+    expect(text).not.toContain("14:06");
   });
 });
 

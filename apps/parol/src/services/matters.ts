@@ -241,7 +241,9 @@ export function createMatterService(
       repo.deleteMatter(matter.id, { actorId: am.principal.userId });
       files.deleteMatter(matter.id);
       uploads.forget(versionIds);
-      // Outside any transaction, as the store requires: it rewrites the database file.
+      // Outside any transaction, as the store requires: it rewrites the database file. While another
+      // connection holds a read transaction it throws `compact_busy` (a 409), after everything above
+      // is done: the matter is gone, and its text leaves the log at a later checkpoint.
       repo.compact();
     },
 

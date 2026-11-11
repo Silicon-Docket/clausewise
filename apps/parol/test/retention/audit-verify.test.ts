@@ -456,6 +456,99 @@ describe("it writes nothing", () => {
   });
 });
 
+describe("what a tampered row can put on the terminal", () => {
+  const PLANTED_HASH = "SECRET-DOCUMENT-TEXT\u001b[31mRED";
+  const PLANTED_ID = "Quillfeather Partners LLC indemnity clause\u001b[2K";
+
+  /** A log whose newest event carries a hash and whose first creation event carries a matter id that are not of the right shape. */
+  async function planted(): Promise<string> {
+    const { dataDir } = await folder(2);
+    editing(dataDir, (db) => {
+      dropAuditTriggers(db);
+      db.prepare(
+        "UPDATE audit_events SET hash = ? WHERE seq = (SELECT max(seq) FROM audit_events)",
+      ).run(PLANTED_HASH);
+      db.prepare(
+        "UPDATE audit_events SET matter_id = ? WHERE seq = (SELECT min(seq) FROM audit_events WHERE action = 'matter.create')",
+      ).run(PLANTED_ID);
+    });
+    return dataDir;
+  }
+
+  it("prints no head hash and no matter id that is not of the right shape, in the text", async () => {
+    const { code, text } = await verify(await planted());
+    expect(code).toBe(1);
+    expect(text).not.toContain("SECRET-DOCUMENT-TEXT");
+    expect(text).not.toContain("Quillfeather");
+    expect(text).not.toContain("\u001b");
+    // The head line is still there, and says why it shows no hash.
+    expect(text).toMatch(/Head: seq \d+, hash not shown, it is not 64 lower-case hex digits/);
+    // The id is counted, not listed.
+    expect(text).toContain("matters gone with no deletion event: 1 (ids not shown)");
+  });
+
+  it("does the same in --json: the hash is null and the list of ids is empty, the count stays", async () => {
+    const { code, out } = await verify(await planted(), ["--json"]);
+    expect(code).toBe(1);
+    expect(out).toHaveLength(1);
+    expect(out[0]).not.toContain("SECRET-DOCUMENT-TEXT");
+    expect(out[0]).not.toContain("Quillfeather");
+    expect(out[0]).not.toContain("u001b");
+    const parsed = JSON.parse(out[0]!) as {
+      head: { seq: number; hash: string | null };
+      matters: { goneWithoutDeleteEvent: { count: number; ids: string[] } };
+    };
+    expect(parsed.head.hash).toBeNull();
+    expect(parsed.head.seq).toBeGreaterThan(1);
+    expect(parsed.matters.goneWithoutDeleteEvent).toEqual({ count: 1, ids: [] });
+  });
+
+  it("still prints a head hash of 64 lower-case hex digits, and the ids that have the form of a matter id", async () => {
+    const { dataDir, ids } = await folder(3);
+    editing(dataDir, (db) => {
+      db.prepare("DELETE FROM matters WHERE id = ?").run(ids[1]!);
+    });
+    const head = headOf(dataDir);
+    const { text, out } = await verify(dataDir);
+    expect(text).toContain(`Head: seq ${head.seq}, hash ${head.hash}`);
+    expect(out).toContain(`FAILED: matters gone with no deletion event: ${ids[1]}`);
+    const json = JSON.parse((await verify(dataDir, ["--json"])).out[0]!) as {
+      head: { hash: string };
+      matters: { goneWithoutDeleteEvent: { ids: string[] } };
+    };
+    expect(json.head.hash).toBe(head.hash);
+    expect(json.matters.goneWithoutDeleteEvent.ids).toEqual([ids[1]]);
+  });
+
+  it("lists the ids of the right shape and counts the others, for each of the three lists", async () => {
+    const { dataDir } = await folder(1);
+    const check = editing(dataDir, (db) => checkAudit(db));
+    const GOOD = "mat_0123456789abcdef";
+    const list = { count: 4, ids: [GOOD, "mat_short", "x\u001b[31my", "MAT_0123456789ABCDEF"] };
+    const text = describeAuditCheck(
+      {
+        ...check,
+        ok: false,
+        matters: {
+          ...check.matters,
+          goneWithoutDeleteEvent: list,
+          presentWithoutCreateEvent: list,
+          deletedButPresent: list,
+        },
+      },
+      "/d",
+    ).join("\n");
+    for (const label of [
+      "matters gone with no deletion event",
+      "matters present with no creation event",
+      "matters with a deletion event that are still present",
+    ])
+      expect(text).toContain(`${label}: ${GOOD} and 3 more`);
+    expect(text).not.toContain("mat_short");
+    expect(text).not.toContain("\u001b");
+  });
+});
+
 describe("the words of the output", () => {
   it("name the matters that are unaccounted for by id, and cut a long list", async () => {
     const { dataDir } = await folder(1);
@@ -465,11 +558,14 @@ describe("the words of the output", () => {
       ok: false,
       matters: {
         ...check.matters,
-        goneWithoutDeleteEvent: { count: 23, ids: ["mat_a", "mat_b"] },
+        goneWithoutDeleteEvent: {
+          count: 23,
+          ids: ["mat_0123456789abcdef", "mat_fedcba9876543210"],
+        },
       },
     };
     expect(describeAuditCheck(many, "/d").join("\n")).toContain(
-      "matters gone with no deletion event: mat_a, mat_b and 21 more",
+      "matters gone with no deletion event: mat_0123456789abcdef, mat_fedcba9876543210 and 21 more",
     );
   });
 });

@@ -1,6 +1,6 @@
 import type { RetentionView } from "../../services/views.js";
 import { urls } from "../urls.js";
-import { formatDate, plural } from "../views/format.js";
+import { formatDate, formatDateTime, plural } from "../views/format.js";
 import { Chip, Field, Section } from "./components.js";
 import { FIELDS } from "./forms.js";
 import { csrfField, type Chrome } from "./layout.js";
@@ -9,10 +9,14 @@ import { csrfField, type Chrome } from "./layout.js";
  * The retention date of a matter, as a section of the matter page (package W2.7): how long the
  * matter is kept, whether it is past its date, and, for an associate, the form that changes it.
  *
- * The page says what the date means and no more: after it the operator's retention command deletes
- * the matter, and nothing deletes it by itself. Every number it states is a date or a count of
- * days from today; none is a measurement. The section is a real form with a labelled number field
- * and a submit button, so Tab reaches them in document order and Enter submits; it uses no script.
+ * The page says what the date means and no more: from that time the operator's retention command
+ * deletes the matter, and nothing deletes it by itself. The date is an instant (the day it was set
+ * plus whole days, so partway through its calendar day) and the command compares that instant, so
+ * the page names the instant in UTC and not the day: a day would be wrong for up to 24 hours. The
+ * minute is cut, not rounded, so the time named is never later than the one the command uses.
+ * Every number it states is a time or a count of days from today; none is a measurement. The
+ * section is a real form with a labelled number field and a submit button, so Tab reaches them in
+ * document order and Enter submits; it uses no script.
  *
  * The file name is letters only because a page may import another page only by such a name (the
  * static test).
@@ -29,7 +33,7 @@ export interface RetentionSectionProps {
 export function RetentionSection(props: RetentionSectionProps) {
   const { retention } = props;
   if (retention === undefined) return null;
-  const date = formatDate(retention.retainUntil);
+  const when = formatDateTime(retention.retainUntil);
   return (
     <Section id="retention" title="How long this matter is kept">
       {retention.pastDate ? (
@@ -37,14 +41,14 @@ export function RetentionSection(props: RetentionSectionProps) {
           <Chip tone="warn" shape="triangle">
             Past its date
           </Chip>{" "}
-          {`This matter is past its retention date (${date}). It is still here because nothing deletes a matter by itself; it goes when the operator runs the retention command. `}
+          {`This matter is past its retention date (${formatDate(retention.retainUntil)}). It became deletable at ${when}. It is still here because nothing deletes a matter by itself; it goes when the operator runs the retention command. `}
           {props.canUpdate
             ? "Change the date below if it should be kept."
             : "Ask an associate on the matter to change the date if it should be kept."}
         </p>
       ) : (
         <p>
-          {`This matter is kept until ${date}, ${plural(retention.daysLeft, "day")} from today. After that date it is deleted, with its documents, findings, decisions and memos, when the operator runs the retention command. Nothing deletes it by itself.`}
+          {`This matter is kept until ${when}, ${plural(retention.daysLeft, "day")} from today. From that time it is deleted, with its documents, findings, decisions and memos, when the operator runs the retention command. Nothing deletes it by itself.`}
         </p>
       )}
       {props.canUpdate ? (

@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterAll, describe, expect, it } from "vitest";
+import { render } from "../../src/server/pages/index.js";
+import { RetentionSection } from "../../src/server/pages/retention.js";
+import { formatDateTime } from "../../src/server/views/format.js";
 import {
   DEFAULT_MAX_MATTERS_PER_RUN,
   RetentionUsageError,
@@ -12,10 +16,12 @@ import {
   ConflictError,
   FileStore,
   createRepository,
+  openDatabase,
   openDatabaseReadOnly,
   type Repository,
 } from "../../src/store/index.js";
 import { censusOf } from "../store/trace-scan.js";
+import { buildChrome } from "../pages/support.js";
 import { cleanup, gate, makeWorld, uploadCase, type World } from "../services/support.js";
 
 /**
@@ -471,6 +477,37 @@ describe("apply", () => {
     expect(retentionRuns(w)[0]!.detail).toMatchObject({ orphansRemoved: 1 });
   });
 
+  it("deletes a matter from the time its page names, not before and not a day later", async () => {
+    const w = makeWorld({ onDisk: true });
+    const id = await matter(w, "due", 3);
+    const view = w.services.matters.view(w.grant(w.associate, id));
+    const until = view.retention!.retainUntil;
+    // The date is the creation time plus whole days, so it falls partway through its calendar day.
+    expect(until).not.toMatch(/T00:00:00\.000Z$/);
+
+    // What the matter page tells the person: the instant, in UTC, to the minute.
+    const pane = RetentionSection({
+      chrome: buildChrome(),
+      matterId: id,
+      retention: view.retention,
+      canUpdate: true,
+    });
+    const html = pane === null ? "" : render(pane);
+    const named = formatDateTime(until);
+    expect(html).toContain(`This matter is kept until ${named},`);
+    // The minute is cut, never rounded up: the job does not delete before the time named.
+    const namedAt = Date.parse(`${until.slice(0, 16)}:00.000Z`);
+    expect(namedAt).toBeLessThanOrEqual(Date.parse(until));
+    expect(Date.parse(until) - namedAt).toBeLessThan(60_000);
+
+    // And the job: one millisecond before the instant nothing is due, at the instant it is.
+    const before = runRetention(deps(w, new Date(Date.parse(until) - 1)), dryRun());
+    expect(before.expired).toBe(0);
+    const at = runRetention(deps(w, new Date(until)), dryRun());
+    expect(at.expired).toBe(1);
+    expect(at.lines[0]?.matterId).toBe(id);
+  });
+
   it("tries the compaction again on the next run when it failed, even with nothing to delete", async () => {
     const w = makeWorld({ onDisk: true });
     await matter(w, "due", 1);
@@ -496,6 +533,35 @@ describe("apply", () => {
     const third = runRetention(deps(w), apply());
     expect(third.compaction).toBe("not_needed");
     expect(calls).toBe(1);
+  });
+
+  it("reports the compaction as failed while a real reader holds the log, and compacts on the next run", async () => {
+    const w = makeWorld({ onDisk: true });
+    await matter(w, "due", 1);
+    const file = join(w.root, "parol.sqlite");
+    // The job's own connection, with a short wait for the lock, so the blocked checkpoint comes back
+    // quickly (it reports busy after the wait; it does not throw).
+    const jobDb = openDatabase(file, { busyTimeoutMs: 50 });
+    const jobRepo = createRepository(jobDb);
+    // A real second connection inside a read transaction: what a dry run or the audit check is.
+    const reader = new DatabaseSync(file, { readOnly: true });
+    reader.exec("BEGIN");
+    reader.prepare("SELECT count(*) AS n FROM matters").get();
+    try {
+      const first = runRetention({ ...deps(w), repo: jobRepo }, apply());
+      expect(first).toMatchObject({ deleted: 1, compaction: "failed" });
+      expect(jobRepo.latestAuditEvent("retention.run")?.detail).toMatchObject({
+        compaction: "failed",
+      });
+    } finally {
+      reader.exec("ROLLBACK");
+      reader.close();
+    }
+
+    // Nothing is due any more, but the last run says its compaction failed: this run compacts.
+    const second = runRetention({ ...deps(w), repo: jobRepo }, apply());
+    expect(second).toMatchObject({ expired: 0, deleted: 0, compaction: "done" });
+    jobDb.close();
   });
 
   it("writes one more event for a run that finds nothing, so a quiet job and a job that never ran differ", async () => {
