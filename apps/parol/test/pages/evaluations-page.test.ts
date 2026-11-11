@@ -298,10 +298,22 @@ describe("a comparison", () => {
     );
   });
 
-  it("says the held-out split is absent when neither file ran it", () => {
-    expect(text).toContain(
-      "The held-out split is not in this comparison: neither results file ran it.",
-    );
+  it("says the held-out split is absent, and says nothing about which run covered it", () => {
+    expect(text).toContain("The held-out split is not in this comparison.");
+    // The document has no field that says which results file ran which split, so the page cannot
+    // say that neither did.
+    expect(text).not.toContain("neither");
+  });
+
+  it("does not say neither file ran the held-out split beside the note that one file did not", () => {
+    // The note a comparison records when one side has a held-out section and the other has none.
+    const note = "The candidate has no heldout section, so it is not compared.";
+    const oneSided = comparisonPage(comparisonBody({ notes: [note] }), "one sided");
+    const one = textOfMain(comparisonHtml(oneSided));
+    expect(one).toContain(note);
+    expect(one).toContain("The held-out split is not in this comparison.");
+    expect(one).not.toContain("neither");
+    expect(one).not.toContain("ran it");
   });
 
   it("lists the changed slots with a link whose name says which slot it opens", () => {

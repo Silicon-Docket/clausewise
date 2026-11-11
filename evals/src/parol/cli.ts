@@ -249,8 +249,8 @@ Options:
   --open-heldout-trails        Put the evidence trails of the held-out split's changed slots into the
                                page document: the answer key and its passages and, for each version,
                                where it looked and what it cited. They are left out by default, and
-                               the document records that they were opened. Needs --publish. Read the
-                               warning that is printed.
+                               the document records that they were opened. Needs --publish. A warning
+                               is printed when the document holds any; read it.
   --allow-differences <names>  Pins that are expected to differ, comma separated: ${PIN_NAMES.filter((name) => name !== "evaluation").join(", ")}.
                                A difference in the evaluation version is never allowed.
   --playbook <file.yaml>       The playbook. Default: apps/parol/playbooks/<slug of the answer keys>.yaml.
@@ -837,9 +837,6 @@ async function publishComparisonPage(args: {
 }): Promise<number> {
   const { options, io } = args;
   if (options.publish === undefined) return 0;
-  if (options.openHeldoutTrails) {
-    io.stderr(`HELD-OUT TRAILS OPENED FOR THE PAGE. ${HELDOUT_SEAL_WARNING}\n`);
-  }
   try {
     const page = await buildComparisonPage({
       baseline: args.baseline,
@@ -850,6 +847,11 @@ async function publishComparisonPage(args: {
       openHeldoutTrails: options.openHeldoutTrails,
     });
     const published = await publishComparison({ page, dataFolder: options.publish });
+    // The warning is about the file, not about the flag: it is printed when the file is in the
+    // folder and records that material of the held-out split is in it.
+    if (page.heldoutTrailsOpened) {
+      io.stderr(`HELD-OUT TRAILS OPENED FOR THE PAGE. ${HELDOUT_SEAL_WARNING}\n`);
+    }
     io.stderr(
       published.created
         ? `Published comparison ${published.id} to ${published.path}. Open /evaluations?comparison=${published.id} as a legal engineer or an administrator.\n`

@@ -20,10 +20,18 @@ const spies = vi.hoisted(() => ({
   calls: [] as string[],
   /** Answers `lstatSync` for a path in place of the real one: a file that changed after the check. */
   lstat: undefined as undefined | ((path: string) => unknown),
+  /** Makes the next call of `openSync` or `readFileSync` throw this error, once: a failed read of a good file. */
+  failOnce: undefined as undefined | { call: "openSync" | "readFileSync"; error: Error },
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
+  const failIfAsked = (call: "openSync" | "readFileSync"): void => {
+    const asked = spies.failOnce;
+    if (asked?.call !== call) return;
+    spies.failOnce = undefined;
+    throw asked.error;
+  };
   const spy =
     <A extends unknown[], R>(name: string, fn: (...args: A) => R) =>
     (...args: A): R => {
@@ -36,9 +44,15 @@ vi.mock("node:fs", async (importOriginal) => {
       const answer = spies.lstat?.(String(args[0]));
       return answer === undefined ? actual.lstatSync(...args) : answer;
     }) as typeof actual.lstatSync,
-    openSync: spy("openSync", actual.openSync),
+    openSync: spy("openSync", ((...args: Parameters<typeof actual.openSync>) => {
+      failIfAsked("openSync");
+      return actual.openSync(...args);
+    }) as typeof actual.openSync),
     readdirSync: spy("readdirSync", actual.readdirSync),
-    readFileSync: spy("readFileSync", actual.readFileSync),
+    readFileSync: spy("readFileSync", ((...args: Parameters<typeof actual.readFileSync>) => {
+      failIfAsked("readFileSync");
+      return actual.readFileSync(...args);
+    }) as typeof actual.readFileSync),
   };
 });
 
@@ -51,6 +65,7 @@ beforeEach(() => {
   mkdirSync(dir);
   spies.calls.length = 0;
   spies.lstat = undefined;
+  spies.failOnce = undefined;
 });
 
 afterEach(() => {
@@ -188,6 +203,66 @@ describe("a source over a folder", () => {
       [`${pageFileName(page.id)} unreadable`, "cmp_5555555555555555.json unreadable"].sort(),
     );
     expect(reads()).toBe(0);
+  });
+
+  for (const call of ["openSync", "readFileSync"] as const) {
+    it(`does not keep a failed ${call} of a good file as unreadable until the file changes`, () => {
+      const page = comparisonPage();
+      publish(page, 1000);
+      const source = createComparisonSource(dir);
+      // Descriptor exhaustion or a disk error, once. The file itself is whole and is not touched.
+      const error = Object.assign(new Error("transient"), {
+        code: call === "openSync" ? "EMFILE" : "EIO",
+      });
+      spies.failOnce = { call, error };
+      expect(source.get(page.id)).toBeNull();
+      expect(source.list().entries).toEqual([
+        { ok: true, id: page.id, publishedAt: "1970-01-01T00:16:40.000Z", page },
+      ]);
+      expect(source.get(page.id)).toEqual({ page, publishedAt: "1970-01-01T00:16:40.000Z" });
+    });
+
+    it(`says unreadable for the call that failed in ${call}, with a fixed problem and none of the error`, () => {
+      const page = comparisonPage();
+      publish(page, 1000);
+      const secret = "SECRET-MARKER-5e07";
+      spies.failOnce = { call, error: new Error(secret) };
+      const { entries } = createComparisonSource(dir).list();
+      expect(entries).toEqual([{ ok: false, name: pageFileName(page.id), problem: "unreadable" }]);
+      expect(JSON.stringify(entries)).not.toContain(secret);
+    });
+  }
+
+  it("does not keep as unreadable a file that was swapped for a directory while it was being read, once it is whole again", () => {
+    const page = comparisonPage();
+    const target = join(outside, "real.json");
+    writeFileSync(target, JSON.stringify(page));
+    utimesSync(target, 1000, 1000);
+    const swapped = join(dir, pageFileName(page.id));
+    mkdirSync(swapped);
+    // The check sees the plain file of the size and time of the page; what is opened is a directory.
+    spies.lstat = (path) => (path === swapped ? fs.statSync(target) : undefined);
+    const source = createComparisonSource(dir);
+    expect(source.list().entries).toEqual([
+      { ok: false, name: pageFileName(page.id), problem: "unreadable" },
+    ]);
+    // The page is in place again with the same size and time as the check saw.
+    spies.lstat = undefined;
+    rmSync(swapped, { recursive: true });
+    publish(page, 1000);
+    expect(source.get(page.id)).toEqual({ page, publishedAt: "1970-01-01T00:16:40.000Z" });
+  });
+
+  it("still keeps a problem that the content decides, and does not read that file again", () => {
+    const name = "cmp_2222222222222222.json";
+    writeFileSync(join(dir, name), "not json");
+    const source = createComparisonSource(dir);
+    const expected = [{ ok: false, name, problem: "not_json" }];
+    expect(source.list().entries).toEqual(expected);
+    expect(reads()).toBe(1);
+    expect(source.list().entries).toEqual(expected);
+    expect(source.get("cmp_2222222222222222")).toBeNull();
+    expect(reads()).toBe(1);
   });
 
   it("lists the newest first, then by id, and stops at the most it is asked for", () => {

@@ -524,7 +524,8 @@ function SplitSwitch({ view }: { view: ComparisonView }) {
       )}
       {heldoutPresent ? null : (
         <p class="hint">
-          The held-out split is not in this comparison: neither results file ran it.
+          {/* The document does not say which results file ran which split, so this says no more. */}
+          The held-out split is not in this comparison.
         </p>
       )}
     </div>
