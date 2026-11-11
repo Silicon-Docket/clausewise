@@ -17,7 +17,17 @@ import { StartTrainingInput } from "../../src/server/routes/training.js";
 import { urls } from "../../src/server/urls.js";
 import { ConflictError, ValidationError } from "../../src/store/index.js";
 import { T01 } from "../../src/training/t01.js";
-import { all, attr, byId, hasClass, parseHtml, readable, withClass } from "../pages/html.js";
+import {
+  all,
+  attr,
+  byId,
+  hasAttr,
+  hasClass,
+  parseHtml,
+  readable,
+  withClass,
+} from "../pages/html.js";
+import { NO_PLAYBOOK_SENTENCE } from "../../src/server/pages/quickstart.js";
 import { expectAccessible } from "../a11y/rules.js";
 import { simulatedModel, trainingMatterIds } from "../training/support.js";
 import { ROOT } from "../integration/pipeline.js";
@@ -35,12 +45,12 @@ import {
 } from "./support.js";
 
 /**
- * Starting the training matter through the routes (package W2.8, slice A): `POST /training`. It
- * names no matter and takes two named fields, so what these tests show is who may use it, that the
- * token is needed, what it makes (and that a second post makes nothing), what it refuses in words,
- * and that no request can reach another person's training matter or set its key. The pages of the
- * quickstart and the help, and the key page, are in the later slices. The reader here is the
- * simulated reader; nothing calls a network.
+ * Starting the training matter through the routes (package W2.8): `POST /training`. It names no
+ * matter and takes two named fields, so what these tests show is who may use it, that the token is
+ * needed, what it makes (and that a second post makes nothing), what it refuses in words, on the
+ * quickstart page that holds the form, and that no request can reach another person's training
+ * matter or set its key. The pages themselves (`GET /quickstart` and `GET /help`) are in
+ * quickstart-routes.test.ts. The reader here is the simulated reader; nothing calls a network.
  */
 
 afterAll(cleanup);
@@ -237,16 +247,16 @@ describe("what it makes", () => {
   });
 });
 
-describe("what it refuses, in words, on the page the form is on", () => {
-  /** A refused post: its status, the page, and the one alert on it. */
-  async function refused(fields: Record<string, string>, status: 400 | 409) {
+describe("what it refuses, in words, on the quickstart page that holds the form", () => {
+  /** A refused post: its status, the quickstart page, and the one alert on it. */
+  async function refused(who: Browser, fields: Record<string, string>, status: 400 | 409) {
     const before = fingerprint(site);
-    const response = await start(associate, fields);
-    // The matter of an earlier test belongs to this person, and a refusal comes first.
+    const response = await start(who, fields);
     expect(response.status).toBe(status);
     expect(response.headers.get("content-type")).toMatch(/^text\/html/);
     const html = await response.text();
     const root = parseHtml(html);
+    expect(readable(all(root, (el) => el.name === "h1")[0]!)).toBe("Quickstart");
     const alerts = all(root, (el) => attr(el, "role") === "alert");
     expect(alerts).toHaveLength(1);
     expect(hasClass(alerts[0]!, "notice-error")).toBe(true);
@@ -254,19 +264,11 @@ describe("what it refuses, in words, on the page the form is on", () => {
     return { html, root, alert: alerts[0]! };
   }
 
-  // The associate has a training matter by now; a refusal still comes first, because the fields
-  // are checked before the person's matter is looked for.
-  beforeAll(async () => {
-    await start(associate);
-  });
-
+  // The reviewing attorney of the site has no training matter of their own, and a refusal changes
+  // nothing, so the form is on the page for every case below.
   const CASES = [
     ["no reviewer", {}, "reviewer_required"],
-    [
-      "the person as their own reviewer",
-      { [FIELDS.reviewerUserId]: IDS.associate },
-      "bad_reviewer",
-    ],
+    ["the person as their own reviewer", { [FIELDS.reviewerUserId]: IDS.reviewer }, "bad_reviewer"],
     [
       "a reviewer who is not a user",
       { [FIELDS.reviewerUserId]: "usr_QZX-TYPED" },
@@ -274,31 +276,38 @@ describe("what it refuses, in words, on the page the form is on", () => {
     ],
     [
       "a trainer who is not a user",
-      { [FIELDS.reviewerUserId]: IDS.reviewer, [FIELDS.trainerUserId]: "usr_QZX-TYPED" },
+      { [FIELDS.reviewerUserId]: IDS.associate, [FIELDS.trainerUserId]: "usr_QZX-TYPED" },
       "unknown_identity",
     ],
     [
       "a trainer who is the reviewer",
-      { [FIELDS.reviewerUserId]: IDS.reviewer, [FIELDS.trainerUserId]: IDS.reviewer },
+      { [FIELDS.reviewerUserId]: IDS.associate, [FIELDS.trainerUserId]: IDS.associate },
       "bad_trainer",
     ],
     [
       "a trainer who is the person",
-      { [FIELDS.reviewerUserId]: IDS.reviewer, [FIELDS.trainerUserId]: IDS.associate },
+      { [FIELDS.reviewerUserId]: IDS.associate, [FIELDS.trainerUserId]: IDS.reviewer },
       "bad_trainer",
     ],
   ] as const;
 
   for (const [name, fields, code] of CASES) {
-    it(`${name} is answered with the phrase of ${code} and the sentence to follow`, async () => {
-      const { html, root, alert } = await refused({ ...fields }, 400);
-      // The form is on the quickstart page, which a later slice builds. Until then the refusal is
-      // shown on the list of matters, which has no field to go to, so the notice has its words and
-      // the sentence to follow and no jump (the fragment still holds the jump for the day it has a
-      // page to point at: see "the words" below).
-      expect(readable(alert)).toBe(`Problem ${REFUSAL_PHRASES[code]}`);
+    it(`${name} is answered with the phrase of ${code}, the sentence to follow and a link to the field`, async () => {
+      const { html, root, alert } = await refused(reviewer, { ...fields }, 400);
+      expect(readable(alert)).toBe(
+        `Problem ${REFUSAL_PHRASES[code]}${
+          Object.hasOwn(REFUSAL_JUMP, code) ? ` ${REFUSAL_JUMP[code]!.label}` : ""
+        }`,
+      );
       expect(withClass(alert, "todo").map((el) => readable(el))).toEqual([REFUSAL_TODO[code]]);
-      expect(all(alert, (el) => el.name === "a")).toEqual([]);
+      // The link leads to a place on this page: the field to fix, or the form.
+      const links = all(alert, (el) => el.name === "a");
+      expect(links.map((el) => attr(el, "href"))).toEqual([REFUSAL_JUMP[code]!.href]);
+      expect(byId(root, REFUSAL_JUMP[code]!.href.slice(1)), code).toBeDefined();
+      // The form is there again, for the person to correct.
+      expect(
+        all(root, (el) => el.name === "form" && attr(el, "action") === urls.training()),
+      ).toHaveLength(1);
       // The page is a whole page that passes the rules of the keyboard and the labels.
       expectAccessible(root);
       // Nothing of the request is in the page.
@@ -306,7 +315,47 @@ describe("what it refuses, in words, on the page the form is on", () => {
     });
   }
 
-  it("a server with no approved playbook version is answered 409, with a sentence for whoever runs it", async () => {
+  it("keeps the person's choice of reviewing attorney and trainer in the form", async () => {
+    const { root } = await refused(
+      reviewer,
+      { [FIELDS.reviewerUserId]: IDS.associate, [FIELDS.trainerUserId]: IDS.associate },
+      400,
+    );
+    const form = all(
+      root,
+      (el) => el.name === "form" && attr(el, "action") === urls.training(),
+    )[0]!;
+    for (const name of [FIELDS.reviewerUserId, FIELDS.trainerUserId]) {
+      const select = all(form, (el) => el.name === "select" && attr(el, "name") === name)[0]!;
+      const picked = all(select, (el) => el.name === "option" && hasAttr(el, "selected"));
+      expect(
+        picked.map((o) => attr(o, "value")),
+        name,
+      ).toEqual([IDS.associate]);
+    }
+  });
+
+  it("is answered for a person who has a training matter with the link to it and no form, and no link to a field", async () => {
+    // The associate has one by now. A post that cannot be made (a hand-made one: the form is not
+    // offered to them) is refused first, and the page does not point at a form it does not show.
+    expect(
+      trainingIds().some((id) => site.w.repo.getMember(id, IDS.associate)?.role === "associate"),
+    ).toBe(true);
+    const { root, alert } = await refused(associate, {}, 400);
+    expect(readable(alert)).toBe(`Problem ${REFUSAL_PHRASES["reviewer_required"]}`);
+    expect(all(alert, (el) => el.name === "a")).toEqual([]);
+    expect(withClass(alert, "todo").map((el) => readable(el))).toEqual([
+      REFUSAL_TODO["reviewer_required"],
+    ]);
+    expect(all(root, (el) => el.name === "form" && attr(el, "action") === urls.training())).toEqual(
+      [],
+    );
+    const own = all(root, (el) => el.name === "a" && readable(el) === "Open the training matter");
+    expect(own).toHaveLength(1);
+    expectAccessible(root);
+  });
+
+  it("a server with no approved playbook version is answered 409, with the sentence for whoever runs it in the page", async () => {
     const services = {
       ...site.deps.services,
       matters: { ...site.deps.services.matters, playbooks: () => [] },
@@ -316,7 +365,8 @@ describe("what it refuses, in words, on the page the form is on", () => {
     registerRoutes(app, deps);
     const { Browser: B } = await import("./support.js");
     const who = new B(app);
-    await who.signIn(OTHER_ASSOCIATE);
+    await who.signIn(VIEWER);
+    expect(trainingIds().some((id) => site.w.repo.getMember(id, VIEWER) !== undefined)).toBe(false);
     const before = fingerprint(site);
     const token = await who.apiToken();
     const response = await who.send("POST", urls.training(), {
@@ -332,6 +382,11 @@ describe("what it refuses, in words, on the page the form is on", () => {
     expect(withClass(alerts[0]!, "todo").map((el) => readable(el))).toEqual([
       REFUSAL_TODO["no_playbook"],
     ]);
+    // The page says it again where the form would be, and offers no form.
+    expect(readable(all(root, (el) => hasClass(el, "empty"))[0]!)).toBe(NO_PLAYBOOK_SENTENCE);
+    expect(all(root, (el) => el.name === "form" && attr(el, "action") === urls.training())).toEqual(
+      [],
+    );
     expect(fingerprint(site)).toEqual(before);
   });
 });

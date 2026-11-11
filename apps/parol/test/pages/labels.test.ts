@@ -41,6 +41,7 @@ import {
   RUN_STATUS_LABEL,
   RUN_STATUS_MEANING,
   SEVERITY_LABEL,
+  SEVERITY_MEANING,
   STATUS_LABEL,
   STATUS_MEANING,
   STATUS_ORDER,
@@ -56,6 +57,7 @@ import {
   roleLabel,
   runErrorMeaning,
   runStatusLabel,
+  severityMeaning,
   statusLabel,
 } from "../../src/server/views/labels.js";
 
@@ -87,6 +89,7 @@ describe("every vocabulary in contracts.ts has plain words", () => {
   expectComplete("statuses", STATUSES, STATUS_LABEL);
   expectComplete("status meanings", STATUSES, STATUS_MEANING);
   expectComplete("severities", SEVERITIES, SEVERITY_LABEL);
+  expectComplete("severity meanings", SEVERITIES, SEVERITY_MEANING);
   expectComplete("categories", CATEGORY_IDS, CATEGORY_LABEL);
   expectComplete("evidence roles", EVIDENCE_ROLES, ROLE_LABEL);
   expectComplete("evidence role meanings", EVIDENCE_ROLES, ROLE_MEANING);
@@ -144,6 +147,10 @@ describe("lookups for values from the database", () => {
     expect(roleLabel(hostile)).not.toContain("script");
     expect(runErrorMeaning(hostile)).not.toContain("script");
     expect(categoryLabel(hostile)).not.toContain("script");
+    expect(severityMeaning(hostile)).toBe("This severity has no description.");
+    expect(severityMeaning("constructor")).toBe("This severity has no description.");
+    expect(severityMeaning(undefined)).toBe("This severity has no description.");
+    expect(severityMeaning("high")).toBe(SEVERITY_MEANING.high);
   });
 
   it("do not read prototype properties", () => {
@@ -190,6 +197,7 @@ describe("style", () => {
     const tables = [
       STATUS_LABEL,
       STATUS_MEANING,
+      SEVERITY_MEANING,
       ROLE_MEANING,
       ESCALATION_LABEL,
       ESCALATION_MEANING,

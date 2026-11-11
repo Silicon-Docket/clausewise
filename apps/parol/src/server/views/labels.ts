@@ -71,6 +71,19 @@ export const SEVERITY_LABEL: Record<Severity, string> = {
 
 export const SEVERITY_ORDER: readonly Severity[] = ["high", "medium", "low"];
 
+/**
+ * What a severity means. The playbook gives a rule a severity and gives no wider definition, so
+ * the sentences say only what the application does with it: the issue table lists the high rules
+ * first (`orderIssues` in pages/run.tsx), and a finding always carries the severity of its rule
+ * (the `findings_same_matter` trigger of migration 002 refuses a finding whose severity differs).
+ */
+export const SEVERITY_MEANING: Record<Severity, string> = {
+  high: "The playbook ranks this rule as high severity. High rules are listed first in the issue table.",
+  medium:
+    "The playbook ranks this rule as medium severity. Medium rules follow the high ones in the issue table.",
+  low: "The playbook ranks this rule as low severity. Low rules are listed last in the issue table.",
+};
+
 export const CATEGORY_LABEL: Record<CategoryId, string> = {
   parties: "Parties",
   "ci-definition": "Definition of Confidential Information",
@@ -394,6 +407,8 @@ export const statusLabel = (v: unknown): string => lookup(STATUS_LABEL, v, "Unkn
 export const statusMeaning = (v: unknown): string =>
   lookup(STATUS_MEANING, v, "This status has no description.");
 export const severityLabel = (v: unknown): string => lookup(SEVERITY_LABEL, v, "Unknown severity");
+export const severityMeaning = (v: unknown): string =>
+  lookup(SEVERITY_MEANING, v, "This severity has no description.");
 export const categoryLabel = (v: unknown): string => lookup(CATEGORY_LABEL, v, "Other topic");
 export const roleLabel = (v: unknown): string => lookup(ROLE_LABEL, v, "Unlabelled");
 export const roleMeaning = (v: unknown): string =>
