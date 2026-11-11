@@ -2,8 +2,9 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 import { FakeElement, SCRIPT_PATH, event, runScript } from "./fake-dom.js";
-import { matterPage, mattersPage, runPage } from "./render.js";
+import { findingPage, matterPage, mattersPage, runPage } from "./render.js";
 import {
+  buildChrome,
   buildIssueRows,
   buildMatterView,
   buildRunSummary,
@@ -320,6 +321,23 @@ describe("scrolling the quote into view", () => {
   it("does nothing when nothing is chosen", () => {
     const h = runScript(runPage({ selected: null }));
     expect(h.doc.querySelectorAll("mark")).toHaveLength(0);
+  });
+
+  it("leaves a page that opens on a refusal where it begins, so the refusal is seen", () => {
+    // Found in a real browser: the refused decision page was scrolled to its quote, which put the
+    // alert behind the banner at the top of the window.
+    const refusal = buildChrome({
+      notice: {
+        kind: "error",
+        text: "Give a reason. A decision to edit, reject or escalate needs one.",
+      },
+    });
+    const h = runScript(findingPage(undefined, refusal));
+    expect(h.doc.querySelectorAll('[role="alert"]')).toHaveLength(1);
+    expect(h.doc.querySelector("mark[data-quote]")!.calls.scroll).toEqual([]);
+    // The same page with no refusal still shows its quote.
+    const plain = runScript(findingPage());
+    expect(plain.doc.querySelector("mark[data-quote]")!.calls.scroll).toHaveLength(1);
   });
 });
 

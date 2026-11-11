@@ -432,11 +432,20 @@ describe("the focus ring and the skip link", () => {
         "--accent-ink",
       );
       const border = /border:\s*\d+px solid var\((--[\w-]+)\)/.exec(rule)?.[1];
+      // The ring: the colour the rule gives it (in `outline` or `outline-color`), else the one every
+      // focused control gets. Where it lies: an offset below minus its width puts it inside the
+      // box, where it is seen against the fill; otherwise it is outside, against what is behind.
+      const ringWidth = Number(/(\d+)px/.exec(property(rule, "outline") ?? "")?.[1] ?? 3);
+      const ringOffset = Number(
+        /^(-?\d+)px$/.exec(property(rule, "outline-offset") ?? "")?.[1] ?? 2,
+      );
       const ring = colour(
         tokenIn(property(rule, "outline-color")) ??
+          tokenIn(property(rule, "outline")?.replace(/^\d+px solid /, "")) ??
           tokenIn(property(ruleBody(":focus-visible"), "outline")?.replace(/^\d+px solid /, "")),
         "--focus",
       );
+      const ringInside = ringOffset + ringWidth <= 0;
       const banner = tokens["--banner-bg"] as string;
       const paper = tokens["--paper"] as string;
 
@@ -449,8 +458,21 @@ describe("the focus ring and the skip link", () => {
         expect(Math.max(contrast(fill, paper), edge)).toBeGreaterThanOrEqual(3);
       });
 
-      it("shows its ring against the banner (3 or more)", () => {
-        expect(contrast(ring, banner)).toBeGreaterThanOrEqual(3);
+      it("shows its ring where the ring is drawn (3 or more)", () => {
+        if (ringInside) {
+          // Inside the box the ring is seen against the fill, whatever the link floats over.
+          expect(contrast(ring, fill)).toBeGreaterThanOrEqual(3);
+        } else {
+          // Outside the box it is seen against the banner and against the page, as it floats over both.
+          expect(contrast(ring, banner)).toBeGreaterThanOrEqual(3);
+          expect(contrast(ring, paper)).toBeGreaterThanOrEqual(3);
+        }
+      });
+
+      it("draws the ring inside the box, clear of the border, so it needs no second background", () => {
+        expect(ringInside).toBe(true);
+        // A gap between the border and the ring, so that they read as two things.
+        expect(ringOffset + ringWidth).toBeLessThan(-2);
       });
 
       it("reads its own text on its own fill (4.5 or more)", () => {
@@ -588,6 +610,50 @@ describe("a keyboard user meets the page in the order the document has it", () =
     expect(tops.every((top) => top !== undefined)).toBe(true);
     // The inspector is the lower of the two: the banner sits at the top, the inspector under it.
     expect(Number(padding)).toBeGreaterThanOrEqual(Math.max(...tops.map(Number)));
+  });
+});
+
+// What the browser audit (test/a11y/browser) found in the stylesheet, held here as well, so that it
+// stays fixed on a machine that has no browser. Each of these was a measured fault in Chromium.
+describe("what a real browser found wrong, kept fixed", () => {
+  it("leaves more room between the filters than the reach of the focus ring", () => {
+    // The ring is 3px wide and starts 2px out. A gap of 5px or less puts it on the filled filter
+    // beside it, where it was 1.9 to 1 against the fill.
+    const ring = ruleBody(":focus-visible");
+    const reach =
+      Number(/outline:\s*(\d+)px/.exec(ring)?.[1]) +
+      Number(/outline-offset:\s*(\d+)px/.exec(ring)?.[1]);
+    expect(reach).toBe(5);
+    const gap = /gap:\s*([\d.]+)rem/.exec(ruleBody(".filters ul"))?.[1];
+    expect(gap, "the filters have a gap in rem").toBeDefined();
+    expect(Number(gap) * 16).toBeGreaterThan(reach);
+  });
+
+  it("makes every box that scrolls the containing block of what is positioned inside it", () => {
+    // Text for screen readers is positioned. In a scrolling box that is not itself positioned it
+    // lay outside the box, and a wide table made the whole page scroll sideways at 640 pixels.
+    const rules = allRules(css);
+    const scrolling = rules
+      .filter(({ body }) => /(?:^|[;\s])overflow(?:-[xy])?:\s*(?:auto|scroll)\b/.test(body))
+      .map(({ selector }) => selector);
+    expect(scrolling.length).toBeGreaterThan(2);
+    for (const selector of scrolling) {
+      const positioned = rules.some(
+        ({ selector: other, body }) =>
+          other === selector &&
+          /^(?:relative|absolute|sticky|fixed)$/.test(property(body, "position") ?? ""),
+      );
+      expect(positioned, `${selector} scrolls and is not positioned`).toBe(true);
+    }
+  });
+
+  it("does not stick the demo banner to the top of a narrow screen", () => {
+    // On a 320 pixel screen it is three lines tall, and Chromium puts the start of a tall focused
+    // box under it. A sticky banner stays where the wide screens have it.
+    const narrow =
+      /@media \(max-width: 40rem\) \{\s*\.demo-banner \{\s*position: static;\s*\}\s*\}/;
+    expect(narrow.test(bare(css))).toBe(true);
+    expect(property(ruleBody(".demo-banner"), "position")).toBe("sticky");
   });
 });
 

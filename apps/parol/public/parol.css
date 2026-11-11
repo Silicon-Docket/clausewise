@@ -18,7 +18,8 @@
  *   ok, bad, warn and info edge on paper 3 (chip borders)
  *   focus on select, ok-bg, bad-bg, info-bg, warn-bg and neutral-bg 3 (a ring on a notice, a banner
  *   or the chosen row)                       accent on ok-bg, bad-bg and info-bg 4.5 (a link in a notice)
- *   skip link, focused: its fill on banner-bg 3, and the larger of its fill and its border on paper 3
+ *   skip link, focused: its fill on banner-bg 3, the larger of its fill and its border on paper 3,
+ *   and its ring (drawn inside the fill) on its fill 3
  */
 
 :root {
@@ -254,16 +255,21 @@ bdi {
 /*
  * Focused, the link is the banner turned inside out (the banner's ink as its fill, the banner's
  * ground as its text and its border), so it stands out from the banner it floats over and, where it
- * hangs below the banner, from the page. The ring takes the fill's colour for the same reason: the
- * accent is the colour of the banner's own surroundings here and could not be seen against it.
- * test/pages/styles.test.ts recomputes both pairs in both themes.
+ * hangs below the banner, from the page. Its ring is drawn inside the fill, in the banner's ground,
+ * so it is seen against the fill however much of the link hangs over the banner and however much
+ * over the page: a ring outside the box would be lost against one of the two in one theme.
+ * test/pages/styles.test.ts recomputes the pairs in both themes, and the browser audit
+ * (test/a11y/browser) measures the ring on the page.
  */
 .skip-link:focus {
   top: 0.5rem;
   background: var(--banner-ink);
   color: var(--banner-bg);
   border: 2px solid var(--banner-bg);
-  outline-color: var(--banner-ink);
+  /* The ring is drawn inside the fill, so that it is seen against the fill and not against what
+     the link happens to float over (the banner, the page, or both). */
+  outline: 3px solid var(--banner-bg);
+  outline-offset: -7px;
 }
 
 .demo-banner {
@@ -277,6 +283,17 @@ bdi {
   font-size: 0.8rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+/*
+ * On a narrow screen the banner is not stuck to the top: it is several lines tall there, and a
+ * stuck banner covers the first part of a tall box that takes focus (Chromium does not scroll such
+ * a box clear of it). It stays at the top of the page, so it is still seen first.
+ */
+@media (max-width: 40rem) {
+  .demo-banner {
+    position: static;
+  }
 }
 
 .site-header {
@@ -570,6 +587,9 @@ bdi {
 .table-scroll {
   max-width: 100%;
   overflow-x: auto;
+  /* The box is the containing block of what is positioned inside it (the text for screen readers
+     in a cell is), so that such a part stays inside the box and cannot widen the page. */
+  position: relative;
   border-bottom: 1px solid var(--rule);
   /* An edge shadow that shows only on a side with more to scroll to, so a table cut off at the
      edge of a phone does not look as if it ends there. The two paper-coloured strips travel with
@@ -669,7 +689,9 @@ bdi {
   margin: 0 0 0.5rem;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem;
+  /* More than the reach of the focus ring (2px away, 3px wide), so that the ring of one filter is
+     drawn on the page and not on the filled one beside it. */
+  gap: 0.5rem;
 }
 
 .filter {
@@ -1310,6 +1332,7 @@ fieldset {
 .doc-text.long {
   max-height: 24rem;
   overflow: auto;
+  position: relative;
 }
 
 .doc-text.suggestion {

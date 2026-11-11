@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   FakeDocument,
@@ -12,6 +13,7 @@ import { all, attr, byTag, parseHtml, readable, type El } from "../pages/html.js
 import { matterPage, mattersPage, runPage } from "../pages/render.js";
 import { buildMatterView, buildRunSummary, buildRunningMatterView } from "../pages/support.js";
 import { variants } from "../pages/variants.js";
+import { fileDialogGaps, mouseCallsIn } from "./browser/keyboard-only.js";
 import { tabStops } from "./rules.js";
 
 /**
@@ -634,5 +636,51 @@ describe("every control the script adds a shortcut to works without it", () => {
       if (byTag(root, "noscript").length > 0) bad.push(`${name}: a noscript element`);
     }
     expect(bad).toEqual([]);
+  });
+});
+
+describe("the keyboard flows in a real browser use the keyboard only", () => {
+  const folder = join(import.meta.dirname, "browser");
+  const FLOWS = join(folder, "flows.test.ts");
+
+  it("has a flows file, and it presses keys and types, and never clicks, fills in, ticks, chooses, hovers or drags", () => {
+    expect(existsSync(FLOWS), "browser/flows.test.ts").toBe(true);
+    expect(mouseCallsIn(readFileSync(FLOWS, "utf8"))).toEqual([]);
+  });
+
+  it("allows one call that is not a key, the file input, and wants the reason beside each", () => {
+    expect(fileDialogGaps(readFileSync(FLOWS, "utf8"))).toEqual([]);
+  });
+
+  it("finds each kind of call in a crafted file, and leaves keys and comments alone", () => {
+    const bad = [
+      "await page.click('a');",
+      "await page.dblclick('a');",
+      "await page.fill('input', 'x');",
+      "await page.check('input');",
+      "await page.selectOption('select', 'v');",
+      "await page.hover('a');",
+      "await page.mouse.click(1, 2);",
+      "await page.touchscreen.tap(1, 2);",
+      "await page.locator('a').focus();",
+    ];
+    for (const line of bad) expect(mouseCallsIn(line), line).toHaveLength(1);
+    expect(
+      mouseCallsIn(
+        [
+          "await page.keyboard.press('Tab');",
+          "await page.keyboard.type('x');",
+          "// a person would .click( here, but the flow does not",
+          "/* .fill( is also not used */",
+          "const url = 'http://example.test/a';",
+        ].join("\n"),
+      ),
+    ).toEqual([]);
+    expect(fileDialogGaps("await page.setInputFiles('input', 'f');")).toEqual([1]);
+    expect(
+      fileDialogGaps(
+        "// the file dialog cannot be driven headless\nawait page.setInputFiles('i', 'f');",
+      ),
+    ).toEqual([]);
   });
 });
