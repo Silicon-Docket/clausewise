@@ -33,6 +33,14 @@ export const urls = {
     `/matters/${e(matterId)}/findings/${e(findingId)}`,
   review: (matterId: string, findingId: string) =>
     `/matters/${e(matterId)}/findings/${e(findingId)}/reviews`,
+  /** Report a missed issue against a run (package W2.6a). */
+  missedIssues: (matterId: string, runId: string) =>
+    `/matters/${e(matterId)}/runs/${e(runId)}/missed-issues`,
+  /** Add a note to a finding (package W2.6a). */
+  notes: (matterId: string, findingId: string) =>
+    `/matters/${e(matterId)}/findings/${e(findingId)}/notes`,
+  /** Rate a matter once a memo has been exported (package W2.6a). */
+  rating: (matterId: string) => `/matters/${e(matterId)}/rating`,
   memos: (matterId: string) => `/matters/${e(matterId)}/memos`,
   memoFile: (matterId: string, memoId: string) => `/matters/${e(matterId)}/memos/${e(memoId)}/file`,
   /**
@@ -56,5 +64,13 @@ export const urls = {
   },
   /** The audit log check (package W2.7). */
   audit: () => "/audit",
+  /** The quickstart page, open to everyone (package W2.8). */
+  quickstart: () => "/quickstart",
+  /** The help page, open to everyone; `anchor` is the id of a term or a group on it (package W2.8). */
+  help: (anchor?: string) => `/help${anchor === undefined || anchor === "" ? "" : `#${e(anchor)}`}`,
+  /** Starts the person's training matter (package W2.8). A POST. */
+  training: () => "/training",
+  /** The trainer's answer key, for the legal engineer and an administrator (package W2.8). */
+  trainerKey: () => "/training/key",
   asset: (name: string) => `/assets/${e(name)}`,
 } as const;

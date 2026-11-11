@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AuditPageView } from "../../src/services/views.js";
+import { navItemsFor } from "../../src/server/pages/layout.js";
 import { urls } from "../../src/server/urls.js";
 import { accessibleName, expectAccessible, tabStops } from "../a11y/rules.js";
 import {
@@ -141,15 +142,11 @@ describe("the keyboard and the labels", () => {
   it("has these tab stops, in this order: the skip link, the brand, the nav, sign out, Check again", () => {
     const root = parseHtml(html);
     const names = tabStops(root).map((el) => accessibleName(root, el));
-    expect(names).toEqual([
-      "Skip to main content",
-      "Parol",
-      "Matters",
-      "Evaluations",
-      "Audit log",
-      "Sign out",
-      "Check again",
-    ]);
+    // The nav is the table's, as an administrator is shown it, so a link added to the table moves
+    // this list and not the test.
+    const nav = navItemsFor("admin").map((item) => item.label);
+    expect(nav).toContain("Audit log");
+    expect(names).toEqual(["Skip to main content", "Parol", ...nav, "Sign out", "Check again"]);
   });
 
   it("has no control in the page that changes anything: no tab stop but the links and sign out", () => {

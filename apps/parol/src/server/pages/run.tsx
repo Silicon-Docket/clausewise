@@ -36,8 +36,10 @@ import {
   decisionValidity,
 } from "./components.js";
 import { FindingPane } from "./finding.js";
+import { WordsHelp } from "./help.js";
 import { Layout, type Chrome } from "./layout.js";
 import { WarningList, runStatusUrl } from "./matter.js";
+import { TrainingBanner } from "./training.js";
 
 export const ISSUE_FILTERS = ["all", "open", "escalated", "stale"] as const;
 export type IssueFilter = (typeof ISSUE_FILTERS)[number];
@@ -303,6 +305,8 @@ export function RunPage(props: RunPageProps) {
         </p>
       </header>
 
+      <TrainingBanner compact training={matter.training} provider={run.model.provider} />
+
       {isStandInProvider(run.model.provider) ? (
         <section class="banner banner-standin" aria-labelledby="run-standin-heading">
           <h2 id="run-standin-heading">{STAND_IN_HEADING}</h2>
@@ -433,6 +437,7 @@ export function RunPage(props: RunPageProps) {
                 Flags say what the review could not confirm. Each one is explained in the inspector.
               </p>
               <KeysHelp />
+              <WordsHelp rows={issues} />
             </div>
             <aside
               class="inspector"

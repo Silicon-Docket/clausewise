@@ -42,11 +42,29 @@ export const FIELDS = {
   discrepancy: "discrepancy",
   fallbackLanguage: "fallbackLanguage",
   findingContentSha256: "findingContentSha256",
+  /** Why an edit or a reject was made, one of `REASON_CODES` (package W2.6a). */
+  reasonCode: "reasonCode",
+  /** A checkbox on the decision form; the value is `MINOR_EDIT_VALUE` (package W2.6a). */
+  minorEdit: "minorEdit",
+
+  // Feedback. A missed issue names a rule (or `NOT_COVERED_VALUE`), says where, and says what.
+  ruleKey: "ruleKey",
+  location: "location",
+  note: "note",
+  rating: "rating",
+  comment: "comment",
+
+  // Training. The person starting the training matter may name a trainer (package W2.8).
+  trainerUserId: "trainerUserId",
 } as const;
 
 export const SIGN_IN_INTENT = "sign-in";
 export const SIGN_OUT_INTENT = "sign-out";
 export const CONFIRM_VALUE = "yes";
+/** What the rule choice posts for "Not covered by any rule". Not a possible rule key (rule keys start with a letter or digit). */
+export const NOT_COVERED_VALUE = "(none)";
+/** What the minor-edit checkbox posts when it is ticked. */
+export const MINOR_EDIT_VALUE = "yes";
 
 const ROLE_FIELD_PREFIX = "evidenceRole:";
 

@@ -195,6 +195,7 @@ const toMatter = (r: RawMatter): MatterRow => ({
   createdAt: r.created_at,
   retainUntil: r.retain_until,
   deletedAt: r.deleted_at,
+  trainingKey: null, // STUB(W2.8): reads matters.training_key once migration 007 adds the column.
 });
 const toMember = (r: RawMember): MemberRow => ({
   matterId: r.matter_id,

@@ -12,6 +12,7 @@ import type { AuthorizedMatter, Principal } from "../auth/types.js";
 import type { MatterRole } from "../contracts.js";
 import type { AuditService } from "./audit.js";
 import type { EvaluationService } from "./evaluations.js";
+import type { FeedbackService } from "./feedback.js";
 import type {
   DecisionRequest,
   FindingView,
@@ -36,6 +37,8 @@ export interface MatterService {
       reviewerUserId: string | null;
       /** Days to keep the matter, from creation. Absent: the default. Package W2.7 reads it. */
       retainDays?: number;
+      /** Makes the matter the person's training matter. Package W2.8 reads it; only `T01` exists. */
+      training?: "T01";
     },
   ): MatterSummary;
   /** Only matters the principal is a member of. */
@@ -113,4 +116,6 @@ export interface Services {
   /** Pages that name no matter. Each function checks the global role of the principal first. */
   evaluations: EvaluationService;
   audit: AuditService;
+  /** Missed issues, notes and ratings, for the matters the person is a member of (package W2.6a). */
+  feedback: FeedbackService;
 }

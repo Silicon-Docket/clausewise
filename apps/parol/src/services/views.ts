@@ -17,6 +17,7 @@ import type {
   MatterRole,
   MatterStatus,
   QuoteCheck,
+  ReasonCode,
   ReviewDecision,
   RunStatus,
   Status,
@@ -131,6 +132,11 @@ export interface MatterSummary {
    * still fits; absent, a page shows no "past" mark. Package W2.7 fills it.
    */
   pastRetention?: boolean;
+  /**
+   * The training key of a matter made for the training exercise (`T01`), or null for an ordinary
+   * matter. Optional so that a summary built before it existed still fits. Package W2.8 reads it.
+   */
+  training?: string | null;
 }
 
 export interface StartReadiness {
@@ -175,6 +181,28 @@ export interface MatterView {
   workflows?: WorkflowOption[];
   /** The retention date and what the page needs to explain it. Package W2.7 fills it; absent, the page shows no section. */
   retention?: RetentionView;
+  /**
+   * How far the person has got through the training exercise. Set only for a matter made for it;
+   * absent or null, the page shows no training section. Package W2.8 fills it.
+   */
+  training?: TrainingProgressView | null;
+}
+
+/** Where one step of the training exercise stands. Package W2.8 (progress.ts) fills it. */
+export interface TrainingStepProgress {
+  n: number;
+  title: string;
+  /** `seeded`: set up by the script. `trainer`: only the trainer can check it. */
+  state: "done" | "not_yet" | "seeded" | "trainer";
+  note: string;
+}
+
+export interface TrainingProgressView {
+  key: string;
+  steps: TrainingStepProgress[];
+  /** Steps Parol can check from what it stores: 3 to 7. */
+  checkable: number;
+  checkableDone: number;
 }
 
 export interface RetentionView {
@@ -217,6 +245,8 @@ export interface IssueRow {
   evidenceCount: number;
   /** The current decision, or null. */
   review: ReviewSummary | null;
+  /** How many notes the finding carries. Optional so that a row built before it existed still fits. Package W2.6a, slice D. */
+  noteCount?: number;
 }
 
 export interface EvidenceView {
@@ -240,6 +270,10 @@ export interface ReviewHistoryItem {
   at: string;
   reason: string | null;
   validity: "current" | "stale";
+  /** Why an edit or a reject was made; null for other decisions and for decisions made before it existed. Package W2.6a. */
+  reasonCode?: ReasonCode | null;
+  /** Whether an edit was marked minor; null for other decisions and for decisions made before it existed. Package W2.6a. */
+  minorEdit?: boolean | null;
   /** Changed fields only, as the reviewer entered them. */
   edits: {
     status?: Status;
@@ -272,6 +306,10 @@ export interface FindingView {
   contentSha256: string;
   /** Whether the signed-in user may decide it now (role, validity), and if not, a fixed reason. */
   canDecide: { allowed: boolean; reason: string | null };
+  /** The notes on the finding, oldest first. Package W2.6a, slice D. */
+  notes?: NoteView[];
+  /** Whether the signed-in user may add a note now, and if not, a fixed reason. Package W2.6a, slice D. */
+  canAddNote?: { allowed: boolean; reason: string | null };
 }
 
 export interface DecisionRequest {
@@ -286,6 +324,55 @@ export interface DecisionRequest {
   } | null;
   /** Required for edit, reject and escalate. */
   reason: string | null;
+  /** Required for edit and reject, not allowed for accept and escalate. Package W2.6a. */
+  reasonCode?: ReasonCode | null;
+  /** Only an edit may carry it. Package W2.6a. */
+  minorEdit?: boolean | null;
+}
+
+// Feedback capture (package W2.6a). The shapes are the design's, section 3.4.
+
+/** A rule of a run's playbook, for the missed-issue form. */
+export interface RuleChoice {
+  ruleKey: string;
+  title: string;
+}
+
+export interface MissedIssueView {
+  feedbackId: string;
+  runId: string;
+  /** Null: reported as not covered by any rule. */
+  ruleKey: string | null;
+  /** The title in the run's playbook; null for not covered. */
+  ruleTitle: string | null;
+  location: string | null;
+  note: string;
+  reporterName: string;
+  at: string;
+}
+
+export interface NoteView {
+  feedbackId: string;
+  findingId: string;
+  note: string;
+  authorName: string;
+  at: string;
+}
+
+export interface RatingView {
+  feedbackId: string;
+  rating: 1 | 2 | 3 | 4 | 5;
+  comment: string | null;
+  at: string;
+}
+
+export interface MatterFeedbackView {
+  /** Oldest first. */
+  missedIssues: MissedIssueView[];
+  /** Oldest first. */
+  notes: NoteView[];
+  /** Other people's ratings are never returned. */
+  myRating: RatingView | null;
 }
 
 /** A user a matter can be shared with, for the reviewer picker. */

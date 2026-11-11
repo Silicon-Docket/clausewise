@@ -29,6 +29,9 @@ export interface UserRow {
   demo: true;
 }
 
+/** The key a matter carries when it was made for the training exercise (package W2.8). */
+export type TrainingKey = "T01";
+
 export interface MatterRow {
   id: string;
   name: string;
@@ -42,6 +45,11 @@ export interface MatterRow {
   createdAt: string;
   retainUntil: string;
   deletedAt: string | null;
+  /**
+   * The training key, or null for every ordinary matter. Contract commit CC2: always null until
+   * W2.8 adds the column (migration 007) and reads it in `toMatter`.
+   */
+  trainingKey: TrainingKey | null;
 }
 
 export interface MatterWithRole extends MatterRow {

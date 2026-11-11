@@ -98,6 +98,17 @@ export type FallbackBasis = (typeof FALLBACK_BASES)[number];
 export const REVIEW_DECISIONS = ["accept", "edit", "reject", "escalate"] as const;
 export type ReviewDecision = (typeof REVIEW_DECISIONS)[number];
 
+/** Why a reviewer edited or rejected a finding. The order is the order the form lists them in. */
+export const REASON_CODES = [
+  "wrong_status",
+  "wrong_evidence",
+  "missed_context",
+  "bad_fallback",
+  "unclear",
+  "other",
+] as const;
+export type ReasonCode = (typeof REASON_CODES)[number];
+
 export const MATTER_STATUSES = [
   "draft",
   "ready",

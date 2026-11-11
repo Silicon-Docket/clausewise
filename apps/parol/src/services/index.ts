@@ -1,6 +1,7 @@
 import { EMPTY_SOURCE } from "../evaluations/index.js";
 import { createAuditService } from "./audit.js";
 import { createEvaluationService } from "./evaluations.js";
+import { createFeedbackService } from "./feedback.js";
 import { createMatterService } from "./matters.js";
 import { createPresenter } from "./present.js";
 import { createReviewService } from "./reviews.js";
@@ -24,6 +25,7 @@ export function createServices(deps: ServiceDeps): Services {
     reviews: createReviewService(deps, present),
     evaluations: createEvaluationService(deps.evaluations ?? EMPTY_SOURCE),
     audit: createAuditService(deps),
+    feedback: createFeedbackService(deps, present),
   };
 }
 

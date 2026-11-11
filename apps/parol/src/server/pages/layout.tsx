@@ -127,6 +127,8 @@ export interface NavItem {
 /** The links of the primary navigation, in the order they are shown. */
 export const NAV_ITEMS: readonly NavItem[] = [
   { label: "Matters", href: urls.matters() },
+  { label: "Quickstart", href: urls.quickstart() },
+  { label: "Help", href: urls.help() },
   { label: "Evaluations", href: urls.evaluations(), global: "evaluation.read" },
   { label: "Audit log", href: urls.audit(), global: "audit.read" },
 ];
