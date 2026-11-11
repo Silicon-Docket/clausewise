@@ -605,7 +605,7 @@ describe("model calls", () => {
     inputTokens: 1200,
     outputTokens: 300,
     cacheReadTokens: 0,
-    cacheWriteTokens: null,
+    cacheWriteTokens: 0,
     ...over,
   });
 
@@ -630,7 +630,7 @@ describe("model calls", () => {
       ruleKey: "dur-1",
       latencyMs: 812,
       inputTokens: 1200,
-      cacheWriteTokens: null,
+      cacheWriteTokens: 0,
       costUsdEstimate: null,
     });
     expect(rows[1]).toMatchObject({

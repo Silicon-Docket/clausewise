@@ -35,6 +35,8 @@ import {
 } from "./run-support.js";
 import { createSupportChecker } from "./support-checker.js";
 import type { RunProgress } from "./views.js";
+import { NO_PRICING } from "../usage/prices.js";
+import { createRunScope, runStore, type RunScope } from "../usage/scope.js";
 
 /** How many rules are analysed, and then verified, at once within one run. */
 export const RULE_CONCURRENCY = 3;
@@ -59,6 +61,8 @@ interface Job {
   stopReason: StopReason | null;
   /** Set by the watched generator when the provider rejects the key, the model or the account. */
   fatal: RunErrorKind | null;
+  /** What the provider's responses named while this run was working: the models that answered. */
+  scope: RunScope;
 }
 
 /** A rule as the stages read it: the playbook's fields, without the store's ids. */
@@ -143,6 +147,7 @@ export function createRunEngine(deps: ServiceDeps) {
       controller: new AbortController(),
       stopReason: null,
       fatal: null,
+      scope: createRunScope(runId),
     };
     all.add(job);
     byRun.set(runId, job);
@@ -217,7 +222,8 @@ export function createRunEngine(deps: ServiceDeps) {
         say("not started, it is no longer queued");
         return;
       }
-      await execute(job, run, say);
+      // The scope tells the metering hooks which run a response belongs to (usage/scope.ts).
+      await runStore.run(job.scope, () => execute(job, run, say));
       say("succeeded");
     } catch (error) {
       try {
@@ -226,6 +232,29 @@ export function createRunEngine(deps: ServiceDeps) {
         // Nothing here may escape as an unhandled rejection. `settle` does not give up on a write
         // that fails, so this is only the log line itself failing.
       }
+    } finally {
+      recordModels(job);
+    }
+  }
+
+  /**
+   * Writes down the model(s) the provider named for this run, whatever way the run ended: a
+   * cancelled or failed run was answered by a model too. A unit writes them with its calls as it
+   * finishes; this catches a response that arrived after the last unit did, such as one for a unit
+   * a cancel cut short. The run may be gone by now (its matter deleted), which is not an error.
+   *
+   * Nothing here may escape: it runs as the job ends, and a rejection from it would be an unhandled
+   * one. A failure is logged by its class name only.
+   */
+  function recordModels(job: Job): void {
+    if (job.scope.models.size === 0) return;
+    try {
+      repo.recordReportedModels(job.matterId, job.runId, [...job.scope.models]);
+    } catch (error) {
+      if (error instanceof StoreError) return;
+      deps.log(
+        `run ${job.runId} (matter ${job.matterId}): could not record the reported model (${error instanceof Error ? error.name : "unknown error"})`,
+      );
     }
   }
 
@@ -316,6 +345,7 @@ export function createRunEngine(deps: ServiceDeps) {
   async function execute(job: Job, start: RunRow, say: (event: string) => void): Promise<void> {
     const { matterId, runId } = job;
     const signal = job.controller.signal;
+    const pricing = deps.pricing ?? NO_PRICING;
     const generator = watchGenerator(deps.generator, (kind) => {
       // Noted only. The stages turn the error into a recorded call and return, and the unit that
       // met it stops the run once that record is saved; aborting here would drop the record.
@@ -377,7 +407,11 @@ export function createRunEngine(deps: ServiceDeps) {
         { status: "succeeded"; output: unknown } | { status: "failed"; errorKind: RunErrorKind },
     ): void => {
       commit(() => {
-        if (calls.length > 0) repo.insertModelCalls(matterId, runId, calls);
+        if (calls.length > 0)
+          repo.insertModelCalls(matterId, runId, pricing.priceCalls(calls, start.modelRequested));
+        // As soon as a model is known, and in the same step as the calls that it answered.
+        if (job.scope.models.size > 0)
+          repo.recordReportedModels(matterId, runId, [...job.scope.models]);
         repo.recordStageResult(matterId, runId, {
           stage,
           unit,

@@ -397,7 +397,8 @@ describe("a leak that only one direction or one channel can show", () => {
     const found = hitsOf(result, "store_rows", "canary").map((hit) => hit.label);
     expect(found.sort()).toEqual(planted.map((table) => `case ${table}`).sort());
     // The tables that take a write without a trigger or a check refusing it. The others (the spans,
-    // the findings, the reviews, the memos, the audit trail) refuse one and are shown below.
+    // the findings, the reviews, the memos, the audit trail, and since migration 004 the model
+    // calls, which are never edited once recorded) refuse one and are shown below.
     expect(planted).toEqual(
       expect.arrayContaining([
         "matters",
@@ -406,9 +407,9 @@ describe("a leak that only one direction or one channel can show", () => {
         "document_versions",
         "runs",
         "run_stages",
-        "model_calls",
       ]),
     );
+    expect(planted).not.toContain("model_calls");
   });
 
   it("is counted in every table of the scan, case side and canary side, whatever a table refuses to take", async () => {

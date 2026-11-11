@@ -345,8 +345,8 @@ describe("finding 3: a model call names a rule of the run's playbook", () => {
     latencyMs: 12,
     inputTokens: 10,
     outputTokens: 5,
-    cacheReadTokens: null,
-    cacheWriteTokens: null,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
   });
 
   it("refuses a sentence of document text in the rule key column", () => {

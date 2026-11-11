@@ -9,6 +9,7 @@ import {
 import type { ComparisonSource } from "../evaluations/source.js";
 import type { BuildMemo, SupportChecker } from "../module-contracts.js";
 import type { FileStore, Repository } from "../store/index.js";
+import type { CallPricer } from "../usage/prices.js";
 import { ForbiddenError } from "./errors.js";
 
 export interface ServiceConfig {
@@ -39,6 +40,12 @@ export interface ServiceDeps {
   buildMemo?: BuildMemo;
   /** Where the published evaluation comparisons are read from. Default: a source with none. */
   evaluations?: ComparisonSource;
+  /**
+   * Gives each model call its estimated cost when the engine records it, from the price table the
+   * operator named. Default: none, so tokens are recorded and no cost is (the page says "not
+   * priced"). Stand-in readers report no tokens, so they have no cost either way.
+   */
+  pricing?: CallPricer;
 }
 
 export const DEFAULT_MAX_CONCURRENT_RUNS = 2;

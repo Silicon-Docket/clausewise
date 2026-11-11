@@ -11,6 +11,7 @@ import {
 import type { MemoFinding, MemoInput } from "../module-contracts.js";
 import { verifyQuote } from "../quotes.js";
 import { settlementReason } from "../settlement.js";
+import { memoUsageText } from "../usage/summary.js";
 import { formatUtcDate, parseUtcInstant } from "./dates.js";
 import { MemoGateError } from "./errors.js";
 import {
@@ -110,6 +111,8 @@ export interface ProvenanceView {
   modelProvider: string;
   modelRequested: string;
   modelReported: string | null;
+  /** What the model calls used, with the number of calls it is out of; null when the memo says nothing of it. */
+  usageText: string | null;
   manifestSha256: string;
   startedOn: string;
   documents: {
@@ -692,6 +695,10 @@ export function planMemo(input: MemoInput): MemoPlan {
         input.run.modelReported === null || clean(input.run.modelReported).trim() === ""
           ? null
           : clean(input.run.modelReported).trim(),
+      usageText:
+        input.run.usage === undefined || input.run.usage === null
+          ? null
+          : memoUsageText(input.run.usage),
       manifestSha256: clean(input.run.manifestSha256).trim(),
       startedOn: formatUtcDate(input.run.startedAt) ?? "not recorded",
       documents,

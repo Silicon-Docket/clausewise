@@ -25,6 +25,7 @@ import type {
   WorkflowManifest,
 } from "./contracts.js";
 import type { Severity } from "@clausewise/playbook";
+import type { UsageSummary } from "./usage/summary.js";
 
 // ---------------------------------------------------------------------------------------------
 // Ingest (src/ingest)
@@ -247,6 +248,11 @@ export interface MemoInput {
     modelReported: string | null;
     manifestSha256: string;
     startedAt: string;
+    /**
+     * What the run's model calls used. The memo prints counts with their denominators and never a
+     * cost (see `memoUsageText`). Absent, or for a stand-in reader, the memo has no usage line.
+     */
+    usage?: UsageSummary | null;
   };
   documents: {
     label: string;

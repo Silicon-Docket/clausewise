@@ -505,6 +505,7 @@ function provenance(plan: MemoPlan): Paragraph[] {
       "Model:",
       `requested ${p.modelProvider} ${p.modelRequested}; reported by the provider: ${p.modelReported ?? "not reported"}.`,
     ),
+    ...(p.usageText === null ? [] : [labelled("Usage:", p.usageText)]),
     // A program that stands in for a model must say so in the memorandum itself, because the file
     // is what leaves the system and the page that said it does not travel with it.
     ...(isStandInProvider(p.modelProvider)

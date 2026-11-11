@@ -15,6 +15,7 @@ import {
   type RunRow,
   type StoredIngestWarning,
 } from "../store/index.js";
+import { summarizeUsage } from "../usage/summary.js";
 import type { ServiceConfig } from "./deps.js";
 import {
   CANNOT_DECIDE,
@@ -234,6 +235,7 @@ export function createPresenter(
           }),
       progress,
       findingCount: repo.listFindings(run.matterId, run.id).length,
+      usage: summarizeUsage(repo.summarizeRunUsage(run.matterId, run.id), run.modelProvider),
     };
   }
 

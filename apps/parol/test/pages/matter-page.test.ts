@@ -459,7 +459,25 @@ describe("MatterPage reviews and memos", () => {
     expect(readable(table)).toContain("Current");
     expect(readable(table)).toContain("8 findings");
     expect(readable(table)).toContain("parol-nda-recipient 1.0.0");
-    expect(readable(table)).toContain("test-model-2026-10");
+    // The fixture's reader is a scripted one, which the table says it is and does not call a model.
+    expect(readable(table)).toContain("Read by a scripted stand-in (scripted, test-model)");
+  });
+
+  it("names the model that answered, and the one that was asked for when they differ", () => {
+    const answers = (model: { requested: string; reported: string | null }): string => {
+      const run = buildRunSummary({ model: { provider: "anthropic", ...model } });
+      const root = page(buildMatterView({ runs: [run], currentRun: run }));
+      return readable(byTag(section(root, "runs"), "table")[0]!);
+    };
+    expect(answers({ requested: "test-model", reported: "test-model-2026-10" })).toContain(
+      "Answered by test-model-2026-10 (requested test-model)",
+    );
+    expect(answers({ requested: "test-model", reported: "test-model" })).toContain(
+      "Answered by test-model",
+    );
+    expect(answers({ requested: "test-model", reported: null })).toContain(
+      "Requested test-model; the provider did not say which model answered",
+    );
   });
 
   it("marks a finished review whose inputs changed as out of date", () => {

@@ -283,7 +283,7 @@ describe("RunPage reader", () => {
         "not an analysis of these documents by any model",
       );
       expect(readable(first(root, (el) => hasClass(el, "run-meta")))).toContain(
-        `Read by ${provider}, parol-reader`,
+        `Read by a scripted stand-in (${provider}, parol-reader)`,
       );
     }
   });
@@ -296,7 +296,7 @@ describe("RunPage reader", () => {
     });
     expect(banner(root)).toBeUndefined();
     expect(readable(first(root, (el) => hasClass(el, "run-meta")))).toContain(
-      "Read by anthropic, claude-test-2026",
+      "Answered by claude-test-2026 (requested claude-test)",
     );
   });
 

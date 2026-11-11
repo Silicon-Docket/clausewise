@@ -15,7 +15,7 @@ import { inputsDigestOf, type MattersApi } from "./repo-matters.js";
 import type { PlaybooksApi } from "./repo-playbooks.js";
 import { CallRecordSchema, RunManifestSchema } from "./schemas.js";
 import { canRunTransition, isActiveRunStatus, isTerminalRunStatus } from "./states.js";
-import type { ModelCallRow, RunRow, RunStageRow } from "./types.js";
+import type { ModelCallRow, RunRow, RunStageRow, RunUsageAggregate } from "./types.js";
 
 interface RawRun {
   id: string;
@@ -47,6 +47,18 @@ interface RawStage {
   error_kind: string | null;
   started_at: string;
   finished_at: string | null;
+}
+interface RawUsage {
+  calls: number;
+  calls_with_usage: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  calls_priced: number;
+  cost_usd: number | null;
+  price_tables: number;
+  price_table_sha256: string | null;
 }
 interface RawModelCall {
   id: string;
@@ -699,6 +711,75 @@ export function createRunsApi(ctx: Ctx, matters: MattersApi, playbooks: Playbook
       runId,
     ).map(toModelCall);
 
+  // --- usage and the reported model --------------------------------------------------------
+
+  /**
+   * A model name as a provider's response may carry it: plain, one line, at most 100 characters.
+   * The same rule `reported-model.ts` applies when it reads a response, checked again here because
+   * this column is shown on pages and printed in a memo.
+   */
+  const REPORTED_MODEL = /^[A-Za-z0-9][\w.:/@+-]{0,99}$/;
+  /** The most characters the column holds (the trigger `runs_model_reported_shape` says the same). */
+  const MAX_REPORTED_LENGTH = 300;
+
+  /**
+   * Records the model(s) a run's responses named, as soon as one is known. The names are sorted,
+   * distinct and joined by a comma and a space. A list that does not fit the column keeps the names
+   * that do. An empty list never overwrites a value. The run may be in any state: a run that was
+   * cancelled or failed has still been answered by a model, and a cancel settles the run before
+   * the engine sees it. Not audited: it is provenance the engine derives, like a model call row.
+   */
+  function recordReportedModels(matterId: string, runId: string, models: readonly string[]): void {
+    const names = [...new Set(models)].sort();
+    if (names.length === 0) return;
+    for (const name of names)
+      if (!REPORTED_MODEL.test(name))
+        throw new ValidationError("bad_reported_model", "a reported model is not a plain name");
+    const kept: string[] = [];
+    for (const name of names) {
+      if ([...kept, name].join(", ").length > MAX_REPORTED_LENGTH) break;
+      kept.push(name);
+    }
+    const value = kept.join(", ");
+    tx(() => {
+      const current = requireRun(matterId, runId);
+      if (current.modelReported === value) return;
+      run(`UPDATE runs SET model_reported = ? WHERE id = ?`, value, runId);
+    });
+  }
+
+  /** One aggregate over the run's call rows, scoped to the matter through the run. */
+  function summarizeRunUsage(matterId: string, runId: string): RunUsageAggregate {
+    const row = get<RawUsage>(
+      `SELECT COUNT(*) AS calls,
+              COALESCE(SUM(c.input_tokens IS NOT NULL), 0) AS calls_with_usage,
+              COALESCE(SUM(c.input_tokens), 0) AS input_tokens,
+              COALESCE(SUM(c.output_tokens), 0) AS output_tokens,
+              COALESCE(SUM(c.cache_read_tokens), 0) AS cache_read_tokens,
+              COALESCE(SUM(c.cache_write_tokens), 0) AS cache_write_tokens,
+              COALESCE(SUM(c.cost_usd_estimate IS NOT NULL), 0) AS calls_priced,
+              SUM(c.cost_usd_estimate) AS cost_usd,
+              COUNT(DISTINCT c.price_table_sha256) AS price_tables,
+              MIN(c.price_table_sha256) AS price_table_sha256
+         FROM model_calls c JOIN runs r ON r.id = c.run_id
+        WHERE r.matter_id = ? AND c.run_id = ?`,
+      matterId,
+      runId,
+    ) as RawUsage;
+    return {
+      calls: row.calls,
+      callsWithUsage: row.calls_with_usage,
+      inputTokens: row.input_tokens,
+      outputTokens: row.output_tokens,
+      cacheReadTokens: row.cache_read_tokens,
+      cacheWriteTokens: row.cache_write_tokens,
+      callsPriced: row.calls_priced,
+      costUsd: row.calls_priced === 0 ? null : row.cost_usd,
+      priceTables: row.price_tables,
+      priceTableSha256: row.price_tables === 1 ? row.price_table_sha256 : null,
+    };
+  }
+
   return {
     buildRunManifest,
     createRun,
@@ -714,6 +795,8 @@ export function createRunsApi(ctx: Ctx, matters: MattersApi, playbooks: Playbook
     listStages,
     insertModelCalls,
     listModelCalls,
+    recordReportedModels,
+    summarizeRunUsage,
     internal: { requireRun, requireWritableRun },
   };
 }

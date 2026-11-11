@@ -5,12 +5,7 @@ import type { AddressInfo } from "node:net";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { getRequestListener, type ServerType } from "@hono/node-server";
-import {
-  createObjectGenerator,
-  loadLlmConfig,
-  type GenerateObjectRequest,
-  type ObjectGenerator,
-} from "@clausewise/llm";
+import { loadLlmConfig, type GenerateObjectRequest, type ObjectGenerator } from "@clausewise/llm";
 import { createScriptedGenerator } from "@clausewise/llm/testing";
 import type { Hono } from "hono";
 import { CATEGORY_IDS } from "./contracts.js";
@@ -26,6 +21,7 @@ import {
 import { acquireInstanceLock } from "./boot/instance-lock.js";
 import { createComparisonSource } from "./evaluations/index.js";
 import { reportRetentionNotices } from "./retention/notices.js";
+import { isStandInProvider } from "./stand-in.js";
 import {
   FileStore,
   createRepository,
@@ -33,6 +29,13 @@ import {
   type Database,
   type Repository,
 } from "./store/index.js";
+import { createLiveGenerator } from "./usage/live.js";
+import {
+  PriceFileError,
+  createCallPricer,
+  loadPriceFile,
+  type CallPricer,
+} from "./usage/prices.js";
 
 /**
  * Starting the server. `parseEnv` turns the environment into settings and refuses the unsafe
@@ -63,6 +66,12 @@ export interface ParolSettings {
   /** Single-person demo: one user may prepare and review, and the memo says so. */
   relaxedSegregation: boolean;
   maxUploadBytes: number;
+  /**
+   * A JSON file of prices, USD per million tokens, in the format of `evals/prices.json`. With it
+   * the server gives each model call an estimated cost; without it calls are recorded with their
+   * tokens and no cost. Null when the variable is not set.
+   */
+  pricesFile: string | null;
   /** Things the operator should know before the server starts. */
   warnings: string[];
 }
@@ -144,6 +153,7 @@ export function parseEnv(env: Env, newSecret: () => string = randomSecret): Paro
       `PAROL_COOKIE_SECRET must be at least ${MIN_COOKIE_SECRET_LENGTH} characters. ` +
         "Use a long random value, or unset it to make one for each start.",
     );
+  const pricesFile = read(env, "PAROL_PRICES_FILE");
   const cookieSecret = given ?? newSecret();
   if (given === undefined)
     warnings.push(
@@ -161,6 +171,7 @@ export function parseEnv(env: Env, newSecret: () => string = randomSecret): Paro
     secureCookies: readFlag(env, "PAROL_SECURE_COOKIES"),
     relaxedSegregation: readFlag(env, "PAROL_RELAXED_SEGREGATION"),
     maxUploadBytes,
+    pricesFile: pricesFile === undefined ? null : resolve(pricesFile),
     warnings,
   };
 }
@@ -273,6 +284,32 @@ const stderr = (line: string): void => {
   process.stderr.write(`${line}\n`);
 };
 
+/**
+ * The prices the server prices its calls with, when the operator named a file. A stand-in reader
+ * calls no model, so a file is ignored for it and the operator is told. A file that cannot be used
+ * stops the start: a server that was meant to price its calls must not run unpriced without saying
+ * so.
+ */
+function readPricing(
+  settings: ParolSettings,
+  generator: ObjectGenerator,
+  notice: (line: string) => void,
+): CallPricer | undefined {
+  if (settings.pricesFile === null) return undefined;
+  if (isStandInProvider(generator.provider)) {
+    notice(
+      "notice: PAROL_PRICES_FILE is ignored, because the reader is a stand-in and calls no model",
+    );
+    return undefined;
+  }
+  try {
+    return createCallPricer(loadPriceFile(settings.pricesFile));
+  } catch (error) {
+    if (error instanceof PriceFileError) throw new ConfigError(error.message);
+    throw error;
+  }
+}
+
 export async function start(
   env: Env = process.env,
   options: StartOptions = {},
@@ -285,8 +322,9 @@ export async function start(
   // The model is chosen first, so a missing key stops the start before anything is opened.
   const generator =
     options.generator ??
-    (settings.scripted ? createSimulatedModel() : createObjectGenerator(loadLlmConfig(env)));
+    (settings.scripted ? createSimulatedModel() : createLiveGenerator(loadLlmConfig(env)));
   notice(`Document text is sent to: ${generator.disclosure}`);
+  const pricing = readPricing(settings, generator, notice);
 
   const { createServices } = await requireModule(
     () => import("./services/index.js"),
@@ -329,6 +367,7 @@ export async function start(
       now,
       log,
       evaluations: createComparisonSource(join(settings.dataDir, "evaluations")),
+      ...(pricing === undefined ? {} : { pricing }),
     });
     const config: AppConfig = {
       demoIdentity: settings.demoIdentity,

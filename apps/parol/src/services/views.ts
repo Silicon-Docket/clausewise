@@ -23,6 +23,9 @@ import type {
   SupportCheck,
   WarningCode,
 } from "../contracts.js";
+import type { UsageSummary } from "../usage/summary.js";
+
+export type { UsageCost, UsageSummary } from "../usage/summary.js";
 
 export interface PlaybookOption {
   versionId: string;
@@ -105,6 +108,11 @@ export interface RunSummary {
   resumable?: boolean;
   progress: RunProgress | null;
   findingCount: number;
+  /**
+   * What the run's model calls used, with the sentences a page shows. Optional so that a summary
+   * built before it existed still fits; absent, a page shows no usage section.
+   */
+  usage?: UsageSummary;
 }
 
 export interface MatterSummary {

@@ -177,6 +177,11 @@ Other settings, all optional:
 | `PAROL_RELAXED_SEGREGATION` | Set to `1` for a one-person demo in which the associate may also decide findings; the memo then says so.       |
 | `PAROL_MAX_UPLOAD_BYTES`    | The largest accepted upload. Default 10 MB.                                                                    |
 
+`PAROL_PRICES_FILE` is for a real model. It names a JSON file of prices, in US dollars per million
+tokens, in the format of `evals/prices.json`. With it the review page shows an estimated cost for a
+review by the `anthropic` provider; without it the tokens are recorded and the cost reads "not
+priced". The figures in `evals/prices.json` have not been checked against a live price list.
+
 ## The data folder, and starting again
 
 Everything Parol stores is in one folder, `./data/parol` unless `PAROL_DATA_DIR` says otherwise,

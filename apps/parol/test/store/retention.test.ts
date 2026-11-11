@@ -76,8 +76,8 @@ function everything(world: World, name: string) {
         latencyMs: 4,
         inputTokens: 10,
         outputTokens: 5,
-        cacheReadTokens: null,
-        cacheWriteTokens: null,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
       },
     ]);
   });

@@ -10,7 +10,12 @@
 -- is kept next to the settled one, so a reviewer can see that code changed it, and it is part of
 -- the finding's content hash whenever it is set.
 --
--- Parts 2 and 3 (usage on a call and the spend ledger) follow below when they are written.
+-- Part 2 (usage on a call). The application records, for every model call, the token counts the
+-- provider reported and an estimated cost, and for every run the model(s) the provider named. The
+-- columns exist since 001 and nothing wrote them; these triggers say what a written row may hold
+-- (counts and a hash, never text) and that a recorded call is never edited.
+--
+-- Part 3 (the spend ledger) follows below when it is written.
 
 -- 1. The model's own status, kept when code settled it to another one.
 --    NULL means the status is the one the model stated (or that no status was stated). It is never
@@ -40,3 +45,24 @@ WHEN NEW.id IS NOT OLD.id OR NEW.run_id IS NOT OLD.run_id OR NEW.matter_id IS NO
   OR NEW.conflict IS NOT OLD.conflict OR NEW.abstain_reason IS NOT OLD.abstain_reason
   OR NEW.model_status IS NOT OLD.model_status
 BEGIN SELECT RAISE(ABORT, 'parol: finding content is immutable'); END;
+
+-- 2. Usage on a call: all four counts or none, never negative; a cost needs tokens and a price table.
+CREATE TRIGGER model_calls_usage_shape BEFORE INSERT ON model_calls
+WHEN ((NEW.input_tokens IS NULL) + (NEW.output_tokens IS NULL)
+      + (NEW.cache_read_tokens IS NULL) + (NEW.cache_write_tokens IS NULL)) NOT IN (0, 4)
+  OR COALESCE(NEW.input_tokens, 0) < 0 OR COALESCE(NEW.output_tokens, 0) < 0
+  OR COALESCE(NEW.cache_read_tokens, 0) < 0 OR COALESCE(NEW.cache_write_tokens, 0) < 0
+  OR (NEW.cost_usd_estimate IS NOT NULL
+      AND (NEW.input_tokens IS NULL OR NEW.cost_usd_estimate < 0
+           OR NEW.price_table_sha256 IS NULL OR length(NEW.price_table_sha256) <> 64))
+  OR (NEW.cost_usd_estimate IS NULL AND NEW.price_table_sha256 IS NOT NULL)
+BEGIN SELECT RAISE(ABORT, 'parol: call usage is all reported or all absent, and a cost needs tokens and a price table'); END;
+
+CREATE TRIGGER model_calls_immutable BEFORE UPDATE ON model_calls
+BEGIN SELECT RAISE(ABORT, 'parol: model calls are never edited'); END;
+
+-- The model(s) the provider named: plain printable text, one line, at most 300 characters.
+CREATE TRIGGER runs_model_reported_shape BEFORE UPDATE OF model_reported ON runs
+WHEN NEW.model_reported IS NOT NULL
+ AND (length(NEW.model_reported) > 300 OR NEW.model_reported GLOB '*[^ -~]*')
+BEGIN SELECT RAISE(ABORT, 'parol: a reported model is plain text of at most 300 characters'); END;

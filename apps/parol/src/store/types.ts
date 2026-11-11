@@ -215,6 +215,27 @@ export interface ModelCallRow {
   priceTableSha256: string | null;
 }
 
+/**
+ * What the model calls of one run add up to. Counts, sums and a hash, from `model_calls` only. The
+ * denominators are in it: `calls` rows were recorded, `callsWithUsage` of them carry tokens and
+ * `callsPriced` of those carry a cost.
+ */
+export interface RunUsageAggregate {
+  calls: number;
+  callsWithUsage: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  callsPriced: number;
+  /** The sum of the estimated cost of the priced calls, or null when none is priced. */
+  costUsd: number | null;
+  /** How many different price tables the priced calls name. */
+  priceTables: number;
+  /** The one hash every priced call names, or null when none is priced or they name more than one. */
+  priceTableSha256: string | null;
+}
+
 export interface StoredEvidence extends VerifiedEvidence {
   id: string;
 }

@@ -1,6 +1,8 @@
-import type { FindingView, IssueRow } from "../../src/services/views.js";
+import type { RunUsageAggregate } from "../../src/store/types.js";
+import type { FindingView, IssueRow, RunSummary } from "../../src/services/views.js";
+import { summarizeUsage, type UsageSummary } from "../../src/usage/summary.js";
 import { findingPage, paneOnly, runPage } from "./render.js";
-import { buildFindingView, buildIssueRows } from "./support.js";
+import { buildFindingView, buildIssueRows, buildRunSummary } from "./support.js";
 import type { Variant } from "./variants.js";
 
 /**
@@ -72,7 +74,123 @@ export function buildSettledThenOpenFinding(): FindingView {
   });
 }
 
+// ---------------------------------------------------------------------------------------------
+// Usage: what the run's model calls used, and which model answered
+// ---------------------------------------------------------------------------------------------
+
+const HASH = "0123456789abcdef".repeat(4);
+
+/** What nine recorded calls add up to when all of them reported usage and all have a price. */
+export const PRICED: RunUsageAggregate = {
+  calls: 9,
+  callsWithUsage: 9,
+  inputTokens: 123_456,
+  outputTokens: 7_890,
+  cacheReadTokens: 1_000_000,
+  cacheWriteTokens: 12,
+  callsPriced: 9,
+  costUsd: 0.0123456,
+  priceTables: 1,
+  priceTableSha256: HASH,
+};
+
+/** Calls were recorded and none carries a count. */
+export const UNREPORTED: RunUsageAggregate = {
+  ...PRICED,
+  callsWithUsage: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+  callsPriced: 0,
+  costUsd: null,
+  priceTables: 0,
+  priceTableSha256: null,
+};
+
+/** The model names a provider and a model, as a review by that provider has them. */
+export function modelOf(
+  provider: string,
+  reported: string | null = "model-a-20260101",
+): RunSummary["model"] {
+  return { provider, requested: "model-a", reported };
+}
+
+/** The usage of a run by `provider`, as the service builds it from the aggregate of its calls. */
+export function usageOf(aggregate: RunUsageAggregate, provider = "anthropic"): UsageSummary {
+  return summarizeUsage(aggregate, provider);
+}
+
+/** A run by a provider that reports usage, with the usage given. */
+export function usageRun(
+  aggregate: RunUsageAggregate,
+  over: Partial<RunSummary> = {},
+  provider = "anthropic",
+): RunSummary {
+  return buildRunSummary({
+    model: modelOf(provider),
+    usage: usageOf(aggregate, provider),
+    ...over,
+  });
+}
+
 export const VARIANTS_USAGE: Variant[] = [
+  ["run, usage reported and priced", () => runPage({ run: usageRun(PRICED) })],
+  [
+    "run, usage reported and partly priced",
+    () => runPage({ run: usageRun({ ...PRICED, callsPriced: 4, costUsd: 0.05 }) }),
+  ],
+  [
+    "run, usage reported and not priced",
+    () =>
+      runPage({
+        run: usageRun({
+          ...PRICED,
+          callsPriced: 0,
+          costUsd: null,
+          priceTables: 0,
+          priceTableSha256: null,
+        }),
+      }),
+  ],
+  [
+    "run, usage reported by some calls only",
+    () => runPage({ run: usageRun({ ...PRICED, callsWithUsage: 6, callsPriced: 6 }) }),
+  ],
+  ["run, usage not reported", () => runPage({ run: usageRun(UNREPORTED) })],
+  [
+    "run, usage not reported by another provider",
+    () => runPage({ run: usageRun(UNREPORTED, { model: modelOf("openai", null) }, "openai") }),
+  ],
+  [
+    "run, no call recorded yet",
+    () =>
+      runPage({
+        run: usageRun(
+          { ...UNREPORTED, calls: 0 },
+          {
+            status: "queued",
+            progress: null,
+            finishedAt: null,
+            findingCount: 0,
+          },
+        ),
+        issues: [],
+        selected: null,
+      }),
+  ],
+  [
+    "run, a stand-in reader",
+    () =>
+      runPage({
+        run: usageRun(PRICED, { model: modelOf("simulated", null) }, "simulated"),
+      }),
+  ],
+  [
+    "run, the provider did not say which model answered",
+    () => runPage({ run: usageRun(PRICED, { model: modelOf("anthropic", null) }) }),
+  ],
+
   [
     "run, a settled finding in the table and selected",
     () => runPage({ issues: rowsWithSettled(), selected: buildSettledFinding() }),
