@@ -486,26 +486,31 @@ describe("a leak that only one direction or one channel can show", () => {
     ).toEqual(["case eval_slot_results", "case feedback"]);
   });
 
-  it("holds rows in every table of the scan after a review, but those four", async () => {
+  it("holds rows in every table of the scan after a review, but two", async () => {
     // A table that is scanned for nothing because it is empty is a table whose leak cannot be seen:
-    // so a review fills all but four, and a change that empties one of the others is noticed. The
-    // four: feedback and evaluation results, which a review does not write, and the timers and the
-    // reference list of the pilot measures (W2.6b), which a person writes by hand and which hold no
-    // text (a role, a rule key, a severity and times).
+    // so a review fills all but two, and a change that empties one of the others is noticed. The
+    // two: feedback and evaluation results, which a review does not write. The timers and the
+    // reference list of the pilot measures (W2.6b) are written by hand, so the suite writes a timer
+    // and a reference list for the case's matter (before the review, which closes the list) and
+    // for the canary matter (which is never reviewed). Both sides are checked below.
     let empty: string[] = [];
+    let canaryEmpty: string[] = [];
     await scan({
       afterReview: (site, context) => {
         empty = storeRows(site, context.caseMatterId)
           .filter((table) => table.content === "[]")
           .map((table) => table.label);
+        canaryEmpty = storeRows(site, context.foreign[0]!.matterId)
+          .filter((table) => table.content === "[]")
+          .map((table) => table.label);
       },
     });
-    expect(empty.sort()).toEqual([
-      "eval_slot_results",
-      "feedback",
-      "reference_issues",
-      "time_entries",
-    ]);
+    expect(empty.sort()).toEqual(["eval_slot_results", "feedback"]);
+    // The canary matter is made, given a document and read, and never reviewed: its tables of a
+    // review stay empty, and the two the suite fills by hand do not.
+    expect(canaryEmpty).not.toContain("time_entries");
+    expect(canaryEmpty).not.toContain("reference_issues");
+    expect(canaryEmpty).toEqual(expect.arrayContaining(["runs", "findings", "reviews", "memos"]));
     expect(STORE_SCOPES.map(([table]) => table)).toEqual(
       expect.arrayContaining(["audit_events", "runs", "model_calls", "findings", "matter_members"]),
     );

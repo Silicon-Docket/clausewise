@@ -42,6 +42,15 @@
  * JSON routes only (`/api/...`): the HTML pages print every user of the application in the member
  * picker, by design, so a name there says nothing.
  *
+ * Timers and reference lists. A review fills most tables by itself, but a timer and a reference
+ * list (`time_entries`, `reference_issues`; the pilot measures) are written by hand, and a table
+ * that is empty on both sides could not show a leak: a route that gave a reader every timer or
+ * every reference list of the store would carry the other matter's id only if the other matter had
+ * a row in it. So the suite writes one closed timer (as the matter's associate) and one reference
+ * list (as its reviewer) through the real service for the case's matter, before its review, which
+ * closes the list, and for each canary matter (`pilot-rows.ts`). A control stops the suite when a
+ * matter has none.
+ *
  * Controls, all of which throw and none of which is counted: the scanner finds every token it is
  * given (scan.ts); each channel holds the case's own data (canary-controls.ts: prompts hold its
  * clauses, answers parse, the memo is a Word package holding its names and quotations, the log is not
@@ -114,6 +123,7 @@ import {
   type Probe,
   type ProbeIds,
 } from "./probes.js";
+import { recordPilotRows } from "./pilot-rows.js";
 import { createCaseMatter, reviewAndExport, type ReviewedMatter } from "./review.js";
 import {
   ARTEFACT_KINDS,
@@ -596,6 +606,8 @@ async function scanCase(
         statedDate: matter.document.statedDate,
       });
       const versionIds = [stored.versionId];
+      // A timer and a reference list, so that its rows in those two tables are not empty.
+      recordPilotRows({ site, matterId: summary.id, people: { associate, reviewer } });
       const spans = site.repo.listSpans(summary.id, versionIds);
       if (spans.length === 0 || matter.strings.length === 0)
         throw new ExposureControlFailure(
@@ -630,6 +642,12 @@ async function scanCase(
       files: filesOf,
       people,
       matterName,
+    });
+    // The reference list is closed by the first run, so it is saved before the review is started.
+    recordPilotRows({
+      site,
+      matterId: created.matterId,
+      people: { associate: CASE_ASSOCIATE, reviewer: CASE_REVIEWER },
     });
     signal.throwIfAborted();
     const reviewed = await reviewAndExport({ site, key, people, matterId: created.matterId });
