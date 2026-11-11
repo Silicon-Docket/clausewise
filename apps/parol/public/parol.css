@@ -1743,3 +1743,22 @@ kbd {
 .training-key td p {
   margin: 0 0 0.25rem;
 }
+
+/* Pilot measures (package W2.6b): the demonstration scope is marked, the scope switch is a plain list of links, and a measure with nothing to count says so in muted text. */
+.banner-synthetic {
+  border-width: 2px;
+  border-left-width: 0.75rem;
+}
+
+.scope-switch {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.5rem;
+}
+
+.measure-no-data {
+  color: var(--muted);
+}

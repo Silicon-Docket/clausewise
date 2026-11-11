@@ -72,5 +72,22 @@ export const urls = {
   training: () => "/training",
   /** The trainer's answer key, for the legal engineer and an administrator (package W2.8). */
   trainerKey: () => "/training/key",
+  /**
+   * The pilot measures page, for the legal engineer and an administrator (package W2.6b). The pilot
+   * scope is the default and has no query; `synthetic` is the demonstration scope.
+   */
+  pilot: (scope?: "pilot" | "synthetic") =>
+    scope === "synthetic" ? "/pilot?scope=synthetic" : "/pilot",
+  /** The measures as CSV, of one scope (package W2.6b). */
+  pilotCsv: (scope: "pilot" | "synthetic" = "pilot") =>
+    scope === "synthetic" ? "/pilot/measures.csv?scope=synthetic" : "/pilot/measures.csv",
+  /** Sets the first day of the pilot, a POST (package W2.6b). */
+  pilotCalendar: () => "/pilot/calendar",
+  /** Sets who was trained, a POST (package W2.6b). */
+  pilotParticipants: () => "/pilot/participants",
+  /** Starts or stops the timer of the signed-in person on a matter, a POST (package W2.6b). */
+  matterTimer: (matterId: string) => `/matters/${e(matterId)}/timer`,
+  /** Writes the reviewer's list of the issues a manual review found, a POST (package W2.6b). */
+  matterReferenceList: (matterId: string) => `/matters/${e(matterId)}/reference-list`,
   asset: (name: string) => `/assets/${e(name)}`,
 } as const;

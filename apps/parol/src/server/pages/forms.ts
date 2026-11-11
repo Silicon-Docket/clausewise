@@ -56,6 +56,13 @@ export const FIELDS = {
 
   // Training. The person starting the training matter may name a trainer (package W2.8).
   trainerUserId: "trainerUserId",
+
+  // Pilot measures (package W2.6b). The first day of the pilot, and the issues a manual review
+  // found that no rule of the playbook covers, by severity.
+  startDate: "startDate",
+  outsideHigh: "outsideHigh",
+  outsideMedium: "outsideMedium",
+  outsideLow: "outsideLow",
 } as const;
 
 export const SIGN_IN_INTENT = "sign-in";
