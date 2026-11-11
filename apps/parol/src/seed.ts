@@ -21,6 +21,7 @@ import {
   type PilotDemoReport,
 } from "./demo/pilot-demo.js";
 import { createSimulatedModel } from "./demo/simulated-model.js";
+import { describeCommandFailure } from "./cli-common.js";
 import { ConfigError, parseEnv, type ParolSettings } from "./main.js";
 import { createServices } from "./services/index.js";
 import { RunNotReadyError } from "./services/errors.js";
@@ -142,7 +143,10 @@ const DEFAULT_FIXTURES_DIR = fileURLToPath(
 function principalOf(repo: Repository, userId: string): Principal {
   const user = repo.getUser(userId);
   // registerAll seeds the demo users first, so this is a store that was changed under the seed.
-  if (user === undefined) throw new SeedError("a demo user is missing from the data folder");
+  if (user === undefined)
+    throw new SeedError(
+      "a demo user is missing from the data folder. Set PAROL_DATA_DIR to a folder that does not exist yet, and seed again",
+    );
   return { userId: user.id, displayName: user.displayName, globalRole: user.globalRole };
 }
 
@@ -166,7 +170,10 @@ export function workedExampleDocuments(
   fixturesDir: string = DEFAULT_FIXTURES_DIR,
 ): PilotDemoDocument[] {
   const worked = DEMO_MATTERS.find((matter) => matter.key === "lanternfish");
-  if (worked === undefined) throw new SeedError("the worked example is not in the seed");
+  if (worked === undefined)
+    throw new SeedError(
+      "the worked example is not in the seed. The copy of Parol is incomplete: get a complete copy and seed again",
+    );
   return worked.documents.map((document) => ({ document, bytes: bytesOf(document, fixturesDir) }));
 }
 
@@ -309,7 +316,9 @@ export async function seedDemo(options: SeedOptions): Promise<SeedReport> {
         run = services.runs.get(am, started.id);
       } catch (error) {
         if (error instanceof RunNotReadyError)
-          throw new SeedError(`the review could not start: ${error.reasons.join("; ")}`);
+          throw new SeedError(
+            `the review could not start (${error.reasons.join("; ")}). Set PAROL_DATA_DIR to a folder that does not exist yet, and seed again`,
+          );
         throw error;
       }
     }
@@ -523,7 +532,13 @@ async function buildPilotDemo(
     // is asked again.
     return { pilotDemo, people: peopleOf(repo, services) };
   } catch (error) {
-    if (error instanceof PilotDemoError) throw new SeedError(error.message);
+    // Its messages say what is wrong with the folder; the way out is the same for all of them.
+    if (error instanceof PilotDemoError)
+      throw new SeedError(
+        error.message.includes("fresh data folder")
+          ? error.message
+          : `${error.message}. Set PAROL_DATA_DIR to a folder that does not exist yet, and seed again`,
+      );
     throw error;
   }
 }
@@ -575,6 +590,17 @@ function isEntryPoint(): boolean {
   }
 }
 
+/**
+ * The line the terminal gets when the seed cannot run, and it says what to do. A setting that is
+ * wrong, an option the command does not know and the seed's own refusals were written as sentences
+ * for the person who runs it, so they are shown as they are. Anything else is about the data folder
+ * or the database (a path that is a file, a folder that cannot be written), and is told from its
+ * class and a code of a fixed shape, with what to change; its own message is not shown, because it
+ * can hold a path (`describeCommandFailure`).
+ */
+export const describeSeedFailure = (error: unknown): string =>
+  describeCommandFailure("Parol seed", error, [SeedError, ConfigError]);
+
 if (isEntryPoint()) {
   runSeed().then(
     (report) => {
@@ -584,14 +610,7 @@ if (isEntryPoint()) {
         process.exitCode = 1;
     },
     (error: unknown) => {
-      if (error instanceof SeedError || error instanceof ConfigError)
-        process.stderr.write(`Parol seed cannot run: ${error.message}\n`);
-      // Any other error is about the data folder or the database (a path that is a file, a folder
-      // that cannot be written), which is what the person running the command has to fix. The server
-      // prints the same two things when it cannot start.
-      else if (error instanceof Error)
-        process.stderr.write(`Parol seed cannot run: ${error.name}: ${error.message}\n`);
-      else process.stderr.write("Parol seed cannot run.\n");
+      process.stderr.write(`${describeSeedFailure(error)}\n`);
       process.exitCode = 1;
     },
   );

@@ -2,7 +2,7 @@ import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HTTPException } from "hono/http-exception";
 import { ZodError } from "zod";
-import { GLOBAL_ACTIONS } from "../../auth/actions.js";
+import { GLOBAL_ACTIONS, type GlobalAction } from "../../auth/actions.js";
 import { CsrfError } from "../../auth/csrf.js";
 import { UploadError } from "../../module-contracts.js";
 import { ForbiddenError, RunNotReadyError, SpendRefusedError } from "../../services/errors.js";
@@ -17,7 +17,7 @@ import {
   StaleRunError,
   ValidationError,
 } from "../../store/errors.js";
-import { guidanceFor, keyForStatus, type GuidanceKey } from "../guidance.js";
+import { globalGuidanceKey, guidanceFor, keyForStatus, type GuidanceKey } from "../guidance.js";
 import { answersInJson, isApiPath } from "../http.js";
 import { urls } from "../urls.js";
 
@@ -118,14 +118,17 @@ const internal = (err: unknown): SafeError =>
   safe(500, "internal", "Something went wrong on the server.", {}, errorNameOf(err));
 
 /**
- * Which of the three refusals a `ForbiddenError` is, told by the action it names: a request for a
- * foreign address (`host`), a page that names no matter and is for a global role (`global_role`),
- * or an action on a matter that the person's role on it does not allow (`role`). All three are
- * decided before the request could learn anything about a matter it has no part in.
+ * Which of the refusals a `ForbiddenError` is, told by the action it names: a request for a foreign
+ * address (`host`), a page that names no matter and is for some global roles (the key of the roles
+ * that hold the action, so the sentence names those and no others), or an action on a matter that
+ * the person's role on it does not allow (`role`). All are decided before the request could learn
+ * anything about a matter it has no part in.
  */
 function forbiddenGuidance(err: ForbiddenError): GuidanceKey {
   if (err.action === "host") return "host";
-  return Object.hasOwn(GLOBAL_ACTIONS, err.action) ? "global_role" : "role";
+  return Object.hasOwn(GLOBAL_ACTIONS, err.action)
+    ? globalGuidanceKey(err.action as GlobalAction)
+    : "role";
 }
 
 export function toSafeError(err: unknown): SafeError {

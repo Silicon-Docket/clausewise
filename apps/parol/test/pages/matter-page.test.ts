@@ -20,6 +20,7 @@ import {
   withClass,
   type El,
 } from "./html.js";
+import { accessibleName } from "../a11y/rules.js";
 import { matterPage } from "./render.js";
 import {
   IDS,
@@ -661,5 +662,106 @@ describe("MatterPage for a reviewer", () => {
     expect(controls(root, FIELDS.versionId)).toHaveLength(0);
     expect(all(root, (el) => el.name === "input" && attr(el, "type") === "file")).toHaveLength(0);
     expect(readable(section(root, "documents"))).toContain("DOCX, 14 KB");
+  });
+});
+
+/**
+ * Controls that look alike are told apart by their names. A button whose label is longer than its
+ * text must still contain its text (a person who speaks the words they see must reach it), and two
+ * buttons that do different things to different documents must not have one name.
+ */
+describe("MatterPage names that tell controls apart", () => {
+  const associate = page(buildMatterViewFor("associate"));
+  const buttonsReading = (root: El, text: string): El[] =>
+    all(root, (el) => el.name === "button" && readable(el) === text);
+
+  it("names each Save date button for its version and its document, and keeps the words it shows", () => {
+    const buttons = buttonsReading(associate, "Save date");
+    expect(buttons).toHaveLength(2);
+    expect(buttons.map((b) => accessibleName(associate, b))).toEqual([
+      "Save date of version 1 of D1",
+      "Save date of version 1 of D2",
+    ]);
+    for (const b of buttons) expect(accessibleName(associate, b)).toContain("Save date");
+  });
+
+  it("names the two Upload new version buttons for their documents, so that no two are called alike", () => {
+    const buttons = buttonsReading(associate, "Upload new version");
+    expect(buttons).toHaveLength(2);
+    const names = buttons.map((b) => accessibleName(associate, b));
+    expect(names).toEqual(["Upload new version of D1", "Upload new version of D2"]);
+    expect(new Set(names).size).toBe(2);
+    for (const name of names) expect(name.startsWith("Upload new version")).toBe(true);
+  });
+
+  it("names the Remove document button for the document it removes, which is the last", () => {
+    const buttons = buttonsReading(associate, "Remove document");
+    expect(buttons.map((b) => accessibleName(associate, b))).toEqual(["Remove document D2"]);
+  });
+
+  it("names each link to a review by when it started and by its workflow, beginning with the words it shows", () => {
+    const first = buildRunSummary({ id: "run_a", workflowLabel: "v1", current: false });
+    const second = buildRunSummary({ id: "run_b", workflowLabel: "v2" });
+    const root = page(buildMatterView({ runs: [second, first], currentRun: second }));
+    const links = all(
+      section(root, "runs"),
+      (el) => el.name === "a" && (attr(el, "href") ?? "").startsWith(urls.run(M, "run_")),
+    ).filter((el) => readable(el) !== "Open the issue table");
+    expect(links.map((a) => accessibleName(root, a))).toEqual([
+      "30 October 2026, 11:00 UTC, workflow v2",
+      "30 October 2026, 11:00 UTC, workflow v1",
+    ]);
+    // Two reviews started in the same minute read alike on screen and are told apart by the name.
+    expect(links.map((a) => readable(a))).toEqual([
+      "30 October 2026, 11:00 UTC",
+      "30 October 2026, 11:00 UTC",
+    ]);
+    for (const a of links) expect(accessibleName(root, a).startsWith(readable(a))).toBe(true);
+  });
+});
+
+/** An empty list says what the person who reads it can do about it, and who can when they cannot. */
+describe("MatterPage empty states say what the person can do", () => {
+  const empty = (role: "associate" | "reviewer" | "viewer") =>
+    page(
+      buildMatterViewFor(role, {
+        documents: [],
+        runs: [],
+        currentRun: null,
+        start: { ready: false, reasons: ["Add the NDA"] },
+      }),
+      { canDelete: false },
+    );
+
+  it("tells the associate to add the NDA, and the others who adds the documents", () => {
+    expect(readable(section(empty("associate"), "documents"))).toContain(
+      "No documents yet. Add the NDA first.",
+    );
+    for (const role of ["reviewer", "viewer"] as const) {
+      const text = readable(section(empty(role), "documents"));
+      expect(text, role).toContain(
+        "No documents yet. Someone with the associate role on the matter adds them.",
+      );
+      expect(text, role).not.toContain("Add the NDA first");
+    }
+  });
+
+  it("tells the associate where to start a review, and the others who starts it", () => {
+    expect(readable(section(empty("associate"), "runs"))).toContain(
+      "No review has been run yet. Start one under Start the review.",
+    );
+    for (const role of ["reviewer", "viewer"] as const) {
+      const text = readable(section(empty(role), "runs"));
+      expect(text, role).toContain(
+        "No review has been run yet. The associate on the matter starts it.",
+      );
+      expect(text, role).not.toContain("Start one under");
+    }
+  });
+
+  it("points the associate at a section that is on the page", () => {
+    const root = empty("associate");
+    const headings = all(root, (el) => /^h[23]$/.test(el.name)).map((h) => readable(h));
+    expect(headings).toContain("Start the review");
   });
 });

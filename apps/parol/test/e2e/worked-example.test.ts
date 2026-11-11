@@ -463,7 +463,7 @@ describe("the worked example, through HTTP only", () => {
     // The link on the page is the download.
     const link = first(
       after.root,
-      (el) => el.name === "a" && hasAttr(el, "download"),
+      (el) => el.name === "a" && attr(el, "href") === urls.memoFile(matterId, memoId),
       "the download link",
     );
     expect(attr(link, "href")).toBe(urls.memoFile(matterId, memoId));

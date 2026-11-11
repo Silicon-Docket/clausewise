@@ -4,7 +4,6 @@ import { accessibleName, expectAccessible, tabStops } from "../a11y/rules.js";
 import { FakeElement, event, runScript } from "./fake-dom.js";
 import {
   decisionPane,
-  expectAccessibleExceptTheMemoList,
   feedbackProps,
   memosPageWith,
   noteOf,
@@ -354,7 +353,7 @@ const ratingRadios = (root: El): El[] =>
 
 describe("the rating of a matter, by keyboard", () => {
   const html = memosPageWith(ratingProps());
-  const root = expectAccessibleExceptTheMemoList(html);
+  const root = expectAccessible(html);
 
   it("takes Tab to the group of marks once, then to the comment and the button, in the order they are used", () => {
     const stopsOfForm = tabStops(ratingForm(root)).map((el) => attr(el, "name") ?? el.name);
@@ -390,9 +389,7 @@ describe("the rating of a matter, by keyboard", () => {
   });
 
   it("stops at the mark that was chosen, when one was, and not at the first", () => {
-    const chosen = expectAccessibleExceptTheMemoList(
-      memosPageWith(ratingProps({ draft: { rating: 4 } })),
-    );
+    const chosen = expectAccessible(memosPageWith(ratingProps({ draft: { rating: 4 } })));
     const radio = tabStops(ratingForm(chosen)).find((el) => attr(el, "name") === FIELDS.rating)!;
     expect(attr(radio, "value")).toBe("4");
   });
@@ -460,9 +457,7 @@ describe("the rating of a matter, by keyboard", () => {
   });
 
   it("leaves nothing to tab to once the rating is given, but the way to report a missed issue", () => {
-    const given = expectAccessibleExceptTheMemoList(
-      memosPageWith(ratingProps({ given: ratingGiven() })),
-    );
+    const given = expectAccessible(memosPageWith(ratingProps({ given: ratingGiven() })));
     const section = byId(given, "rating")!;
     const mine = tabStops(given).filter((el) => ancestorsOf(given, el).includes(section));
     expect(mine.map((el) => el.name)).toEqual(["a"]);
@@ -476,9 +471,7 @@ describe("the links of a refused rating", () => {
       ["bad_rating", "rating-choice"],
       ["comment_too_long", "rating-comment"],
     ] as const) {
-      const page = expectAccessibleExceptTheMemoList(
-        refusedMemosPage(code, { rating: 3, comment: "x" }),
-      );
+      const page = expectAccessible(refusedMemosPage(code, { rating: 3, comment: "x" }));
       const stopsOfPage = tabStops(page);
       const link = first(page, (el) => el.name === "a" && hasClass(el, "notice-jump"));
       expect(attr(link, "href"), code).toBe(`#${target}`);

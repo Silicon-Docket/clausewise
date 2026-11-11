@@ -148,6 +148,18 @@ const PAIRS: [string, string, number][] = [
   ["--edge", "--field", 3],
   ["--focus", "--paper", 3],
   ["--focus", "--surface", 3],
+  // The ring on the backgrounds a control can have: the chosen row, and the notices and banners that
+  // hold links and buttons.
+  ["--focus", "--select", 3],
+  ["--focus", "--ok-bg", 3],
+  ["--focus", "--bad-bg", 3],
+  ["--focus", "--info-bg", 3],
+  ["--focus", "--warn-bg", 3],
+  ["--focus", "--neutral-bg", 3],
+  // A link in a notice is the accent on the notice's own ground.
+  ["--accent", "--ok-bg", 4.5],
+  ["--accent", "--bad-bg", 4.5],
+  ["--accent", "--info-bg", 4.5],
   ["--ok-edge", "--paper", 3],
   ["--bad-edge", "--paper", 3],
   ["--warn-edge", "--paper", 3],
@@ -177,6 +189,9 @@ describe("contrast of the colour pairs, in both themes", () => {
       "banner-ink on banner-bg",
       "mark-ink on mark-bg",
       "focus on paper",
+      "focus on select, ok-bg, bad-bg, info-bg, warn-bg and neutral-bg",
+      "accent on ok-bg, bad-bg and info-bg",
+      "skip link, focused",
     ]) {
       expect(comment, phrase).toContain(phrase);
     }
@@ -289,6 +304,392 @@ describe("the stylesheet", () => {
     const important = [...css.matchAll(/!important/g)].length;
     // [hidden] and the reduced-motion block.
     expect(important).toBeLessThanOrEqual(5);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Colour only through tokens, the focus ring, the skip link, hover
+// ---------------------------------------------------------------------------------------------
+
+/** The body of the first rule whose selector is exactly `selector`, or "" when there is none. */
+function ruleBody(selector: string): string {
+  const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  for (const rule of bare.matchAll(/([^{}@]+)\{([^{}]*)\}/g))
+    if ((rule[1] as string).trim() === selector) return rule[2] as string;
+  return "";
+}
+
+/** The value of a declaration in a rule body, or undefined. */
+function property(body: string, name: string): string | undefined {
+  return new RegExp(`(?:^|[;\\s])${name}:\\s*([^;]+)`).exec(body)?.[1]?.trim();
+}
+
+/** `var(--x)` as a token name, or undefined when the value is anything else. */
+function tokenIn(value: string | undefined): string | undefined {
+  return value === undefined ? undefined : /^var\((--[\w-]+)\)$/.exec(value)?.[1];
+}
+
+const NAMED_COLOURS = [
+  "white",
+  "black",
+  "red",
+  "green",
+  "blue",
+  "gray",
+  "grey",
+  "silver",
+  "yellow",
+  "orange",
+  "purple",
+  "navy",
+  "teal",
+  "maroon",
+  "lime",
+  "aqua",
+  "fuchsia",
+  "olive",
+] as const;
+
+/** The stylesheet with its comments and its blocks of token definitions taken out. */
+const withoutTokens = (text: string): string =>
+  text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/:root\s*\{[^}]*\}/g, "");
+
+/**
+ * The colours a stylesheet writes out where it should name a token: a hex colour, a colour
+ * function, or the name of a colour in the value of a declaration. The values `currentColor` and
+ * `transparent` and the system colours of the forced-colours block are not colours chosen by the
+ * stylesheet, so they are not found.
+ */
+function colourLiterals(text: string): string[] {
+  const rest = withoutTokens(text);
+  const found = [
+    ...rest.matchAll(/#[0-9a-fA-F]{3,8}\b/g),
+    ...rest.matchAll(/\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color-mix|color)\([^)]*\)/g),
+    ...rest.matchAll(new RegExp(`:[^;{}]*\\b(${NAMED_COLOURS.join("|")})\\b`, "g")),
+  ];
+  return found.map((m) => m[1] ?? m[0]);
+}
+
+describe("colour comes only from the tokens", () => {
+  it("has no colour written out outside the token blocks", () => {
+    expect(colourLiterals(css)).toEqual([]);
+  });
+
+  it("finds a colour written out in a rule, in any of its forms, and none in a token block", () => {
+    expect(colourLiterals(".a { color: #123456; }")).toEqual(["#123456"]);
+    expect(colourLiterals(".a { background: rgb(1, 2, 3); }")).toEqual(["rgb(1, 2, 3)"]);
+    expect(colourLiterals(".a { border: 1px solid white; }")).toEqual(["white"]);
+    expect(colourLiterals(":root { --paper: #ffffff; } .a { color: var(--paper); }")).toEqual([]);
+    expect(
+      colourLiterals(
+        ".a { color: CanvasText; border-color: currentColor; background: transparent; }",
+      ),
+    ).toEqual([]);
+  });
+
+  it("names, in every var(), a token that is defined", () => {
+    const { light, dark } = themes();
+    const used = new Set(
+      [...withoutTokens(css).matchAll(/var\((--[\w-]+)/g)].map((m) => m[1] as string),
+    );
+    expect(used.size).toBeGreaterThan(20);
+    for (const name of used) {
+      expect(light[name], `${name} is defined`).toBeDefined();
+      // The fonts are defined once; every colour is defined again for the dark theme.
+      if (isColour(light[name] as string))
+        expect(dark[name], `${name} in the dark theme`).toBeDefined();
+    }
+  });
+});
+
+describe("the focus ring and the skip link", () => {
+  const { light, dark } = themes();
+  const rule = ruleBody(".skip-link:focus");
+
+  it("has a rule of its own for the skip link when it has focus", () => {
+    expect(rule).not.toBe("");
+  });
+
+  for (const [name, tokens] of [
+    ["light", light],
+    ["dark", dark],
+  ] as const) {
+    describe(name, () => {
+      const colour = (token: string | undefined, fallback: string): string => {
+        const value = tokens[token ?? fallback];
+        expect(value, `${token ?? fallback} is a token`).toBeDefined();
+        return value as string;
+      };
+      // What the link looks like focused: the declarations of `.skip-link:focus`, else those of
+      // `.skip-link`, else the ring that every focused control gets.
+      const base = ruleBody(".skip-link");
+      const fill = colour(
+        tokenIn(property(rule, "background")) ?? tokenIn(property(base, "background")),
+        "--accent",
+      );
+      const text = colour(
+        tokenIn(property(rule, "color")) ?? tokenIn(property(base, "color")),
+        "--accent-ink",
+      );
+      const border = /border:\s*\d+px solid var\((--[\w-]+)\)/.exec(rule)?.[1];
+      // The ring: the colour the rule gives it (in `outline` or `outline-color`), else the one every
+      // focused control gets. Where it lies: an offset below minus its width puts it inside the
+      // box, where it is seen against the fill; otherwise it is outside, against what is behind.
+      const ringWidth = Number(/(\d+)px/.exec(property(rule, "outline") ?? "")?.[1] ?? 3);
+      const ringOffset = Number(
+        /^(-?\d+)px$/.exec(property(rule, "outline-offset") ?? "")?.[1] ?? 2,
+      );
+      const ring = colour(
+        tokenIn(property(rule, "outline-color")) ??
+          tokenIn(property(rule, "outline")?.replace(/^\d+px solid /, "")) ??
+          tokenIn(property(ruleBody(":focus-visible"), "outline")?.replace(/^\d+px solid /, "")),
+        "--focus",
+      );
+      const ringInside = ringOffset + ringWidth <= 0;
+      const banner = tokens["--banner-bg"] as string;
+      const paper = tokens["--paper"] as string;
+
+      it("sets the focused link's fill off from the banner it floats over (3 or more)", () => {
+        expect(contrast(fill, banner)).toBeGreaterThanOrEqual(3);
+      });
+
+      it("sets the link off from the page where it hangs below the banner: its fill or its border (3 or more)", () => {
+        const edge = border === undefined ? 1 : contrast(colour(border, "--ink"), paper);
+        expect(Math.max(contrast(fill, paper), edge)).toBeGreaterThanOrEqual(3);
+      });
+
+      it("shows its ring where the ring is drawn (3 or more)", () => {
+        if (ringInside) {
+          // Inside the box the ring is seen against the fill, whatever the link floats over.
+          expect(contrast(ring, fill)).toBeGreaterThanOrEqual(3);
+        } else {
+          // Outside the box it is seen against the banner and against the page, as it floats over both.
+          expect(contrast(ring, banner)).toBeGreaterThanOrEqual(3);
+          expect(contrast(ring, paper)).toBeGreaterThanOrEqual(3);
+        }
+      });
+
+      it("draws the ring inside the box, clear of the border, so it needs no second background", () => {
+        expect(ringInside).toBe(true);
+        // A gap between the border and the ring, so that they read as two things.
+        expect(ringOffset + ringWidth).toBeLessThan(-2);
+      });
+
+      it("reads its own text on its own fill (4.5 or more)", () => {
+        expect(contrast(text, fill)).toBeGreaterThanOrEqual(4.5);
+      });
+    });
+  }
+
+  it("keeps the ring a focused control gets from :focus-visible on every other element", () => {
+    const ring = ruleBody(":focus-visible");
+    expect(ring).toContain("outline: 3px solid var(--focus)");
+    expect(ring).toContain("outline-offset");
+  });
+});
+
+// What a hover may change: how the thing is coloured, bordered or underlined, and the pointer. A
+// hover that moved, showed or hid something would leave a keyboard user without it.
+const HOVER_MAY_SET =
+  /^(color|background|background-color|border|border-color|border-style|border-width|text-decoration|text-decoration-\w+|box-shadow|cursor)$/;
+
+/** Every `selector: property` in a rule with `:hover` that sets something a hover may not set. */
+function hoverRevealing(text: string): string[] {
+  const out: string[] = [];
+  const bare = text.replace(/\/\*[\s\S]*?\*\//g, "");
+  for (const rule of bare.matchAll(/([^{}@]+)\{([^{}]*)\}/g)) {
+    const selector = (rule[1] as string).trim();
+    if (!selector.includes(":hover")) continue;
+    for (const m of (rule[2] as string).matchAll(/([a-z-]+)\s*:/g))
+      if (!HOVER_MAY_SET.test(m[1] as string)) out.push(`${selector}: ${m[1]}`);
+  }
+  return out;
+}
+
+describe("hover only decorates", () => {
+  it("sets, in every rule with :hover, only colour, background, border, text decoration, shadow or cursor", () => {
+    expect([...css.matchAll(/:hover/g)].length).toBeGreaterThan(0);
+    expect(hoverRevealing(css)).toEqual([]);
+  });
+
+  it("finds a hover that shows, hides or moves something", () => {
+    expect(hoverRevealing(".a:hover { display: block; }")).toEqual([".a:hover: display"]);
+    expect(hoverRevealing(".a:hover { color: red; opacity: 1; }")).toEqual([".a:hover: opacity"]);
+    expect(hoverRevealing(".a:hover { transform: none; }")).toEqual([".a:hover: transform"]);
+    expect(
+      hoverRevealing(".a:hover { border-color: red; text-decoration-thickness: 2px; }"),
+    ).toEqual([]);
+    expect(hoverRevealing(".a { display: block; }")).toEqual([]);
+  });
+});
+
+describe("the sentence that says what to do, and the link to where", () => {
+  it("has a rule for .todo and for .notice-jump, so the sentence stands out and the link is set apart", () => {
+    expect(ruleBody(".todo")).toContain("font-weight");
+    expect(ruleBody(".notice-jump")).toContain("margin-left");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The order of the page is the order of the document, and nothing is hidden but left to the keyboard
+// ---------------------------------------------------------------------------------------------
+
+/** The text without its comments. */
+const bare = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, "");
+
+/** The text without the block that starts at `opener`, braces balanced; the text itself when there is none. */
+function withoutBlock(text: string, opener: string): string {
+  const start = text.indexOf(opener);
+  if (start === -1) return text;
+  let depth = 0;
+  for (let at = text.indexOf("{", start); at < text.length; at += 1) {
+    if (text[at] === "{") depth += 1;
+    if (text[at] === "}") depth -= 1;
+    if (depth === 0) return text.slice(0, start) + text.slice(at + 1);
+  }
+  throw new Error(`${opener} is not closed`);
+}
+
+/** Every `selector { body }` of the text, nested blocks of a media query included, in file order. */
+function allRules(text: string): { selector: string; body: string }[] {
+  return [...bare(text).matchAll(/([^{}@]+)\{([^{}]*)\}/g)].map((m) => ({
+    selector: (m[1] as string).replace(/\s+/g, " ").trim(),
+    body: m[2] as string,
+  }));
+}
+
+/** The selectors of the rules that set `name` to a value for which `wanted` is true. */
+const settingTo = (text: string, name: string, wanted: (value: string) => boolean): string[] =>
+  allRules(text)
+    .filter(({ body }) => {
+      const value = property(body, name);
+      return value !== undefined && wanted(value);
+    })
+    .map(({ selector }) => selector);
+
+describe("a keyboard user meets the page in the order the document has it", () => {
+  it("never reorders: no order, no reversed row or column, no dense grid, no float", () => {
+    expect(settingTo(css, "order", () => true)).toEqual([]);
+    expect(settingTo(css, "flex-direction", (v) => v.includes("reverse"))).toEqual([]);
+    expect(settingTo(css, "flex-flow", (v) => v.includes("reverse"))).toEqual([]);
+    expect(settingTo(css, "grid-auto-flow", (v) => v.includes("dense"))).toEqual([]);
+    expect(settingTo(css, "float", () => true)).toEqual([]);
+    expect(settingTo(css, "direction", () => true)).toEqual([]);
+    expect(settingTo(css, "writing-mode", () => true)).toEqual([]);
+  });
+
+  it("places a grid item in only one rule, whose item follows what it sits beside in the document", () => {
+    // The hint of a choice sits in the second column, under the label that precedes it.
+    for (const name of ["grid-column", "grid-row", "grid-area"])
+      expect(
+        settingTo(css, name, () => true),
+        name,
+      ).toEqual(name === "grid-column" ? [".choice .hint"] : []);
+  });
+
+  it("takes an element out of the flow only for the skip link and the text for screen readers", () => {
+    expect(settingTo(css, "position", (v) => v === "absolute" || v === "fixed").sort()).toEqual([
+      ".skip-link",
+      ".sr-only",
+    ]);
+    // A sticky part stays where it is in the document and in the tab order.
+    expect(settingTo(css, "position", (v) => v === "sticky").sort()).toEqual([
+      ".demo-banner",
+      ".inspector",
+    ]);
+  });
+
+  it("scrolls a focused control clear of the sticky banner and the sticky inspector", () => {
+    const html = /(?:^|\n)html\s*\{([^}]*)\}/.exec(bare(css))?.[1] ?? "";
+    const padding = /scroll-padding-top:\s*([\d.]+)rem/.exec(html)?.[1];
+    expect(padding, "html sets scroll-padding-top in rem").toBeDefined();
+    const tops = allRules(css)
+      .filter(({ body }) => property(body, "position") === "sticky")
+      .map(({ body }) => /(?:^|[;\s])top:\s*([\d.]+)(?:rem)?\s*(?:;|$)/.exec(body)?.[1]);
+    expect(tops).toHaveLength(2);
+    expect(tops.every((top) => top !== undefined)).toBe(true);
+    // The inspector is the lower of the two: the banner sits at the top, the inspector under it.
+    expect(Number(padding)).toBeGreaterThanOrEqual(Math.max(...tops.map(Number)));
+  });
+});
+
+// What the browser audit (test/a11y/browser) found in the stylesheet, held here as well, so that it
+// stays fixed on a machine that has no browser. Each of these was a measured fault in Chromium.
+describe("what a real browser found wrong, kept fixed", () => {
+  it("leaves more room between the filters than the reach of the focus ring", () => {
+    // The ring is 3px wide and starts 2px out. A gap of 5px or less puts it on the filled filter
+    // beside it, where it was 1.9 to 1 against the fill.
+    const ring = ruleBody(":focus-visible");
+    const reach =
+      Number(/outline:\s*(\d+)px/.exec(ring)?.[1]) +
+      Number(/outline-offset:\s*(\d+)px/.exec(ring)?.[1]);
+    expect(reach).toBe(5);
+    const gap = /gap:\s*([\d.]+)rem/.exec(ruleBody(".filters ul"))?.[1];
+    expect(gap, "the filters have a gap in rem").toBeDefined();
+    expect(Number(gap) * 16).toBeGreaterThan(reach);
+  });
+
+  it("makes every box that scrolls the containing block of what is positioned inside it", () => {
+    // Text for screen readers is positioned. In a scrolling box that is not itself positioned it
+    // lay outside the box, and a wide table made the whole page scroll sideways at 640 pixels.
+    const rules = allRules(css);
+    const scrolling = rules
+      .filter(({ body }) => /(?:^|[;\s])overflow(?:-[xy])?:\s*(?:auto|scroll)\b/.test(body))
+      .map(({ selector }) => selector);
+    expect(scrolling.length).toBeGreaterThan(2);
+    for (const selector of scrolling) {
+      const positioned = rules.some(
+        ({ selector: other, body }) =>
+          other === selector &&
+          /^(?:relative|absolute|sticky|fixed)$/.test(property(body, "position") ?? ""),
+      );
+      expect(positioned, `${selector} scrolls and is not positioned`).toBe(true);
+    }
+  });
+
+  it("does not stick the demo banner to the top of a narrow screen", () => {
+    // On a 320 pixel screen it is three lines tall, and Chromium puts the start of a tall focused
+    // box under it. A sticky banner stays where the wide screens have it.
+    const narrow =
+      /@media \(max-width: 40rem\) \{\s*\.demo-banner \{\s*position: static;\s*\}\s*\}/;
+    expect(narrow.test(bare(css))).toBe(true);
+    expect(property(ruleBody(".demo-banner"), "position")).toBe("sticky");
+  });
+});
+
+describe("nothing is hidden from the eye and left to the keyboard", () => {
+  // The print sheet drops the skip link and the buttons: they do nothing on paper.
+  const screen = withoutBlock(css, "@media print");
+
+  it("hides with display none only what is hidden for everyone: the hidden attribute and a hint", () => {
+    expect(settingTo(screen, "display", (v) => v.startsWith("none")).sort()).toEqual([
+      ".scroll-hint",
+      "[hidden]",
+    ]);
+  });
+
+  it("makes nothing invisible or unclickable by style", () => {
+    expect(settingTo(screen, "visibility", () => true)).toEqual([]);
+    expect(settingTo(screen, "opacity", () => true)).toEqual([]);
+    expect(settingTo(screen, "pointer-events", () => true)).toEqual([]);
+    expect(settingTo(screen, "user-select", (v) => v === "none")).toEqual([]);
+  });
+
+  it("finds a stylesheet that does, so the pins above can fail", () => {
+    const planted = ".a { display: none; } .b { order: 2; } .c { visibility: hidden; }";
+    expect(settingTo(planted, "display", (v) => v.startsWith("none"))).toEqual([".a"]);
+    expect(settingTo(planted, "order", () => true)).toEqual([".b"]);
+    expect(settingTo(planted, "visibility", () => true)).toEqual([".c"]);
+    expect(
+      withoutBlock("@media print { .a { display: none; } } .b { color: red; }", "@media print"),
+    ).toBe(" .b { color: red; }");
+  });
+
+  it("sets the print sheet apart: the rules it hides are in a block of their own", () => {
+    expect(css).toContain("@media print");
+    expect(settingTo(css, "display", (v) => v.startsWith("none")).length).toBeGreaterThan(
+      settingTo(screen, "display", (v) => v.startsWith("none")).length,
+    );
   });
 });
 

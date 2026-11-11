@@ -83,8 +83,9 @@
   }
 
   /* Show the highlighted quote and the chosen row, and put focus on the evidence inspector when
-     the page opens on a chosen finding, so a keyboard user starts at the evidence. */
+     the page opens on a chosen finding. A page that opens on a refusal stays at its top. */
   function showSelection() {
+    var refused = doc.querySelector('[role="alert"]');
     var quote = doc.querySelector("mark[data-quote]");
     var row = doc.querySelector("[data-issue-table] tr.is-selected");
     var pane = doc.querySelector("[data-inspector]");
@@ -93,7 +94,7 @@
     if (row && pane && !win.location.hash && doc.activeElement === doc.body) {
       pane.focus({ preventScroll: true });
     }
-    if (quote) quote.scrollIntoView({ block: "center", behavior: behavior });
+    if (quote && !refused) quote.scrollIntoView({ block: "center", behavior: behavior });
   }
 
   /* A submitted form cannot be submitted twice. The buttons come back if the page is restored

@@ -47,7 +47,6 @@ import {
   decidedWith,
   decisionPane,
   editWith,
-  expectAccessibleExceptTheMemoList,
   feedbackProps,
   memosPageWith,
   noteOf,
@@ -359,14 +358,8 @@ describe("the fixtures of the pane", () => {
     expect(new Set(titles).size).toBe(titles.length);
     for (const [title, make, options] of VARIANTS_FEEDBACK) {
       checkInvariants(make(), options);
-      // The memos page has one problem of its own that is not this package's (see
-      // `isKnownProblemOfTheMemoList`); the section of the rating is audited alone as well.
       expect(
-        () =>
-          expectAccessibleExceptTheMemoList(
-            make(),
-            options?.fragment === true ? { fragment: true } : {},
-          ),
+        () => expectAccessible(make(), options?.fragment === true ? { fragment: true } : {}),
         title,
       ).not.toThrow();
     }
@@ -724,7 +717,7 @@ const checkedMarks = (root: El): (string | null | undefined)[] =>
   radios(root)
     .filter((r) => hasAttr(r, "checked"))
     .map((r) => attr(r, "value"));
-const memos = (html: string): El => expectAccessibleExceptTheMemoList(html);
+const memos = (html: string): El => expectAccessible(html);
 
 describe("the rating of a matter, the form", () => {
   const page = memos(memosPageWith(ratingProps()));

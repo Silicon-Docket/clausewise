@@ -11,7 +11,17 @@ import {
 } from "../../src/server/routes/notices.js";
 import { urls } from "../../src/server/urls.js";
 import { expectAccessible } from "../a11y/rules.js";
-import { all, attr, byId, first, hasClass, parseHtml, readable, withClass } from "../pages/html.js";
+import {
+  all,
+  attr,
+  byId,
+  first,
+  hasClass,
+  parseHtml,
+  readable,
+  withClass,
+  type El,
+} from "../pages/html.js";
 import {
   IDS,
   cleanup,
@@ -101,20 +111,42 @@ function expectWordsWithoutLink(page: Page, code: string): void {
   expectAccessible(page.html);
 }
 
-describe("a decision that is refused for its code on a finding that cannot be decided", () => {
-  it("on a finding of an exported matter: the words and the todo, no link, no form", async () => {
+/**
+ * What a refused decision must say when the finding has no form on its page: the words of what
+ * stops the decision, not the words of a field of a form that is not there, and a way to the reason
+ * the page writes under Decision. The page has no form to link to, and every link it has leads to
+ * an element that is on it.
+ */
+function expectBlockedWords(page: Page): void {
+  const alert = noticeOf(page);
+  const jump = REFUSAL_JUMP["finding_blocked"]!;
+  expect(readable(alert)).toBe(`Problem ${REFUSAL_PHRASES["finding_blocked"]} ${jump.label}`);
+  expect(withClass(alert, "todo").map(readable)).toEqual([REFUSAL_TODO["finding_blocked"]]);
+  // The one link leads to the section that holds the reason, which is on the page.
+  expect(linksOf(page)).toEqual([jump.href]);
+  expect(byId(page.root, jump.href.slice(1))).toBeDefined();
+  // And the words of the field are not told: nothing here can be chosen.
+  expect(readable(alert)).not.toContain("reason code");
+  for (const id of ["decision-reason-code", "edit-minor", "edit-status", "decision-accept"])
+    expect(byId(page.root, id), id).toBeUndefined();
+  expect(readable(page.root)).toContain("This finding cannot be decided here.");
+  expectAccessible(page.html);
+}
+
+describe("a decision that is refused for its fields on a finding that cannot be decided", () => {
+  it("on a finding of an exported matter: the words of what stops it, a way to the reason, no form", async () => {
     const ids = await prepareMatter(site, { name: "Exported, then refused", exported: true });
     const before = fingerprint(site, ids.matterId);
     const page = await rejectWithoutCode(ids);
-    expectWordsWithoutLink(page, "reason_code_required");
-    // The page has no decision form, and says so in its own words.
-    expect(byId(page.root, "decision-reason-code")).toBeUndefined();
-    expect(byId(page.root, "edit-minor")).toBeUndefined();
-    expect(readable(page.root)).toContain("This finding cannot be decided here.");
+    expectBlockedWords(page);
+    // The reason the page gives under Decision is the service's own, and says what the cause is.
+    expect(readable(byId(page.root, "decision") as El)).toContain(
+      "The memo is exported. Decisions can change only after a new review.",
+    );
     expect(fingerprint(site, ids.matterId)).toEqual(before);
   });
 
-  it("on a finding that has gone out of date: the words and the todo, no link, no form", async () => {
+  it("on a finding that has gone out of date: the same words, and the reason under Decision names the change", async () => {
     const ids = await prepareMatter(site, { name: "Stale, then refused", exported: false });
     const finding = await findingOf(ids);
     // The inputs changed after the page was opened: the finding is stale, and its form is gone.
@@ -122,6 +154,7 @@ describe("a decision that is refused for its code on a finding that cannot be de
       reason: "rerun_requested",
       actorId: IDS.associate,
     });
+    const before = fingerprint(site, ids.matterId);
     const page = await asPage(
       await byHand(reviewer, urls.review(ids.matterId, ids.findingId), {
         [FIELDS.decision]: "reject",
@@ -130,12 +163,11 @@ describe("a decision that is refused for its code on a finding that cannot be de
       }),
       400,
     );
-    expectWordsWithoutLink(page, "reason_code_required");
-    expect(byId(page.root, "decision-reason-code")).toBeUndefined();
-    expect(readable(page.root)).toContain("This finding cannot be decided here.");
+    expectBlockedWords(page);
+    expect(fingerprint(site, ids.matterId)).toEqual(before);
   });
 
-  it("with a code that is not one of the six, on an exported matter: the words and the todo, no link", async () => {
+  it("with a code that is not one of the six, on an exported matter: the same words again", async () => {
     const ids = await prepareMatter(site, { name: "Exported, bad code", exported: true });
     const finding = await findingOf(ids);
     const page = await asPage(
@@ -147,30 +179,56 @@ describe("a decision that is refused for its code on a finding that cannot be de
       }),
       400,
     );
-    expectWordsWithoutLink(page, "bad_reason_code");
-    expect(byId(page.root, "decision-reason-code")).toBeUndefined();
+    expectBlockedWords(page);
+  });
+
+  it("keeps the status of the refusal it replaces the words of", async () => {
+    // The fields were wrong (400), and the words are those of the state, but the answer is still
+    // the one the shell gives that mistake, as it is for the JSON API.
+    const ids = await prepareMatter(site, { name: "Exported, status", exported: true });
+    const page = await rejectWithoutCode(ids);
+    expect(page.response.status).toBe(400);
+  });
+
+  it("keeps a refusal that is already about the state, and its own todo", async () => {
+    const ids = await prepareMatter(site, { name: "Exported, accepted", exported: true });
+    const finding = await findingOf(ids);
+    // An accept needs nothing but the content the page was made on; the matter is exported.
+    const page = await asPage(
+      await byHand(reviewer, urls.review(ids.matterId, ids.findingId), {
+        [FIELDS.decision]: "accept",
+        [FIELDS.findingContentSha256]: finding.contentSha256,
+      }),
+      409,
+    );
+    const alert = noticeOf(page);
+    expect(readable(alert)).toContain(REFUSAL_PHRASES["matter_exported"]!);
+    expect(withClass(alert, "todo").map(readable)).toEqual([REFUSAL_TODO["matter_exported"]]);
+    expect(readable(alert)).not.toContain(REFUSAL_PHRASES["finding_blocked"]!);
+    expectAccessible(page.html);
+  });
+
+  it("tells the words of a field, as before, when the finding has its form on the page", async () => {
+    const ids = await prepareMatter(site, { name: "Open, field refused", exported: false });
+    const page = await rejectWithoutCode(ids);
+    expect(readable(noticeOf(page))).toContain(REFUSAL_PHRASES["reason_code_required"]!);
+    expect(readable(noticeOf(page))).not.toContain(REFUSAL_PHRASES["finding_blocked"]!);
   });
 
   it("is not fooled by the id written in the name of the matter, which the page shows as text", async () => {
-    const hostile = 'Matter id="decision-reason-code" and id="edit-minor"';
-    const ids = await prepareMatter(site, { name: hostile, exported: true });
-    const page = await rejectWithoutCode(ids);
+    // A report refused on a review with no findings: its link to the form is dropped, and the check
+    // that drops it reads the elements of the page and not the text of the matter's name.
+    const hostile = 'Matter id="missed-issue-rule" and id="missed-issue-note"';
+    const ids = await prepareMatter(site, { name: hostile, exported: false });
+    const runId = emptyRun(ids);
+    const page = await asPage(
+      await byHand(associate, urls.missedIssues(ids.matterId, runId), {}),
+      400,
+    );
     // The name is on the page, as text, with its quotes escaped, and it made no element.
     expect(readable(page.root)).toContain(hostile);
-    expectWordsWithoutLink(page, "reason_code_required");
-    expect(byId(page.root, "decision-reason-code")).toBeUndefined();
-  });
-
-  it("keeps the link where the form is on the page, and it leads to the list of codes", async () => {
-    const ids = await prepareMatter(site, { name: "Open, refused", exported: false });
-    const page = await rejectWithoutCode(ids);
-    const alert = noticeOf(page);
-    expect(readable(alert)).toBe(
-      `Problem ${REFUSAL_PHRASES["reason_code_required"]} ${REFUSAL_JUMP["reason_code_required"]!.label}`,
-    );
-    expect(linksOf(page)).toEqual(["#decision-reason-code"]);
-    expect(byId(page.root, "decision-reason-code")?.name).toBe("select");
-    expectAccessible(page.html);
+    expectWordsWithoutLink(page, "rule_required");
+    expect(byId(page.root, "missed-issue-rule")).toBeUndefined();
   });
 });
 

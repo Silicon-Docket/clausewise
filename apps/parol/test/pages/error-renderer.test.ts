@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { GUIDANCE, GUIDANCE_BY_STATUS, GUIDANCE_KEYS } from "../../src/server/guidance.js";
+import {
+  GUIDANCE,
+  GUIDANCE_BY_STATUS,
+  GUIDANCE_KEYS,
+  globalGuidanceKey,
+  isGlobalGuidanceKey,
+  type GuidanceKey,
+} from "../../src/server/guidance.js";
 import { ErrorPage, render, renderErrorPage } from "../../src/server/pages/index.js";
 import { urls } from "../../src/server/urls.js";
 import { expectAccessible, tabStops } from "../a11y/rules.js";
@@ -127,13 +134,15 @@ describe("renderErrorPage, the shell's renderer made from ErrorPage", () => {
   });
 
   it("reads differently for each cause of a 403, and tells the person what to do", () => {
-    const textOf = (key: "csrf" | "host" | "role" | "global_role"): string =>
+    const textOf = (key: GuidanceKey): string =>
       readable(
         first(checkInvariants(renderErrorPage(403, "You may not do that", undefined, key)), (el) =>
           hasClass(el, "error-page"),
         ),
       );
-    const causes = (["csrf", "host", "role", "global_role"] as const).map(textOf);
+    const causes = (["csrf", "host", "role", globalGuidanceKey("evaluation.read")] as const).map(
+      textOf,
+    );
     expect(new Set(causes).size).toBe(4);
     // Without a key the status gives the role sentence, the most common cause.
     expect(readable(checkInvariants(renderErrorPage(403, "T")))).toContain(GUIDANCE.role.text);
@@ -174,7 +183,7 @@ describe("the error pages and the keyboard", () => {
   const cases: [string, string][] = GUIDANCE_KEYS.map((key) => {
     const status = Number(
       Object.entries(GUIDANCE_BY_STATUS).find(([, k]) => k === key)?.[0] ??
-        (key === "csrf" || key === "host" || key === "global_role" ? 403 : 418),
+        (key === "csrf" || key === "host" || isGlobalGuidanceKey(key) ? 403 : 418),
     );
     return [key, renderErrorPage(status, "Title", status === 500 ? ID : undefined, key)];
   });

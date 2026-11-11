@@ -83,9 +83,17 @@ export const runPage = (
 export const paneOnly = (finding: FindingView = buildFindingView(), c: Chrome = chrome): string =>
   render(FindingPane({ chrome: c, matterId: IDS.matter, finding }));
 
-export const findingPage = (finding: FindingView = buildFindingView()): string =>
+export const findingPage = (
+  finding: FindingView = buildFindingView(),
+  c: Chrome = chrome,
+): string =>
   render(
-    FindingPage({ chrome, matterId: IDS.matter, matterName: "Lanternfish / Corvane NDA", finding }),
+    FindingPage({
+      chrome: c,
+      matterId: IDS.matter,
+      matterName: "Lanternfish / Corvane NDA",
+      finding,
+    }),
   );
 
 export const memosPage = (canExport = true, blocked: string | null = null): string =>

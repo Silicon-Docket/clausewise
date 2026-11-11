@@ -2,8 +2,9 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 import { FakeElement, SCRIPT_PATH, event, runScript } from "./fake-dom.js";
-import { matterPage, mattersPage, runPage } from "./render.js";
+import { findingPage, matterPage, mattersPage, runPage } from "./render.js";
 import {
+  buildChrome,
   buildIssueRows,
   buildMatterView,
   buildRunSummary,
@@ -71,6 +72,102 @@ describe("parol.js as a file", () => {
     const fetches = [...source.matchAll(/\.fetch\(/g)];
     expect(fetches).toHaveLength(1);
     expect(source).toContain("sameOriginPath(url)");
+  });
+});
+
+/**
+ * What the script may listen to. Everything a page needs works without it, and what it adds can be
+ * done with the keyboard alone: it registers no event that only a mouse, a finger or a pen can
+ * cause, so no shortcut or behaviour exists for a pointer that a keyboard cannot reach.
+ */
+describe("parol.js and the keyboard", () => {
+  const registered = (): string[] =>
+    [...source.matchAll(/addEventListener\(\s*([^,)]*)/g)].map((m) => (m[1] as string).trim());
+  const MOUSE_ONLY =
+    /^(click|dblclick|auxclick|mousedown|mouseup|mouseover|mouseout|mouseenter|mouseleave|mousemove|contextmenu|wheel|pointer\w*|touch\w*|drag\w*|drop)$/;
+
+  it("names every event it listens to as a plain word, so the check below cannot be got round", () => {
+    const names = registered();
+    expect(names.length).toBeGreaterThan(0);
+    for (const name of names) expect(name, name).toMatch(/^"[a-zA-Z]+"$/);
+  });
+
+  it("listens to no event that only a mouse, a finger or a pen can cause", () => {
+    for (const name of registered().map((n) => n.replaceAll('"', "")))
+      expect(MOUSE_ONLY.test(name), name).toBe(false);
+    // The same for a handler set as a property: onclick, onmousedown and the like.
+    expect(source).not.toMatch(
+      /\.on(click|dblclick|mouse\w*|pointer\w*|touch\w*|contextmenu|wheel|drag\w*)\s*=/,
+    );
+    // The one kind of key it listens for, and what else it hears, is pinned so that a new listener
+    // is a decision made here and not an accident.
+    expect(
+      registered()
+        .map((n) => n.replaceAll('"', ""))
+        .sort(),
+    ).toEqual(["DOMContentLoaded", "keydown", "pageshow", "submit"]);
+  });
+
+  it("calls click() only on a link it moved to with a key, never to answer a pointer", () => {
+    const clicks = [...source.matchAll(/\.click\(\)/g)];
+    expect(clicks).toHaveLength(1);
+    const at = source.indexOf(".click()");
+    const before = source.slice(0, at);
+    // It is inside the keydown handler, after the check for the Enter key.
+    expect(before.lastIndexOf('addEventListener("keydown"')).toBeGreaterThan(
+      before.lastIndexOf('addEventListener("submit"'),
+    );
+    expect(before.slice(before.lastIndexOf('addEventListener("keydown"'))).toContain(
+      'key === "Enter"',
+    );
+  });
+
+  it("lets a key through to the page when a modifier is held or the person is typing", () => {
+    const handler = source.slice(source.indexOf('addEventListener("keydown"'));
+    const body = handler.slice(0, handler.indexOf("\n    });"));
+    // The modifiers are checked first, before the key is read.
+    const modifiers = body.indexOf("event.ctrlKey || event.metaKey || event.altKey");
+    expect(modifiers).toBeGreaterThan(-1);
+    expect(modifiers).toBeLessThan(body.indexOf("event.key"));
+    // Typing is checked before any letter key is acted on, and the keys act only inside the table.
+    const typing = body.indexOf("typingIn(at)");
+    expect(typing).toBeGreaterThan(-1);
+    expect(typing).toBeLessThan(body.indexOf('key === "j"'));
+    expect(body.indexOf("closest('[data-zone=\"issues\"]')")).toBeLessThan(
+      body.indexOf('key === "j"'),
+    );
+    // And what typingIn counts as typing is every kind of text entry there is.
+    const typingIn = source.slice(
+      source.indexOf("function typingIn"),
+      source.indexOf("function prefersReducedMotion"),
+    );
+    for (const tag of ["input", "textarea", "select"]) expect(typingIn).toContain(`"${tag}"`);
+    expect(typingIn).toContain("isContentEditable");
+  });
+
+  it.each([
+    ["an input", "input", false],
+    ["a text area", "textarea", false],
+    ["a select", "select", false],
+    ["an element that can be edited", "div", true],
+  ] as const)("does not take a letter typed into %s inside the table", (_name, tag, editable) => {
+    const h = runScript(runPage({ selected: null }));
+    const field = new FakeElement(h.doc, null, tag);
+    field.isContentEditable = editable;
+    field.parent = h.doc.querySelector('[data-zone="issues"]');
+    for (const letter of ["j", "k", "?", "Enter"]) key(h, letter, {}, field);
+    expect(h.doc.querySelectorAll("tr.is-current")).toHaveLength(0);
+    expect(h.doc.querySelector("[data-keys-help]")!.open).toBe(false);
+  });
+
+  it("names, in the list of keys, every key it acts on, and says where they work", () => {
+    const acted = [...source.matchAll(/key === "([^"]+)"/g)].map((m) => m[1] as string);
+    expect([...new Set(acted)].sort()).toEqual(["?", "Enter", "Escape", "j", "k"]);
+    const h = runScript(runPage());
+    const help = h.doc.querySelector("[data-keys-help]")!;
+    const text = (help.textContent ?? "").replace(/\s+/g, " ");
+    expect(text).toContain("These keys work while focus is in the issue table.");
+    for (const name of ["j", "k", "Enter", "?", "Escape"]) expect(text, name).toContain(name);
   });
 });
 
@@ -224,6 +321,23 @@ describe("scrolling the quote into view", () => {
   it("does nothing when nothing is chosen", () => {
     const h = runScript(runPage({ selected: null }));
     expect(h.doc.querySelectorAll("mark")).toHaveLength(0);
+  });
+
+  it("leaves a page that opens on a refusal where it begins, so the refusal is seen", () => {
+    // Found in a real browser: the refused decision page was scrolled to its quote, which put the
+    // alert behind the banner at the top of the window.
+    const refusal = buildChrome({
+      notice: {
+        kind: "error",
+        text: "Give a reason. A decision to edit, reject or escalate needs one.",
+      },
+    });
+    const h = runScript(findingPage(undefined, refusal));
+    expect(h.doc.querySelectorAll('[role="alert"]')).toHaveLength(1);
+    expect(h.doc.querySelector("mark[data-quote]")!.calls.scroll).toEqual([]);
+    // The same page with no refusal still shows its quote.
+    const plain = runScript(findingPage());
+    expect(plain.doc.querySelector("mark[data-quote]")!.calls.scroll).toHaveLength(1);
   });
 });
 

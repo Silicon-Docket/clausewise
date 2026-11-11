@@ -16,6 +16,7 @@ import {
   dateInputValue,
   formatBytes,
   formatDate,
+  formatDateTime,
   modelLine,
   plural,
   shortHash,
@@ -200,7 +201,7 @@ function VersionRows(props: { doc: DocumentView; canWrite: boolean }) {
                     type="submit"
                     class="button button-small"
                     form={dateFormId}
-                    aria-label={`Save stated date of version ${version.versionNo} of ${doc.label}`}
+                    aria-label={`Save date of version ${version.versionNo} of ${doc.label}`}
                   >
                     Save date
                   </button>
@@ -320,7 +321,11 @@ function DocumentCard(props: {
                 />
               </Field>
               <div class="actions">
-                <button type="submit" class="button">
+                <button
+                  type="submit"
+                  class="button"
+                  aria-label={`Upload new version of ${doc.label}`}
+                >
                   Upload new version
                 </button>
               </div>
@@ -348,7 +353,11 @@ function DocumentCard(props: {
                   </label>
                 </div>
                 <div class="actions">
-                  <button type="submit" class="button button-danger">
+                  <button
+                    type="submit"
+                    class="button button-danger"
+                    aria-label={`Remove document ${doc.label}`}
+                  >
                     Remove document
                   </button>
                 </div>
@@ -503,7 +512,15 @@ function RunsTable(props: {
   runs: RunSummary[];
   canStart: boolean;
 }) {
-  if (props.runs.length === 0) return <p class="empty">No review has been run yet.</p>;
+  if (props.runs.length === 0) {
+    return (
+      <p class="empty">
+        {props.canStart
+          ? "No review has been run yet. Start one under Start the review."
+          : "No review has been run yet. The associate on the matter starts it."}
+      </p>
+    );
+  }
   return (
     <ScrollBox label="Reviews run on this matter">
       <table class="data-table">
@@ -522,7 +539,10 @@ function RunsTable(props: {
           {props.runs.map((run) => (
             <tr>
               <th scope="row">
-                <a href={urls.run(props.matterId, run.id)}>
+                <a
+                  href={urls.run(props.matterId, run.id)}
+                  aria-label={`${formatDateTime(run.startedAt)}, workflow ${revealToString(run.workflowLabel)}`}
+                >
                   <Time value={run.startedAt} />
                 </a>
                 <br />
@@ -924,7 +944,11 @@ export function MatterPage(props: MatterPageProps) {
         note="Choose which version of each document is operative. Only operative versions are reviewed."
       >
         {view.documents.length === 0 ? (
-          <p class="empty">No documents yet. Add the NDA first.</p>
+          <p class="empty">
+            {canWrite
+              ? "No documents yet. Add the NDA first."
+              : "No documents yet. Someone with the associate role on the matter adds them."}
+          </p>
         ) : (
           <div class="documents">
             {view.documents.map((doc, index) => (
@@ -979,6 +1003,7 @@ export function MatterPage(props: MatterPageProps) {
           matterId={matter.id}
           memos={view.memos}
           currentRunId={view.currentRun?.id ?? null}
+          canExport={canExport}
         />
         {canExport ? (
           <ExportMemoForm chrome={chrome} matterId={matter.id} blockedReason={exportBlocked} />

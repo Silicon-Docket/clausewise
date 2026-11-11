@@ -14,6 +14,7 @@ import {
   readable,
   type El,
 } from "./html.js";
+import { expectAccessible } from "../a11y/rules.js";
 import { IDS, buildIssueRows } from "./support.js";
 
 /** Every URL a form in the fixtures may post to, built from the shared url table. */
@@ -222,6 +223,10 @@ export function checkInvariants(html: string, options: InvariantOptions = {}): E
 
   // No em or en dash anywhere in what the application wrote.
   expect(html).not.toMatch(/[\u2013\u2014]/);
+
+  // Last, the rules of test/a11y/rules.ts: tab stops, names, landmarks, and what an error page tells
+  // the person to do. Every page test that calls this function is held to all of them.
+  expectAccessible(root, { fragment: options.fragment === true });
   return root;
 }
 

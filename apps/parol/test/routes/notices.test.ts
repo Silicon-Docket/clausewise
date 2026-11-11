@@ -466,7 +466,7 @@ describe("refusalOf", () => {
     expect(second?.notice.todo).toBe("Do the probe again.");
   });
 
-  it("says nothing of what to do for a code with no phrase, whatever the tables hold for it", () => {
+  it("takes nothing of what the tables hold for a code with no phrase: the words and the todo of its status", () => {
     const orphan = {
       phrases: {},
       todo: { orphan_code: "Do it." },
@@ -476,15 +476,17 @@ describe("refusalOf", () => {
     expect(refusal?.notice).toStrictEqual({
       kind: "error",
       text: "That request was not valid. Check the form and try again.",
+      todo: "Check the form and try again.",
     });
   });
 
-  it("gives the phrase of the status to a code it does not know, and a ZodError its own", () => {
+  it("gives the phrase and the todo of the status to a code it does not know, and a ZodError its own", () => {
     const unknown = refusalOf(new ConflictError("no_such_code", "x"), synthetic);
-    expect(unknown?.notice.text).toBe(
-      "That conflicts with the current state of the matter. Reload the page and try again.",
-    );
-    expect(unknown?.notice.todo).toBeUndefined();
+    expect(unknown?.notice).toStrictEqual({
+      kind: "error",
+      text: "That conflicts with the current state of the matter. Reload the page and try again.",
+      todo: "Reload the page and try again.",
+    });
     const parse = z.object({ a: z.string() }).safeParse({ a: 1 });
     expect(parse.success).toBe(false);
     const zod = refusalOf((parse as { error: ZodError }).error, synthetic);
@@ -492,16 +494,21 @@ describe("refusalOf", () => {
     expect(zod?.notice).toStrictEqual({
       kind: "error",
       text: "That request was not valid. Check the form and try again.",
+      todo: "Check the form and try again.",
     });
   });
 
-  it("keeps the text of an upload error and adds nothing to it", () => {
+  it("keeps the text of an upload error, adds the sentence that says what to do and a way to the documents", () => {
     const refusal = refusalOf(new UploadError("Save it as a regular .docx file."), synthetic);
     expect(refusal?.status).toBe(422);
     expect(refusal?.notice).toStrictEqual({
       kind: "error",
-      text: "Save it as a regular .docx file.",
+      text: "Save it as a regular .docx file. Fix the file or choose another.",
+      todo: "Fix the file or choose another.",
+      jump: { href: "#documents", label: "Go to the documents" },
     });
+    // The sentence that was added is the todo: it ends the text, so it occurs in it.
+    expect(refusal?.notice.text.endsWith(refusal?.notice.todo ?? "?")).toBe(true);
   });
 
   it("is null for an error that is not the person's to act on", () => {
@@ -509,18 +516,39 @@ describe("refusalOf", () => {
       expect(refusalOf(error, synthetic)).toBeNull();
   });
 
-  it("answers the codes the application already had exactly as before, with no todo or jump yet", () => {
-    for (const [code, phrase] of Object.entries({
-      reason_required: "Give a reason. A decision to edit, reject or escalate needs one.",
-      bad_decision: "Choose a decision.",
-      nda_exists: "The matter already has an NDA.",
-    })) {
-      const refusal = refusalOf(new ValidationError(code, "x"));
-      expect(refusal, code).toStrictEqual({
+  it("answers the codes the application already had with the first sentence they had, then what to do and where", () => {
+    const expected: Record<string, Record<string, unknown>> = {
+      reason_required: {
         status: 400,
-        code,
-        notice: { kind: "error", text: phrase },
-      });
+        notice: {
+          kind: "error",
+          text: "Give a reason. A decision to edit, reject or escalate needs one.",
+          todo: "Give a reason.",
+          jump: { href: "#decision-reason", label: "Go to the reason" },
+        },
+      },
+      bad_decision: {
+        status: 400,
+        notice: {
+          kind: "error",
+          text: "Choose a decision.",
+          todo: "Choose a decision.",
+          jump: { href: "#decision-accept", label: "Go to the choices" },
+        },
+      },
+      nda_exists: {
+        status: 400,
+        notice: {
+          kind: "error",
+          text: "The matter already has an NDA. Upload a new version of it, or remove it first.",
+          todo: "Upload a new version of it, or remove it first.",
+          jump: { href: "#documents", label: "Go to the documents" },
+        },
+      },
+    };
+    for (const [code, found] of Object.entries(expected)) {
+      const refusal = refusalOf(new ValidationError(code, "x"));
+      expect(refusal, code).toStrictEqual({ ...found, code });
     }
   });
 });

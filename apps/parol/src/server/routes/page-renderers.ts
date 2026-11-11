@@ -1,7 +1,6 @@
 import type { Context } from "hono";
 import { roleAllows } from "../../auth/actions.js";
 import type { AuthorizedMatter, Principal } from "../../auth/types.js";
-import type { ReferenceView, TimerView } from "../../services/views.js";
 import type { AppDeps } from "../deps.js";
 import {
   FindingPage,
@@ -12,11 +11,10 @@ import {
   RunPage,
 } from "../pages/index.js";
 import type { Chrome } from "../pages/layout.js";
-import { PILOT_ANCHORS } from "../pages/pilotfields.js";
 import type { MissedIssueDraft, NoteDraft, RatingDraft } from "../pages/feedback.js";
 import type { DecisionDraft } from "../pages/finding.js";
 import { refusalOf, type Refusal } from "./notices.js";
-import { sendPageWithLiveJump, withoutJump } from "./refusal-jumps.js";
+import { sendPageWithLiveJump } from "./refusal-jumps.js";
 import { exportBlockedReason, mayDeleteMatter, pageChrome, sendPage } from "./shared.js";
 
 /**
@@ -36,30 +34,6 @@ import { exportBlockedReason, mayDeleteMatter, pageChrome, sendPage } from "./sh
 function chromeFor(c: Context, principal: Principal, refusal: Refusal | undefined): Chrome {
   const chrome = pageChrome(c, principal);
   return refusal === undefined ? chrome : { ...chrome, notice: refusal.notice };
-}
-
-/**
- * Whether the place a refusal's link leads to (`href`, as `#id`) is on the matter page for this
- * person. The links of the pilot fragment lead to the timer section (there when the person may time
- * the matter), to the reference list (there for the role that writes it) and to its counts of
- * issues no rule covers (there while the list is not closed). Any other link is not this fragment's
- * to judge and is left as it is.
- */
-export function pilotJumpHasTarget(
-  href: string | undefined,
-  timer: TimerView,
-  reference: ReferenceView | null,
-): boolean {
-  switch (href) {
-    case `#${PILOT_ANCHORS.timer}`:
-      return timer.allowed;
-    case `#${PILOT_ANCHORS.referenceList}`:
-      return reference !== null;
-    case `#${PILOT_ANCHORS.referenceOutside}`:
-      return reference !== null && reference.state !== "locked";
-    default:
-      return true;
-  }
 }
 
 /**
@@ -123,6 +97,16 @@ export interface PageRenderers {
     options?: { ratingDraft?: RatingDraft },
   ): Response;
   /**
+   * Runs `run`, the body of a request about the memos (the export and the download of a file). A
+   * refusal the person can act on is answered on the memos page, with the status and the words of
+   * the refusal; anything else is thrown again, for the shell.
+   */
+  answerOnMemos(
+    c: Context,
+    am: AuthorizedMatter,
+    run: () => Response | Promise<Response>,
+  ): Promise<Response>;
+  /**
    * Runs `run`, the body of a matter form's POST. A refusal the person can fix is answered on the
    * matter's own page, with the status and the words of the refusal; anything else is thrown again,
    * for the shell. The page is shown only to a person who holds a role on the matter (the check is
@@ -144,25 +128,24 @@ export function createPageRenderers(deps: AppDeps): PageRenderers {
     // other). Both are read by the service for this matter and this person only.
     const timer = pilot.timer(am);
     const reference = pilot.referenceList(am);
-    // A refusal of the timer or of the reference list leads to a place in that panel. A panel that
-    // this person does not have, or a form it does not hold in this state, leaves the link nowhere
-    // to go, so it is dropped and the words stand alone (as the finding and memos pages do).
-    const shown =
-      refusal === undefined || pilotJumpHasTarget(refusal.notice.jump?.href, timer, reference)
-        ? refusal
-        : { ...refusal, notice: withoutJump(refusal.notice) };
-    return sendPage(
-      c,
+    const view = matters.view(am);
+    // Only the person who can add someone is shown the list of people to add.
+    const users = roleAllows(am.role, "member.add") ? matters.users() : undefined;
+    const canDelete = mayDeleteMatter(repo, am.principal, am.matterId);
+    // A refusal can lead to a place of this page that the person's page does not have: the timer
+    // and the reference list are given to some roles and not to others, the list closes when a
+    // review starts, a training matter has neither, and a form of the documents is shown only to
+    // the role that writes them. The link goes when the page that was built has no such place and
+    // the words stand alone, as they do on the run, finding and memos pages.
+    return sendPageWithLiveJump(c, refusal, (shown) =>
       MatterPage({
         chrome: chromeFor(c, am.principal, shown),
-        view: matters.view(am),
-        // Only the person who can add someone is shown the list of people to add.
-        users: roleAllows(am.role, "member.add") ? matters.users() : undefined,
-        canDelete: mayDeleteMatter(repo, am.principal, am.matterId),
+        view,
+        users,
+        canDelete,
         timer,
         reference,
       }),
-      refusal?.status,
     );
   };
 
@@ -212,7 +195,8 @@ export function createPageRenderers(deps: AppDeps): PageRenderers {
 
   const findingPage: PageRenderers["findingPage"] = (c, am, findingId, refusal, draft, options) => {
     const finding = runs.finding(am, findingId);
-    const matter = matters.view(am).matter;
+    const view = matters.view(am);
+    const matter = view.matter;
     // A decision or a note refused for its fields is answered here whatever the finding: the link
     // to the form goes when this page has none (the finding went out of date, or its matter was
     // exported).
@@ -223,6 +207,8 @@ export function createPageRenderers(deps: AppDeps): PageRenderers {
         finding,
         matterName: matter.name,
         training: matter.training,
+        // The way back to the issue table, for the page shown again after a refused decision.
+        currentRunId: view.currentRun?.id ?? null,
         draft,
         noteDraft: options?.noteDraft,
       }),
@@ -270,5 +256,8 @@ export function createPageRenderers(deps: AppDeps): PageRenderers {
       return matterPage(c, am, refusal);
     });
 
-  return { matterPage, mattersPage, runPage, findingPage, memosPage, answerInPlace };
+  const answerOnMemos: PageRenderers["answerOnMemos"] = (c, am, run) =>
+    answerRefusal(run, (refusal) => memosPage(c, am, refusal));
+
+  return { matterPage, mattersPage, runPage, findingPage, memosPage, answerInPlace, answerOnMemos };
 }

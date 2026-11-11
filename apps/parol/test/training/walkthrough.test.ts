@@ -355,7 +355,8 @@ describe("the training exercise, walked through the pages", () => {
     const withMemo = await dana.get(urls.matter(matterId));
     const memoLinks = all(
       withMemo.root,
-      (el) => el.name === "a" && attr(el, "download") !== undefined,
+      (el) =>
+        el.name === "a" && /^\/matters\/[^/]+\/memos\/[^/]+\/file$/.test(attr(el, "href") ?? ""),
     );
     expect(memoLinks).toHaveLength(1);
     const memoHref = attr(memoLinks[0] as El, "href") as string;

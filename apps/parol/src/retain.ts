@@ -2,8 +2,9 @@ import { existsSync } from "node:fs";
 import { acquireInstanceLock } from "./boot/instance-lock.js";
 import {
   CliUsageError,
-  describeFailure,
+  NO_DATABASE,
   dataFolder,
+  describeCommandFailure,
   isEntryPointOf,
   stderrLine,
   stdoutLine,
@@ -19,7 +20,6 @@ import {
 import {
   AUDIT_BREAK_TEXT,
   FileStore,
-  StoreError,
   createRepository,
   openDatabase,
   openDatabaseReadOnly,
@@ -219,7 +219,8 @@ export function exitCodeOf(report: RetentionReport): 0 | 1 | 3 {
   return report.refusedByLimit ? 3 : 0;
 }
 
-const READABLE = [CliUsageError, RetentionUsageError, StoreError] as const;
+/** The errors whose messages are written for the person who runs the command. */
+const WRITTEN = [CliUsageError, RetentionUsageError] as const;
 
 /** Opens what the mode needs, runs the job, closes. Returns the report. */
 function execute(
@@ -279,9 +280,7 @@ export async function runRetain(
     const folder = dataFolder(env);
     // Nothing is created for a data folder that has no database: not the folder, not the lock file.
     if (!existsSync(folder.databasePath)) {
-      err(
-        "Parol retention cannot run: there is no database in the data folder. Check PAROL_DATA_DIR.",
-      );
+      err(`Parol retention cannot run: ${NO_DATABASE}`);
       return 2;
     }
     const result = execute(folder, args, now);
@@ -295,7 +294,7 @@ export async function runRetain(
     else for (const line of describeRetention(result, { dataDir: folder.dataDir, args })) out(line);
     return exitCodeOf(result);
   } catch (error) {
-    err(`Parol retention cannot run: ${describeFailure(error, READABLE)}`);
+    err(describeCommandFailure("Parol retention", error, WRITTEN));
     return 2;
   }
 }

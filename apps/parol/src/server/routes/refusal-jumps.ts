@@ -18,6 +18,11 @@ import { sendPage } from "./shared.js";
  * The check is made against the page that was built and not against the conditions that decide
  * whether its form is shown, so it cannot drift from them: if the form is ever shown under other
  * conditions, the link follows it.
+ *
+ * Every page that answers a refusal is built through it: the matter's page too, whose links lead to
+ * its documents, its people and its reviews (always there) and to the timer and the reference list
+ * (there for some roles, some states and not for a training matter). One mechanism decides, for all
+ * of them, whether the place a link names is on the page that was built.
  */
 
 /** The notice as it is, without its link to a place on the page. */

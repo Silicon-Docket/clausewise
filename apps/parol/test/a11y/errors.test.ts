@@ -3,16 +3,18 @@ import { join, relative } from "node:path";
 import { Writable, type Duplex } from "node:stream";
 import { RequestError } from "@hono/node-server";
 import { HTTPException } from "hono/http-exception";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { ZodError } from "zod";
-import { GLOBAL_ACTIONS, MATTER_ACTIONS } from "../../src/auth/actions.js";
+import { GLOBAL_ACTIONS, MATTER_ACTIONS, type GlobalAction } from "../../src/auth/actions.js";
 import { CsrfError } from "../../src/auth/csrf.js";
 import { UploadError } from "../../src/module-contracts.js";
 import {
   GUIDANCE,
   GUIDANCE_BY_STATUS,
   GUIDANCE_KEYS,
+  globalGuidanceKey,
   guidanceFor,
+  isGlobalGuidanceKey,
 } from "../../src/server/guidance.js";
 import { defineRoute } from "../../src/server/matter-route.js";
 import { TITLES, builtinErrorPage, toSafeError } from "../../src/server/middleware/errors.js";
@@ -38,6 +40,7 @@ import {
   OUTSIDER,
   VIEWER,
   makeSite,
+  newMatter,
   prepareMatter,
   type Prepared,
   type Site,
@@ -93,11 +96,83 @@ describe("the guidance table", () => {
     expect(new Set(shared)).toEqual(new Set(["Reload the page and try again."]));
   });
 
-  it("says, for a global role, which people the page is for and that the person can go back", () => {
-    expect(GUIDANCE.global_role.text).toBe(
+  /** The words for each role, as the sentences say them: the expected side of the tests below. */
+  const WORDS_OF_ROLE: Record<string, string> = {
+    legal_engineer: "the legal engineer",
+    admin: "an administrator",
+  };
+  const ACTIONS = Object.keys(GLOBAL_ACTIONS) as GlobalAction[];
+
+  it("says, for each global action, exactly the roles that hold it, and that the person can go back", () => {
+    for (const action of ACTIONS) {
+      const roles = GLOBAL_ACTIONS[action] as readonly string[];
+      const { text, todo } = GUIDANCE[globalGuidanceKey(action)];
+      for (const [role, words] of Object.entries(WORDS_OF_ROLE))
+        expect(text.includes(words), `${action}: ${role}`).toBe(roles.includes(role));
+      expect(text.startsWith("This page is for "), action).toBe(true);
+      expect(todo.endsWith("or go back to your matters."), action).toBe(true);
+    }
+    // The two sentences that exist today, in full.
+    expect(GUIDANCE[globalGuidanceKey("evaluation.read")].text).toBe(
       "This page is for the legal engineer or an administrator. Ask one of them, or go back to your matters.",
     );
-    expect(GUIDANCE.global_role.todo).toBe("Ask one of them, or go back to your matters.");
+    expect(GUIDANCE[globalGuidanceKey("evaluation.read")].todo).toBe(
+      "Ask one of them, or go back to your matters.",
+    );
+    expect(GUIDANCE[globalGuidanceKey("audit.read")].text).toBe(
+      "This page is for an administrator. Ask an administrator, or go back to your matters.",
+    );
+    expect(GUIDANCE[globalGuidanceKey("audit.read")].todo).toBe(
+      "Ask an administrator, or go back to your matters.",
+    );
+  });
+
+  it("gives actions with the same roles the same key and actions with other roles another", () => {
+    const byRoles = new Map<string, Set<string>>();
+    for (const action of ACTIONS) {
+      const roles = [...(GLOBAL_ACTIONS[action] as readonly string[])].sort().join("+");
+      byRoles.set(roles, (byRoles.get(roles) ?? new Set()).add(globalGuidanceKey(action)));
+    }
+    for (const [roles, keys] of byRoles) expect(keys.size, roles).toBe(1);
+    const keys = [...byRoles.values()].map((set) => [...set][0]);
+    expect(new Set(keys).size).toBe(byRoles.size);
+    // And every key made for a global action is a key of the table, once.
+    for (const action of ACTIONS) {
+      expect(GUIDANCE_KEYS.filter((key) => key === globalGuidanceKey(action))).toHaveLength(1);
+      expect(isGlobalGuidanceKey(globalGuidanceKey(action))).toBe(true);
+    }
+    expect(isGlobalGuidanceKey("role")).toBe(false);
+    expect(GUIDANCE_KEYS.filter(isGlobalGuidanceKey)).toHaveLength(byRoles.size);
+  });
+
+  it("makes the sentences from the table of global actions, so that a change to the table is a change to the page", async () => {
+    // The table, replaced: one action is for the legal engineer alone, one for everyone who is
+    // listed, and the audit is for an administrator. Nothing in guidance.ts says which.
+    vi.resetModules();
+    vi.doMock("../../src/auth/actions.js", () => ({
+      GLOBAL_ACTIONS: {
+        "evaluation.read": ["legal_engineer", "admin"],
+        "pilot.read": ["legal_engineer"],
+        "audit.read": ["admin"],
+      },
+    }));
+    try {
+      const fresh = await import("../../src/server/guidance.js");
+      const only = fresh.GUIDANCE[fresh.globalGuidanceKey("pilot.read" as never)];
+      expect(fresh.globalGuidanceKey("pilot.read" as never)).toBe("global_legal_engineer");
+      expect(only.text).toBe(
+        "This page is for the legal engineer. Ask the legal engineer, or go back to your matters.",
+      );
+      expect(only.text).not.toContain("administrator");
+      expect(fresh.GUIDANCE_KEYS.filter(fresh.isGlobalGuidanceKey).sort()).toEqual([
+        "global_admin",
+        "global_legal_engineer",
+        "global_legal_engineer_admin",
+      ]);
+    } finally {
+      vi.doUnmock("../../src/auth/actions.js");
+      vi.resetModules();
+    }
   });
 
   it("keeps the first sentence of the 404, 409 and 422 pages as they were", () => {
@@ -132,7 +207,10 @@ describe("the guidance table", () => {
     expect(guidanceFor(403)).toBe(GUIDANCE.role);
     expect(guidanceFor(403, "csrf")).toBe(GUIDANCE.csrf);
     expect(guidanceFor(403, "host")).toBe(GUIDANCE.host);
-    expect(guidanceFor(403, "global_role")).toBe(GUIDANCE.global_role);
+    for (const action of Object.keys(GLOBAL_ACTIONS) as GlobalAction[])
+      expect(guidanceFor(403, globalGuidanceKey(action)), action).toBe(
+        GUIDANCE[globalGuidanceKey(action)],
+      );
     expect(guidanceFor(404)).toBe(GUIDANCE.not_found);
     for (const status of [0, 200, 418, 502, 503, -1, Number.NaN])
       expect(guidanceFor(status), String(status)).toBe(GUIDANCE.other);
@@ -141,11 +219,21 @@ describe("the guidance table", () => {
       expect(guidanceFor(409, bad as never), bad).toBe(GUIDANCE.conflict);
   });
 
-  it("is pure data: the file imports nothing, so a page may use it without reaching anything else", () => {
+  it("is pure data: the one thing the file imports is the table of global actions, which a page may import", () => {
     const source = readFileSync(join(import.meta.dirname, "../../src/server/guidance.ts"), "utf8");
-    expect(source).not.toMatch(/^\s*import\s/m);
+    // Every import statement of the file, whatever the line breaks: one, from the table of actions.
+    const imports = [...source.matchAll(/^\s*import\s[^;]*?from\s+"([^"]+)";/gms)].map(
+      (match) => match[1],
+    );
+    expect(imports).toEqual(["../auth/actions.js"]);
     expect(source).not.toMatch(/\brequire\(|\bimport\(/);
     expect(source).not.toMatch(NO_DASH);
+    // And that table is itself pure: it imports a type of the contracts and nothing else.
+    const actions = readFileSync(join(import.meta.dirname, "../../src/auth/actions.ts"), "utf8");
+    expect(
+      [...actions.matchAll(/^\s*import\s[^;]*?from\s+"([^"]+)";/gms)].map((match) => match[1]),
+    ).toEqual(["../contracts.js"]);
+    expect(actions).toMatch(/^import type \{[^}]*\} from "\.\.\/contracts\.js";/m);
   });
 });
 
@@ -199,9 +287,11 @@ describe("the sentence each kind of failure gets", () => {
     expect(safe.guidance).toBe(key);
   });
 
-  it("tells a global action from a matter action by the table of global actions", () => {
+  it("tells a global action from a matter action by the table of global actions, and names the roles of the action", () => {
     for (const action of Object.keys(GLOBAL_ACTIONS))
-      expect(toSafeError(new ForbiddenError(action)).guidance, action).toBe("global_role");
+      expect(toSafeError(new ForbiddenError(action)).guidance, action).toBe(
+        globalGuidanceKey(action as GlobalAction),
+      );
     for (const action of Object.keys(MATTER_ACTIONS))
       expect(toSafeError(new ForbiddenError(action)).guidance, action).toBe("role");
     // A name that only looks like one of the table's property names is not a global action.
@@ -243,10 +333,12 @@ const FORM = { "content-type": "application/x-www-form-urlencoded" };
 describe("the real responses of the application", () => {
   let site: Site;
   let ids: Prepared;
+  let empty: string;
 
   beforeAll(async () => {
     site = makeSite({ maxUploadBytes: 4096 });
     ids = await prepareMatter(site, { exported: false });
+    empty = newMatter(site.w, "A matter with nothing in it").matterId;
     // Routes are added before the first request: the router does not take one after it.
     defineRoute(site.app, {
       method: "GET",
@@ -315,20 +407,23 @@ describe("the real responses of the application", () => {
       "host",
     ],
     [
-      "a page for the legal engineer, asked for by a member (the evaluation comparison)",
+      "a page for the legal engineer or an administrator, asked for by a member (the evaluation comparison)",
       async () => (await site.as(IDS.associate)).get(urls.evaluations()),
       403,
-      "global_role",
+      globalGuidanceKey("evaluation.read"),
     ],
     [
-      "a page for an administrator, asked for by a member (the audit check)",
+      "a page for an administrator alone, asked for by a member (the audit check)",
       async () => (await site.as(IDS.reviewer)).get(urls.audit()),
       403,
-      "global_role",
+      globalGuidanceKey("audit.read"),
     ],
     [
-      "a memo asked for before every finding is decided",
-      async () => post(await site.as(IDS.reviewer), urls.memos(ids.matterId), {}),
+      // The shell's 409: the matter has no document to review, which is not a mistake in the form
+      // and so is not answered on a page of the matter. (A memo asked for too early and a request
+      // for a memo file that is gone are answered on the memos page, in their own words.)
+      "a review asked for on a matter with nothing in it",
+      async () => post(await site.as(IDS.associate), urls.runs(empty), { workflow: "v2" }),
       409,
       "conflict",
     ],
@@ -402,13 +497,25 @@ describe("the real responses of the application", () => {
     const pages = await Promise.all(forbidden.map(async ([, ask]) => seen(await ask())));
     const sentences = pages.map((p) => readable(p.page));
     expect(forbidden.map(([, , , key]) => key).sort()).toEqual(
-      ["csrf", "global_role", "global_role", "host", "role"].sort(),
+      [
+        "csrf",
+        globalGuidanceKey("audit.read"),
+        globalGuidanceKey("evaluation.read"),
+        "host",
+        "role",
+      ].sort(),
     );
-    // Four causes, four different pages (the two pages for a global role are the same page).
-    expect(new Set(sentences).size).toBe(4);
+    // Five causes, five different pages: the page for the legal engineer or an administrator and the
+    // page for an administrator alone are told apart, because they are for different people.
+    expect(new Set(sentences).size).toBe(5);
     for (const [index, [, , , key]] of forbidden.entries()) {
       if (key !== "role") expect(sentences[index], key).not.toContain("Your role");
     }
+    // The audit page names the administrator and not the legal engineer, whom it does not let in.
+    const audit =
+      sentences[forbidden.findIndex(([, , , key]) => key === globalGuidanceKey("audit.read"))]!;
+    expect(audit).toContain("an administrator");
+    expect(audit).not.toContain("legal engineer");
   });
 
   it("lets an administrator and a member who is allowed in through the same addresses", async () => {
@@ -705,49 +812,27 @@ const NOT_REACHED: Record<string, string> = {
   workflow_retired: "the start form lists workflows that are not retired",
 };
 
-const ON_THE_SHELL_PAGE: Record<string, string> = {
-  export_blocked:
-    "POST /matters/:matterId/memos is not answered in place, so a person sees the shell's 409 page",
-  memo_file_changed: "GET of the memo file is a download, so a person sees the shell's 409 page",
-  memo_file_missing: "GET of the memo file is a download, so a person sees the shell's 409 page",
-  memo_quote_unverified:
-    "POST /matters/:matterId/memos is not answered in place, so a person sees the shell's 409 page",
-  reviews_changed:
-    "POST /matters/:matterId/memos is not answered in place, so a person sees the shell's 409 page",
-};
+/**
+ * The codes a person can reach whose route is not answered in place, so that the shell's page for
+ * the status is what they see and a phrase would not be shown. It is empty: the export of a memo
+ * and the download of its file are answered on the memos page since package W2.9-fix, and every
+ * other form is answered on its own page. A route added later that cannot be answered in place puts
+ * its codes here, each with the route; the list is written to shrink.
+ */
+const ON_THE_SHELL_PAGE: Record<string, string> = {};
 
 /**
- * Phrases written before the sentence that says what to do (`todo`) was required of every code.
- * The list is written to shrink: a code that gains a todo must leave it, and a phrase added now
- * without a todo is not on it and fails.
+ * Phrases for a code that nothing in the store or the services throws, because a route makes the
+ * refusal itself. Each has the place that makes it, and the scan below insists that the place is
+ * where the code is written in the source.
  */
-const PHRASES_WITHOUT_A_TODO = [
-  "amendment_limit",
-  "bad_date",
-  "bad_decision",
-  "bad_hash",
-  "bad_role",
-  "bad_status",
-  "content_mismatch",
-  "decision_conflict",
-  "document_layout",
-  "document_limit",
-  "duplicate_stated_date",
-  "edit_changes_nothing",
-  "edits_not_allowed",
-  "edits_required",
-  "matter_changed",
-  "matter_exported",
-  "matter_not_in_review",
-  "nda_exists",
-  "nda_first",
-  "no_file",
-  "reason_required",
-  "run_model_changed",
-  "run_not_succeeded",
-  "stale_finding",
-  "too_many_roles",
-] as const;
+const MADE_BY_A_ROUTE: Record<string, { file: string; reason: string }> = {
+  finding_blocked: {
+    file: "server/routes/notices.ts",
+    reason:
+      "the decision route says it in place of the words of a field when the finding has no decision form (refusalForBlockedFinding)",
+  },
+};
 
 interface ThrowSite {
   code: string;
@@ -864,9 +949,21 @@ describe("the codes a form can be refused with", () => {
     }
     const both = Object.keys(NOT_REACHED).filter((code) => Object.hasOwn(ON_THE_SHELL_PAGE, code));
     expect(both).toEqual([]);
-    // Every phrase is for a code the source can throw.
-    const orphans = [...phrases].filter((code) => !thrown.has(code));
+    // Every phrase is for a code the source can throw, or for one a route makes itself.
+    const orphans = [...phrases].filter(
+      (code) => !thrown.has(code) && !Object.hasOwn(MADE_BY_A_ROUTE, code),
+    );
     expect(orphans, `phrases for codes nothing throws: ${orphans.join(", ")}`).toEqual([]);
+    for (const [code, { file }] of Object.entries(MADE_BY_A_ROUTE)) {
+      expect(thrown.has(code), `${code} is thrown after all: it is not made by a route`).toBe(
+        false,
+      );
+      expect(phrases.has(code), `${code} has no phrase`).toBe(true);
+      expect(
+        readFileSync(join(SRC, file), "utf8").includes(`"${code}"`),
+        `${code} is not written in ${file}`,
+      ).toBe(true);
+    }
   });
 
   it("gives every listed code a reason of one line, in plain words", () => {
@@ -881,13 +978,9 @@ describe("the codes a form can be refused with", () => {
     }
   });
 
-  it("gives every phrase a todo that occurs in it, apart from the older ones the list names", () => {
+  it("gives every phrase a todo that occurs in it", () => {
     const without = [...phrases].filter((code) => !Object.hasOwn(REFUSAL_TODO, code)).sort();
-    expect(
-      without,
-      "phrases with no todo that are not on PHRASES_WITHOUT_A_TODO: " +
-        without.filter((code) => !(PHRASES_WITHOUT_A_TODO as readonly string[]).includes(code)),
-    ).toEqual([...PHRASES_WITHOUT_A_TODO].sort());
+    expect(without, `phrases with no todo: ${without.join(", ")}`).toEqual([]);
     for (const [code, todo] of Object.entries(REFUSAL_TODO)) {
       expect(phrases.has(code), `a todo for ${code} with no phrase`).toBe(true);
       expect(

@@ -145,8 +145,8 @@ describe("a start that the guard refuses, through the page", () => {
     });
     expect(refused.status).toBe(409);
     const root = parseHtml(await refused.text());
-    // The rest of the matter page has findings of its own that the sweep of the pages is to fix
-    // (W2.9-fix); the notice this refusal adds is audited alone, as a pane.
+    // The whole page is audited, and the notice this refusal adds is audited alone as well, as a pane.
+    expectAccessible(root);
     const alerts = all(root, (el) => attr(el, "role") === "alert");
     expect(alerts).toHaveLength(1);
     expectAccessible(alerts[0]!, { fragment: true });

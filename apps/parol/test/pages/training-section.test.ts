@@ -27,7 +27,6 @@ import {
 } from "./html.js";
 import { checkInvariants } from "./invariants.js";
 import { matterPage } from "./render.js";
-import { expectAccessibleExceptTheMemoList } from "./feedback-support.js";
 import { IDS, buildChrome, buildFindingView, buildMatterSummary, buildMemo } from "./support.js";
 import { progressWith, trainingMatterView, trainingRunHtml } from "./training-support.js";
 
@@ -350,10 +349,8 @@ describe("the banner on the pages that hang off a training matter", () => {
       }),
     );
 
-  // The memos page names two landmarks "Exported memos" until the polish sweep (W2.9-fix) renames
-  // one; the helper lets exactly that through and nothing else.
   for (const [name, make, audit] of [
-    ["memos page", memos, expectAccessibleExceptTheMemoList],
+    ["memos page", memos, (html: string) => expectAccessible(html)],
     ["finding page", finding, (html: string) => expectAccessible(html)],
   ] as const) {
     it(`the ${name} of a training matter carries the short banner, in the main region, before its other sections`, () => {

@@ -17,6 +17,7 @@ import { urls } from "../urls.js";
 import { MINOR_EDIT_MARKED, NOTES_JUMP, reasonCodeLabel } from "../views/feedback.js";
 import { shortHash } from "../views/format.js";
 import { confirmedRange, type Offsets } from "../views/highlight.js";
+import { revealToString } from "../views/reveal.js";
 import {
   DECISION_HINT,
   DECISION_VERB,
@@ -103,7 +104,8 @@ export interface FindingPaneProps {
 /** Said when a finding is out of date, whatever the service says, so the reason is never blank. */
 export const STALE_FINDING_REASON =
   "This finding is out of date because the documents or the playbook changed. Run the review again to decide it.";
-export const CANNOT_DECIDE_REASON = "You cannot decide this finding.";
+export const CANNOT_DECIDE_REASON =
+  "You cannot decide this finding. Only the reviewing attorney can record a decision.";
 
 /** Exactly what the unverified quote says, so a test and a reader see the same words. */
 export const UNVERIFIED_QUOTE_NOTE = "not found in the document, never exported";
@@ -127,24 +129,50 @@ const LONG_TEXT = 1500;
 
 type Lv = 1 | 2 | 3 | 4 | 5 | 6;
 
-/** The paragraph, with `range` marked when there is one. `range` has been checked against the quote. */
-function ParagraphText(props: { evidence: EvidenceView; range: Offsets | null }) {
+/**
+ * The paragraph, with `range` marked when there is one. `range` has been checked against the quote.
+ * `citation` is the place of this passage among the passages of the finding that cite the same
+ * location, set only when a location is cited more than once: it keeps the names of the scroll boxes
+ * apart.
+ */
+function ParagraphText(props: {
+  evidence: EvidenceView;
+  range: Offsets | null;
+  citation?: number | undefined;
+}) {
   const { evidence } = props;
   if (evidence.spanText === "") {
     return <p class="muted">The text of this paragraph is not available.</p>;
   }
   const body = <HighlightedText text={evidence.spanText} offsets={props.range} />;
+  const long = evidence.spanText.length > LONG_TEXT;
+  // A box that scrolls takes a tab stop, and a tab stop needs a role and a name: a region called by
+  // the place the text comes from.
+  const name =
+    props.citation === undefined
+      ? `Text of ${revealToString(evidence.location)}`
+      : `Text of ${revealToString(evidence.location)}, citation ${props.citation}`;
   return (
     <blockquote
-      class={evidence.spanText.length > LONG_TEXT ? "doc-text long" : "doc-text"}
-      tabindex={evidence.spanText.length > LONG_TEXT ? 0 : undefined}
+      class={long ? "doc-text long" : "doc-text"}
+      tabindex={long ? 0 : undefined}
+      role={long ? "region" : undefined}
+      aria-label={long ? name : undefined}
     >
       {evidence.role === "superseded" ? <del class="superseded-text">{body}</del> : body}
     </blockquote>
   );
 }
 
-function Passage({ evidence, level }: { evidence: EvidenceView; level: Lv }) {
+function Passage({
+  evidence,
+  level,
+  citation,
+}: {
+  evidence: EvidenceView;
+  level: Lv;
+  citation?: number | undefined;
+}) {
   const base = `passage-${idPart(evidence.evidenceId)}`;
   const superseded = evidence.role === "superseded";
   const verified = evidence.quoteCheck === "verified";
@@ -190,7 +218,7 @@ function Passage({ evidence, level }: { evidence: EvidenceView; level: Lv }) {
       ) : null}
 
       {placed ? (
-        <ParagraphText evidence={evidence} range={range} />
+        <ParagraphText evidence={evidence} range={range} citation={citation} />
       ) : evidence.quoteCheck === "not_found" ? (
         <>
           <p class="unverified">
@@ -204,7 +232,7 @@ function Passage({ evidence, level }: { evidence: EvidenceView; level: Lv }) {
           {evidence.spanText === "" ? null : (
             <details class="disclosure">
               <summary>Show the paragraph it was cited from</summary>
-              <ParagraphText evidence={evidence} range={null} />
+              <ParagraphText evidence={evidence} range={null} citation={citation} />
             </details>
           )}
         </>
@@ -227,7 +255,7 @@ function Passage({ evidence, level }: { evidence: EvidenceView; level: Lv }) {
               <RevealedText value={evidence.quote} />
             )}
           </blockquote>
-          <ParagraphText evidence={evidence} range={null} />
+          <ParagraphText evidence={evidence} range={null} citation={citation} />
         </>
       )}
     </article>
@@ -240,6 +268,12 @@ function EvidenceSection({ finding, level }: { finding: FindingView; level: Lv }
   );
   const conflicting = sorted.filter((e) => e.role === "conflicting");
   const others = sorted.filter((e) => e.role !== "conflicting");
+  // Two quotes from one paragraph give two passages with one location; each is told apart by its
+  // number among them, so that no two scroll boxes of the page are called the same.
+  const citationOf = (evidence: EvidenceView): number | undefined => {
+    const same = sorted.filter((e) => e.location === evidence.location);
+    return same.length < 2 ? undefined : same.indexOf(evidence) + 1;
+  };
   return (
     <section class="pane-section" aria-labelledby="evidence-heading">
       <Heading level={level} id="evidence-heading">
@@ -252,7 +286,11 @@ function EvidenceSection({ finding, level }: { finding: FindingView; level: Lv }
           {others.length === 0 ? null : (
             <div class="passages">
               {others.map((evidence) => (
-                <Passage evidence={evidence} level={(level + 1) as Lv} />
+                <Passage
+                  evidence={evidence}
+                  level={(level + 1) as Lv}
+                  citation={citationOf(evidence)}
+                />
               ))}
             </div>
           )}
@@ -264,7 +302,11 @@ function EvidenceSection({ finding, level }: { finding: FindingView; level: Lv }
               </p>
               <div class="passages passages-conflict">
                 {conflicting.map((evidence) => (
-                  <Passage evidence={evidence} level={(level + 1) as Lv} />
+                  <Passage
+                    evidence={evidence}
+                    level={(level + 1) as Lv}
+                    citation={citationOf(evidence)}
+                  />
                 ))}
               </div>
             </div>
@@ -579,7 +621,7 @@ function DecisionForm({ chrome, matterId, finding, draft }: FindingPaneProps) {
           </textarea>
         </Field>
         {finding.evidence.length === 0 ? null : (
-          <fieldset class="roles">
+          <fieldset class="roles" id="edit-roles">
             <legend>How each passage is labelled</legend>
             {finding.evidence.map((evidence) => {
               const id = `role-${idPart(evidence.evidenceId)}`;
@@ -631,10 +673,18 @@ const statusFor = (decision: ReviewDecision): string =>
   ({ accept: "accepted", edit: "edited", reject: "rejected", escalate: "escalated" })[decision] ??
   "decided";
 
+/**
+ * Whether the page gives this finding a decision form. The page and the route that answers a
+ * refused decision both ask it, so the route can tell a refusal for a field of a form that is on the
+ * page from one for a form that is not.
+ */
+export const decisionFormShown = (finding: FindingView): boolean =>
+  finding.canDecide.allowed && finding.issue.validity !== "stale";
+
 function DecisionSection(props: FindingPaneProps & { sectionLevel: Lv }) {
   const { finding } = props;
   const stale = finding.issue.validity === "stale";
-  const allowed = finding.canDecide.allowed && !stale;
+  const allowed = decisionFormShown(finding);
   // The service gives a fixed phrase; a blank one would leave the reader with no explanation.
   const given = finding.canDecide.reason;
   const reason = stale
@@ -828,15 +878,38 @@ export function FindingPage(
     matterName: string;
     /** `MatterSummary.training`: the page of a training matter says what it is. Null or absent for any other. */
     training?: string | null | undefined;
+    /**
+     * The review the matter shows now, or null (or absent) when there is none. It gives the page a
+     * way back to the issue table, which matters most when a decision was refused and the page is
+     * shown again at the address the form was posted to.
+     */
+    currentRunId?: string | null | undefined;
   },
 ) {
+  const { finding } = props;
+  // A finding that is out of date is not a row of the current review, so its link opens the table
+  // without choosing a row.
+  const review =
+    props.currentRunId === undefined || props.currentRunId === null
+      ? []
+      : [
+          {
+            label: "Review",
+            href: urls.run(
+              props.matterId,
+              props.currentRunId,
+              finding.issue.validity === "current" ? finding.issue.findingId : undefined,
+            ),
+          },
+        ];
   return (
-    <Layout title={props.finding.issue.ruleTitle} chrome={props.chrome}>
+    <Layout title={finding.issue.ruleTitle} chrome={props.chrome}>
       <Crumbs
         items={[
           { label: "Matters", href: urls.matters() },
           { label: props.matterName, href: urls.matter(props.matterId) },
-          { label: props.finding.issue.ruleTitle },
+          ...review,
+          { label: finding.issue.ruleTitle },
         ]}
       />
       <FindingPane

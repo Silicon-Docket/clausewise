@@ -2,7 +2,13 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { urls } from "../../src/server/urls.js";
-import { ISSUE_FILTERS, orderIssues, runHref } from "../../src/server/pages/index.js";
+import {
+  ISSUE_FILTERS,
+  RunPage,
+  orderIssues,
+  render,
+  runHref,
+} from "../../src/server/pages/index.js";
 import type { IssueRow } from "../../src/services/views.js";
 import { checkInvariants } from "./invariants.js";
 import {
@@ -21,9 +27,11 @@ import {
 import { runPage } from "./render.js";
 import {
   IDS,
+  buildChrome,
   buildConflictFinding,
   buildFindingView,
   buildIssueRows,
+  buildMatterSummary,
   buildRunSummary,
   buildStaleFinding,
 } from "./support.js";
@@ -383,15 +391,40 @@ describe("RunPage filters", () => {
     expect(keysOf(root)).toHaveLength(5);
   });
 
-  it("says no finding matches when a filter is empty", () => {
+  it("says no finding matches when a filter is empty, and how to see them all", () => {
     const root = page({ filter: "stale", selected: null });
-    expect(readable(withClass(root, "run-table")[0]!)).toContain("No finding matches this filter");
+    expect(readable(withClass(root, "run-table")[0]!)).toContain(
+      "No finding matches this filter. Choose All to see every finding.",
+    );
     expect(withClass(root, "issue-table")).toHaveLength(0);
   });
 
-  it("says the review has no findings when it has none", () => {
+  it("says the review has no findings when it has none, and where to run it again", () => {
     const root = page({ issues: [], selected: null });
-    expect(readable(withClass(root, "run-table")[0]!)).toContain("This review has no findings");
+    expect(readable(withClass(root, "run-table")[0]!)).toContain(
+      "This review has no findings. Go to the matter to run it again.",
+    );
+  });
+
+  it("tells a person who cannot run a review who can", () => {
+    for (const role of ["reviewer", "viewer"] as const) {
+      const root = checkInvariants(
+        render(
+          RunPage({
+            chrome: buildChrome(),
+            matter: buildMatterSummary({ role }),
+            run: buildRunSummary(),
+            issues: [],
+            selected: null,
+          }),
+        ),
+      );
+      const text = readable(withClass(root, "run-table")[0]!);
+      expect(text, role).toContain(
+        "This review has no findings. The associate on the matter can run it again.",
+      );
+      expect(text, role).not.toContain("Go to the matter to run it again");
+    }
   });
 
   it("summarises the counts in a sentence", () => {

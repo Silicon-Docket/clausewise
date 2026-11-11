@@ -45,6 +45,11 @@ export function SignInPage(props: SignInPageProps) {
         This is a demonstration. There are no passwords: pick a person to act as. It is not
         authentication, and it must never be used with a real client's documents.
       </p>
+      <p class="hint">
+        If Parol sent you back to this page, your session ended: sessions are limited in time, and a
+        server started without a fixed cookie secret signs everyone out whenever it restarts. Choose
+        a person to start again. Anything you were typing was not saved.
+      </p>
       <p>
         New here? <a href={urls.quickstart()}>Read the quickstart</a>.
       </p>
