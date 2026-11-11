@@ -1,33 +1,38 @@
 # 2. Experience and architecture
 
 **Implementation status.** Built and tested in `apps/parol` (run with `pnpm parol`): the journey from
-intake to memo up to step 9, the screens S1 to S3, the stage graph, the three state machines and the
-stack. Deferred and marked Not yet built below: notes for the reviewer and one-click re-confirmation
-after a re-run (steps 5 and 8), feedback (step 10), the evaluation comparison page S4 and the
-correction review (step 11), and the model support check in a workflow version the application
-ships (built; v1 and v2, which the application registers, leave it off, and the evaluation-only v3
-turns it on). Never run live: no real model has been called, so no accuracy, latency or cost figure
-exists. The demonstration runs a scripted simulated reader, which answers one worked example from a
-table and is not a measurement. A **Deviation** note marks where the code departs from the design.
+intake to memo up to step 9, feedback (step 10, in part), the screens S1 to S5 and the pages outside
+the journey (the audit log check, the quickstart and the help), the stage graph, the three state
+machines and the stack. Deferred and marked Not yet built below: one-click re-confirmation after a
+re-run (step 8), the correction review across matters (step 11), and the model support check in a
+workflow version the application ships (built; v1 and v2, which the application registers, leave it
+off, and the evaluation-only v3 turns it on). The evaluation comparison page S4 is built and shows
+only files that the evaluation command wrote from scripted runs. Never run live: no real model has
+been called, so no accuracy, latency or cost figure exists. The demonstration runs a scripted
+simulated reader, which reads two document sets (the worked example and the training matter) and is
+not a measurement. Everything here is tested against scripted wires and synthetic data; no person has
+used the pages with a keyboard alone or a screen reader (known gap 21 of
+[document 7](07-delivery-plan.md#known-gaps)). A **Deviation** note marks where the code departs
+from the design.
 
 ## User journey
 
 One matter, from intake to memo. "System" lines are what Parol does; everything else is a
 person.
 
-| #   | Who                | Action                                                                                               | System                                                                                                                                                                          | Matter state                        |
-| --- | ------------------ | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| 1   | Associate          | Creates matter "Lanternfish / Corvane NDA", names the client entity, adds a reviewer                 | Creates the matter, grants membership (associate for the creator, reviewer for the person chosen), writes an audit event                                                        | `draft`                             |
-| 2   | Associate          | Uploads the NDA (DOCX) and Amendment No. 1 (TXT), enters each stated date                            | Hashes each file, stores it, parses paragraphs into source spans and annotations, warns about duplicates, unreviewed content and instruction-like text; the upload is operative | `draft`                             |
-| 3   | Associate          | Selects playbook "Parol NDA (Recipient)" version 1.0.1                                               | Checks the version is approved; the matter is ready                                                                                                                             | `ready`                             |
-| 4   | Associate          | Picks a workflow version if more than one is offered (v1 or v2) and starts a review                  | Pins documents, playbook, workflow and model in a run manifest; reads the stored spans, then runs extract, retrieve, analyze and verify                                         | `running`                           |
-| 5   | Associate          | Opens the issue table and triages. Not yet built: adding notes for the reviewer                      | Shows eight findings with statuses, flags (escalations) and an evidence inspector beside the table                                                                              | `in_review`                         |
-| 6   | Reviewing attorney | Opens each finding's evidence; accepts, edits, rejects or escalates                                  | Records each decision against the exact finding content it saw; refuses the person who started the review unless `PAROL_RELAXED_SEGREGATION` is set                             | `in_review`, then `review_complete` |
-| 7   | Associate          | Uploads a corrected amendment (new version), or changes a stated date, the client or the playbook    | Marks the review's findings and decisions stale, supersedes the review and the current memo, blocks export, offers a re-run                                                     | `stale`                             |
-| 8   | Associate          | Re-runs; reviewer decides the new findings again                                                     | New run pinned to the new manifest. Not yet built: showing the earlier decision for reference and re-confirming an unchanged finding in one click                               | `in_review`                         |
-| 9   | Reviewing attorney | Exports the memo                                                                                     | Rechecks that every finding of the current run has a current decision made on its exact content, builds the DOCX with a provenance appendix                                     | `exported`                          |
-| 10  | Both               | Leave feedback on findings and a one-question rating. Not yet built                                  | The `feedback` table and a store method exist; there is no route, service or page                                                                                               | `exported`                          |
-| 11  | Legal engineer     | Reviews corrections across matters; runs the evaluation suite on a candidate revision. Not yet built | Not in the application. `pnpm eval:parol` runs the suite from the command line over synthetic cases and writes a results file; there is no comparison page and no promotion     | n/a                                 |
+| #   | Who                | Action                                                                                            | System                                                                                                                                                                                                                                                         | Matter state                        |
+| --- | ------------------ | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| 1   | Associate          | Creates matter "Lanternfish / Corvane NDA", names the client entity, adds a reviewer              | Creates the matter, grants membership (associate for the creator, reviewer for the person chosen), writes an audit event                                                                                                                                       | `draft`                             |
+| 2   | Associate          | Uploads the NDA (DOCX) and Amendment No. 1 (TXT), enters each stated date                         | Hashes each file, stores it, parses paragraphs into source spans and annotations, warns about duplicates, unreviewed content and instruction-like text; the upload is operative                                                                                | `draft`                             |
+| 3   | Associate          | Selects playbook "Parol NDA (Recipient)" version 1.0.1                                            | Checks the version is approved; the matter is ready                                                                                                                                                                                                            | `ready`                             |
+| 4   | Associate          | Picks a workflow version if more than one is offered (v1 or v2) and starts a review               | Pins documents, playbook, workflow and model in a run manifest; with a hosted model, first plans the most the review could cost and refuses to start if that would pass a spend limit; reads the stored spans, then runs extract, retrieve, analyze and verify | `running`                           |
+| 5   | Associate          | Opens the issue table and triages; leaves a note on a finding for the reviewer                    | Shows eight findings with statuses, flags (escalations) and an evidence inspector beside the table; stores a note with the finding and does not print it in the memo                                                                                           | `in_review`                         |
+| 6   | Reviewing attorney | Opens each finding's evidence; accepts, edits, rejects or escalates                               | Records each decision against the exact finding content it saw, with a reason code for an edit or a reject and a minor-edit mark for an edit; refuses the person who started the review unless `PAROL_RELAXED_SEGREGATION` is set                              | `in_review`, then `review_complete` |
+| 7   | Associate          | Uploads a corrected amendment (new version), or changes a stated date, the client or the playbook | Marks the review's findings and decisions stale, supersedes the review and the current memo, blocks export, offers a re-run                                                                                                                                    | `stale`                             |
+| 8   | Associate          | Re-runs; reviewer decides the new findings again                                                  | New run pinned to the new manifest. Not yet built: showing the earlier decision for reference and re-confirming an unchanged finding in one click                                                                                                              | `in_review`                         |
+| 9   | Reviewing attorney | Exports the memo                                                                                  | Rechecks that every finding of the current run has a current decision made on its exact content, builds the DOCX with a provenance appendix                                                                                                                    | `exported`                          |
+| 10  | Both               | Report an issue the review missed, rate the matter once a memo is exported; time the work         | Stores a report (a rule or "not covered by any rule", a place, a note), one rating from 1 to 5 for each person and matter, and the timers of the associate and the reviewer                                                                                    | `exported`                          |
+| 11  | Legal engineer     | Reads the measures; compares a candidate revision. Corrections across matters: Not yet built      | The pilot measures page counts the stored rows (S5). `pnpm eval:parol` runs the suite from the command line over synthetic cases, and the comparison page (S4) shows a file it published; nothing promotes a version                                           | n/a                                 |
 
 **Deviation (step 2).** Each upload is operative at once, and the associate can choose another
 version of a document later. The design had the associate mark the NDA operative. A re-saved file
@@ -53,11 +58,18 @@ decisions of the same run again returns the memo on record and does not supersed
 ## Screen sketches
 
 Server-rendered pages with one small script, `public/parol.js`. The script only adds keyboard
-shortcuts in the issue table, scrolls a quote into view, stops a double submit and polls a running
-review's progress; every page works with it blocked. A permanent banner reads "DEMO: synthetic
-documents, demo identity, not for client work". The sketches below were redrawn from the built pages
-(screenshots of the seeded demonstration); ids, hashes and dates in them are illustrative, and every
-finding text shown is the output of the scripted simulated reader, not of a language model.
+shortcuts in the issue table, scrolls a quote into view (except on a page that opens on a refusal),
+stops a double submit and polls a running review's progress; every page works with it blocked. A
+permanent banner reads "DEMO: synthetic documents, demo identity, not for client work"; it sticks to
+the top of the window from 40rem up, and on a narrower screen it is at the top of the page and
+scrolls away. The sketches below were drawn from the built pages (the seeded demonstration, read by
+a script and not photographed); ids, hashes and dates in them are illustrative, every finding text
+shown is the output of the scripted simulated reader, not of a language model, and the sketches of the
+comparison and the pilot pages carry no figures because every figure those pages can show today is
+scripted or synthetic. Two pages sit outside the journey and are open to everyone, signed in or not:
+the quickstart (ten steps and a training exercise on a matter made for the purpose, T01) and the help
+page (the words the pages use). The review page and the finding pane carry short help text of their
+own ("What the words mean").
 
 ### S1. Matter intake
 
@@ -80,6 +92,7 @@ S1a. Matters page
 |     Our client          [                                  ] exact legal name           |
 |     Reviewing attorney  [ Choose later                    v ]                           |
 |     Playbook            [ Choose later                    v ]                           |
+|     Keep for (days)     [ 30 ]  1 to 90; can be changed later                           |
 |                                                           [ Create matter ]             |
 +-----------------------------------------------------------------------------------------+
 
@@ -110,13 +123,35 @@ S1b. Matter page
 |   Where document text is sent: <one sentence from the model layer's disclosure>         |
 |   Workflow version [ v1 (candidate, default) v ]                      [ Start review ]  |
 |                                                                                         |
-| Reviews | Memos | People | Delete this matter                                           |
+| Reviews | Memos | Time on this matter | Reference list (reviewer) | People |            |
+| How long this matter is kept | Delete this matter                                       |
 +-----------------------------------------------------------------------------------------+
 ```
 
 The warning shown is what the upload of `fixtures/parol/files/parol-d08-nda.docx` produces; the
-seeded matters raise none. A page that sends text to a hosted provider says so in the sentence
-under "Start the review"; with the simulated reader it says that nothing is sent anywhere.
+seeded matters raise none, and the training matter T01 carries it. A page that sends text to a hosted
+provider says so in the sentence under "Start the review"; with the simulated reader it says that
+nothing is sent anywhere. Once a review exists, "Start the review" reads "Run the review again" and
+says that the findings are replaced.
+
+The "Results are out of date" banner that follows a change to a document, the client or the playbook
+has its own "Re-run review" button, which sends no workflow, so the new review uses the default
+version (the latest promoted to pilot, else v1) even when the earlier review ran on v2; the picker is
+in the "Run the review again" section (known gap 36 of [document 7](07-delivery-plan.md#known-gaps)).
+
+Four sections are new since the first build, each in the place shown above. "Time on this matter" is
+shown to the associate and the reviewing attorney: Start timer and Stop timer, when the timer
+began, and the person's own closed total (sessions and time); it shows no elapsed time, because the
+page reads no clock. "Reference list for shadow mode" is shown to the reviewing attorney: one select
+per playbook rule (Not an issue, High, Medium, Low) and three counts (0 to 9, one for each severity) of issues no
+rule covers; it closes read-only at the first review of the matter, and with no playbook chosen it offers
+only the counts. "How long this matter is kept" shows the date and, to an associate, a field for the
+number of days from today (1 to 90) that replaces it, earlier or later; everyone else reads "Only an
+associate on the matter can change this date." Neither timer nor reference list is offered on a
+training matter, which also has a "Training matter T01" notice and a "Training progress" table (steps
+3 to 7 read from what Parol stored, step 1 set up, step 2 the trainer's). The matters list marks a
+past retention date with a "Past" chip (a triangle and the word) and a training matter with
+"Training".
 
 ### S2. Issue table with evidence inspector
 
@@ -132,9 +167,11 @@ disclosure. Filters are All, Open, Escalated and Out of date.
 | DEMO: synthetic documents, demo identity, not for client work                           |
 | Matters / Lanternfish / Corvane NDA / Review                                            |
 | Issues   [Finished]  Run run_5ad2adbb8da33e40  Workflow v2                              |
-|          Read by simulated, parol-simulated-reader   Playbook parol-nda-recipient 1.0.1 |
+|          Read by a scripted stand-in (simulated, parol-simulated-reader)                |
+|          Playbook parol-nda-recipient 1.0.1                                             |
 | [ Read by a scripted stand-in, not a language model ]  (shown for scripted providers)   |
 | [All 8] [Open 8] [Escalated 0] [Out of date 0]                                          |
+| Go to the evidence inspector     Report a missed issue                                  |
 +------------------------------------------------+----------------------------------------+
 | Sev Category, rule    Status    Review   Flags | Duration, rule dur-1                   |
 | H   Duration dur-1    Deviation Not dec. None  | [High] [Deviation] [Not decided]       |
@@ -172,10 +209,27 @@ ten passed and three not applicable, counted from the database of a seeded run),
 check raised is explained by that check. A rule that was not analyzed (`output_invalid` or
 `context_over_budget`) has no checks, and its finding states the reason in words.
 
+Below the table and the inspector the review page has, in this order, "What the words mean" (the
+statuses, severities and passage roles, in the page's own words), the form "Report a missed issue"
+(S3), the reports already made on this review, and a "Usage" section. The Usage section reads "No
+model was called, so there is no usage to record." for a scripted reader. For a review by a hosted
+provider it gives the number of calls recorded and how many of them reported usage, the token counts,
+an estimated cost (only where a price was applied, with the number of calls priced) and the model the
+provider named; the header and the matter page then read "Answered by X", "Answered by X (requested
+Y)" or "Requested Y; the provider did not say which model answered". The application records usage
+and the reported model for the `anthropic` provider only, and only against scripted wires so far: no
+provider has been called. When the playbook's flags settled a finding's status to another one than
+the workflow stated, the issue table says so under the status ("Settled by the playbook; the workflow
+stated ...") and the finding page opens its "What the review found" with a note that names both
+statuses and the reason. A review that the spend guard refuses to start is answered with the matter's
+own page, the status 409 and an alert that gives the planned bound and the limit and says what to do
+(its words name no matter, run, person or document); nothing is created, and the matter is as it was.
+
 ### S3. Review decision
 
 The decision form is the lower part of the inspector (and of the finding's own page), under the
-evidence, the finding, the checks and the playbook rule.
+evidence, the finding, the checks and the playbook rule. Below it are the notes on the finding and
+the history of its decisions.
 
 Deviation: the design's "Changes from approved text: [diff]" is not built. The page labels where the
 suggested wording comes from (approved text unchanged, approved text adapted, or wording written by
@@ -209,57 +263,181 @@ can be changed in the same form (the `evidenceRoles` edit of the API).
 |                                                                                         |
 | Your decision   ( ) Accept  (o) Edit  ( ) Reject  ( ) Escalate                          |
 | Reason     [ The parties agreed two years in February. Propose reinstating it.        ] |
+| Reason code [ Bad fallback language v ]   required for edit and reject, not otherwise   |
 | Edits, used only when you choose Edit: Status [Deviation v]  Discrepancy [...]          |
 |            Fallback language [...]   How each passage is labelled [...]                 |
+|            [ ] This is a minor edit   (a change of status is never minor)               |
 |                                                                                         |
 | You are deciding dur-1 as shown (content hash 6be99ad6a4c3). The decision is bound to   |
 | this exact finding. If the documents or the playbook change, it becomes stale: it no    |
 | longer counts and has to be made again.                           [ Save decision ]     |
 +-----------------------------------------------------------------------------------------+
+| Notes on this finding   (any member; not part of the decision; not printed in the memo) |
+|   Your note [                                                        ]   [ Add note ]   |
++-----------------------------------------------------------------------------------------+
+| Review history   (each decision with its reason code and minor-edit mark)               |
++-----------------------------------------------------------------------------------------+
 ```
+
+The reason code is one of six, listed in the order the form shows them: wrong status, wrong
+evidence, missed context, bad fallback language, unclear, other; the page explains each in the words
+under the select. An edit and a reject need one, an accept and an escalate must not carry one, and
+an escalate still needs a reason in words. The wording of the six codes and of "minor edit" was
+written by the project and has not been agreed with attorneys (known gap 37 of
+[document 7](07-delivery-plan.md#known-gaps)). A note is allowed on any current finding of a review
+that has not been replaced, in any state of the matter including exported; a note on a finding that
+is out of date is refused, though the notes it already had stay with it. When a finding has notes, the
+Review cell of the issue table reads "n notes". The missed-issue form (rule or "Not covered by any
+rule", a place, a note) is on the review page, and the rating, once a memo is exported, on the memos
+page ("I would use this for my next NDA", 1 to 5, with an optional comment); a rating is final.
 
 ### S4. Evaluation comparison
 
-**Not yet built.** There is no comparison page. The held-out split has its 12 cases and nothing has
-used it. On the command line, `pnpm eval:parol --simulate --workflow v1 --out a.json` and then the same with
-`--workflow v2 --compare a.json --out b.json` compare two workflow versions over the development
-cases against the scripted simulated reader, as a Markdown report on standard output; every report
-and results file says in capitals that it is not a measurement of any model. The comparison also
-reads each file's exposure record (`--exposure`) and calibration record (`--calibration`), which
-fill the "Unauthorized-data exposure (found of checked)" row and a "Support checker, caught /
-flagged" row (an exposure record counts for the gate only if its reviews were of the file's own
-workflow; otherwise the row shows the counts with that note and G1 is not evaluated), and it skips
-the decision rule for a selftest, a simulated run or a replay. A run against a real model needs a
-key and `--yes`, and has never been made. The sketch below is the design, with the values left blank
-(it has no row for the support checker, which the report has).
+**Built (package W2.5), and showing only scripted comparisons.** `GET /evaluations` lists the
+comparisons that the evaluation command has published, newest first, and `GET
+/evaluations?comparison=<id>` opens one. It is for the legal engineer and the administrator (the
+global action `evaluation.read`; a member gets 403 and no link, a visitor is sent to sign in). It
+changes nothing, has no form and no JSON twin, and reads only files: the command `pnpm eval:parol
+--simulate --workflow v2 --compare a.json --out b.json --publish <data folder>` (or `--baseline` and
+`--candidate` with two files that exist) writes `<data folder>/evaluations/cmp_<16 hex digits>.json`,
+the application lists that folder on each request, and the code that reads it imports nothing from
+the store, so the page cannot reach matter data. The page shows what the file says: it does not
+prove who made the file or that a model was called, and its footer says so. No live run has ever been made, so every
+comparison the command can publish today comes from a selftest oracle or the simulated reader; a page
+for such a file carries the capital-letter banner of its mode (SELFTEST, SIMULATED or REPLAY), and no
+figure of a model can be shown. A split that the comparison did not include reads "The held-out split
+is not in this comparison". The sketch below is the built layout in page order, drawn without
+figures for that reason; `n` and `N` stand for counts the page prints.
 
 ```text
 +-----------------------------------------------------------------------------------------+
-| Compare workflow versions                 Dataset parol-cases v1 (sha __)      k = 3    |
-|   Baseline  v1  (prompts P1, retrieval R1)   Candidate v2 (prompts P1, retrieval R2)    |
-|   Pinned: playbook 1.0.1, model <id>, prices sha __                                     |
+| Evaluations / v1 against v2                                                             |
+| SIMULATED RUN. THE ANSWERS BELOW COME FROM THE SCRIPTED SIMULATED READER OF THE DEMO,   |
+| NOT FROM A LANGUAGE MODEL. THESE SCORES ARE NOT A MEASUREMENT OF ANY MODEL.             |
 +-----------------------------------------------------------------------------------------+
-| Split: [dev] [held-out]                                                                 |
-|                                   Baseline        Candidate       Gate      Pass?       |
-|   Strict issue recall             __ / __          __ / __         >= 0.90   __         |
-|   Issue precision                 __ / __          __ / __         >= 0.80   __         |
-|   High-severity silent misses     __               __              0         __         |
-|   Substantive support             __ / __          __ / __         >= 0.95   __         |
-|   Required escalations raised     __ / __          __ / __         all       __         |
-|   Unnecessary escalations         __ / __          __ / __         <= 0.15   __         |
-|   Severity-weighted failure       __               __              <= 0.05   __         |
-|   p95 run latency                 __ s             __ s            budget    __         |
-|   Mean cost per run               $__              $__             budget    __         |
-|   Unauthorized exposure           __               __              0         __         |
+| The two versions        Baseline v1 (workflow hash, retrieval R1, checks C1, prompts,   |
+|                         model requested and reported, endpoint, started, finished,      |
+|                         repeats, code, evidence trails recorded or not, results file)   |
+|                         Candidate v2 (the same facts)                                   |
+| What they were run on   dataset and answer-key hashes, playbook, evaluation version     |
+| Differences between the runs   pin, field, baseline, candidate, status                  |
 +-----------------------------------------------------------------------------------------+
-| Slots that changed (paired, modal status)                                               |
-|   PAROL-D05 dur-1   expected deviation   baseline: compliant x3   candidate: __         |
-|   ...                                                            [ open evidence ]      |
-| [ Draft promotion record ]                                                              |
+| Split: [Dev] [Held-out]   Baseline: n of N cases of the split, k repeats scored.        |
+|                           Candidate: n of N cases of the split, k repeats scored.       |
++-----------------------------------------------------------------------------------------+
+| Gates   G1 .. G14       Threshold     Baseline          Candidate                       |
+|   Pass, Fail or Not evaluated, with the reason, and the counts behind each              |
+| Decision rule   applied, or "not applied" with the reason (a scripted run: never)       |
++-----------------------------------------------------------------------------------------+
+| Metrics   recall, precision, silent misses, unsupported findings, escalations, SWF,     |
+|           stability, latency, cost, exposure, support checker:  baseline  candidate     |
+|           change  gate  pass; a cell without data reads n/a                             |
++-----------------------------------------------------------------------------------------+
+| Slots that changed   "n of N paired slots changed", regressions first                   |
+|   Case  Rule  Severity  Expected  Baseline  Candidate  Change  [ Open the trail ]       |
++-----------------------------------------------------------------------------------------+
+| Evidence trail of one slot (opened from the list)                                       |
+|   The answer key: expected status, basis, the passages the key cites                    |
+|   Per version and repeat: the status and whether it was right; the paragraphs the       |
+|   reader was shown and why; the paragraphs the finding cited with their role and        |
+|   whether the quote was found; the checks passed and not applicable; escalations        |
+|   "This page shows where each version looked and what it cited. It does not show        |
+|   what it wrote."  (a version recorded without a trail says why: not recorded, or       |
+|   the case changed between the runs)                                                    |
++-----------------------------------------------------------------------------------------+
+| Draft promotion record   text to copy; Decision / Conditions / Signed off by: left blank |
+| This page shows a file written by the evaluation command. It does not prove who made    |
+| the file or that a model was called.                                                    |
 +-----------------------------------------------------------------------------------------+
 ```
 
-The blanks are deliberate: no run against a real model has happened.
+A gate that was not evaluated is shown as that, with its reason, and is never a pass. The draft
+promotion record is text only: it records nothing and promotes nothing, it never uses the word
+recommend except in one fixed sentence, and the person fills in the decision and signs it in a
+document. The evidence trail holds ids, offsets and codes recorded by the run, and the page sets beside them the
+text of the synthetic case passages from `fixtures/parol`; no document holds a model answer, a
+quotation a model wrote, a prompt or text from a matter, because the results file records none. The
+trails of the held-out split's changed slots are sealed by default ("Sealed", and a sentence saying
+the trail is not in the file); `--open-heldout-trails` puts them in, records that in the file, and
+makes the page say in capitals that the held-out set was opened for it, so a workflow changed in response to those trails can no longer be judged on that set. That results files record these trails at
+all is a decision of the build that the owner can overturn (number 1 of the [decisions of part 3](07-delivery-plan.md#decisions-of-part-3-that-the-project-owner-can-overturn)); without them the
+trail shows the answer key and the scores only. The command's options are in
+[document 5](05-evaluation.md). The list of comparisons shows, for each, the candidate's gates as
+counts (passed, failed, not evaluated, of 14).
+
+### S5. Pilot measures
+
+**Built (package W2.6b), and empty of any pilot result.** `GET /pilot` shows the measures of
+[document 8](08-pilot-and-enablement.md#measures) in one of two scopes; `GET /pilot/measures.csv`
+downloads the same rows for the scope asked for. It is for the legal engineer and the administrator
+(`pilot.read`; the two forms that save the start date and the list of trained people need
+`pilot.manage`, held by the same two roles); a member gets 403. The scope is asked for by query
+(`?scope=synthetic`; anything else reads as the pilot scope, which is the default), and the pilot scope is
+empty on every database this build can make, because every person is a demonstration identity (known gap 30). The
+synthetic scope counts what demonstration identities did to synthetic matters, and its page opens
+with a banner that says its figures are not pilot data, not adoption, not accuracy and not time
+saved. The optional seed `pnpm parol:seed --pilot-demo` fills the synthetic scope with a scripted
+scenario so that the page has something to show.
+
+```text
++-----------------------------------------------------------------------------------------+
+| Pilot measures                                                                          |
+| Which scope: [Pilot scope] [Synthetic scope, a demonstration]                           |
+| (pilot scope, empty:) No pilot data. This database holds N matters and every one is     |
+| synthetic or was made by a demonstration identity, so the pilot scope is empty and      |
+| every measure below reads no data.                                                      |
++-----------------------------------------------------------------------------------------+
+| Pilot calendar   The pilot starts on <date> and week 5 ends on <date>, counted in UTC.  |
+|                  First day of the pilot [ date ] [ Save the start date ]                |
+| People who were trained (recorded by the trainer, not worked out)  [x] name ...         |
+|                                                                [ Save who was trained ] |
++-----------------------------------------------------------------------------------------+
+| Measures   Measure | Result | Numerator | Denominator | What the denominator counts |    |
+|            Note   (a row with nothing to count reads "No data" and says why)            |
+| Breakdowns   by pilot phase; correction rate by reason code; missed issues by rule;     |
+|              rating distribution; shadow-mode agreement by severity; active time by     |
+|              phase and by associate, attorney and both (n, median, minimum, maximum)    |
++-----------------------------------------------------------------------------------------+
+| What the measures count   the population table, one line for every exclusion, with a    |
+|                           count; matters that will expire before week 5 ends            |
+| How to read this page     ten fixed method lines                                        |
+| Download   [ Download the CSV of this scope ]                                           |
++-----------------------------------------------------------------------------------------+
+```
+
+Every figure on the page states its numerator and its denominator, and a ratio over nothing reads
+"No data" with one of three fixed reasons (no calendar can be counted from, every matter belongs to
+the other scope, nothing meets the definition), never 0 percent of nothing. The page computes
+medians only, with the number of NDAs, the minimum and the maximum: no mean, no difference between
+phases and no saving. It does not judge the acceptance criteria and does not recommend go or no-go.
+The CSV holds codes and numbers only, one scope per file, with the scope on every row. Training
+matters (T01) are in neither scope.
+
+### S6. Audit log check
+
+**Built (package W2.7).** `GET /audit`, for the administrator only (`audit.read`; the legal engineer
+and a member get 403, and the navigation shows the link to the administrator alone). It has no form
+and one link, "Check again". When it is opened it walks the hash chain of the audit log and shows the
+number of events checked of those in the log, the newest event and its hash (to be kept somewhere that
+nobody who can write the database can edit, and given to `pnpm parol:audit-verify --expect-head`),
+whether every matter that was created has a creation event and every deleted one a deletion event, how
+many matters are past their retention date and the last retention run, and a section "What this check
+does not show". It stores no result. Its limits are the ones the page states: the log is in the same
+file as the data, the hashes are not keyed, the number of the newest event is in that file too, a head
+kept elsewhere closes both only up to the event it names, and the log records changes and not reads or
+refusals (a refusal is a line in the access log, which goes to standard output and is not stored).
+
+### Navigation
+
+The primary navigation is the same list on every page, and shows a link only to the people who will
+be let through: Matters, Quickstart and Help to everyone (the last two without signing in); Evaluations
+and Pilot measures to the legal engineer and the administrator; Audit log to the administrator. The
+trainer's key (`GET /training/key`, global action `training.key`, legal engineer and administrator) has
+no navigation link: the quickstart page links it to the people who may open it. Which roles may open each page is
+a decision of the build that the project owner can overturn (number 2 of the [decisions of part 3](07-delivery-plan.md#decisions-of-part-3-that-the-project-owner-can-overturn); one line per action in the action
+table). The gate is a global
+role that the sign-in picker assigns and the database stores; it is tested against its table, and the
+demo identity is not authentication, so it is not access control (known gap 26).
 
 ## Architecture
 
@@ -273,11 +451,12 @@ flowchart LR
     SHELL["Shell<br/>host guard, body limit, security headers,<br/>safe errors, access log"]
     AUTH["Demo identity, CSRF<br/>and matter authorization"]
     ROUTES["Routes<br/>pages and JSON API"]
-    SVC["Services<br/>matters and uploads, runs, reviews"]
-    RUN["Run engine<br/>in-process queue, stage graph"]
-    STAGES["Stage functions<br/>ingest, extract, retrieve, analyze, verify"]
+    SVC["Services<br/>matters and uploads, runs, reviews,<br/>feedback, pilot, comparison pages, audit, training"]
+    RUN["Run engine<br/>in-process queue, stage graph,<br/>usage meter and spend guard"]
+    STAGES["Stage functions<br/>ingest, extract, retrieve, analyze,<br/>verify (settles statuses first)"]
     EXP["Memo export<br/>docx library"]
-    FB["Feedback<br/>NOT YET BUILT"]
+    FB["Feedback<br/>reason codes, notes, missed issues, ratings"]
+    PILOT["Pilot measures<br/>pure module over stored rows"]
     AUD["Audit log<br/>hash chain, same transaction as the change"]
   end
 
@@ -294,6 +473,8 @@ flowchart LR
   end
 
   EVAL["evals/src/parol<br/>case runner, scoring, compare<br/>(reuses spend guard and prices)"]
+  CMP[("Comparison pages<br/>data/evaluations/cmp_*.json")]
+  OPS["Operator commands<br/>pnpm parol:retain, pnpm parol:audit-verify"]
   PROV[("Model provider<br/>configured by env")]
   SIM["Simulated reader<br/>scripted, not a model"]
 
@@ -308,8 +489,12 @@ flowchart LR
   SVC --> DB
   SVC & EXP --> FS
   SVC --> AUD --> DB
-  FB -. planned .-> DB
+  SVC --> FB --> DB
+  SVC --> PILOT --> DB
   EVAL --> STAGES
+  EVAL -- "--publish writes" --> CMP
+  SVC -- "reads files only" --> CMP
+  OPS --> DB & FS
   EVAL -. "--exposure: in process, scripted oracle for the model" .-> SHELL
 ```
 
@@ -333,6 +518,12 @@ service that reads matter data, calls a model or writes a file. As built:
 - Every write (POST, PUT, PATCH, DELETE) must carry a CSRF token, in the `_csrf` form field or the
   `x-csrf-token` header. The token is an HMAC bound to the session cookie, or before sign-in to a
   short-lived anonymous cookie.
+- A route that names no matter and is not open to everyone is declared through `defineRoute`, which
+  names a global action (`evaluation.read`, `pilot.read`, `pilot.manage`, `audit.read` or
+  `training.key`). The order is the person (a visitor is sent to sign in, or gets 401 under `/api`),
+  the CSRF token on a write, the global role read from the database on every request (a member gets
+  403), then the handler. The action table (`GLOBAL_ACTIONS`) also decides which navigation links a
+  person sees, so a link is shown to the people who will be let through and to no one else.
 - A matter route is declared only through `defineMatterRoute`, which names the action. It resolves
   the person, checks the token on a write, then asks `authorizeMatter` for membership and role from
   the database. A non-member, a missing matter and a deleted matter all give the same 404; a member
@@ -358,7 +549,12 @@ service that reads matter data, calls a model or writes a file. As built:
   Errors are a fixed kind and message and do not repeat what the request carried, except an upload
   error and the reasons a review cannot start (see
   [document 6](06-access-and-governance.md#minimal-sensitive-logging)); the access log line
-  holds ids, the route template, the status and the latency.
+  holds ids, the route template, the status and the latency. An error page chooses its sentence from
+  a closed list by the kind of failure, and says what to do; the 404 is one sentence for every cause,
+  so a matter that is not yours reads byte for byte as one that does not exist. A form that is refused
+  is answered with its own page and the status of the refusal, and an error notice carries a marked
+  sentence that says what to do and, for a field, a link to it. A server that cannot start prints one
+  sentence that says what to do, and quotes no secret, path or line of a file.
 
 **Deviation.** The design said the evaluation runner "calls the same workflow runner with synthetic
 matters". It calls the same stage functions (extract, retrieve, analyze, verify, the prompts and the
@@ -366,7 +562,11 @@ workflow manifests), with its own composition of them in `evals/src/parol/runner
 without the store, the queue or the run engine, which are what a measurement does not need. A test
 pins the rule concurrency of the two, and a layers test compares the application's runner with the
 reference pipeline on the development cases. Nothing makes a later change to
-`src/services/runner.ts` reach the evaluation automatically.
+`src/services/runner.ts` reach the evaluation automatically. With `--publish` the evaluation also
+writes a page document into the application's data folder (`<data folder>/evaluations`), which the
+application only reads. The application's usage meter and spend guard are a separate copy of the
+evaluation's reported-model reader, prices loader and planner arithmetic, tied to the originals by
+parity tests (`evals/test/parol-app-*.test.ts`) and not by shared code.
 
 The exposure suite is the exception to that composition. `pnpm eval:parol --exposure`
 (`evals/src/parol/exposure/`) builds the real application in process (the real shell, routes and
@@ -399,9 +599,20 @@ flowchart LR
 | extract  | model plus rules                  | Source spans of all operative documents                               | For each category, located spans with verified quotes, or "not found"                  | Yes                                                                     |
 | retrieve | deterministic                     | Located spans, playbook version, category                             | One context bundle per rule: rule text, approved fallback, bounded spans               | No                                                                      |
 | analyze  | model                             | One context bundle                                                    | Draft finding: status, evidence quotes with roles, discrepancy, fallback               | Yes                                                                     |
-| verify   | deterministic, then a model check | Draft finding and the spans it cites                                  | Verified finding, or a finding with escalation reasons                                 | Partly: the model check is off in v1 and v2 (on in v3, evaluation only) |
+| verify   | deterministic, then a model check | Draft finding and the spans it cites                                  | Verified finding, or a finding with escalation reasons; the status settled first       | Partly: the model check is off in v1 and v2 (on in v3, evaluation only) |
 | review   | human                             | Verified findings                                                     | Decisions bound to finding content hashes                                              | No                                                                      |
 | export   | deterministic                     | Current findings with current decisions                               | DOCX memo with provenance appendix                                                     | No                                                                      |
+
+The first step of verify is status settlement, in every workflow version: the playbook's flags, not
+the model, say what an absent clause means, so a `missing` on a rule that is not required becomes
+`not_applicable`, a `not_applicable` on a required rule becomes `missing`, and either on a rule that
+forbids something becomes `compliant`. The status the model stated is kept (`findings.model_status`),
+a `status_settled` row in the checks says what changed, and the finding's content hash covers it.
+Applying settlement to every workflow version, v1 and v2 included, is a decision of the build that
+the project owner can overturn (number 3 of the [decisions of part 3](07-delivery-plan.md#decisions-of-part-3-that-the-project-owner-can-overturn)); a results file made before it carries another `code`
+pin. A
+`not_applicable` that the model states directly on an optional rule is not checked against the
+keyword hints (known gap 6 of [document 7](07-delivery-plan.md#known-gaps)).
 
 Each stage's output is stored in `run_stages` with the hash of its input (extract once per run,
 analyze and verify once per rule), which is what lets a resumed run skip what is done. Retrieve
@@ -457,8 +668,13 @@ marked as superseded when the inputs changed.
 
 **Deviation.** The design drew four edges into `deleted`; the code allows six (every state but
 `running`), and a matter with a run in flight has the run cancelled first. `deleted` is a state of the
-machine and a value the database accepts, but it is never stored: deleting a matter removes its rows,
-its files and its memos, and only the audit events remain (ids, hashes and counts).
+machine and a value the database accepts, but it is never stored: deleting a matter, by a person or by
+`pnpm parol:retain --apply` for a matter past its retention date, removes its rows, its files and
+its memos, and only the audit events remain (ids, hashes and counts). Nothing deletes a matter by
+itself: no scheduler ships, and a matter past its date stays open and usable until an operator runs
+the command (known gap 17 of [document 7](07-delivery-plan.md#known-gaps)). `--apply` refuses to run
+while the server holds the data folder, which is also a decision the owner can overturn (number 6 of
+the [decisions of part 3](07-delivery-plan.md#decisions-of-part-3-that-the-project-owner-can-overturn)).
 `review_complete` to `in_review` is in the transition table because the design named it; reopening
 is a new decision and not a state change, so no application code takes the edge.
 
@@ -512,8 +728,10 @@ budget gets `context_over_budget` without a call. A failed extract call does not
 either: retrieval then reads the whole document for every rule. A run fails only when it cannot
 produce output: a provider that rejects the key, the account, the model or the address
 (`provider_auth`, `provider_permission`, `provider_model`, `provider_billing`, `provider_redirect`),
-a restart that interrupted it (`interrupted`, set at start-up and offered as Resume), or an
-unexpected internal error (`internal`). A corrupt file cannot fail a run, because files are parsed
+the spend guard stopping a review that reached its limit for one review or for the UTC day
+(`spend_review_limit`, `spend_daily_limit`; the run can be resumed after the limit is raised), a
+restart that interrupted it (`interrupted`, set at start-up and offered as Resume), or an
+unexpected internal error (`internal`). These are the nine kinds a run can end with. A corrupt file cannot fail a run, because files are parsed
 at upload and refused there.
 
 ### Finding and review
@@ -574,9 +792,9 @@ also split the evaluation harness from the code it measures.
 | `@hono/node-server`      | Yes, a second dependency beside `hono`                                        | Serves the Hono application on Node's `http`. `main.ts` uses its request listener on its own server, so that a request the adapter cannot read still gets the security headers; its `serve` helper takes no error handler    | Writing the request and response conversion by hand: more code to get wrong          |
 | `docx`                   | Yes, for this app (a dev dependency of the repository root for the fixtures)  | Generates the memo as a real Word document with tables and headings; it is a runtime dependency of `apps/parol`, so it moved from dev dependencies to dependencies                                                           | Writing OOXML by hand with `@clausewise/docx` internals: possible, more code         |
 | `jszip`                  | Yes, a direct dependency of this app (already used inside `@clausewise/docx`) | Rewrites the memo's zip so that its timestamps are the export date and nothing else, which makes the memo file a pure function of its content and its stored hash meaningful                                                 | Leaving the library's clock stamps: two exports of one memo would hash differently   |
-| `tsx`                    | A dependency of this app (a dev dependency of the repository root)            | Runs the TypeScript sources directly for `pnpm parol` and `pnpm parol:seed`; the scripts pass the app's `tsconfig.json` so that JSX compiles for Hono                                                                        | A build step: not needed for a local demonstration                                   |
+| `tsx`                    | A dependency of this app (a dev dependency of the repository root)            | Runs the TypeScript sources directly for `pnpm parol`, `pnpm parol:seed`, `pnpm parol:retain` and `pnpm parol:audit-verify`; the scripts pass the app's `tsconfig.json` so that JSX compiles for Hono                        | A build step: not needed for a local demonstration                                   |
 | Front-end framework      | None                                                                          | Pages are forms and tables. One script of about 250 lines adds keyboard shortcuts, scrolls a quote into view, stops a double submit and polls progress; the quote highlighting is rendered on the server from stored offsets | React or htmx: a build step or another dependency for little gain                    |
-| ORM                      | None                                                                          | Plain SQL migrations in numbered files; 25 tables                                                                                                                                                                            | Drizzle or Prisma: more surface than the schema needs                                |
+| ORM                      | None                                                                          | Plain SQL migrations in numbered files (eight); 31 tables in a fresh database, counting the migration runner's own `schema_migrations`                                                                                       | Drizzle or Prisma: more surface than the schema needs                                |
 
 Complexity budget: one process, one database file, one folder of matter files, no queue service (runs
 execute in the server process through a bounded in-process queue, two at a time; a run's stage
@@ -595,20 +813,27 @@ refused if the configuration has changed.
 ```text
 apps/parol/
   src/
-    auth/          demo identity, session cookie, CSRF, matter authorization
+    auth/          demo identity, session cookie, CSRF, matter and global authorization
     boot/          registers prompts, workflow versions and the demo playbook at start-up
     demo/          the simulated reader and the data of the seeded matters (not a model)
+    evaluations/   reads the comparison page documents the evaluation command publishes
     export/        memo builder (docx)
     ingest/        DOCX and TXT readers, spans, annotations, warnings
+    pilot/         the pure module that computes the pilot measures, their CSV and their fixed words
     playbooks/     playbook loader (validates version, categories, hint topics)
     prompts/       prompt sources, each with an id; hashes computed at load; workflow versions
+    retention/     the retention job and the start-up notices
     server/        shell (app.ts, middleware), routes, pages (Hono JSX), views
-    services/      matters, uploads, runs and the run engine, reviews, memo input
+    services/      matters, uploads, runs and the run engine, reviews, feedback, pilot, memo input
     stages/        extract, retrieve, analyze, verify and its checks (pure functions)
     store/         SQLite repository, migration runner, file store, audit log
-    contracts.ts, module-contracts.ts, canonical.ts   shared shapes and hashing
+    training/      the training matter T01, the quickstart steps, the trainer's key, progress
+    usage/         the usage meter, prices, the spend guard and the reported-model reader
+    contracts.ts, module-contracts.ts, canonical.ts, settlement.ts   shared shapes, hashing, status settlement
     main.ts, seed.ts   the server (pnpm parol) and the demonstration data (pnpm parol:seed)
-  migrations/      001_init.sql, 002_integrity.sql, 003_ingest_warnings.sql
+    retain.ts, audit-verify.ts, cli-common.ts   the commands pnpm parol:retain and pnpm parol:audit-verify
+  migrations/      001_init.sql to 008_pilot_measures.sql (eight files)
+  training/         t01-nda.docx, t01-amendment-1.txt (built by pnpm fixtures:parol:training)
   playbooks/
     parol-nda-recipient.yaml      the fictional demo playbook, version 1.0.1
   public/          parol.js, parol.css
@@ -635,7 +860,8 @@ Small, tested changes to existing packages that Parol needs:
    `normalizeForAnchor` and a new `locateQuote`, which finds a quote in a paragraph under the same
    normalisation as `anchorEdit`. Deviation: clause reference resolution was not exported; Parol has
    its own in `src/ingest/references.ts` and `src/stages/clause-refs.ts`. `settledStatus` is exported
-   and is not called by Parol (see the status settlement note in
+   and, since week-two part 3, is called by Parol: `src/settlement.ts` wraps it and the verify stage
+   calls it first, for every workflow version (see the status settlement note in
    [document 3](03-data-model-and-contracts.md#deterministic-checks-and-model-judgment)).
 3. **Deviation.** The TXT reader is not a package change. It lives in `apps/parol/src/ingest/txt.ts`
    and produces the same paragraph shape as `parseDocx`, so `segment` works on both. It copies the

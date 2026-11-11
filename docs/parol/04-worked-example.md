@@ -8,7 +8,13 @@ upload, ingest, extract, retrieval R1 and R2, the checks of set C1, the review d
 memo). It runs end to end on case `PAROL-D05` in `apps/parol`, and the stage output below is taken
 from such a run. The reader in that run was the scripted simulated reader, which is not a language
 model: its answers were written from the earlier draft of this document, so they show the machinery
-and say nothing about any model, and H1 (a real model fails this way) is untested. Never run live.
+and say nothing about any model, and H1 (a real model fails this way) is untested. The reader knows
+two document sets and no others: this example, and the training matter T01 (this example with one
+instruction paragraph added to the NDA, recognised by a marker in the first document's title, for
+which its script also plants one wrong finding; see [document 8](08-pilot-and-enablement.md#training-exercise-20-minutes)).
+It declines everything else, including one changed word of either set or one added paragraph, and then
+every rule comes out `undetermined` and escalated. That is a property of a script and not a finding
+about any model. Never run live.
 Not pinned by v1 or v2, which this example uses: the model support check and the
 `superseded_evidence` check (set C2). Workflow v3 pins both, for the evaluation only: the application
 does not register it, so none of the output below is v3's. Departures from the earlier draft are
@@ -17,7 +23,7 @@ marked **Deviation**.
 The analysis outputs below are **what the scripted simulated reader returned** when the application
 ran the documents through the stages (source: `apps/parol/src/demo`, workflow versions v1 and v2).
 The span tables, annotation counts and verify tables were read again from a seeded database on 8
-November 2026; the memo excerpt in section 6 comes from one demo run on 4 November 2026. They
+November 2026 (the counts of checks passed and not applicable, again on 11 November 2026); the memo excerpt in section 6 comes from one demo run on 4 November 2026. They
 illustrate the contract shapes and the hypothesised baseline failure. A real
 model has not produced them.
 
@@ -162,6 +168,15 @@ and not a count from any model) is 841 under R1 and 886 under R2, against the wo
 **Deviation.** The earlier draft listed four spans. The real bundle also holds the preamble (a
 definition), the heading and Section 6.2 (both keyword hints), which do not change the story.
 
+The same contrast can be read on the comparison page (S4 in
+[document 2](02-experience-and-architecture.md#s4-evaluation-comparison)) once a simulated comparison
+of v1 and v2 has been published (`pnpm eval:parol --simulate --workflow v2 --compare a.json --out
+b.json --publish <data folder>`, with `a.json` made by the same command under `--workflow v1`). The
+evidence trail of the slot `PAROL-D05` `dur-1` then lists, for v1, the paragraphs it was shown
+without `D2-p3` and a citation of `D1-p19` as governing, and for v2 `D2-p3` shown as a cross reference
+and cited as governing. It is labelled SIMULATED, because the reader is the script of this example, so
+it shows the machinery and not what any model does.
+
 ### Baseline (workflow v1: prompts P1, retrieval R1), the failure as the simulated reader reproduces it
 
 Analyze returns (source: the scripted simulated reader; prompts P1 are the registry's `extract.p1`
@@ -218,9 +233,12 @@ validity and local support are not enough, and why the failure is worth a contro
 shown only D1-p19", and called the precedence row `precedence`. The checks have the names above;
 seven more exist than the earlier draft's table had (`evidence_set`, `parties`,
 `missing_confirmation`, `playbook_escalation`, `defined_term`, `instruction_like_text` and
-`model_abstained`; all sixteen check ids are listed in
+`model_abstained`; all seventeen check ids are listed in
 [document 3](03-data-model-and-contracts.md#deterministic-checks-and-model-judgment)); and neither v1 nor v2 pins the support prompt, so no
-`support` row appears and every cited passage reads "Support not checked".
+`support` row appears and every cited passage reads "Support not checked". The seventeenth id,
+`status_settled`, has a row only when the playbook's flags changed the status the model stated, which
+the verify stage now checks first for every workflow version; settlement leaves a stated `compliant`
+and a stated `deviation` on a required rule alone, so it adds no row here and the counts are unchanged.
 The support check is wired (`createSupportChecker`, prompt `support.p1`), and a test with a scripted
 checker shows what the earlier draft said: given only `D1-p19`, it agrees. That is also why the
 calibration set ([document 5](05-evaluation.md#support-calibration-set)) holds this finding as one of
@@ -334,9 +352,17 @@ the parties had already agreed. The decision is the body of
   "edits": {
     "fallbackLanguage": "6.1 The obligations of each Receiving Party under Section 4 shall continue for two (2) years from the date of each disclosure of Confidential Information, except that obligations with respect to any trade secret shall continue for so long as it remains a trade secret under applicable law."
   },
-  "reason": "The parties agreed two years in February. Propose reinstating it; three years from disclosure is the playbook's outer limit if Corvane resists."
+  "reason": "The parties agreed two years in February. Propose reinstating it; three years from disclosure is the playbook's outer limit if Corvane resists.",
+  "reasonCode": "bad_fallback",
+  "minorEdit": false
 }
 ```
+
+An edit or a reject must carry a `reasonCode`, one of `wrong_status`, `wrong_evidence`,
+`missed_context`, `bad_fallback`, `unclear` or `other`; an accept or an escalate must not. An edit may
+also carry `minorEdit`, true only when the finding was right in substance and a detail or some wording
+was corrected (a change of status is never minor). The code and the mark are stored with the decision
+and counted by the pilot measures page; the memo below prints the reviewer's words and not the code.
 
 The decision is bound to the finding's content hash. If Corvane later sends a revised amendment and
 it is uploaded as D2 version 2, the new version becomes the operative one at once, the review made
