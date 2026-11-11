@@ -8,8 +8,9 @@ decisions with a reason code, invalidation, the Word memorandum, feedback captur
 reports of a missed issue, a post-matter rating), timers and a reference list for shadow mode, the
 application's own recording of usage and its spend guard, retention and audit verification (two
 commands and a page), the training matter with a quickstart and a help page, error pages that say what
-to do, rules over the HTML of every page for keyboard use, contrast and error wording (with an optional
-real-browser part, run on one machine in Chromium only), and, on the evaluation side, all 26 planned
+to do, rules over the HTML of every page for keyboard use and error wording, a numeric contrast check of
+the stylesheet's colour pairs, an optional real-browser part (run on one machine in Chromium only), and,
+on the evaluation side, all 26 planned
 cases (14 development and 12 held-out, with the held-out hash committed), a 40-pair calibration set for
 the support checker, scoring, the runner with record and replay of a live run's answers, a candidate
 workflow version (v3) that turns the support check on for the evaluation only, the calibration step,

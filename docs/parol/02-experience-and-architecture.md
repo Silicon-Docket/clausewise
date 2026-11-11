@@ -59,8 +59,12 @@ decisions of the same run again returns the memo on record and does not supersed
 
 Server-rendered pages with one small script, `public/parol.js`. The script only adds keyboard
 shortcuts in the issue table, scrolls a quote into view (except on a page that opens on a refusal),
-stops a double submit and polls a running review's progress; every page works with it blocked. A
-permanent banner reads "DEMO: synthetic documents, demo identity, not for client work"; it sticks to
+stops a double submit and polls a running review's progress; every page works with it blocked. Every
+control is a native link, button or field, the first Tab stop of every page is a skip link, and the
+pages follow the light or dark setting of the system (there is no theme switch). Fifteen rules over the
+HTML are checked on 213 page fixtures, and an opt-in run in Chromium (`pnpm test:browser`, run once on
+one machine) audits 109 pages; no person has used a screen reader on the pages (known gap 21 of
+[document 7](07-delivery-plan.md#known-gaps)). A permanent banner reads "DEMO: synthetic documents, demo identity, not for client work"; it sticks to
 the top of the window from 40rem up, and on a narrower screen it is at the top of the page and
 scrolls away. The sketches below were drawn from the built pages (the seeded demonstration, read by
 a script and not photographed); ids, hashes and dates in them are illustrative, every finding text
@@ -139,7 +143,7 @@ has its own "Re-run review" button, which sends no workflow, so the new review u
 version (the latest promoted to pilot, else v1) even when the earlier review ran on v2; the picker is
 in the "Run the review again" section (known gap 36 of [document 7](07-delivery-plan.md#known-gaps)).
 
-Four sections are new since the first build, each in the place shown above. "Time on this matter" is
+Three sections are new since the first build, each in the place shown above. "Time on this matter" is
 shown to the associate and the reviewing attorney: Start timer and Stop timer, when the timer
 began, and the person's own closed total (sessions and time); it shows no elapsed time, because the
 page reads no clock. "Reference list for shadow mode" is shown to the reviewing attorney: one select
@@ -148,8 +152,9 @@ rule covers; it closes read-only at the first review of the matter, and with no 
 only the counts. "How long this matter is kept" shows the date and, to an associate, a field for the
 number of days from today (1 to 90) that replaces it, earlier or later; everyone else reads "Only an
 associate on the matter can change this date." Neither timer nor reference list is offered on a
-training matter, which also has a "Training matter T01" notice and a "Training progress" table (steps
-3 to 7 read from what Parol stored, step 1 set up, step 2 the trainer's). The matters list marks a
+training matter. A training matter also opens with a "Training matter T01" notice and a "Training
+progress" table (steps 3 to 7 read from what Parol stored, step 1 set up, step 2 the trainer's), both
+above Documents and neither drawn in the sketch. The matters list marks a
 past retention date with a "Past" chip (a triangle and the word) and a training matter with
 "Training".
 

@@ -235,8 +235,8 @@ seven more exist than the earlier draft's table had (`evidence_set`, `parties`,
 `missing_confirmation`, `playbook_escalation`, `defined_term`, `instruction_like_text` and
 `model_abstained`; all seventeen check ids are listed in
 [document 3](03-data-model-and-contracts.md#deterministic-checks-and-model-judgment)); and neither v1 nor v2 pins the support prompt, so no
-`support` row appears and every cited passage reads "Support not checked". The seventeenth id,
-`status_settled`, has a row only when the playbook's flags changed the status the model stated, which
+`support` row appears and every cited passage reads "Support not checked". The fifteenth id in
+that order, `status_settled`, has a row only when the playbook's flags changed the status the model stated, which
 the verify stage now checks first for every workflow version; settlement leaves a stated `compliant`
 and a stated `deviation` on a required rule alone, so it adds no row here and the counts are unchanged.
 The support check is wired (`createSupportChecker`, prompt `support.p1`), and a test with a scripted

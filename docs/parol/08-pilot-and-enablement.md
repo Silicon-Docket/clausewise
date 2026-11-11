@@ -130,7 +130,7 @@ the build that the project owner can overturn (document 7, [decisions of part
 
 **The trainer's key** is `GET /training/key`: the table below, in the same words (a test keeps the page
 and this table in step), and notes for the trainer. It is shown to the legal engineer and the
-administrator, and anyone else gets 403. That is a courtesy to trainees and not a control: the
+administrator; a signed-in person with another role gets 403 and a visitor is sent to sign in. That is a courtesy to trainees and not a control: the
 demonstration sign-in has no passwords, and the same answers are in this document and in the source.
 
 **T01 is never used in evaluation**, and four things hold it: it is not in the dataset or either
