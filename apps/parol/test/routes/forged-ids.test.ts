@@ -293,6 +293,7 @@ const FORGES: Forge[] = [
     body: (b) => ({
       form: {
         decision: "edit",
+        reasonCode: "other",
         reason: "Relabelled.",
         findingContentSha256: hashOf(open),
         [`evidenceRole:${b.evidence}`]: "superseded",
@@ -308,6 +309,7 @@ const FORGES: Forge[] = [
     body: (b) => ({
       json: {
         decision: "edit",
+        reasonCode: "other",
         reason: "Relabelled.",
         findingContentSha256: hashOf(open),
         edits: { evidenceRoles: [{ evidenceId: b.evidence, role: "superseded" }] },
@@ -600,12 +602,14 @@ describe("fields a request may not set (mass assignment)", () => {
     const hash = "1".repeat(64);
     await refuse(reviewer, "POST", path, {
       decision: "edit",
+      reasonCode: "other",
       reason: "x",
       findingContentSha256: hash,
       edits: { status: "compliant", findingId: other.findingId },
     });
     await refuse(reviewer, "POST", path, {
       decision: "edit",
+      reasonCode: "other",
       reason: "x",
       findingContentSha256: hash,
       edits: { evidenceRoles: [{ evidenceId: "x", role: "governing", quote: "new words" }] },
@@ -676,6 +680,7 @@ describe("fields a request may not set (mass assignment)", () => {
       body: new URLSearchParams({
         _csrf: await reviewer.apiToken(),
         decision: "reject",
+        reasonCode: "other",
         reason: "The wording is not acceptable.",
         findingContentSha256: hashOf(fresh),
         reviewerId: IDS.admin,
@@ -691,6 +696,7 @@ describe("fields a request may not set (mass assignment)", () => {
     expect(view.reviews).toHaveLength(1);
     expect(view.reviews[0]).toMatchObject({
       decision: "reject",
+      reasonCode: "other",
       reviewerName: "Dana Whitfield (reviewing attorney)",
       validity: "current",
     });

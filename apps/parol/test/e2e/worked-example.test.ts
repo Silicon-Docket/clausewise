@@ -393,6 +393,7 @@ describe("the worked example, through HTTP only", () => {
                 [FIELDS.decision]: "edit",
                 [FIELDS.fallbackLanguage]: EDITED_FALLBACK,
                 [FIELDS.reason]: EDIT_REASON,
+                [FIELDS.reasonCode]: "missed_context",
               }
             : verified
               ? { [FIELDS.decision]: "accept" }
@@ -427,6 +428,8 @@ describe("the worked example, through HTTP only", () => {
       decision: "edit",
       validity: "current",
       reason: EDIT_REASON,
+      reasonCode: "missed_context",
+      minorEdit: false,
       edits: { fallbackLanguage: EDITED_FALLBACK },
     });
     expect(Object.keys(edited.reviews[0]!.edits ?? {})).toEqual(["fallbackLanguage"]);

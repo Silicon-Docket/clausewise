@@ -1204,6 +1204,13 @@ async function runMode(mode: Mode): Promise<void> {
       const view = site.services.runs.finding(reviewer, issue.findingId);
       site.services.reviews.decide(reviewer, issue.findingId, decisionFor(view));
     }
+    if (level === "decided") return scratch;
+    // Exported: the reviewer exports the memo once every finding is decided, as the reviewer of the
+    // matter the matrix goes to does. The scratch matter is made for one probe, so the memo exported
+    // here is not the memo of any other probe's matter (the rating, which needs it, is the only
+    // probe that asks for this level, and a rating sent to it is that matter's first).
+    const exporter = site.authorize(DEMO_USER_IDS.reviewer, made.matterId, "memo.export");
+    await site.services.reviews.exportMemo(exporter);
     return scratch;
   }
 
@@ -1467,17 +1474,22 @@ async function runMode(mode: Mode): Promise<void> {
   for (const name of shown) mode.proven.set(name, (mode.proven.get(name) ?? 0) + 1);
 }
 
-/** The levels `makeScratch` builds. */
-const SCRATCH_LEVELS_BUILT: readonly ScratchLevel[] = ["documents", "run", "decided"];
+/** The levels `makeScratch` builds: all of those the type names. */
+export const SCRATCH_LEVELS_BUILT: readonly ScratchLevel[] = [
+  "documents",
+  "run",
+  "decided",
+  "exported",
+];
 
 /**
- * Stops the suite for a body that needs a scratch matter that `makeScratch` cannot build yet. The
- * level `exported` (a matter with a memo) is part of the type for the package that probes a route
- * that needs one, and that package adds the branch to `makeScratch` and removes this refusal for
- * it. Until then the level is refused here, before any matter is made, and not served as the next
- * level down: a body that the suite sends to a matter that lacks what it needs would show a
- * refused caller nothing and the let-in caller a conflict, and the proof that it changes the store
- * would be missing for the wrong reason.
+ * Stops the suite for a body that needs a scratch matter that `makeScratch` cannot build. Every
+ * level of the type is built now (`exported`, a matter with a memo, by the package that probes the
+ * rating), so nothing a probe table names is refused today; the refusal is what a level added to
+ * the type without a branch of `makeScratch` meets. Such a level is refused here, before any matter
+ * is made, and not served as the next level down: a body that the suite sends to a matter that
+ * lacks what it needs would show a refused caller nothing and the let-in caller a conflict, and the
+ * proof that it changes the store would be missing for the wrong reason.
  */
 export function requireScratchLevelBuilt(level: ScratchLevel): void {
   if (!SCRATCH_LEVELS_BUILT.includes(level))

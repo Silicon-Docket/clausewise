@@ -7,6 +7,7 @@ import { loadPlaybook } from "../playbooks/load.js";
 import { settlementReason } from "../settlement.js";
 import {
   INPUT_CHANGE_REASONS,
+  type FeedbackRow,
   type FindingRecord,
   type MatterRow,
   type MemoRow,
@@ -18,6 +19,7 @@ import {
 import { summarizeUsage } from "../usage/summary.js";
 import type { ServiceConfig } from "./deps.js";
 import {
+  CANNOT_ADD_NOTE,
   CANNOT_DECIDE,
   UNKNOWN_USER_NAME,
   WARNING_ORDER,
@@ -32,7 +34,10 @@ import type {
   MatterSummary,
   MemberView,
   MemoSummary,
+  MissedIssueView,
+  NoteView,
   PlaybookOption,
+  RatingView,
   ReviewHistoryItem,
   RunProgress,
   RunSummary,
@@ -263,6 +268,11 @@ export function createPresenter(
 
   // --- findings -----------------------------------------------------------------------------
 
+  /** The notes a finding carries, from every member. */
+  const notesOf = (f: FindingRecord): FeedbackRow[] =>
+    repo.listFeedback(f.matterId, { kind: "comment", findingId: f.id });
+  const noteCountOf = (f: FindingRecord): number => notesOf(f).length;
+
   function issueRow(f: FindingRecord): IssueRow {
     const review = f.currentReview ?? f.reviews[f.reviews.length - 1] ?? null;
     return {
@@ -281,6 +291,10 @@ export function createPresenter(
       verificationState: f.verificationState,
       escalations: f.escalations,
       evidenceCount: f.evidence.length,
+      // Every member's notes, not only the caller's: the number says how much there is to read.
+      // Left out when there are none, as a status nothing settled is, so that a row of a finding
+      // nobody has written about is the row it was before notes existed.
+      noteCount: noteCountOf(f) || undefined,
       review:
         review === null
           ? null
@@ -326,6 +340,24 @@ export function createPresenter(
     return { allowed: true, reason: null };
   }
 
+  /**
+   * Whether a note can be added to the finding now, restated for a page that shows or hides the
+   * form. The service function that adds it decides again. It follows `canDecide` for the role and
+   * for the state of the finding (the finding is current and its review has not been replaced) and
+   * not for the state of the matter, because a note is not a decision.
+   */
+  function canAddNote(
+    am: AuthorizedMatter,
+    f: FindingRecord,
+    run: RunRow | undefined,
+  ): NonNullable<FindingView["canAddNote"]> {
+    if (!roleAllows(am.role, "feedback.add"))
+      return { allowed: false, reason: CANNOT_ADD_NOTE.role };
+    if (f.validity !== "current" || run === undefined || run.status === "superseded")
+      return { allowed: false, reason: CANNOT_ADD_NOTE.stale };
+    return { allowed: true, reason: null };
+  }
+
   function findingView(am: AuthorizedMatter, f: FindingRecord): FindingView {
     const matter = repo.getMatter(f.matterId) as MatterRow;
     const run = repo.getRun(f.matterId, f.runId);
@@ -349,6 +381,8 @@ export function createPresenter(
       at: r.createdAt,
       reason: r.reason,
       validity: r.validity,
+      reasonCode: r.reasonCode,
+      minorEdit: r.minorEdit,
       edits: r.edits,
     }));
     return {
@@ -374,6 +408,9 @@ export function createPresenter(
       reviews,
       contentSha256: f.contentSha256,
       canDecide: canDecide(am, f, matter, run),
+      // The notes of every member, oldest first.
+      notes: notesOf(f).map(noteView),
+      canAddNote: canAddNote(am, f, run),
     };
   }
 
@@ -409,6 +446,49 @@ export function createPresenter(
     };
   }
 
+  // --- feedback (package W2.6a) ---------------------------------------------------------------
+  // What a person typed is carried through as it was stored; the pages show it through
+  // `RevealedText`. Who wrote it is a name looked up now, as the name of a reviewer is.
+
+  /**
+   * A missed issue, with the title its rule has in the playbook of the run it was reported against.
+   * `ruleTitles` maps a rule key to that title; a key it does not know (a playbook that no longer
+   * lists it) is shown by its key and no title.
+   */
+  function missedIssueView(
+    row: FeedbackRow,
+    ruleTitles: ReadonlyMap<string, string>,
+  ): MissedIssueView {
+    return {
+      feedbackId: row.id,
+      runId: row.runId ?? "",
+      ruleKey: row.ruleKey,
+      ruleTitle: row.ruleKey === null ? null : (ruleTitles.get(row.ruleKey) ?? null),
+      location: row.location,
+      note: row.text ?? "",
+      reporterName: userName(row.userId),
+      at: row.createdAt,
+    };
+  }
+
+  /** A note on a finding. */
+  function noteView(row: FeedbackRow): NoteView {
+    return {
+      feedbackId: row.id,
+      findingId: row.findingId ?? "",
+      note: row.text ?? "",
+      authorName: userName(row.userId),
+      at: row.createdAt,
+    };
+  }
+
+  /** A rating; null for a row that is not a rating of 1 to 5 (the database does not let one in). */
+  function ratingView(row: FeedbackRow): RatingView | null {
+    const rating = row.rating;
+    if (rating !== 1 && rating !== 2 && rating !== 3 && rating !== 4 && rating !== 5) return null;
+    return { feedbackId: row.id, rating, comment: row.text, at: row.createdAt };
+  }
+
   return {
     userName,
     playbookName,
@@ -424,6 +504,9 @@ export function createPresenter(
     findingView,
     memoFileName,
     memoSummary,
+    missedIssueView,
+    noteView,
+    ratingView,
   };
 }
 

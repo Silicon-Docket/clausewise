@@ -10,7 +10,8 @@ import {
   MemosPage,
   RunPage,
 } from "../pages/index.js";
-import type { Chrome } from "../pages/layout.js";
+import type { Chrome, Notice } from "../pages/layout.js";
+import type { MissedIssueDraft, NoteDraft, RatingDraft } from "../pages/feedback.js";
 import type { DecisionDraft } from "../pages/finding.js";
 import { refusalOf, type Refusal } from "./notices.js";
 import { exportBlockedReason, mayDeleteMatter, pageChrome, sendPage } from "./shared.js";
@@ -32,6 +33,15 @@ import { exportBlockedReason, mayDeleteMatter, pageChrome, sendPage } from "./sh
 function chromeFor(c: Context, principal: Principal, refusal: Refusal | undefined): Chrome {
   const chrome = pageChrome(c, principal);
   return refusal === undefined ? chrome : { ...chrome, notice: refusal.notice };
+}
+
+/** The place on the finding page that a refused note links to: its textarea. */
+const NOTE_CONTROL = "#note-text";
+
+/** The notice as it is, without its link to a place on the page. */
+function withoutJump(notice: Notice): Notice {
+  const { jump: _jump, ...rest } = notice;
+  return rest;
 }
 
 /**
@@ -60,18 +70,40 @@ export interface PageRenderers {
   matterPage(c: Context, am: AuthorizedMatter, refusal?: Refusal): Response;
   /** The list of matters, with the form that makes one. */
   mattersPage(c: Context, principal: Principal, refusal?: Refusal): Response;
-  /** One run: its table of findings, and the finding the query string asks for. */
-  runPage(c: Context, am: AuthorizedMatter, runId: string, refusal?: Refusal): Response;
-  /** One finding and the decision form, with what was typed when a decision was refused. */
+  /**
+   * One run: its table of findings, and the finding the query string asks for. With the options of
+   * a refused report of a missed issue, it holds what was typed in that form (package W2.6a).
+   */
+  runPage(
+    c: Context,
+    am: AuthorizedMatter,
+    runId: string,
+    refusal?: Refusal,
+    options?: { missedIssueDraft?: MissedIssueDraft },
+  ): Response;
+  /**
+   * One finding and the decision form, with what was typed when a decision was refused. With the
+   * options of a refused note, it holds what was typed in the note form (package W2.6a).
+   */
   findingPage(
     c: Context,
     am: AuthorizedMatter,
     findingId: string,
     refusal?: Refusal,
     draft?: DecisionDraft,
+    options?: { noteDraft?: NoteDraft },
   ): Response;
-  /** The memos of a matter and the form that exports one. */
-  memosPage(c: Context, am: AuthorizedMatter, refusal?: Refusal): Response;
+  /**
+   * The memos of a matter, the form that exports one and the section that rates the matter. With
+   * the options of a refused rating, it holds what was chosen and typed in that form (package
+   * W2.6a).
+   */
+  memosPage(
+    c: Context,
+    am: AuthorizedMatter,
+    refusal?: Refusal,
+    options?: { ratingDraft?: RatingDraft },
+  ): Response;
   /**
    * Runs `run`, the body of a matter form's POST. A refusal the person can fix is answered on the
    * matter's own page, with the status and the words of the refusal; anything else is thrown again,
@@ -87,7 +119,7 @@ export interface PageRenderers {
 
 export function createPageRenderers(deps: AppDeps): PageRenderers {
   const { services, repo } = deps;
-  const { matters, runs, reviews } = services;
+  const { matters, runs, reviews, feedback } = services;
 
   const matterPage: PageRenderers["matterPage"] = (c, am, refusal) =>
     sendPage(
@@ -114,7 +146,7 @@ export function createPageRenderers(deps: AppDeps): PageRenderers {
       refusal?.status,
     );
 
-  const runPage: PageRenderers["runPage"] = (c, am, runId, refusal) => {
+  const runPage: PageRenderers["runPage"] = (c, am, runId, refusal, options) => {
     // A run of another matter, or none at all, is a 404 here, before anything is listed.
     const run = runs.get(am, runId);
     const view = matters.view(am);
@@ -134,37 +166,73 @@ export function createPageRenderers(deps: AppDeps): PageRenderers {
         filter: ISSUE_FILTERS.find((name) => name === c.req.query("filter")) ?? "all",
         warnings: view.warnings,
         documents: view.documents,
+        feedback: {
+          rules: feedback.ruleChoices(am, run.id),
+          items: feedback.list(am).missedIssues.filter((item) => item.runId === run.id),
+          draft: options?.missedIssueDraft,
+        },
       }),
       refusal?.status,
     );
   };
 
-  const findingPage: PageRenderers["findingPage"] = (c, am, findingId, refusal, draft) =>
-    sendPage(
+  const findingPage: PageRenderers["findingPage"] = (c, am, findingId, refusal, draft, options) => {
+    const finding = runs.finding(am, findingId);
+    // A refusal of the note form links to the note's control. A note posted by hand to a finding
+    // that has gone out of date is refused for its text before its state, and that page offers no
+    // form, so the link is dropped there: it would lead nowhere.
+    const shown =
+      refusal === undefined ||
+      refusal.notice.jump?.href !== NOTE_CONTROL ||
+      finding.canAddNote?.allowed === true
+        ? refusal
+        : { ...refusal, notice: withoutJump(refusal.notice) };
+    return sendPage(
       c,
       FindingPage({
-        chrome: chromeFor(c, am.principal, refusal),
+        chrome: chromeFor(c, am.principal, shown),
         matterId: am.matterId,
-        finding: runs.finding(am, findingId),
+        finding,
         matterName: matters.view(am).matter.name,
         draft,
+        noteDraft: options?.noteDraft,
       }),
       refusal?.status,
     );
+  };
 
-  const memosPage: PageRenderers["memosPage"] = (c, am, refusal) => {
+  const memosPage: PageRenderers["memosPage"] = (c, am, refusal, options) => {
     const view = matters.view(am);
+    const memos = reviews.listMemos(am);
+    // The caller's own rating, and no other: the service reads it by the caller's id.
+    const given = feedback.myRating(am);
+    // The refusals of this page are the rating form's, and each leads to a control of that form. The
+    // form is on the page while the matter has a memo and the person has not rated; a refusal
+    // that reaches the page otherwise (a post made by hand, or from a page opened earlier) is told
+    // in words with no link, because a link to a control that is not there leads nowhere.
+    const formShown = memos.length > 0 && given === null;
+    const shown =
+      refusal === undefined || formShown || refusal.notice.jump === undefined
+        ? refusal
+        : { ...refusal, notice: withoutJump(refusal.notice) };
     return sendPage(
       c,
       MemosPage({
-        chrome: chromeFor(c, am.principal, refusal),
+        chrome: chromeFor(c, am.principal, shown),
         matter: view.matter,
-        memos: reviews.listMemos(am),
+        memos,
         canExport: roleAllows(am.role, "memo.export", {
           relaxedSegregation: view.segregationRelaxed,
         }),
         exportBlockedReason: exportBlockedReason(view),
         currentRunId: view.currentRun?.id ?? null,
+        rating: {
+          hasMemo: memos.length > 0,
+          given,
+          // The newest memo is first. It names the review the matter was last exported from.
+          runId: memos[0]?.runId ?? null,
+          draft: options?.ratingDraft,
+        },
       }),
       refusal?.status,
     );

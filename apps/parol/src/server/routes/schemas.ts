@@ -3,6 +3,7 @@ import {
   DOCUMENT_KINDS,
   EVIDENCE_ROLES,
   MATTER_ROLES,
+  REASON_CODES,
   REVIEW_DECISIONS,
   STATUSES,
 } from "../../contracts.js";
@@ -34,6 +35,10 @@ export const MAX_NAME = 200;
 export const MAX_CLIENT_NAME = 300;
 export const MAX_REASON = 4000;
 export const MAX_EDIT_TEXT = 8000;
+/** The longest note, report or comment of the feedback capture (package W2.6a). */
+export const MAX_FEEDBACK_TEXT = 4000;
+/** The longest place a person can give for a missed issue. */
+export const MAX_LOCATION = 200;
 /** Most evidence passages one finding has; a decision naming more is not one of ours. */
 export const MAX_ROLE_EDITS = 64;
 
@@ -140,7 +145,54 @@ export const DecisionBody = z.strictObject({
   findingContentSha256: sha256,
   edits: EditsInput.nullable().optional(),
   reason: z.string().max(MAX_REASON).nullable().optional(),
+  /** Required for edit and reject, not allowed for accept and escalate (the store says which). */
+  reasonCode: z.enum(REASON_CODES).nullable().optional(),
+  /** Only an edit may carry it. */
+  minorEdit: z.boolean().nullable().optional(),
 });
 export type DecisionBody = z.infer<typeof DecisionBody>;
 
 export const FINDING_HASH = sha256;
+
+/**
+ * `POST /api/matters/:id/runs/:runId/missed-issues` (package W2.6a). The run is the path's. The body
+ * is checked here for its shape only: no key but these three, and each of the type it has. What a
+ * value may be (a rule chosen, a note that says something, a note and a place that are not too
+ * long) is checked by `missedIssueFromBody` (feedback.ts), the function the form shares its rules
+ * with, so that a script is refused with the same codes as a person at the form. `ruleKey` is a rule
+ * key of the review's playbook, or `null` for "not covered by any rule"; leaving it out is not
+ * choosing, and is refused as the form refuses it.
+ */
+export const MissedIssueBody = z.strictObject({
+  ruleKey: z.string().nullable().optional(),
+  location: z.string().nullable().optional(),
+  note: z.string().optional(),
+});
+export type MissedIssueBody = z.infer<typeof MissedIssueBody>;
+
+/**
+ * `POST /api/matters/:id/findings/:findingId/notes` (package W2.6a, slice D). The finding is the
+ * path's and the person the session's. The body is checked here for its shape only: no key but
+ * `note`, and it a string. What the note may be (it says something, it is not too long) is checked
+ * by `noteFromBody` (feedback.ts), the function the form shares its rules with, so that a script is
+ * refused with the same codes as a person at the form. A note that is left out is `finding_note_required`.
+ */
+export const NoteBody = z.strictObject({
+  note: z.string().nullable().optional(),
+});
+export type NoteBody = z.infer<typeof NoteBody>;
+
+/**
+ * `POST /api/matters/:id/rating` (package W2.6a). The matter is the path's and the person the
+ * session's. The body is checked here for its shape only: no key but these two, and each of the
+ * type it has. What a value may be (a mark that is a whole number from 1 to 5, a comment that is not
+ * too long) is checked by `ratingFromBody` (feedback.ts), the function the form shares its rules
+ * with, so that a script is refused with the same codes as a person at the form. A mark that is
+ * left out or `null` is `rating_required`; a mark that is a number but not one of the five is
+ * `bad_rating`; a mark that is not a number at all is refused here.
+ */
+export const RatingBody = z.strictObject({
+  rating: z.number().nullable().optional(),
+  comment: z.string().nullable().optional(),
+});
+export type RatingBody = z.infer<typeof RatingBody>;

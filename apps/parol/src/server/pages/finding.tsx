@@ -1,5 +1,11 @@
 import { EVIDENCE_ROLES, REVIEW_DECISIONS, STATUSES } from "../../contracts.js";
-import type { CheckResult, EvidenceRole, ReviewDecision, Status } from "../../contracts.js";
+import type {
+  CheckResult,
+  EvidenceRole,
+  ReasonCode,
+  ReviewDecision,
+  Status,
+} from "../../contracts.js";
 import type {
   EvidenceView,
   FindingView,
@@ -7,6 +13,7 @@ import type {
   ReviewHistoryItem,
 } from "../../services/views.js";
 import { urls } from "../urls.js";
+import { MINOR_EDIT_MARKED, NOTES_JUMP, reasonCodeLabel } from "../views/feedback.js";
 import { shortHash } from "../views/format.js";
 import { confirmedRange, type Offsets } from "../views/highlight.js";
 import {
@@ -45,6 +52,7 @@ import {
   idPart,
   textareaValue,
 } from "./components.js";
+import { MinorEditField, NotesSection, ReasonCodeField, type NoteDraft } from "./feedback.js";
 import { FIELDS, evidenceRoleField } from "./forms.js";
 import { ContextHelp } from "./help.js";
 import { Layout, csrfField, type Chrome } from "./layout.js";
@@ -63,6 +71,10 @@ export interface DecisionDraft {
   fallbackLanguage?: string;
   /** Labels by evidence id. */
   roles?: Readonly<Record<string, EvidenceRole>>;
+  /** The reason code that was chosen (package W2.6a). */
+  reasonCode?: ReasonCode;
+  /** Whether the minor-edit box was ticked (package W2.6a). */
+  minorEdit?: boolean;
 }
 
 export interface FindingPaneProps {
@@ -71,6 +83,8 @@ export interface FindingPaneProps {
   finding: FindingView;
   /** Shown in the decision form in place of the finding's own values, after a refused decision. */
   draft?: DecisionDraft | undefined;
+  /** Shown in the note form in place of an empty one, after a refused note (package W2.6a, slice D). */
+  noteDraft?: NoteDraft | undefined;
   /**
    * The level of the pane's title. Beside the issue table it is a section of the page (2); on a
    * page of its own it is the page title (1). Everything inside follows from it.
@@ -528,6 +542,8 @@ function DecisionForm({ chrome, matterId, finding, draft }: FindingPaneProps) {
         </textarea>
       </Field>
 
+      <ReasonCodeField draft={draft} />
+
       <fieldset class="edits">
         <legend>Edits, used only when you choose Edit</legend>
         <Field id="edit-status" label="Status">
@@ -579,6 +595,7 @@ function DecisionForm({ chrome, matterId, finding, draft }: FindingPaneProps) {
             })}
           </fieldset>
         )}
+        <MinorEditField draft={draft} />
       </fieldset>
 
       <p class="binding">
@@ -705,6 +722,10 @@ function HistorySection({ finding, level }: { finding: FindingView; level: Lv })
                   <RevealedText value={item.reason} />
                 </blockquote>
               )}
+              {item.reasonCode === undefined || item.reasonCode === null ? null : (
+                <p class="muted">Reason code: {reasonCodeLabel(item.reasonCode)}</p>
+              )}
+              {item.minorEdit === true ? <p class="muted">{MINOR_EDIT_MARKED}</p> : null}
               <EditSummary item={item} finding={finding} />
             </li>
           ))}
@@ -726,6 +747,8 @@ export function FindingPane(props: FindingPaneProps) {
   const { finding } = props;
   const { issue } = finding;
   const decidable = finding.canDecide.allowed && issue.validity === "current";
+  // A finding made before notes existed has neither the notes nor the answer, and no such section.
+  const hasNotes = finding.notes !== undefined || finding.canAddNote !== undefined;
   const title: Lv = props.level ?? 2;
   const level = (title + 1) as Lv;
   return (
@@ -765,6 +788,11 @@ export function FindingPane(props: FindingPaneProps) {
             <a href="#decision">Go to the decision</a>
           </p>
         ) : null}
+        {hasNotes ? (
+          <p>
+            <a href="#notes">{NOTES_JUMP}</a>
+          </p>
+        ) : null}
       </header>
       <ContextHelp finding={finding} />
       <EvidenceSection finding={finding} level={level} />
@@ -773,6 +801,13 @@ export function FindingPane(props: FindingPaneProps) {
       <RuleSection finding={finding} level={level} />
       <SuggestionSection finding={finding} level={level} />
       <DecisionSection {...props} sectionLevel={level} />
+      <NotesSection
+        chrome={props.chrome}
+        matterId={props.matterId}
+        finding={finding}
+        level={level}
+        draft={props.noteDraft}
+      />
       <HistorySection finding={finding} level={level} />
     </article>
   );
@@ -794,6 +829,7 @@ export function FindingPage(props: FindingPaneProps & { matterName: string }) {
         matterId={props.matterId}
         finding={props.finding}
         draft={props.draft}
+        noteDraft={props.noteDraft}
         level={1}
       />
     </Layout>

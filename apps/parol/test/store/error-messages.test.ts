@@ -194,6 +194,7 @@ function probes(w: World): Record<string, { run: () => unknown; forbidden: strin
       return repo.recordReview(r.m.id, f.id, {
         reviewerId: ACTORS.reviewer,
         decision: "edit",
+        reasonCode: "other",
         reason: "r",
         edits: { evidenceRoles: [{ evidenceId: ID, role: "supporting" }] },
         findingContentSha256: f.contentSha256,

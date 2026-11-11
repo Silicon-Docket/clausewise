@@ -1017,9 +1017,9 @@ describe("reviews", () => {
     clone("reviews", "id", ids.reviewA, { id: "rev_new", ...over }, verb, suffix);
 
   it("are never replaced", () => {
-    expect(review({ id: ids.reviewA, decision: "reject" }, "INSERT OR REPLACE")).toThrow(
-      /never replaced/,
-    );
+    expect(
+      review({ id: ids.reviewA, decision: "reject", reason_code: "other" }, "INSERT OR REPLACE"),
+    ).toThrow(/never replaced/);
     expect(
       review({ id: ids.reviewA }, "INSERT", "ON CONFLICT(id) DO UPDATE SET decision = 'reject'"),
     ).toThrow(/never replaced/);
@@ -1049,6 +1049,8 @@ describe("reviews", () => {
     decision: "reject",
     edited_json: '{"status":"deviation"}',
     reason: "changed",
+    reason_code: "other",
+    minor_edit: 1,
     finding_content_sha256: "0".repeat(64),
     supersedes_review_id: "rev_other",
     created_at: "2000-01-01T00:00:00.000Z",

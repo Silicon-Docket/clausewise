@@ -1,11 +1,13 @@
 import {
   FORCES_UNDETERMINED,
+  REASON_CODES,
   REVIEW_DECISIONS,
   type CheckResult,
   type DeterminedStatus,
   type Escalation,
   type EvidenceRole,
   type FallbackBasis,
+  type ReasonCode,
   type ReviewDecision,
   type Status,
   type VerifiedFinding,
@@ -19,6 +21,7 @@ import {
   assertShortCode,
   assertStoragePath,
   assertStoragePathFree,
+  cleanLabel,
   cleanProse,
   parseWith,
   type Ctx,
@@ -37,7 +40,7 @@ import type { MattersApi } from "./repo-matters.js";
 import { toStoredRule } from "./repo-playbooks.js";
 import type { PlaybooksApi } from "./repo-playbooks.js";
 import type { RunsApi } from "./repo-runs.js";
-import { ReviewEditsSchema, VerifiedFindingSchema } from "./schemas.js";
+import { RULE_KEY_PATTERN, ReviewEditsSchema, VerifiedFindingSchema } from "./schemas.js";
 import type {
   ExportReadiness,
   FeedbackRow,
@@ -98,6 +101,8 @@ interface RawReview {
   decision: ReviewDecision;
   edited_json: string | null;
   reason: string | null;
+  reason_code: ReasonCode | null;
+  minor_edit: 0 | 1 | null;
   finding_content_sha256: string;
   supersedes_review_id: string | null;
   validity: "current" | "stale";
@@ -124,6 +129,8 @@ interface RawFeedback {
   reason_code: string | null;
   rating: number | null;
   text: string | null;
+  rule_key: string | null;
+  location: string | null;
   created_at: string;
 }
 
@@ -136,6 +143,8 @@ const toReview = (r: RawReview): ReviewRecord => ({
   decision: r.decision,
   edits: r.edited_json === null ? null : (JSON.parse(r.edited_json) as ReviewEdits),
   reason: r.reason,
+  reasonCode: r.reason_code,
+  minorEdit: r.minor_edit === null ? null : r.minor_edit === 1,
   findingContentSha256: r.finding_content_sha256,
   supersedesReviewId: r.supersedes_review_id,
   validity: r.validity,
@@ -162,6 +171,8 @@ const toFeedback = (r: RawFeedback): FeedbackRow => ({
   reasonCode: r.reason_code,
   rating: r.rating,
   text: r.text,
+  ruleKey: r.rule_key,
+  location: r.location,
   createdAt: r.created_at,
 });
 
@@ -666,6 +677,14 @@ export function createFindingsApi(
    * given where one is required, and that no other reviewer's decision is current on the finding
    * (`ConflictError` `decision_conflict`). The finding's previous current decision, the same
    * reviewer's, becomes stale and the new one records `supersedesReviewId`. The matter's `in_review` / `review_complete` status follows.
+   *
+   * An edit or a reject carries a reason code (`reason_code_required` when it has none), the other
+   * decisions carry none (`reason_code_not_allowed`), and a code outside `REASON_CODES` is
+   * `bad_reason_code`. Only an edit carries a minor-edit mark (`minor_edit_not_allowed`), stored as
+   * false when an edit says nothing, and never true for an edit that changes the status
+   * (`minor_edit_status`). The code and the mark are stored with the decision, bound like it to the
+   * finding content it was made on, and the database refuses a decision that breaks these rules
+   * (migration 006). The messages name the rule and never the value that was sent.
    */
   function recordReview(
     matterId: string,
@@ -676,6 +695,8 @@ export function createFindingsApi(
       findingContentSha256: string;
       edits?: ReviewEdits | null;
       reason?: string | null;
+      reasonCode?: ReasonCode | null;
+      minorEdit?: boolean | null;
     },
   ): ReviewRecord {
     if (!(REVIEW_DECISIONS as readonly string[]).includes(input.decision))
@@ -697,6 +718,34 @@ export function createFindingsApi(
       throw new ValidationError("edits_required", "an edit decision needs the edits");
     if (input.decision !== "edit" && hasEdits)
       throw new ValidationError("edits_not_allowed", "only an edit decision carries edits");
+
+    // The reason code and the minor-edit mark. The value sent is never repeated in a message.
+    const reasonCode = input.reasonCode === undefined ? null : input.reasonCode;
+    if (reasonCode !== null && !(REASON_CODES as readonly unknown[]).includes(reasonCode))
+      throw new ValidationError(
+        "bad_reason_code",
+        "the reason code is not one of the listed codes",
+      );
+    const needsReasonCode = input.decision === "edit" || input.decision === "reject";
+    if (needsReasonCode && reasonCode === null)
+      throw new ValidationError(
+        "reason_code_required",
+        `a decision to ${input.decision} needs a reason code`,
+      );
+    if (!needsReasonCode && reasonCode !== null)
+      throw new ValidationError(
+        "reason_code_not_allowed",
+        "only an edit or a reject carries a reason code",
+      );
+    const markGiven = input.minorEdit !== undefined && input.minorEdit !== null;
+    // A value that is not a plain true or false cannot be a mark, so it is refused as one that
+    // is not allowed rather than stored as something else.
+    if (markGiven && (input.decision !== "edit" || typeof input.minorEdit !== "boolean"))
+      throw new ValidationError(
+        "minor_edit_not_allowed",
+        "only an edit carries a minor-edit mark, and the mark is true or false",
+      );
+    const minorEdit = input.decision === "edit" ? input.minorEdit === true : null;
 
     return tx(() => {
       const finding = getFinding(matterId, findingId);
@@ -730,6 +779,13 @@ export function createFindingsApi(
 
       requireUser(input.reviewerId);
       const edits = hasEdits ? normaliseEdits(input.edits, finding) : null;
+      // A change of status is a change of substance, so it is never a minor edit. `normaliseEdits`
+      // has already dropped a status equal to the finding's own.
+      if (minorEdit === true && edits !== null && edits.status !== undefined)
+        throw new ValidationError(
+          "minor_edit_status",
+          "an edit that changes the status is not a minor edit",
+        );
 
       // The content hash says the reviewer read this finding; it says nothing of whether they read
       // the decision on it. Replacing another reviewer's decision would leave them unaware, and the
@@ -744,9 +800,9 @@ export function createFindingsApi(
       const id = newId("rev");
       run(
         `INSERT INTO reviews
-           (id, finding_id, matter_id, reviewer_id, decision, edited_json, reason, finding_content_sha256,
-            supersedes_review_id, validity, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'current', ?)`,
+           (id, finding_id, matter_id, reviewer_id, decision, edited_json, reason, reason_code,
+            minor_edit, finding_content_sha256, supersedes_review_id, validity, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'current', ?)`,
         id,
         findingId,
         matterId,
@@ -754,6 +810,8 @@ export function createFindingsApi(
         input.decision,
         edits === null ? null : canonicalJson(edits),
         reason,
+        reasonCode,
+        minorEdit === null ? null : minorEdit ? 1 : 0,
         finding.contentSha256,
         previous?.id ?? null,
         ctx.now(),
@@ -774,6 +832,8 @@ export function createFindingsApi(
           reviewId: id,
           ruleKey: finding.ruleKey,
           decision: input.decision,
+          reasonCode,
+          minorEdit,
           findingContentSha256: finding.contentSha256,
           supersedesReviewId: previous?.id ?? null,
           matterStatus: target,
@@ -953,6 +1013,37 @@ export function createFindingsApi(
 
   // --- feedback -----------------------------------------------------------------------------
 
+  /** How many missed issues one person may report against one run. */
+  const MAX_MISSED_ISSUES_PER_RUN = 50;
+  /** How many notes one person may add to one finding. */
+  const MAX_NOTES_PER_FINDING = 20;
+  const MAX_LOCATION = 200;
+  const UNKNOWN_RULE_MESSAGE = "the rule is not in this review's playbook";
+
+  /**
+   * Adds a piece of feedback. The kinds have a shape each, held here and by the database
+   * (`feedback_shape`, migration 006):
+   *
+   * - `missed_issue` is about a run: it needs the run and a text, may name the rule of the run's
+   *   playbook that should have applied (`ruleKey`, null for "not covered by any rule") and say
+   *   where (`location`), and carries no finding and no reason code. A rule that is not in the
+   *   run's playbook is refused (`unknown_rule`), and one person may report 50 against a run
+   *   (`feedback_limit`).
+   * - `rule` and `location` belong to a missed issue and to no other kind.
+   * - `comment` that names a finding is a note on it. It carries the words and nothing else (no
+   *   reason code, no rule, no place, no mark), and it is stored with the run of the finding: if it
+   *   names a run, that must be the finding's own, and if it names none it is given the finding's.
+   *   A note belongs to a finding as the finding stood in its own review. One person
+   *   may add 20 to one finding (`feedback_limit`). A comment that names no finding stays valid.
+   * - `rating` is a person's mark of a whole matter: it needs the mark (1 to 5), may carry words of
+   *   the person's own, and names no finding and carries no reason code. A person rates a matter
+   *   once and the rating is final (`already_rated`; the unique index
+   *   `feedback_one_rating_per_user` of migration 006 is the second line). Words that say nothing
+   *   are none.
+   *
+   * Every message names a rule and never what the caller sent. The audit event holds ids, codes and
+   * flags: the text and the location are never in it, only whether they were given.
+   */
   function addFeedback(
     matterId: string,
     input: {
@@ -963,6 +1054,8 @@ export function createFindingsApi(
       reasonCode?: string | null;
       rating?: number | null;
       text?: string | null;
+      ruleKey?: string | null;
+      location?: string | null;
     },
   ): FeedbackRow {
     if (!["finding_reason", "missed_issue", "rating", "comment"].includes(input.kind))
@@ -974,7 +1067,11 @@ export function createFindingsApi(
       throw new ValidationError("bad_rating", "rating must be a whole number from 1 to 5");
     if (input.kind === "rating" && rating === null)
       throw new ValidationError("rating_required", "a rating needs a rating");
-    const text = input.text ?? null;
+    if (input.kind !== "rating" && rating !== null)
+      throw new ValidationError("field_not_allowed", "a mark belongs to a rating only");
+    const typedText = input.text ?? null;
+    // The words of a rating are optional, so words that say nothing are no words at all.
+    const text = input.kind === "rating" && typedText?.trim() === "" ? null : typedText;
     if (text !== null) cleanProse("feedback text", text, MAX_FEEDBACK_TEXT);
     if (
       (input.kind === "missed_issue" || input.kind === "comment") &&
@@ -984,18 +1081,100 @@ export function createFindingsApi(
     if (input.kind === "finding_reason" && !input.findingId)
       throw new ValidationError("finding_required", "finding_reason feedback names a finding");
 
+    // The rule and the location are a missed issue's. Checked before anything is looked up.
+    const ruleKey = input.ruleKey ?? null;
+    const given = input.location ?? null;
+    if (input.kind !== "missed_issue" && (ruleKey !== null || given !== null))
+      throw new ValidationError(
+        "field_not_allowed",
+        "a rule and a location belong to a missed issue only",
+      );
+    if (input.kind === "missed_issue") {
+      if (input.runId === undefined || input.runId === null)
+        throw new ValidationError("run_required", "a missed issue is reported against a run");
+      if (input.findingId !== undefined && input.findingId !== null)
+        throw new ValidationError("finding_not_allowed", "a missed issue names no finding");
+      if (reasonCode !== null)
+        throw new ValidationError("field_not_allowed", "a missed issue carries no reason code");
+      // What cannot be a rule key at all is as unknown as a key that is no rule of the playbook,
+      // and is answered in the same words.
+      if (ruleKey !== null && !RULE_KEY_PATTERN.test(ruleKey))
+        throw new ValidationError("unknown_rule", UNKNOWN_RULE_MESSAGE);
+    }
+    if (input.kind === "comment" && input.findingId && reasonCode !== null)
+      throw new ValidationError("field_not_allowed", "a note carries no reason code");
+    if (input.kind === "rating") {
+      // A rating is about the matter. It names no finding, and a reason code is a decision's.
+      if (input.findingId !== undefined && input.findingId !== null)
+        throw new ValidationError("finding_not_allowed", "a rating names no finding");
+      if (reasonCode !== null)
+        throw new ValidationError("field_not_allowed", "a rating carries no reason code");
+    }
+    const location = given === null ? null : cleanLabel("location", given, MAX_LOCATION);
+
     return tx(() => {
       requireMatter(matterId);
       requireUser(input.userId);
-      const runId = input.runId ?? null;
+      let runId = input.runId ?? null;
       const findingId = input.findingId ?? null;
-      if (runId !== null) requireRun(matterId, runId);
-      if (findingId !== null && !getFinding(matterId, findingId))
-        throw new NotFoundError("finding");
+      const target = runId === null ? undefined : requireRun(matterId, runId);
+      const finding = findingId === null ? undefined : getFinding(matterId, findingId);
+      if (findingId !== null && finding === undefined) throw new NotFoundError("finding");
+      if (input.kind === "comment" && finding !== undefined) {
+        // A note is on a finding of a review, and says which review: the finding's own, and no
+        // other, so that the run and the finding it names cannot disagree. A note that names only
+        // the finding is given its review.
+        if (runId !== null && finding.runId !== runId)
+          throw new ValidationError("run_mismatch", "the finding does not belong to that review");
+        runId = finding.runId;
+        const added = get<{ n: number }>(
+          "SELECT COUNT(*) AS n FROM feedback WHERE matter_id = ? AND finding_id = ? AND user_id = ? AND kind = 'comment'",
+          matterId,
+          finding.id,
+          input.userId,
+        );
+        if ((added?.n ?? 0) >= MAX_NOTES_PER_FINDING)
+          throw new ConflictError(
+            "feedback_limit",
+            "the most notes that one person can add to a finding have been added",
+          );
+      }
+      if (input.kind === "missed_issue" && target !== undefined) {
+        // The rule must be one of the playbook this run was made with: a key from another playbook,
+        // or one that was never a rule, is not a rule of this review.
+        if (
+          ruleKey !== null &&
+          !playbooks.listRules(target.playbookVersionId).some((rule) => rule.key === ruleKey)
+        )
+          throw new ValidationError("unknown_rule", UNKNOWN_RULE_MESSAGE);
+        const reported = get<{ n: number }>(
+          "SELECT COUNT(*) AS n FROM feedback WHERE matter_id = ? AND run_id = ? AND user_id = ? AND kind = 'missed_issue'",
+          matterId,
+          target.id,
+          input.userId,
+        );
+        if ((reported?.n ?? 0) >= MAX_MISSED_ISSUES_PER_RUN)
+          throw new ConflictError(
+            "feedback_limit",
+            "the most missed issues that one person can report on a review have been reported",
+          );
+      }
+      if (input.kind === "rating") {
+        // One rating for each person and matter, and it is final: a second is a conflict, not a
+        // replacement. The unique index of migration 006 holds the same rule for code that bypasses
+        // this function.
+        const rated = get<{ n: number }>(
+          "SELECT COUNT(*) AS n FROM feedback WHERE matter_id = ? AND user_id = ? AND kind = 'rating'",
+          matterId,
+          input.userId,
+        );
+        if ((rated?.n ?? 0) > 0)
+          throw new ConflictError("already_rated", "this person has already rated this matter");
+      }
       const id = newId("fbk");
       run(
-        `INSERT INTO feedback (id, matter_id, run_id, finding_id, user_id, kind, reason_code, rating, text, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO feedback (id, matter_id, run_id, finding_id, user_id, kind, reason_code, rating, text, rule_key, location, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id,
         matterId,
         runId,
@@ -1005,25 +1184,58 @@ export function createFindingsApi(
         reasonCode,
         rating,
         text,
+        ruleKey,
+        location,
         ctx.now(),
       );
-      // The text itself is not audited: the audit log holds ids and codes only.
+      // The text and the location are not audited: the audit log holds ids, codes and flags only.
       ctx.audit({
         actorId: input.userId,
         matterId,
         action: "feedback.add",
         targetType: "feedback",
         targetId: id,
-        detail: { kind: input.kind, reasonCode, rating, hasText: text !== null, findingId, runId },
+        detail: {
+          kind: input.kind,
+          reasonCode,
+          rating,
+          hasText: text !== null,
+          hasLocation: location !== null,
+          ruleKey,
+          findingId,
+          runId,
+        },
       });
       return toFeedback(get<RawFeedback>("SELECT * FROM feedback WHERE id = ?", id) as RawFeedback);
     });
   }
 
-  const listFeedback = (matterId: string): FeedbackRow[] =>
+  /**
+   * The feedback of a matter, oldest first. Every filter is optional and they are ANDed; the query
+   * is anchored on the matter whatever the filter says, so an id of another matter finds nothing.
+   */
+  const listFeedback = (
+    matterId: string,
+    filter: {
+      kind?: FeedbackRow["kind"];
+      runId?: string;
+      findingId?: string;
+      userId?: string;
+    } = {},
+  ): FeedbackRow[] =>
     all<RawFeedback>(
-      "SELECT * FROM feedback WHERE matter_id = ? ORDER BY created_at, rowid",
+      `SELECT * FROM feedback
+       WHERE matter_id = ?1
+         AND (?2 IS NULL OR kind = ?2)
+         AND (?3 IS NULL OR run_id = ?3)
+         AND (?4 IS NULL OR finding_id = ?4)
+         AND (?5 IS NULL OR user_id = ?5)
+       ORDER BY created_at, rowid`,
       matterId,
+      filter.kind ?? null,
+      filter.runId ?? null,
+      filter.findingId ?? null,
+      filter.userId ?? null,
     ).map(toFeedback);
 
   return {

@@ -45,6 +45,7 @@ describe("a finding that one reviewer has decided", () => {
     const refused = errorOf(() =>
       w.services.reviews.decide(lee, issue.findingId, {
         decision: "reject",
+        reasonCode: "other",
         findingContentSha256: seen.contentSha256,
         edits: null,
         reason: "Not for this client.",
@@ -81,6 +82,7 @@ describe("a finding that one reviewer has decided", () => {
     w.services.reviews.decide(reviewerAm, issue.findingId, decisionFor(seen));
     const second = w.services.reviews.decide(reviewerAm, issue.findingId, {
       decision: "reject",
+      reasonCode: "other",
       findingContentSha256: seen.contentSha256,
       edits: null,
       reason: "On reflection, no.",

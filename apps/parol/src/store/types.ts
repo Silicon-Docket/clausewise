@@ -10,6 +10,7 @@ import type {
   MatterRole,
   MatterStatus,
   PlaybookRuleRecord,
+  ReasonCode,
   ReviewDecision,
   RunManifest,
   RunStatus,
@@ -265,6 +266,16 @@ export interface ReviewRecord {
   /** Changed fields only. */
   edits: ReviewEdits | null;
   reason: string | null;
+  /**
+   * Why an edit or a reject was made. Null for the other decisions, and for a decision made before
+   * the code existed (migration 006).
+   */
+  reasonCode: ReasonCode | null;
+  /**
+   * Whether an edit was marked as a minor one. Null for the other decisions, and for an edit made
+   * before the mark existed (migration 006), which counts as not minor.
+   */
+  minorEdit: boolean | null;
   findingContentSha256: string;
   supersedesReviewId: string | null;
   validity: "current" | "stale";
@@ -314,6 +325,14 @@ export interface FeedbackRow {
   reasonCode: string | null;
   rating: number | null;
   text: string | null;
+  /**
+   * A missed issue only: the rule of the run's playbook that should have applied. Null on a missed
+   * issue means it was reported as not covered by any rule; it is null on every other kind
+   * (package W2.6a).
+   */
+  ruleKey: string | null;
+  /** A missed issue only: where in the documents, in the reporter's words. Null when not given. */
+  location: string | null;
   createdAt: string;
 }
 

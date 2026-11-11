@@ -427,6 +427,7 @@ describe("a verified finding saved and read back", async () => {
         m.repo.recordReview(m.matterId, record.id, {
           reviewerId: ACTORS.reviewer,
           decision: "edit",
+          reasonCode: "other",
           findingContentSha256: record.contentSha256,
           edits: {
             fallbackLanguage: edited,

@@ -295,6 +295,7 @@ describe("the demonstration, through the pages", () => {
         {
           json: {
             decision: edited ? "edit" : "accept",
+            reasonCode: edited ? "missed_context" : null,
             findingContentSha256: view.contentSha256,
             edits: edited
               ? { discrepancy: "Reviewed: the term was deleted by the amendment." }

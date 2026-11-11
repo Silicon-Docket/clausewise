@@ -437,6 +437,11 @@ describe("(d) an application built with a planted authorization hole", () => {
   });
 });
 
+/** The routes of the JSON API that name a matter, as the probe table has them (it grows with the packages). */
+const JSON_ROUTES = MATTER_PROBES.filter((probe) =>
+  probe.template.startsWith("/api/matters/:matterId"),
+).length;
+
 describe("(e) a refusal that reveals that the matter exists", () => {
   it("is counted when the body of the refusal differs from the body for a matter that does not exist", async () => {
     const result = await authorization({
@@ -462,7 +467,7 @@ describe("(e) a refusal that reveals that the matter exists", () => {
     expect(result.exposed.every((cell) => cell.reasons.join() === "refusal_differs")).toBe(true);
     // Every JSON route, for the three kinds of caller with no part in the matter, in two modes.
     // An administrator may delete a matter, so that route is refused to two of the three.
-    expect(result.probesAnsweredWithData).toBe((17 * 3 - 1) * 2);
+    expect(result.probesAnsweredWithData).toBe((JSON_ROUTES * 3 - 1) * 2);
   });
 
   it("is counted when the status of the refusal differs (a 403 where a missing matter gets 404)", async () => {
@@ -476,7 +481,7 @@ describe("(e) a refusal that reveals that the matter exists", () => {
         });
       },
     });
-    expect(result.byReason.refusal_differs).toBe((17 * 3 - 1) * 2);
+    expect(result.byReason.refusal_differs).toBe((JSON_ROUTES * 3 - 1) * 2);
   });
 
   it("is counted when only a header of the refusal differs", async () => {

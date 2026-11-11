@@ -165,7 +165,7 @@ describe("a refused matter form", () => {
 
   it("covers every matter form of the probe table that the page routes answer in place", () => {
     // A form added later that re-renders the matter page must be in the list above; a form in the
-    // list must still be a probed route. The two routes that are answered another way are named.
+    // list must still be a probed route. The routes that are answered another way are named.
     const posts = MATTER_PROBES.filter(
       (p) => p.method === "POST" && p.template.startsWith("/matters/:matterId/"),
     ).map((p) => p.template);
@@ -173,6 +173,13 @@ describe("a refused matter form", () => {
       // A refused decision is answered on the finding's page, and the memo form never refuses.
       `${M}/findings/:findingId/reviews`,
       `${M}/memos`,
+      // A refused report of a missed issue is answered on the review's page, a refused note on the
+      // finding's own page, and a refused rating on the memos page (package W2.6a,
+      // routes/feedback-routes.ts; their refusals are tested in test/routes/feedback.test.ts,
+      // test/routes/feedback-notes.test.ts and test/routes/feedback-rating.test.ts).
+      `${M}/runs/:runId/missed-issues`,
+      `${M}/findings/:findingId/notes`,
+      `${M}/rating`,
     ];
     expect([...posts].sort()).toEqual([...IN_PLACE.map((r) => r.template), ...elsewhere].sort());
   });
