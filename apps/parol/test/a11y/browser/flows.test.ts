@@ -689,7 +689,7 @@ describe.skipIf(!opened.ok)("the main tasks, by keyboard alone, in a real browse
     expect(n).toBeLessThan(200);
   });
 
-  it("F14 the administrator: the audit page, by keyboard, and the trainer's key page", async () => {
+  it("F14 the administrator: the audit page by keyboard (it has no control of its own), then sign out", async () => {
     const page = await as("administrator");
     record("F14 The administrator (Sam Patel): the audit check");
     await goto(page, `${world.base}/audit`);
