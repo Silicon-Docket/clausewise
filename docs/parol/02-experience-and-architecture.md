@@ -62,8 +62,8 @@ shortcuts in the issue table, scrolls a quote into view (except on a page that o
 stops a double submit and polls a running review's progress; every page works with it blocked. Every
 control is a native link, button or field, the first Tab stop of every page is a skip link, and the
 pages follow the light or dark setting of the system (there is no theme switch). Fifteen rules over the
-HTML are checked on 213 page fixtures, and an opt-in run in Chromium (`pnpm test:browser`, run once on
-one machine) audits 109 pages; no person has used a screen reader on the pages (known gap 21 of
+HTML are checked on 217 page fixtures, and an opt-in run in Chromium (`pnpm test:browser`, run on one
+machine) audits 109 pages; no person has used a screen reader on the pages (known gap 21 of
 [document 7](07-delivery-plan.md#known-gaps)). A permanent banner reads "DEMO: synthetic documents, demo identity, not for client work"; it sticks to
 the top of the window from 40rem up, and on a narrower screen it is at the top of the page and
 scrolls away. The sketches below were drawn from the built pages (the seeded demonstration, read by
