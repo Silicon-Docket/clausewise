@@ -1,12 +1,14 @@
-import { mkdtempSync, writeFileSync, copyFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { MATTER_ACTIONS, type MatterAction } from "../../src/auth/actions.js";
 import { authorizeMatter } from "../../src/auth/authorize.js";
 import { registerAll } from "../../src/boot/register.js";
 import { PLANTED_RULE_KEY } from "../../src/demo/training-example.js";
 import { PASSAGES } from "../../src/demo/worked-example.js";
 import type { Services } from "../../src/services/types.js";
+import { ForbiddenError } from "../../src/services/errors.js";
 import {
   ConflictError,
   DEMO_USER_IDS,
@@ -118,7 +120,7 @@ describe("startTraining", () => {
     expect(w.repo.verifyAuditChain().ok).toBe(true);
   });
 
-  it("lets the trainer read the matter and change nothing", async () => {
+  it("lets the trainer read the matter and add feedback to it, and decide, run, export or change nothing", async () => {
     const { w, deps, input, alex } = setup();
     const started = await startTraining(deps, alex, input());
     const lee = w.principal(DEMO_USER_IDS.legalEngineer);
@@ -129,6 +131,55 @@ describe("startTraining", () => {
     ]);
     const roles = new Map(w.repo.listMembers(started.matterId).map((m) => [m.userId, m.role]));
     expect(roles.get(lee.userId)).toBe("viewer");
+    // What the quickstart tells the trainee: read, notes, a missed issue and a rating are allowed;
+    // deciding, starting or changing a review, exporting and changing the matter are not.
+    const allowed = (Object.keys(MATTER_ACTIONS) as MatterAction[]).filter((action) => {
+      try {
+        authorizeMatter(w.repo, lee, started.matterId, action);
+        return true;
+      } catch (error) {
+        if (error instanceof ForbiddenError) return false;
+        throw error;
+      }
+    });
+    expect(allowed.sort()).toEqual(
+      ["feedback.add", "finding.read", "matter.read", "memo.read", "run.read"].sort(),
+    );
+  });
+
+  it("lets the trainer add a note to a finding of the matter and report a missed issue, and keeps them out of the decision", async () => {
+    const { w, deps, input, alex } = setup();
+    const started = await startTraining(deps, alex, input());
+    const findings = await reviewed(w, alex, started.matterId, "v2");
+    const lee = w.principal(DEMO_USER_IDS.legalEngineer);
+    const finding = findings.get("dur-1")!;
+    const am = authorizeMatter(w.repo, lee, started.matterId, "feedback.add");
+    const note = w.services.feedback.addNote(am, finding.id, { note: "A note from the trainer." });
+    expect(note).toMatchObject({ findingId: finding.id, note: "A note from the trainer." });
+    expect(w.repo.listFeedback(started.matterId, { kind: "comment" })).toHaveLength(1);
+    const missed = w.services.feedback.reportMissedIssue(am, finding.runId, {
+      ruleKey: null,
+      location: null,
+      note: "A report from the trainer.",
+    });
+    expect(missed.runId).toBe(finding.runId);
+    expect(w.repo.listFeedback(started.matterId, { kind: "missed_issue" })).toHaveLength(1);
+    expect(() => authorizeMatter(w.repo, lee, started.matterId, "review.decide")).toThrow(
+      ForbiddenError,
+    );
+  });
+
+  it("is not described, in the training package or on the start form, as unable to change anything", () => {
+    const here = join(import.meta.dirname, "../../src");
+    const files = [
+      ...readdirSync(join(here, "training")).map((name) => join(here, "training", name)),
+      join(here, "server/pages/quickstart.tsx"),
+    ];
+    expect(files.length).toBeGreaterThan(5);
+    for (const file of files)
+      expect(readFileSync(file, "utf8"), file).not.toMatch(
+        /cannot change anything|change nothing|read-only trainer/i,
+      );
   });
 
   it("makes nothing the second time, and returns the same matter", async () => {
@@ -175,21 +226,82 @@ describe("startTraining", () => {
   });
 });
 
-describe("a review of the matter it made", () => {
-  /** The finding of the planted rule in a review, and the other seven by rule. */
-  async function reviewed(
-    w: ReturnType<typeof setup>["w"],
-    alex: ReturnType<typeof setup>["alex"],
-    matterId: string,
-    workflowLabel: "v1" | "v2",
-  ) {
-    const am = authorizeMatter(w.repo, alex, matterId, "run.start");
-    const run = w.services.runs.start(am, { workflowLabel });
-    await w.services.runs.idle();
-    expect(w.services.runs.get(am, run.id).status).toBe("succeeded");
-    return new Map(w.repo.listFindings(matterId, run.id).map((f) => [f.ruleKey, f]));
-  }
+/** The finding of the planted rule in a review, and the other seven by rule. */
+async function reviewed(
+  w: ReturnType<typeof setup>["w"],
+  alex: ReturnType<typeof setup>["alex"],
+  matterId: string,
+  workflowLabel: "v1" | "v2",
+) {
+  const am = authorizeMatter(w.repo, alex, matterId, "run.start");
+  const run = w.services.runs.start(am, { workflowLabel });
+  await w.services.runs.idle();
+  expect(w.services.runs.get(am, run.id).status).toBe("succeeded");
+  return new Map(w.repo.listFindings(matterId, run.id).map((f) => [f.ruleKey, f]));
+}
 
+describe("whose training matter is the person's own", () => {
+  /** Adds a person to a matter as an associate, the way POST /matters/:id/members does. */
+  const makeAssociate = (
+    w: ReturnType<typeof setup>["w"],
+    owner: ReturnType<typeof setup>["alex"],
+    matterId: string,
+    userId: string,
+  ): void =>
+    w.services.matters.addMember(authorizeMatter(w.repo, owner, matterId, "member.add"), {
+      userId,
+      role: "associate",
+    });
+
+  it("is the one the person made: a person made associate on someone else's T01 still starts their own", async () => {
+    const { w, deps, input, alex } = setup();
+    const sam = w.principal(DEMO_USER_IDS.admin);
+    const alexs = await startTraining(deps, alex, input({ trainerUserId: null }));
+    makeAssociate(w, alex, alexs.matterId, sam.userId);
+    expect(w.repo.getMember(alexs.matterId, sam.userId)?.role).toBe("associate");
+    const membersOfAlexs = w.repo.listMembers(alexs.matterId).map((m) => [m.userId, m.role]);
+    const eventsOfAlexs = w.repo.listAuditEvents({ matterId: alexs.matterId, limit: 1000 }).length;
+
+    const sams = await startTraining(deps, sam, input());
+    expect(sams).toMatchObject({ created: true, documentsAdded: 2 });
+    expect(sams.matterId).not.toBe(alexs.matterId);
+    expect(w.repo.getMatter(sams.matterId)).toMatchObject({
+      createdBy: sam.userId,
+      trainingKey: "T01",
+    });
+    expect(trainingMatterIds(w.repo).sort()).toEqual([alexs.matterId, sams.matterId].sort());
+
+    // The trainer Sam named is a viewer of Sam's matter and was not put on Alex's.
+    expect(w.repo.getMember(sams.matterId, DEMO_USER_IDS.legalEngineer)?.role).toBe("viewer");
+    expect(w.repo.getMember(alexs.matterId, DEMO_USER_IDS.legalEngineer)).toBeUndefined();
+    // Alex's matter is as it was.
+    expect(w.repo.listMembers(alexs.matterId).map((m) => [m.userId, m.role])).toEqual(
+      membersOfAlexs,
+    );
+    expect(w.repo.listAuditEvents({ matterId: alexs.matterId, limit: 1000 })).toHaveLength(
+      eventsOfAlexs,
+    );
+  });
+
+  it("is found again by the person who made it, even when a newer T01 lists them as associate first", async () => {
+    const { w, deps, input, alex } = setup();
+    const sam = w.principal(DEMO_USER_IDS.admin);
+    const sams = await startTraining(deps, sam, input({ trainerUserId: null }));
+    // The list is newest first, so Alex's matter must be newer than Sam's to come first.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const alexs = await startTraining(deps, alex, input({ trainerUserId: null }));
+    makeAssociate(w, alex, alexs.matterId, sam.userId);
+    expect(w.services.matters.list(sam).map((m) => m.id)[0]).toBe(alexs.matterId);
+
+    const again = await startTraining(deps, sam, input());
+    expect(again).toEqual({ matterId: sams.matterId, created: false, documentsAdded: 0 });
+    // The trainer is added to Sam's matter, and not to Alex's.
+    expect(w.repo.getMember(sams.matterId, DEMO_USER_IDS.legalEngineer)?.role).toBe("viewer");
+    expect(w.repo.getMember(alexs.matterId, DEMO_USER_IDS.legalEngineer)).toBeUndefined();
+  });
+});
+
+describe("a review of the matter it made", () => {
   it.each(["v1", "v2"] as const)(
     "holds the finding the exercise is about, under %s: compliant, verified, with no flag, citing the definition clause",
     async (workflow) => {

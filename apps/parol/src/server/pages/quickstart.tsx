@@ -134,7 +134,7 @@ function StartForm({ chrome, start }: { chrome: Chrome; start: TrainingStartView
       <Field
         id="training-trainer"
         label="Trainer (optional)"
-        hint="A trainer can open the matter and read it. They cannot change anything."
+        hint="A trainer can open the matter and read it. Like any member they can add notes, report a missed issue and rate the matter. They cannot decide a finding, start or change a review, export the memo or change the matter."
       >
         <select
           id="training-trainer"

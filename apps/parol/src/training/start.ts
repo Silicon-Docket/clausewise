@@ -3,6 +3,7 @@ import type { Principal } from "../auth/types.js";
 import type { Services } from "../services/types.js";
 import { ValidationError, type Repository } from "../store/index.js";
 import { DEFAULT_TRAINING_DIR, readTrainingFile } from "./files.js";
+import { ownTrainingMatter } from "./own.js";
 import { T01 } from "./t01.js";
 
 /**
@@ -109,11 +110,9 @@ async function start(
   const authorize = (matterId: string, action: "matter.read" | "document.write" | "member.add") =>
     authorizeMatter(repo, principal, matterId, action, { relaxedSegregation });
 
-  // The person's own T01, if they have one: the one they are the associate of. The list is the
-  // services' own, so it holds only matters the person is a member of.
-  const found = services.matters
-    .list(principal)
-    .find((matter) => matter.training === T01.key && matter.role === "associate");
+  // The person's own T01, if they have one: the one they made. Being the associate of a T01 is
+  // not enough, because an associate can add another person as associate of theirs.
+  const found = ownTrainingMatter(services, repo, principal);
   const present =
     found === undefined
       ? []
@@ -148,7 +147,9 @@ async function start(
     documentsAdded += 1;
   }
 
-  // The trainer can then read the matter and see its progress, and change nothing.
+  // The trainer can then read the matter and see its progress. A viewer holds feedback.add like
+  // every role, so they can also add notes, report a missed issue and rate the matter; they cannot
+  // decide a finding, start or change a review, export the memo or change the matter.
   if (input.trainerUserId !== null && repo.getMember(matterId, input.trainerUserId) === undefined)
     services.matters.addMember(authorize(matterId, "member.add"), {
       userId: input.trainerUserId,

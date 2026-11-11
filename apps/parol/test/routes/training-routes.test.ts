@@ -26,6 +26,7 @@ import {
   parseHtml,
   readable,
   withClass,
+  type El,
 } from "../pages/html.js";
 import { NO_PLAYBOOK_SENTENCE } from "../../src/server/pages/quickstart.js";
 import { expectAccessible } from "../a11y/rules.js";
@@ -388,6 +389,75 @@ describe("what it refuses, in words, on the quickstart page that holds the form"
       [],
     );
     expect(fingerprint(site)).toEqual(before);
+  });
+});
+
+describe("a person who was made associate on someone else's training matter", () => {
+  // Alex starts T01 and makes Sam an associate of it (POST /api/matters/:id/members). The database
+  // holds one T01 per creator, so Sam's own is still to make, and the page and the post must both
+  // see that. Each test has a site of its own, so no other test has made a matter for either.
+  async function alexAddsSam() {
+    const own = makeSite({ model2: simulatedModel() });
+    const alex = await own.as(IDS.associate);
+    const sam = await own.as(OTHER_ASSOCIATE);
+    const started = await start(alex, { [FIELDS.reviewerUserId]: IDS.reviewer });
+    expect(started.status).toBe(303);
+    const alexs = matterIdFrom(started);
+    const added = await alex.api("POST", `/api/matters/${alexs}/members`, {
+      userId: OTHER_ASSOCIATE,
+      role: "associate",
+    });
+    expect(added.status).toBe(201);
+    expect(own.w.repo.getMember(alexs, OTHER_ASSOCIATE)?.role).toBe("associate");
+    return { own, alex, sam, alexs };
+  }
+
+  it("is shown the start form on the quickstart page and not a link to Alex's matter", async () => {
+    const { sam, alexs } = await alexAddsSam();
+    const { root } = await sam.page(urls.quickstart());
+    expect(
+      all(root, (el) => el.name === "form" && attr(el, "action") === urls.training()),
+    ).toHaveLength(1);
+    expect(all(root, (el) => readable(el) === "Open the training matter")).toEqual([]);
+    expect(all(root, (el) => el.name === "a" && attr(el, "href") === urls.matter(alexs))).toEqual(
+      [],
+    );
+  });
+
+  it("creates their own T01 when they post the form, and leaves Alex's matter and its members alone", async () => {
+    const { own, alex, sam, alexs } = await alexAddsSam();
+    const membersOfAlexs = own.w.repo.listMembers(alexs).map((m) => [m.userId, m.role]);
+    const response = await start(sam, {
+      [FIELDS.reviewerUserId]: IDS.reviewer,
+      [FIELDS.trainerUserId]: IDS.legalEngineer,
+    });
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toContain("notice=training-started");
+    const sams = matterIdFrom(response);
+    expect(sams).not.toBe(alexs);
+    expect(own.w.repo.getMatter(sams)).toMatchObject({
+      createdBy: OTHER_ASSOCIATE,
+      trainingKey: "T01",
+    });
+    expect(own.w.repo.listDocuments(sams).map((d) => d.kind)).toEqual(["nda", "amendment"]);
+    // The trainer is a viewer of Sam's matter and was not put on Alex's.
+    expect(own.w.repo.getMember(sams, IDS.legalEngineer)?.role).toBe("viewer");
+    expect(own.w.repo.getMember(alexs, IDS.legalEngineer)).toBeUndefined();
+    expect(own.w.repo.listMembers(alexs).map((m) => [m.userId, m.role])).toEqual(membersOfAlexs);
+    expect(trainingMatterIds(own.w.repo).sort()).toEqual([alexs, sams].sort());
+
+    // From then on the quickstart links Sam to Sam's matter, and Alex still to Alex's.
+    const linkOf = async (who: Browser): Promise<string | null | undefined> => {
+      const { root } = await who.page(urls.quickstart());
+      const links = all(
+        root,
+        (el) => el.name === "a" && readable(el) === "Open the training matter",
+      );
+      expect(links).toHaveLength(1);
+      return attr(links[0] as El, "href");
+    };
+    expect(await linkOf(sam)).toBe(urls.matter(sams));
+    expect(await linkOf(alex)).toBe(urls.matter(alexs));
   });
 });
 

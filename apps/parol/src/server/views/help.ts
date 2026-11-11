@@ -109,14 +109,18 @@ const FLAGS_INTRO =
 const DECISIONS_INTRO =
   "Parol drafts findings and an attorney decides every one. A decision stops counting when the documents or the playbook change.";
 
+/** The form's hint without its pointer to the fields below it, which a page of help does not have. */
+const withoutFieldsPointer = (hint: string): string => hint.replace(" Use the fields below.", "");
+
 /**
- * What each decision does. Accept, reject and escalate use the hint the decision form shows. The
- * form's hint for an edit points at the fields below it, which a page of help does not have, so the
- * sentence is written here. A complete record, so a new decision needs words.
+ * What each decision does: the hint the decision form shows, so that what a decision needs (a
+ * reason, and for an edit and a reject a reason code) is said once and the form and the help
+ * cannot differ. The form's hint for an edit points at the fields below it, which a page of help
+ * does not have, so that pointer is left out. A complete record, so a new decision needs words.
  */
 const DECISION_HELP: Record<ReviewDecision, string> = {
   accept: DECISION_HINT.accept,
-  edit: "The finding needs changes. A reason is required.",
+  edit: withoutFieldsPointer(DECISION_HINT.edit),
   reject: DECISION_HINT.reject,
   escalate: DECISION_HINT.escalate,
 };

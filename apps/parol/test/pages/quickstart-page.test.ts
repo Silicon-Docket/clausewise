@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MATTER_ACTIONS, roleAllows, type MatterAction } from "../../src/auth/actions.js";
 import { FIELDS } from "../../src/server/pages/forms.js";
 import { NO_PLAYBOOK_SENTENCE } from "../../src/server/pages/quickstart.js";
 import { REFUSALS_TRAINING } from "../../src/server/routes/refusals-training.js";
@@ -34,6 +35,28 @@ import { VARIANTS_TRAINING } from "./variants-training.js";
  */
 
 const SIGNED_IN = buildChrome();
+
+/** What the start form tells the trainee a trainer can do. A trainer is added as a viewer. */
+const TRAINER_HINT =
+  "A trainer can open the matter and read it. Like any member they can add notes, report a missed issue and rate the matter. They cannot decide a finding, start or change a review, export the memo or change the matter.";
+
+type VisibleAction = Exclude<MatterAction, "matter.delete">;
+
+/** The words by which the hint above names each action of the role table. */
+const VIEWER_PHRASES: Record<VisibleAction, readonly string[]> = {
+  "matter.read": ["read"],
+  "run.read": ["read"],
+  "finding.read": ["read"],
+  "memo.read": ["read"],
+  "feedback.add": ["add notes", "report a missed issue", "rate the matter"],
+  "review.decide": ["decide a finding"],
+  "run.start": ["start or change a review"],
+  "run.resume": ["start or change a review"],
+  "memo.export": ["export the memo"],
+  "matter.update": ["change the matter"],
+  "document.write": ["change the matter"],
+  "member.add": ["change the matter"],
+};
 
 const read = (html: string): { html: string; root: El } => ({ html, root: checkInvariants(html) });
 
@@ -209,9 +232,25 @@ describe("the quickstart, for a signed-in person without a training matter", () 
     expect(readable(byId(root, "training-reviewer-hint") as El)).toBe(
       "This person decides the findings. It cannot be you unless the server is set for one person.",
     );
-    expect(readable(byId(root, "training-trainer-hint") as El)).toBe(
-      "A trainer can open the matter and read it. They cannot change anything.",
-    );
+    expect(readable(byId(root, "training-trainer-hint") as El)).toBe(TRAINER_HINT);
+  });
+
+  it("says of the trainer what the role table says of a viewer, which is the role a trainer is given", () => {
+    const hint = readable(byId(root, "training-trainer-hint") as El);
+    // The sentence that was there said they cannot change anything, and a viewer can add feedback.
+    expect(hint).not.toMatch(/cannot change anything|change nothing/);
+    const [can, cannot] = hint.split("They cannot ") as [string, string];
+    expect(cannot).toBeDefined();
+    // Every action of the table is covered by a phrase, so a new action cannot go unsaid.
+    const actions = Object.keys(MATTER_ACTIONS).filter((a) => a !== "matter.delete");
+    expect(actions.sort()).toEqual(Object.keys(VIEWER_PHRASES).sort());
+    for (const action of actions as VisibleAction[]) {
+      const allowed = roleAllows("viewer", action);
+      for (const phrase of VIEWER_PHRASES[action])
+        expect(allowed ? can : cannot, `${action}: ${phrase}`).toContain(phrase);
+      for (const phrase of VIEWER_PHRASES[action])
+        expect(allowed ? cannot : can, `${action}: ${phrase}`).not.toContain(phrase);
+    }
   });
 
   it("does not say Sign in first, and does not link to a training matter that does not exist", () => {
