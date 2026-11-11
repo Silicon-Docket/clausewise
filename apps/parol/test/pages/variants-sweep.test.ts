@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { GUIDANCE, GUIDANCE_KEYS } from "../../src/server/guidance.js";
-import { auditPage, formatViolations } from "../a11y/rules.js";
 import { all, attr, hasClass, parseHtml, readable, type El } from "./html.js";
 import { variants } from "./variants.js";
 
@@ -8,8 +7,9 @@ import { variants } from "./variants.js";
  * The list of page fixtures is what every page-wide check sweeps. A page state that has no fixture
  * is a state no sweep sees, so this test names the states that must be on the list: an error page
  * for each sentence of the guidance table, an error notice with its link, a long passage, and every
- * empty state that has an action. It also holds every fixture to the accessibility rules on its
- * own, so the sweep does not depend on a page test remembering to call them.
+ * empty state that has an action. That every fixture passes the accessibility rules is held by
+ * `test/a11y/pages.test.ts`, which sweeps the list, so the sweep does not depend on a page test
+ * remembering to call them.
  */
 
 const pages = (): { name: string; root: El; html: string; fragment: boolean }[] =>
@@ -28,15 +28,6 @@ describe("the list of page fixtures", () => {
     const names = sweep.map((p) => p.name);
     expect(names.length).toBeGreaterThan(100);
     expect(new Set(names).size).toBe(names.length);
-  });
-
-  it("passes every accessibility rule, whole pages and panes alike", () => {
-    const problems = sweep.flatMap((p) =>
-      auditPage(p.root, { fragment: p.fragment }).map(
-        (v) => `${p.name}: ${formatViolations([v]).trim()}`,
-      ),
-    );
-    expect(problems).toEqual([]);
   });
 
   it("holds an error page for each key of the guidance table, with its sentence and the part to do marked", () => {

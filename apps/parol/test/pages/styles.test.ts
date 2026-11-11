@@ -508,6 +508,125 @@ describe("the sentence that says what to do, and the link to where", () => {
   });
 });
 
+// ---------------------------------------------------------------------------------------------
+// The order of the page is the order of the document, and nothing is hidden but left to the keyboard
+// ---------------------------------------------------------------------------------------------
+
+/** The text without its comments. */
+const bare = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, "");
+
+/** The text without the block that starts at `opener`, braces balanced; the text itself when there is none. */
+function withoutBlock(text: string, opener: string): string {
+  const start = text.indexOf(opener);
+  if (start === -1) return text;
+  let depth = 0;
+  for (let at = text.indexOf("{", start); at < text.length; at += 1) {
+    if (text[at] === "{") depth += 1;
+    if (text[at] === "}") depth -= 1;
+    if (depth === 0) return text.slice(0, start) + text.slice(at + 1);
+  }
+  throw new Error(`${opener} is not closed`);
+}
+
+/** Every `selector { body }` of the text, nested blocks of a media query included, in file order. */
+function allRules(text: string): { selector: string; body: string }[] {
+  return [...bare(text).matchAll(/([^{}@]+)\{([^{}]*)\}/g)].map((m) => ({
+    selector: (m[1] as string).replace(/\s+/g, " ").trim(),
+    body: m[2] as string,
+  }));
+}
+
+/** The selectors of the rules that set `name` to a value for which `wanted` is true. */
+const settingTo = (text: string, name: string, wanted: (value: string) => boolean): string[] =>
+  allRules(text)
+    .filter(({ body }) => {
+      const value = property(body, name);
+      return value !== undefined && wanted(value);
+    })
+    .map(({ selector }) => selector);
+
+describe("a keyboard user meets the page in the order the document has it", () => {
+  it("never reorders: no order, no reversed row or column, no dense grid, no float", () => {
+    expect(settingTo(css, "order", () => true)).toEqual([]);
+    expect(settingTo(css, "flex-direction", (v) => v.includes("reverse"))).toEqual([]);
+    expect(settingTo(css, "flex-flow", (v) => v.includes("reverse"))).toEqual([]);
+    expect(settingTo(css, "grid-auto-flow", (v) => v.includes("dense"))).toEqual([]);
+    expect(settingTo(css, "float", () => true)).toEqual([]);
+    expect(settingTo(css, "direction", () => true)).toEqual([]);
+    expect(settingTo(css, "writing-mode", () => true)).toEqual([]);
+  });
+
+  it("places a grid item in only one rule, whose item follows what it sits beside in the document", () => {
+    // The hint of a choice sits in the second column, under the label that precedes it.
+    for (const name of ["grid-column", "grid-row", "grid-area"])
+      expect(
+        settingTo(css, name, () => true),
+        name,
+      ).toEqual(name === "grid-column" ? [".choice .hint"] : []);
+  });
+
+  it("takes an element out of the flow only for the skip link and the text for screen readers", () => {
+    expect(settingTo(css, "position", (v) => v === "absolute" || v === "fixed").sort()).toEqual([
+      ".skip-link",
+      ".sr-only",
+    ]);
+    // A sticky part stays where it is in the document and in the tab order.
+    expect(settingTo(css, "position", (v) => v === "sticky").sort()).toEqual([
+      ".demo-banner",
+      ".inspector",
+    ]);
+  });
+
+  it("scrolls a focused control clear of the sticky banner and the sticky inspector", () => {
+    const html = /(?:^|\n)html\s*\{([^}]*)\}/.exec(bare(css))?.[1] ?? "";
+    const padding = /scroll-padding-top:\s*([\d.]+)rem/.exec(html)?.[1];
+    expect(padding, "html sets scroll-padding-top in rem").toBeDefined();
+    const tops = allRules(css)
+      .filter(({ body }) => property(body, "position") === "sticky")
+      .map(({ body }) => /(?:^|[;\s])top:\s*([\d.]+)(?:rem)?\s*(?:;|$)/.exec(body)?.[1]);
+    expect(tops).toHaveLength(2);
+    expect(tops.every((top) => top !== undefined)).toBe(true);
+    // The inspector is the lower of the two: the banner sits at the top, the inspector under it.
+    expect(Number(padding)).toBeGreaterThanOrEqual(Math.max(...tops.map(Number)));
+  });
+});
+
+describe("nothing is hidden from the eye and left to the keyboard", () => {
+  // The print sheet drops the skip link and the buttons: they do nothing on paper.
+  const screen = withoutBlock(css, "@media print");
+
+  it("hides with display none only what is hidden for everyone: the hidden attribute and a hint", () => {
+    expect(settingTo(screen, "display", (v) => v.startsWith("none")).sort()).toEqual([
+      ".scroll-hint",
+      "[hidden]",
+    ]);
+  });
+
+  it("makes nothing invisible or unclickable by style", () => {
+    expect(settingTo(screen, "visibility", () => true)).toEqual([]);
+    expect(settingTo(screen, "opacity", () => true)).toEqual([]);
+    expect(settingTo(screen, "pointer-events", () => true)).toEqual([]);
+    expect(settingTo(screen, "user-select", (v) => v === "none")).toEqual([]);
+  });
+
+  it("finds a stylesheet that does, so the pins above can fail", () => {
+    const planted = ".a { display: none; } .b { order: 2; } .c { visibility: hidden; }";
+    expect(settingTo(planted, "display", (v) => v.startsWith("none"))).toEqual([".a"]);
+    expect(settingTo(planted, "order", () => true)).toEqual([".b"]);
+    expect(settingTo(planted, "visibility", () => true)).toEqual([".c"]);
+    expect(
+      withoutBlock("@media print { .a { display: none; } } .b { color: red; }", "@media print"),
+    ).toBe(" .b { color: red; }");
+  });
+
+  it("sets the print sheet apart: the rules it hides are in a block of their own", () => {
+    expect(css).toContain("@media print");
+    expect(settingTo(css, "display", (v) => v.startsWith("none")).length).toBeGreaterThan(
+      settingTo(screen, "display", (v) => v.startsWith("none")).length,
+    );
+  });
+});
+
 describe("status meaning never rests on colour alone", () => {
   it("defines every shape the components can draw, each looking different", () => {
     const looks = new Map<string, string>();

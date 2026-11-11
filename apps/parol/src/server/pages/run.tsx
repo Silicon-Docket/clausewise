@@ -380,7 +380,10 @@ export function RunPage(props: RunPageProps) {
               max={progress === null ? undefined : Math.max(progress.total, 1)}
             ></progress>
           </div>
-          <p class="muted">The findings appear when the review finishes.</p>
+          <p class="muted">
+            The findings appear when the review finishes. This page checks for progress every few
+            seconds; you can also reload it.
+          </p>
         </Section>
       ) : null}
 

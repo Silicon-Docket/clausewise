@@ -20,8 +20,13 @@ export interface FakeEvent {
   metaKey?: boolean;
   altKey?: boolean;
   persisted?: boolean;
+  shiftKey?: boolean;
   defaultPrevented: boolean;
+  /** True once a listener stopped the event from reaching the listeners that come after it. */
+  stopped: boolean;
   preventDefault(): void;
+  stopPropagation(): void;
+  stopImmediatePropagation(): void;
 }
 
 export function event(type: string, target: unknown, extra: Partial<FakeEvent> = {}): FakeEvent {
@@ -29,8 +34,15 @@ export function event(type: string, target: unknown, extra: Partial<FakeEvent> =
     type,
     target,
     defaultPrevented: false,
+    stopped: false,
     preventDefault() {
       e.defaultPrevented = true;
+    },
+    stopPropagation() {
+      e.stopped = true;
+    },
+    stopImmediatePropagation() {
+      e.stopped = true;
     },
     ...extra,
   };
@@ -108,6 +120,10 @@ export class FakeElement {
   hasAttribute(name: string): boolean {
     return this.attrs.has(name);
   }
+  /** Every attribute as set now, in name order, for a test that compares two states of a page. */
+  attributeEntries(): [string, string][] {
+    return [...this.attrs.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }
 
   get textContent(): string {
     if (this.text !== null) return this.text;
@@ -180,6 +196,7 @@ export class FakeElement {
   dispatch(e: FakeEvent): void {
     for (let el: FakeElement | null = this; el !== null; el = el.parent) {
       for (const fn of el.listeners.get(e.type)) fn(e);
+      if (e.stopped) return;
     }
     for (const fn of this.doc.listeners.get(e.type)) fn(e);
   }
@@ -278,10 +295,15 @@ export interface HarnessOptions {
   reducedMotion?: boolean;
   noFetch?: boolean;
   storageBlocked?: boolean;
+  /** The fragment of the address as `location.hash` has it: "" for none, "#decision" for one. */
+  hash?: string;
+  /** Runs on the document before the script does: to put focus somewhere, say. */
+  before?: (doc: FakeDocument) => void;
 }
 
 export function runScript(html: string, options: HarnessOptions = {}): Harness {
   const doc = new FakeDocument(html);
+  options.before?.(doc);
   const windowListeners = new Listeners();
   const h: Harness = {
     doc,
@@ -336,6 +358,7 @@ export function runScript(html: string, options: HarnessOptions = {}): Harness {
           setItem: (k: string, v: string) => void h.storage.set(k, v),
         },
     location: {
+      hash: options.hash ?? "",
       reload() {
         h.reloads += 1;
       },
