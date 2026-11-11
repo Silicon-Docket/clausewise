@@ -53,6 +53,7 @@ import {
   diffPins,
   parseAllowDifferences,
   renderComparison,
+  type Comparison,
   type PinName,
 } from "./compare.js";
 import {
@@ -61,6 +62,7 @@ import {
   playbookFactProblems,
   selectCases,
   type CaseGroup,
+  type Dataset,
 } from "./dataset.js";
 import {
   CalibrationSetError,
@@ -70,7 +72,9 @@ import {
   type PreparedPair,
 } from "./calibration-run.js";
 import { ORACLE_MODEL, ORACLE_PROVIDER, createKeyOracle } from "./oracle.js";
+import { PageError, buildComparisonPage } from "./page.js";
 import { buildParolPlan, costBounds, decideSpend, describeParolPlan } from "./plan.js";
+import { publishComparison } from "./publish.js";
 import { renderReport } from "./report.js";
 import { reportingFetch } from "./reported-model.js";
 import {
@@ -162,6 +166,16 @@ export interface ParolOptions {
   compare: string | undefined;
   allowDifferences: PinName[];
   playbook: string | undefined;
+  /** The Parol data folder to write the comparison to as a page document. */
+  publish: string | undefined;
+  /** With candidate: compare two results files that already exist, and run nothing. */
+  baseline: string | undefined;
+  candidate: string | undefined;
+  /**
+   * Put the evidence trails of the held-out split's changed slots into the page document: the answer
+   * key and its passages and, for each version, where it looked and what it cited. Sealed otherwise.
+   */
+  openHeldoutTrails: boolean;
   help: boolean;
 }
 
@@ -173,6 +187,7 @@ result against the answer keys, check the release gates and write a results file
 Usage:
   pnpm eval:parol --selftest
   pnpm eval:parol [options]
+  pnpm eval:parol --baseline <a.json> --candidate <b.json> [--publish <data-folder>]
 
 Options:
   --selftest                   Run against a perfect scripted oracle that reads the answer key. It needs
@@ -216,6 +231,26 @@ Options:
   --out <file.json>            Where to write the results. Default: evals/results/parol-<UTC time>.json.
   --compare <previous.json>    Compare with an earlier results file (the baseline) after the run. The pins
                                are checked first: the runs may differ only in the workflow.
+  --baseline <file.json>       Compare two results files that already exist and run nothing. The two
+  --candidate <file.json>      options go together. It sends nothing and needs no key, prints the same
+                               Markdown comparison as --compare and refuses the same comparisons. It
+                               cannot be combined with an option that runs something (--selftest,
+                               --simulate, --replay, --calibration, --exposure, --no-record, --split,
+                               --allow-heldout, --workflow, --runs, --case, --yes, --max-cost,
+                               --assumed-output-tokens, --prices, --out, --compare).
+                               --allow-differences, --playbook and --publish can be used with them.
+  --publish <data-folder>      After a comparison, write it as a page document into
+                               <data-folder>/evaluations, where the evaluation page of the application
+                               (/evaluations, for a legal engineer or an administrator) reads it. The
+                               folder is the one PAROL_DATA_DIR names. Needs --compare, or --baseline
+                               and --candidate. The page shows what the files say: a selftest, a
+                               simulated run or a replay is labelled as such, and a comparison that
+                               was refused or is unfinished is not published.
+  --open-heldout-trails        Put the evidence trails of the held-out split's changed slots into the
+                               page document: the answer key and its passages and, for each version,
+                               where it looked and what it cited. They are left out by default, and
+                               the document records that they were opened. Needs --publish. Read the
+                               warning that is printed.
   --allow-differences <names>  Pins that are expected to differ, comma separated: ${PIN_NAMES.filter((name) => name !== "evaluation").join(", ")}.
                                A difference in the evaluation version is never allowed.
   --playbook <file.yaml>       The playbook. Default: apps/parol/playbooks/<slug of the answer keys>.yaml.
@@ -229,7 +264,8 @@ The plan and progress go to stderr and the Markdown report to stdout.
 
 Exit codes:
   0    The run finished. (Gates that fail are results, not errors.)
-  1    Something went wrong, including a failed selftest and a fatal answer from the provider.
+  1    Something went wrong, including a failed selftest, a fatal answer from the provider, a
+       comparison that was refused, and a page document that could not be built or written.
   2    An integrity failure: the answer keys, a case file or the calibration set differ from the
        hashes in fixtures/parol/splits.json, an anchor of a key does not resolve in the documents, or
        an exposure suite found that its own controls or the upload steps disagree with the key.
@@ -253,6 +289,27 @@ function positiveAmount(name: string, raw: string): number {
   }
   return value;
 }
+
+/** The options that run something, which make no sense when two results files are compared. */
+const NOT_WITH_FILES = [
+  "selftest",
+  "simulate",
+  "replay",
+  "calibration",
+  "exposure",
+  "no-record",
+  "split",
+  "allow-heldout",
+  "workflow",
+  "runs",
+  "case",
+  "yes",
+  "max-cost",
+  "assumed-output-tokens",
+  "prices",
+  "out",
+  "compare",
+] as const;
 
 export function parseParolArgs(args: readonly string[]): ParolOptions {
   let parsed;
@@ -279,6 +336,10 @@ export function parseParolArgs(args: readonly string[]): ParolOptions {
         compare: { type: "string" },
         "allow-differences": { type: "string", multiple: true },
         playbook: { type: "string" },
+        publish: { type: "string" },
+        baseline: { type: "string" },
+        candidate: { type: "string" },
+        "open-heldout-trails": { type: "boolean" },
         help: { type: "boolean", short: "h" },
       },
       allowPositionals: true,
@@ -311,6 +372,10 @@ export function parseParolArgs(args: readonly string[]): ParolOptions {
     compare: undefined,
     allowDifferences: [],
     playbook: undefined,
+    publish: undefined,
+    baseline: undefined,
+    candidate: undefined,
+    openHeldoutTrails: false,
     help: false,
   };
   if (values.help === true) return { ...defaults, help: true };
@@ -335,6 +400,9 @@ export function parseParolArgs(args: readonly string[]): ParolOptions {
     "compare",
     "playbook",
     "replay",
+    "publish",
+    "baseline",
+    "candidate",
   ] as const) {
     if (values[name] === "") throw new UsageError(`Option --${name} needs a value.`);
   }
@@ -367,6 +435,32 @@ export function parseParolArgs(args: readonly string[]): ParolOptions {
       "--calibration needs a live run or a replay. A scripted stand-in is not the support checker, so its verdicts say nothing about it.",
     );
   }
+  // Two files that exist already are compared without a run, so an option that is about running is
+  // a mistake. Given-ness is read from the tokens: a default and a typed default look alike.
+  if ((values.baseline === undefined) !== (values.candidate === undefined)) {
+    throw new UsageError("--baseline and --candidate go together: give both, or neither.");
+  }
+  if (values.baseline !== undefined) {
+    const given = new Set(tokens.flatMap((token) => (token.kind === "option" ? [token.name] : [])));
+    const runs = NOT_WITH_FILES.find((name) => given.has(name));
+    if (runs !== undefined) {
+      throw new UsageError(
+        `--${runs} cannot be used with --baseline and --candidate, which compare two results files that already exist and run nothing.`,
+      );
+    }
+  }
+  if (
+    values.publish !== undefined &&
+    values.baseline === undefined &&
+    values.compare === undefined
+  ) {
+    throw new UsageError(
+      "--publish needs a comparison to publish: give --compare <previous.json> with a run, or --baseline and --candidate.",
+    );
+  }
+  if (values["open-heldout-trails"] === true && values.publish === undefined) {
+    throw new UsageError("--open-heldout-trails needs --publish.");
+  }
   const maxCost = values["max-cost"];
   const assumed = values["assumed-output-tokens"];
   return {
@@ -393,6 +487,10 @@ export function parseParolArgs(args: readonly string[]): ParolOptions {
     compare: values.compare,
     allowDifferences: parseAllowDifferences(values["allow-differences"] ?? []),
     playbook: values.playbook,
+    publish: values.publish,
+    baseline: values.baseline,
+    candidate: values.candidate,
+    openHeldoutTrails: values["open-heldout-trails"] === true,
   };
 }
 
@@ -656,55 +754,32 @@ async function defaultOutPath(dir: string, startedAt: Date): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The run
+// The dataset and the playbook, which a run and a comparison of two files both read
 // ---------------------------------------------------------------------------------------------
 
-interface Stopped {
-  reason: string;
-  exitCode: number;
-  label: "Stopped" | "Error";
-}
-
-async function execute(argv: string[], io: ParolIo): Promise<number> {
-  const options = parseParolArgs(argv);
-  if (options.help) {
-    io.stdout(USAGE);
-    return 0;
-  }
-  const mode: RunMode = options.selftest
-    ? "selftest"
-    : options.simulate
-      ? "simulated"
-      : options.replay !== undefined
-        ? "replay"
-        : "live";
-  const root = io.root ?? DEFAULT_ROOT;
-  const now = io.now ?? ((): Date => new Date());
-  const clock = io.clock ?? ((): number => performance.now());
-  const startedAt = now();
-
-  // ---- 1. The held-out seal.
-  if (options.split !== "dev" && !options.allowHeldout) {
-    throw new EvalError(
-      `Refusing to run the held-out split without --allow-heldout. ${HELDOUT_SEAL_WARNING} ` +
-        "Add --allow-heldout when a candidate is ready for its one held-out run.",
-    );
-  }
-
-  // ---- 2. The dataset.
+/** The dataset, checked against splits.json, or the exit code to stop with after saying why. */
+async function readDataset(
+  root: string,
+  io: ParolIo,
+): Promise<{ dataset: Dataset } | { exit: number }> {
   const loaded = await loadDataset(root);
   if (!loaded.ok) {
     io.stderr(
       `INTEGRITY FAILURE: the dataset is not the one that was committed. Nothing was run and nothing was sent.\n${loaded.problems.map((p) => `  ${p}`).join("\n")}\n` +
         "Rebuild it with pnpm fixtures:parol only if the change to a case was meant, and commit the result.\n",
     );
-    return EXIT_INTEGRITY;
+    return { exit: EXIT_INTEGRITY };
   }
-  const { dataset } = loaded;
-  const groups: CaseGroup[] = selectCases(dataset, options.split, options.cases);
-  const runnables = groups.flatMap((group) => runnableCases(group));
+  return { dataset: loaded.dataset };
+}
 
-  // ---- 3. The playbook, the workflow, the model.
+/** The playbook the answer keys were built for, or the exit code to stop with after saying why. */
+async function readPlaybook(
+  options: ParolOptions,
+  root: string,
+  dataset: Dataset,
+  io: ParolIo,
+): Promise<{ playbook: LoadedPlaybook } | { exit: number }> {
   const playbookPath = resolve(
     options.playbook ??
       join(root, "apps", "parol", "playbooks", `${dataset.keys.playbook.slug}.yaml`),
@@ -737,8 +812,149 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
         .join("\n")}\n` +
         "Rebuild the keys with pnpm fixtures:parol only if the change was meant, and commit the result.\n",
     );
-    return EXIT_INTEGRITY;
+    return { exit: EXIT_INTEGRITY };
   }
+  return { playbook };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Publishing a comparison as a page document
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Builds the page document for a comparison that was made, and writes it into the data folder.
+ * Returns 0 when it is there (written now, or found to be the same document already) and 1 when it
+ * could not be built or written, after saying why. Nothing from a document is in what it says.
+ */
+async function publishComparisonPage(args: {
+  options: ParolOptions;
+  io: ParolIo;
+  comparison: Extract<Comparison, { ok: true }>;
+  baseline: { file: string; results: ResultsFile };
+  candidate: { file: string; results: ResultsFile };
+  dataset: Dataset;
+  playbook: LoadedPlaybook;
+}): Promise<number> {
+  const { options, io } = args;
+  if (options.publish === undefined) return 0;
+  if (options.openHeldoutTrails) {
+    io.stderr(`HELD-OUT TRAILS OPENED FOR THE PAGE. ${HELDOUT_SEAL_WARNING}\n`);
+  }
+  try {
+    const page = await buildComparisonPage({
+      baseline: args.baseline,
+      candidate: args.candidate,
+      comparison: args.comparison,
+      dataset: args.dataset,
+      playbook: args.playbook,
+      openHeldoutTrails: options.openHeldoutTrails,
+    });
+    const published = await publishComparison({ page, dataFolder: options.publish });
+    io.stderr(
+      published.created
+        ? `Published comparison ${published.id} to ${published.path}. Open /evaluations?comparison=${published.id} as a legal engineer or an administrator.\n`
+        : `Comparison ${published.id} is already published (${published.path}), and the file was left as it is. Open /evaluations?comparison=${published.id} as a legal engineer or an administrator.\n`,
+    );
+    return 0;
+  } catch (error) {
+    if (!(error instanceof PageError)) throw error;
+    io.stderr(`Error: ${error.message}\n`);
+    return 1;
+  }
+}
+
+/**
+ * `--baseline` and `--candidate`: compares two results files that already exist, prints the
+ * Markdown comparison and, with `--publish`, the page document. It runs nothing and sends nothing.
+ */
+async function compareFiles(options: ParolOptions, io: ParolIo): Promise<number> {
+  const baselinePath = options.baseline as string;
+  const candidatePath = options.candidate as string;
+  const baseline = await loadResults(baselinePath);
+  const candidate = await loadResults(candidatePath);
+  const baselineName = basename(baselinePath);
+  const candidateName = basename(candidatePath);
+  const comparison = compareResults(baseline, candidate, {
+    allow: options.allowDifferences,
+    baselineName,
+    candidateName,
+  });
+  if (!comparison.ok) {
+    io.stderr(describeRefusal(comparison));
+    io.stderr("Nothing was written.\n");
+    return 1;
+  }
+  io.stdout(
+    renderComparison(comparison, {
+      baseline: baseline.pins.workflow.label,
+      candidate: candidate.pins.workflow.label,
+    }),
+  );
+  if (options.publish === undefined) return 0;
+  const root = io.root ?? DEFAULT_ROOT;
+  const loaded = await readDataset(root, io);
+  if ("exit" in loaded) return loaded.exit;
+  const read = await readPlaybook(options, root, loaded.dataset, io);
+  if ("exit" in read) return read.exit;
+  return publishComparisonPage({
+    options,
+    io,
+    comparison,
+    baseline: { file: baselineName, results: baseline },
+    candidate: { file: candidateName, results: candidate },
+    dataset: loaded.dataset,
+    playbook: read.playbook,
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// The run
+// ---------------------------------------------------------------------------------------------
+
+interface Stopped {
+  reason: string;
+  exitCode: number;
+  label: "Stopped" | "Error";
+}
+
+async function execute(argv: string[], io: ParolIo): Promise<number> {
+  const options = parseParolArgs(argv);
+  if (options.help) {
+    io.stdout(USAGE);
+    return 0;
+  }
+  if (options.baseline !== undefined) return compareFiles(options, io);
+  const mode: RunMode = options.selftest
+    ? "selftest"
+    : options.simulate
+      ? "simulated"
+      : options.replay !== undefined
+        ? "replay"
+        : "live";
+  const root = io.root ?? DEFAULT_ROOT;
+  const now = io.now ?? ((): Date => new Date());
+  const clock = io.clock ?? ((): number => performance.now());
+  const startedAt = now();
+
+  // ---- 1. The held-out seal.
+  if (options.split !== "dev" && !options.allowHeldout) {
+    throw new EvalError(
+      `Refusing to run the held-out split without --allow-heldout. ${HELDOUT_SEAL_WARNING} ` +
+        "Add --allow-heldout when a candidate is ready for its one held-out run.",
+    );
+  }
+
+  // ---- 2. The dataset.
+  const loaded = await readDataset(root, io);
+  if ("exit" in loaded) return loaded.exit;
+  const { dataset } = loaded;
+  const groups: CaseGroup[] = selectCases(dataset, options.split, options.cases);
+  const runnables = groups.flatMap((group) => runnableCases(group));
+
+  // ---- 3. The playbook, the workflow, the model.
+  const readPb = await readPlaybook(options, root, dataset, io);
+  if ("exit" in readPb) return readPb.exit;
+  const { playbook } = readPb;
   const workflow = workflowFor(options.workflow);
   // A replay is checked against what the recording was made with before anything else is done.
   let recording: Recording | undefined;
@@ -1341,6 +1557,8 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
               slots: seen.slots,
               extraction: seen.extraction,
               spans: prepared.ingest.spans,
+              trails: seen.trails,
+              textDigest: seen.textDigest,
             });
             const done = record("succeeded", {
               totalMs: mode === "live" ? run.totalMs : null,
@@ -1508,6 +1726,9 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
   }
 
   if (!nothingRan) {
+    // Whether the results file was written whole and can be read back, which a published page
+    // depends on: it names that file.
+    let stored = false;
     try {
       const written = serialiseResults(results);
       await writeFileAtomically(outPath, written, { replace: false });
@@ -1518,6 +1739,7 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
       // kept, because a failing run is the one whose evidence matters, and is said not to load.
       try {
         parseResults(written);
+        stored = true;
       } catch {
         io.stderr(
           `Error: the results file ${outPath} is too long or malformed for its own reader: this version of the tool cannot read it back, so --compare and a later report will refuse it. The file was kept as written.\n`,
@@ -1532,6 +1754,7 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
       exitCode ||= 1;
     }
     let text = renderReport(results);
+    let compared: Extract<Comparison, { ok: true }> | undefined;
     if (previous !== undefined) {
       const comparison = compareResults(previous, results, {
         allow: options.allowDifferences,
@@ -1539,6 +1762,7 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
         candidateName: basename(outPath),
       });
       if (comparison.ok) {
+        compared = comparison;
         text += `\n${renderComparison(comparison, {
           baseline: previous.pins.workflow.label,
           candidate: results.pins.workflow.label,
@@ -1549,6 +1773,34 @@ async function execute(argv: string[], io: ParolIo): Promise<number> {
       }
     }
     io.stdout(text);
+    // The page is published after the report is printed, so that a failure to publish costs the
+    // reader nothing. A comparison that was refused, or whose candidate is not on disk whole, is
+    // not published. The results are kept either way, and can be published later with
+    // --baseline and --candidate.
+    if (options.publish !== undefined && compared !== undefined) {
+      if (!stored) {
+        io.stderr(
+          "Not published: the results file of this run was not written whole, and a page would name a file that cannot be read.\n",
+        );
+        exitCode ||= 1;
+      } else {
+        const published = await publishComparisonPage({
+          options,
+          io,
+          comparison: compared,
+          baseline: { file: basename(options.compare ?? "baseline"), results: previous! },
+          candidate: { file: basename(outPath), results },
+          dataset,
+          playbook,
+        });
+        if (published !== 0) {
+          io.stderr(
+            "The results were kept. Publish them again with --baseline and --candidate when the cause is fixed.\n",
+          );
+          exitCode ||= published;
+        }
+      }
+    }
   }
   return exitCode;
 }

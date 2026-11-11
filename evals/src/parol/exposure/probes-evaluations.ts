@@ -12,11 +12,27 @@
  * A route may be given once in all the probe modules together: composing the tables refuses a
  * route, a forged-id body or an effect body that two owners both give.
  */
-import type { EffectOf, ForgedBody, OtherProbe, Probe } from "./probe-kit.js";
+import { NONE, type EffectOf, type ForgedBody, type OtherProbe, type Probe } from "./probe-kit.js";
 
 export const MATTER_PROBES_EVALUATIONS: readonly Probe[] = [];
 
-export const OTHER_PROBES_EVALUATIONS: readonly OtherProbe[] = [];
+/**
+ * `GET /evaluations`, the evaluation comparison page. It names no matter, so it is a list probe;
+ * only the legal engineer and the administrator may open it (`evaluation.read`), so a member is
+ * expected to get 403 and a visitor is sent to sign in. The page takes no matter, document,
+ * version, run, finding or memo id, so there is no forged id for it, and it is a read, so there is
+ * no effect body: the suite's check that no row of the store changed applies to its cells. Its own
+ * query values (`comparison`, `case`, `rule`) are checked by the application's route tests.
+ */
+export const OTHER_PROBES_EVALUATIONS: readonly OtherProbe[] = [
+  {
+    method: "GET",
+    template: "/evaluations",
+    access: "principal",
+    body: NONE,
+    globalAction: "evaluation.read",
+  },
+];
 
 export const FORGED_BODIES_EVALUATIONS: Readonly<Record<string, ForgedBody>> = {};
 

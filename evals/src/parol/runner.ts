@@ -15,6 +15,7 @@
 import type { AnthropicUsage, ObjectGenerator } from "@clausewise/llm";
 import type {
   CallRecord,
+  ContextBundle,
   DraftFinding,
   ExtractOutput,
   IngestDocumentInput,
@@ -54,6 +55,7 @@ import { findAnchor } from "./anchors.js";
 import { observeExtraction, observeSlot } from "./observe.js";
 import type { ExtractionObservation, SlotObservation } from "./score.js";
 import type { StageName } from "./timing.js";
+import { textDigestOf, trailOf, type SlotTrail } from "./trails.js";
 
 /** How many rules are analysed, and then verified, at once within one run. Equal to the service's. */
 export const RULE_CONCURRENCY = 3;
@@ -161,18 +163,17 @@ export type ParsedFiles = Map<string, Awaited<ReturnType<typeof parseDocument>>>
 const slug = (text: string): string => text.toLowerCase().replace(/[^a-z0-9]+/g, "_");
 
 /**
- * Reads the case's operative documents as an upload would and builds the ingest. The document
+ * Reads the case's operative documents as an upload would, ready for the ingest. The document
  * version ids are new for every repeat, so span ids differ between repeats as they do between
- * matters.
+ * matters. The comparison page reads the passages of a key through this too, so that it shows the
+ * paragraphs as a run reads them.
  */
-export async function prepareCase(args: {
+export async function readCaseDocuments(args: {
   dataset: Dataset;
   runnable: RunnableCase;
   repeat: number;
-  playbook: LoadedPlaybook;
-  workflow: RegisteredWorkflow;
   parsed: ParsedFiles;
-}): Promise<PreparedCase> {
+}): Promise<IngestDocumentInput[]> {
   const { runnable, repeat } = args;
   const documents: IngestDocumentInput[] = [];
   for (const doc of runnable.documents) {
@@ -199,6 +200,20 @@ export async function prepareCase(args: {
       inspection: parsed.inspection,
     });
   }
+  return documents;
+}
+
+/** Reads the case's operative documents (see `readCaseDocuments`) and builds the ingest. */
+export async function prepareCase(args: {
+  dataset: Dataset;
+  runnable: RunnableCase;
+  repeat: number;
+  playbook: LoadedPlaybook;
+  workflow: RegisteredWorkflow;
+  parsed: ParsedFiles;
+}): Promise<PreparedCase> {
+  const { runnable, repeat } = args;
+  const documents = await readCaseDocuments(args);
   const ingest = buildIngest({ documents });
   return {
     runnable,
@@ -237,6 +252,8 @@ type AnalysisOutcome =
 
 export interface StageRun {
   extract: ExtractOutput;
+  /** What retrieval built for each rule, in the order of `findings`: what the reader was shown. */
+  bundles: ContextBundle[];
   findings: VerifiedFinding[];
   /** The analyze stage's answer per rule, or undefined where the rule could not be analysed. */
   drafts: (DraftFinding | undefined)[];
@@ -409,6 +426,7 @@ export async function runStages(args: StageArgs): Promise<StageRun> {
 
     return {
       extract: extracted.output,
+      bundles,
       findings,
       drafts: analyses.map((a) => (a.outcome === "draft" ? a.draft : undefined)),
       calls,
@@ -428,8 +446,17 @@ export async function runStages(args: StageArgs): Promise<StageRun> {
 export function observeRun(
   prepared: PreparedCase,
   run: StageRun,
-): { slots: SlotObservation[]; extraction: ExtractionObservation } {
-  const { caseKey } = prepared.runnable;
+): {
+  slots: SlotObservation[];
+  extraction: ExtractionObservation;
+  /** One per rule slot, in the order of `run.findings`. Ids, offsets and codes; no text. */
+  trails: SlotTrail[];
+  /** Names the text of the case's documents that the trails' paragraph indexes point into. */
+  textDigest: string;
+} {
+  const { caseKey, split } = prepared.runnable;
+  // Bundles are looked up by rule, so a trail never describes another rule's retrieval.
+  const bundleOf = new Map(run.bundles.map((bundle) => [bundle.ruleKey, bundle]));
   return {
     slots: run.findings.map((finding, index) =>
       observeSlot({
@@ -441,6 +468,17 @@ export function observeRun(
       }),
     ),
     extraction: observeExtraction({ caseKey, repeat: prepared.repeat, extract: run.extract }),
+    trails: run.findings.map((finding) =>
+      trailOf({
+        split,
+        caseKey,
+        repeat: prepared.repeat,
+        finding,
+        bundle: bundleOf.get(finding.ruleKey),
+        spans: prepared.ingest.spans,
+      }),
+    ),
+    textDigest: textDigestOf(prepared.manifest.documents),
   };
 }
 
