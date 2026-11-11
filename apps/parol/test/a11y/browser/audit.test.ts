@@ -24,7 +24,7 @@ import { FIELDS } from "../../../src/server/pages/forms.js";
 import { judgeText, judgeWalk } from "./judge.js";
 import {
   browserNotice,
-  openBrowser,
+  openBrowserIfAsked,
   type PwBrowser,
   type PwContext,
   type PwPage,
@@ -64,7 +64,7 @@ import { bootWorld, type RoleName, type World } from "./world.js";
 
 vi.setConfig({ testTimeout: 600_000, hookTimeout: 120_000 });
 
-const opened = await openBrowser();
+const opened = await openBrowserIfAsked();
 browserNotice("audit.test.ts", opened);
 
 const ROLES: readonly RoleName[] = [

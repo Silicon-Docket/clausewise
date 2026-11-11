@@ -15,6 +15,7 @@
     "lint": "prettier --check .",
     "format": "prettier --write .",
     "test": "vitest run",
+    "test:browser": "env PAROL_BROWSER_TESTS=1 vitest run apps/parol/test/a11y/browser",
     "fixtures": "tsx tools/make-fixtures.ts",
     "clausewise": "node apps/cli/bin/clausewise.mjs",
     "eval": "tsx evals/src/run.ts",

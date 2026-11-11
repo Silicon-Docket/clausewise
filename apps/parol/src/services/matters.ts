@@ -250,9 +250,19 @@ export function createMatterService(
       files.deleteMatter(matter.id);
       uploads.forget(versionIds);
       // Outside any transaction, as the store requires: it rewrites the database file. While another
-      // connection holds a read transaction it throws `compact_busy` (a 409), after everything above
-      // is done: the matter is gone, and its text leaves the log at a later checkpoint.
-      repo.compact();
+      // connection holds a read transaction (the operator's audit check or retention dry run, which
+      // are meant to run beside a live server) it throws `compact_busy`. The matter is gone by then,
+      // so the person is told it was deleted, and not that the request conflicted: the failure is
+      // logged in a fixed line, and the text leaves the log at a later checkpoint (the next
+      // deletion, or the operator's retention command, empties it).
+      try {
+        repo.compact();
+      } catch (error) {
+        if (!(error instanceof ConflictError) || error.code !== "compact_busy") throw error;
+        deps.log(
+          "matter deletion: the database log could not be emptied because another connection was reading; it is emptied at a later checkpoint",
+        );
+      }
     },
 
     playbooks: () => present.playbookOptions(),

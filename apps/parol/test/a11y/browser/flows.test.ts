@@ -5,7 +5,7 @@ import { FIXTURE_FILES } from "../../../src/demo/matters.js";
 import { active, checkText, goto, prepare } from "./drive.js";
 import {
   browserNotice,
-  openBrowser,
+  openBrowserIfAsked,
   type PwBrowser,
   type PwContext,
   type PwPage,
@@ -31,7 +31,7 @@ import { bootWorld, DISPLAY_NAMES, type RoleName, type World } from "./world.js"
 
 vi.setConfig({ testTimeout: 180_000, hookTimeout: 120_000 });
 
-const opened = await openBrowser();
+const opened = await openBrowserIfAsked();
 browserNotice("flows.test.ts", opened);
 
 // ---------------------------------------------------------------------------------------------

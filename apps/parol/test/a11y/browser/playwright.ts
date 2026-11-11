@@ -165,6 +165,24 @@ export async function openBrowser(): Promise<
   }
 }
 
+/** The environment variable that asks for the browser tests. They take minutes, so they are opt in. */
+export const BROWSER_TESTS_VARIABLE = "PAROL_BROWSER_TESTS";
+
+/**
+ * `openBrowser`, when the browser tests were asked for (`PAROL_BROWSER_TESTS=1`, or `pnpm
+ * test:browser`), and a skip with that reason when they were not. The audit of every page in every
+ * role takes several minutes, so the ordinary `pnpm test` does not start a browser; the skip line
+ * says how to run them. `openBrowser` itself stays unconditional so that its own tests can use it.
+ */
+export async function openBrowserIfAsked(): Promise<Awaited<ReturnType<typeof openBrowser>>> {
+  if (process.env[BROWSER_TESTS_VARIABLE] !== "1")
+    return {
+      ok: false,
+      reason: `the browser tests are opt in: set ${BROWSER_TESTS_VARIABLE}=1 or run pnpm test:browser`,
+    };
+  return openBrowser();
+}
+
 /**
  * The one line a test file prints when it is skipped, or when it runs, so that a log shows which.
  * It is written to the error output directly, and not with `console`, which the static checks keep

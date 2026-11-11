@@ -93,6 +93,8 @@ const NO_PLACE_TO_GO: Record<string, string> = {
   timer_role: "about the person's role on the matter",
   reference_locked: "about the list, which a review closed",
   reference_role: "about the person's role on the matter",
+  timer_training: "about the matter, which is a training matter and takes no timer",
+  reference_training: "about the matter, which is a training matter and has no reference list",
   // retention
   matter_residue: "about the data, which only the operator can look at",
   // training

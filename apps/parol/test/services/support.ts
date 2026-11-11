@@ -178,13 +178,18 @@ export function makeWorld(
      * store is `<root>/files`.
      */
     onDisk?: boolean;
+    /** How long the database waits for a lock; short, so that a test of a busy log need not wait. */
+    busyTimeoutMs?: number;
   } = {},
 ): World {
   let tick = Date.parse("2026-11-03T09:00:00.000Z");
   const root = mkdtempSync(join(tmpdir(), "parol-services-"));
   roots.push(root);
   const repo = createRepository(
-    openDatabase(options.onDisk === true ? join(root, "parol.sqlite") : ":memory:"),
+    openDatabase(
+      options.onDisk === true ? join(root, "parol.sqlite") : ":memory:",
+      options.busyTimeoutMs === undefined ? {} : { busyTimeoutMs: options.busyTimeoutMs },
+    ),
     { now: () => new Date((tick += 1000)) },
   );
   const registered = registerAll(repo, { seedDemoUsers: true });

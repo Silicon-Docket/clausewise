@@ -728,7 +728,7 @@ const NOT_REACHED: Record<string, string> = {
     "ingest warnings are written by the ingest with a detail it has cut to length",
   bad_yaml: "a playbook is registered at start-up from the files of the application",
   compact_busy:
-    "the compaction of the database is run by the operator's commands, and no page runs it",
+    "the compaction after a matter is deleted catches it (the matter is gone, so the person is told it was deleted) and the operator's retention command reports it; no page shows it",
   content_hash_mismatch: "a stage saves a finding with the hash it has just computed",
   duplicate_check:
     "a stage saves a finding with one result for each check, and the stage writes no other",

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { ModelRequestError } from "@clausewise/llm";
 import { ForbiddenError } from "../../src/services/errors.js";
+import { openDatabase } from "../../src/store/index.js";
 import {
   baseWorld,
   cleanup,
@@ -494,6 +495,36 @@ describe("delete", () => {
     // An administrator who is only a viewer may.
     await w.services.matters.delete(adminAm);
     expect(w.repo.getMatter(matterId)).toBeUndefined();
+  });
+
+  it("is done when another connection is reading the log: the matter is gone, the person is not told it conflicted, and one fixed line is logged", async () => {
+    const w = makeWorld({ onDisk: true, busyTimeoutMs: 50 });
+    const { matterId, am } = await reviewed(w);
+    // The operator's audit check or retention dry run, beside the live server, holds a read
+    // transaction on the same file for as long as it runs.
+    const reader = openDatabase(join(w.root, "parol.sqlite"));
+    reader.exec("BEGIN");
+    reader.prepare("SELECT count(*) FROM audit_events").get();
+    try {
+      const logsBefore = w.logs.length;
+      await expect(w.services.matters.delete(am)).resolves.toBeUndefined();
+      expect(w.repo.getMatter(matterId)).toBeUndefined();
+      expect(existsSync(join(w.files.root, matterId))).toBe(false);
+      expect(w.repo.listMatterAuditEvents(matterId).events.at(-1)).toMatchObject({
+        action: "matter.delete",
+      });
+      const added = w.logs.slice(logsBefore);
+      expect(added).toEqual([
+        "matter deletion: the database log could not be emptied because another connection was reading; it is emptied at a later checkpoint",
+      ]);
+    } finally {
+      reader.exec("ROLLBACK");
+      reader.close();
+    }
+    // Once the reader is gone the next deletion empties the log as before.
+    const next = await reviewed(w);
+    await expect(w.services.matters.delete(next.am)).resolves.toBeUndefined();
+    expect(w.logs.at(-1)).not.toContain("could not be emptied");
   });
 
   it("cancels a run in flight first, and the run stops quietly", async () => {

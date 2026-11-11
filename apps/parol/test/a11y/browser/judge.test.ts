@@ -21,7 +21,7 @@ import {
   type Walk,
 } from "./judge.js";
 import { PAGE_GETS } from "../inventory.js";
-import { openBrowser } from "./playwright.js";
+import { BROWSER_TESTS_VARIABLE, openBrowser, openBrowserIfAsked } from "./playwright.js";
 import { COLOR_MATH, PRELUDE } from "./scripts.js";
 import { targets } from "./targets.js";
 import type { Ids } from "./world.js";
@@ -577,5 +577,39 @@ describe("finding Playwright and Chromium without a dependency", () => {
     process.env["PLAYWRIGHT_MODULES_DIR"] = standIn(false);
     const result = await openBrowser();
     expect(result).toEqual({ ok: false, reason: "Chromium could not be started by Playwright" });
+  });
+
+  it("is not started by the ordinary test run: the browser tests are opt in, and the skip says how to ask", async () => {
+    const before = process.env[BROWSER_TESTS_VARIABLE];
+    try {
+      delete process.env[BROWSER_TESTS_VARIABLE];
+      process.env["PLAYWRIGHT_MODULES_DIR"] = standIn(true);
+      const result = await openBrowserIfAsked();
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toContain("opt in");
+      expect(result.reason).toContain(`${BROWSER_TESTS_VARIABLE}=1`);
+      expect(result.reason).toContain("pnpm test:browser");
+      // Any value but 1 is not a request.
+      process.env[BROWSER_TESTS_VARIABLE] = "true";
+      expect((await openBrowserIfAsked()).ok).toBe(false);
+    } finally {
+      if (before === undefined) delete process.env[BROWSER_TESTS_VARIABLE];
+      else process.env[BROWSER_TESTS_VARIABLE] = before;
+    }
+  });
+
+  it("starts the browser when it is asked for", async () => {
+    const before = process.env[BROWSER_TESTS_VARIABLE];
+    try {
+      process.env[BROWSER_TESTS_VARIABLE] = "1";
+      process.env["PLAYWRIGHT_MODULES_DIR"] = standIn(true);
+      const result = await openBrowserIfAsked();
+      expect(result.ok).toBe(true);
+      if (result.ok) await result.opened.browser.close();
+    } finally {
+      if (before === undefined) delete process.env[BROWSER_TESTS_VARIABLE];
+      else process.env[BROWSER_TESTS_VARIABLE] = before;
+    }
   });
 });
