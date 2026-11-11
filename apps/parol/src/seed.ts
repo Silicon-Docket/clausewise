@@ -12,6 +12,14 @@ import {
   type DemoDocument,
   type DemoMatter,
 } from "./demo/matters.js";
+import {
+  PILOT_DEMO_NOTICE,
+  PilotDemoError,
+  createSteppingClock,
+  seedPilotDemo,
+  type PilotDemoDocument,
+  type PilotDemoReport,
+} from "./demo/pilot-demo.js";
 import { createSimulatedModel } from "./demo/simulated-model.js";
 import { ConfigError, parseEnv, type ParolSettings } from "./main.js";
 import { createServices } from "./services/index.js";
@@ -25,6 +33,7 @@ import {
   FileStore,
   createRepository,
   openDatabase,
+  type Database,
   type Repository,
 } from "./store/index.js";
 
@@ -43,6 +52,11 @@ import {
  * reviewing attorney on it and the demo legal engineer as its trainer (training/start.ts). It is off
  * by default: the two matters above are what the README's walk-through starts from, and the
  * quickstart page has a button that makes T01 for whoever is signed in.
+ *
+ * With `--pilot-demo` it also builds a backdated scenario for the pilot measures page, through the
+ * services, with the demo identities on synthetic matters (demo/pilot-demo.ts). It is off by
+ * default and belongs on a fresh data folder: it dates its rows weeks back, and the pilot page's
+ * synthetic scope then has a value in every row it can, while its pilot scope stays empty.
  *
  * Running it again changes nothing: a matter is recognised by its name and its owner, and only
  * what is missing is added. It refuses to run unless the demo identity is on, because the data is
@@ -113,6 +127,8 @@ export interface SeedReport {
   matters: SeededMatter[];
   /** The training matter, when it was asked for, and null when it was not. */
   training: SeededTraining | null;
+  /** The pilot demonstration, when it was asked for (`runSeed` fills it in), and null when it was not. */
+  pilotDemo: PilotDemoReport | null;
   runs: SeededRun[];
   /** Each demo identity and the matters the services list for it, which is all it can see. */
   people: { name: string; matters: string[] }[];
@@ -138,6 +154,19 @@ function bytesOf(document: DemoDocument, fixturesDir: string): Uint8Array {
       "an example document is missing from the dataset. Run pnpm fixtures:parol, or restore the files in fixtures/parol/files",
     );
   }
+}
+
+/**
+ * The documents of the worked example, as `pnpm parol:seed` uploads them to its first matter, with
+ * their bytes read from the dataset. The pilot demonstration uploads the same to each of its
+ * matters, and is given them here because the folder it lives in does not read files.
+ */
+export function workedExampleDocuments(
+  fixturesDir: string = DEFAULT_FIXTURES_DIR,
+): PilotDemoDocument[] {
+  const worked = DEMO_MATTERS.find((matter) => matter.key === "lanternfish");
+  if (worked === undefined) throw new SeedError("the worked example is not in the seed");
+  return worked.documents.map((document) => ({ document, bytes: bytesOf(document, fixturesDir) }));
 }
 
 export async function seedDemo(options: SeedOptions): Promise<SeedReport> {
@@ -296,6 +325,7 @@ export async function seedDemo(options: SeedOptions): Promise<SeedReport> {
     playbook: { slug: registered.playbook.slug, version: registered.playbook.version },
     matters,
     training,
+    pilotDemo: null,
     runs,
     people,
   };
@@ -305,22 +335,32 @@ export async function seedDemo(options: SeedOptions): Promise<SeedReport> {
 // The command
 // ---------------------------------------------------------------------------------------------
 
-const USAGE = "usage: pnpm parol:seed [--run v1] [--run v2] [--training]";
+const USAGE = "usage: pnpm parol:seed [--run v1] [--run v2] [--training] [--pilot-demo]";
 
 /**
  * `--run v1 --run v2` or `--run=v1`: workflow versions to run on the first matter. `--training`
- * also makes the training matter T01 (`training` is present, and true, only then). A lone `--` is
- * ignored, because `pnpm parol:seed -- --run v1` hands it on.
+ * also makes the training matter T01 (`training` is present, and true, only then). `--pilot-demo`
+ * also builds the backdated scenario of the pilot measures page (`pilotDemo` likewise). A lone `--`
+ * is ignored, because `pnpm parol:seed -- --run v1` hands it on.
  */
-export function parseSeedArgs(argv: readonly string[]): { runs: string[]; training?: true } {
+export function parseSeedArgs(argv: readonly string[]): {
+  runs: string[];
+  training?: true;
+  pilotDemo?: true;
+} {
   const runs: string[] = [];
   let training = false;
+  let pilotDemo = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     // pnpm passes on the `--` in `pnpm parol:seed -- --run v1`. It only separates, so it is skipped.
     if (arg === "--") continue;
     if (arg === "--training") {
       training = true;
+      continue;
+    }
+    if (arg === "--pilot-demo") {
+      pilotDemo = true;
       continue;
     }
     let label: string | undefined;
@@ -333,7 +373,43 @@ export function parseSeedArgs(argv: readonly string[]): { runs: string[]; traini
       );
     if (!runs.includes(label)) runs.push(label);
   }
-  return training ? { runs, training } : { runs };
+  return {
+    runs,
+    ...(training ? { training: true as const } : {}),
+    ...(pilotDemo ? { pilotDemo: true as const } : {}),
+  };
+}
+
+/** What the pilot demonstration did, in words. Counts of what was done, never a measure and never document text. */
+function describePilotDemo(demo: PilotDemoReport, origin: string): string[] {
+  const baseline = demo.matters.filter((matter) => matter.kind === "baseline").length;
+  const assisted = demo.matters.length - baseline;
+  const lines = [
+    demo.created
+      ? `Pilot demonstration: ${demo.matters.length} matters made (${baseline} baseline, ${assisted} assisted)`
+      : "Pilot demonstration: already there, nothing to add",
+    `  ${PILOT_DEMO_NOTICE}`,
+  ];
+  if (demo.startDate !== null)
+    lines.push(
+      `  The pilot calendar starts on ${demo.startDate} (UTC) and its weeks are backdated.`,
+    );
+  if (demo.created) {
+    const d = demo.done;
+    lines.push(
+      `  Done through the services: ${d.sittings} timed sittings, ${d.referenceLists} reference lists, ${d.reviews} reviews by the scripted reader, ${d.decisions} decisions, ${d.memos} memos exported, ${d.reports} missed-issue reports, ${d.ratings} ratings.`,
+      "  The rows are dated weeks back and the audit log is in the order they were written, so use a fresh data folder.",
+    );
+  }
+  for (const matter of demo.matters)
+    lines.push(
+      `  ${matter.kind} matter "${matter.name}": ${origin}${urls.matter(matter.matterId)}`,
+    );
+  lines.push(
+    `  Sign in as ${demo.readers.join(" or ")} to read the pilot page: ${origin}${urls.pilot("synthetic")}`,
+    `  The pilot scope, ${origin}${urls.pilot()}, stays empty: every person and every matter here is a demonstration.`,
+  );
+  return lines;
 }
 
 /** The lines the command prints. Ids, names fixed by the seed and counts, never document text. */
@@ -376,6 +452,7 @@ export function describeSeed(report: SeedReport, settings: ParolSettings): strin
       `  ${origin}${urls.quickstart()}`,
     );
   }
+  if (report.pilotDemo !== null) lines.push("", ...describePilotDemo(report.pilotDemo, origin));
   if (report.runs.length > 0) {
     lines.push("");
     for (const run of report.runs)
@@ -412,6 +489,30 @@ const stdout = (line: string): void => {
 };
 
 /**
+ * The pilot demonstration, on its own repository and services: they follow a clock the scenario
+ * moves, so that every stored time is backdated. The default seed never reaches this.
+ */
+async function buildPilotDemo(db: Database, files: FileStore): Promise<PilotDemoReport> {
+  const clock = createSteppingClock(new Date());
+  const repo = createRepository(db, { now: clock.now });
+  const services = createServices({
+    repo,
+    files,
+    generator: createSimulatedModel(),
+    config: { relaxedSegregation: false },
+    now: clock.now,
+    // The services log ids and codes. The seed prints its own summary instead.
+    log: () => {},
+  });
+  try {
+    return await seedPilotDemo({ repo, services, clock, documents: workedExampleDocuments() });
+  } catch (error) {
+    if (error instanceof PilotDemoError) throw new SeedError(error.message);
+    throw error;
+  }
+}
+
+/**
  * Seeds the data folder the environment names. Refuses, before it opens anything, unless the demo
  * identity is on.
  */
@@ -425,17 +526,20 @@ export async function runSeed(
     throw new SeedError(
       "the demonstration data is only for the demo identity. Set PAROL_DEMO_IDENTITY=1 to seed it",
     );
-  const { runs, training } = parseSeedArgs(argv);
+  const { runs, training, pilotDemo } = parseSeedArgs(argv);
 
   mkdirSync(settings.dataDir, { recursive: true, mode: 0o700 });
   const db = openDatabase(join(settings.dataDir, "parol.sqlite"));
   try {
-    const report = await seedDemo({
+    const files = new FileStore(join(settings.dataDir, "matters"));
+    const seeded = await seedDemo({
       repo: createRepository(db),
-      files: new FileStore(join(settings.dataDir, "matters")),
+      files,
       runs,
       ...(training === true ? { training } : {}),
     });
+    const report =
+      pilotDemo === true ? { ...seeded, pilotDemo: await buildPilotDemo(db, files) } : seeded;
     for (const line of describeSeed(report, settings)) out(line);
     return report;
   } finally {
