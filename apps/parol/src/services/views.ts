@@ -390,3 +390,19 @@ export interface UserOption {
 // import types only through this file (the static test lists what a page may import).
 export type { EvaluationListView, ComparisonView } from "./evaluations.js";
 export type { AuditPageView } from "./audit.js";
+// The pilot measures page, the timer and the reference list (package W2.6b). Declared in the pure
+// module; a page cannot import that folder, so it reads the types here.
+export type {
+  PilotAdminView,
+  PilotCellView,
+  PilotMeasuresView,
+  PilotParticipantView,
+  PilotPopulationLine,
+  PilotTableRowView,
+  PilotTableView,
+  ReferenceListInput,
+  ReferenceRuleView,
+  ReferenceView,
+  TimerView,
+} from "../pilot/views.js";
+export type { PilotMeasures, PilotScope, PilotSeverity } from "../pilot/types.js";

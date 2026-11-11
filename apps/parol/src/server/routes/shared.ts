@@ -159,6 +159,23 @@ export function memoDownloadHeaders(fileName: string, size: number): Record<stri
   };
 }
 
+/** The media type of the pilot measures file. UTF-8 is named, and `nosniff` is the shell's. */
+export const CSV_MEDIA_TYPE = "text/csv; charset=utf-8";
+
+/**
+ * The headers of the pilot measures download: a file to save and not a page to show. The name is
+ * made by the service from the scope and the day and is checked here all the same, so that nothing
+ * but plain characters can reach a header; one that fails the check gets a plain name.
+ */
+export function csvDownloadHeaders(fileName: string, size: number): Record<string, string> {
+  const name = SAFE_FILE_NAME.test(fileName) ? fileName : "parol-pilot-measures.csv";
+  return {
+    "content-type": CSV_MEDIA_TYPE,
+    "content-disposition": `attachment; filename="${name}"`,
+    "content-length": String(size),
+  };
+}
+
 /**
  * Whether the signed-in person may delete the matter: the person who created it, or an
  * administrator, read from the database. It asks `authorizeMatterDelete`, the function that will

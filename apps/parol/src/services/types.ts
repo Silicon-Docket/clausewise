@@ -13,6 +13,7 @@ import type { MatterRole } from "../contracts.js";
 import type { AuditService } from "./audit.js";
 import type { EvaluationService } from "./evaluations.js";
 import type { FeedbackService } from "./feedback.js";
+import type { PilotService } from "./pilot.js";
 import type {
   DecisionRequest,
   FindingView,
@@ -118,4 +119,9 @@ export interface Services {
   audit: AuditService;
   /** Missed issues, notes and ratings, for the matters the person is a member of (package W2.6a). */
   feedback: FeedbackService;
+  /**
+   * The pilot measures page and its CSV, the roster and the calendar (each checks the global role
+   * of the principal first), and the timer and the reference list of a matter (package W2.6b).
+   */
+  pilot: PilotService;
 }

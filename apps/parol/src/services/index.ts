@@ -3,6 +3,7 @@ import { createAuditService } from "./audit.js";
 import { createEvaluationService } from "./evaluations.js";
 import { createFeedbackService } from "./feedback.js";
 import { createMatterService } from "./matters.js";
+import { createPilotService } from "./pilot.js";
 import { createPresenter } from "./present.js";
 import { createReviewService } from "./reviews.js";
 import { createRunEngine } from "./runner.js";
@@ -26,6 +27,7 @@ export function createServices(deps: ServiceDeps): Services {
     evaluations: createEvaluationService(deps.evaluations ?? EMPTY_SOURCE),
     audit: createAuditService(deps),
     feedback: createFeedbackService(deps, present),
+    pilot: createPilotService(deps),
   };
 }
 
@@ -43,4 +45,5 @@ export {
   type StoredRunErrorKind,
 } from "./run-support.js";
 export type { Services, MatterService, RunService, ReviewService } from "./types.js";
+export type { PilotService } from "./pilot.js";
 export type * from "./views.js";
