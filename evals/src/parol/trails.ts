@@ -32,7 +32,11 @@ import {
   type SourceSpan,
   type VerifiedFinding,
 } from "../../../apps/parol/src/contracts.js";
-import { BUNDLE_SPAN_REASONS, QUOTE_CHECKS } from "../../../apps/parol/src/evaluations/document.js";
+import {
+  BUNDLE_SPAN_REASONS,
+  PAGE_RULE_KEY,
+  QUOTE_CHECKS,
+} from "../../../apps/parol/src/evaluations/document.js";
 import type { Split } from "../../../fixtures/parol/types.js";
 import { EvalError } from "../errors.js";
 import type { ObservedRun } from "./results.js";
@@ -268,7 +272,7 @@ const offset = z.number().int().min(0).max(10_000_000);
 const sha = z.string().regex(/^[0-9a-f]{64}$/);
 /** The same alphabets as the page document, which carries these keys on. */
 const caseKey = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/);
-const ruleKey = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
+const ruleKey = z.string().regex(PAGE_RULE_KEY);
 const checkId = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
 const docLabel = z.enum(DOC_LABELS);
 

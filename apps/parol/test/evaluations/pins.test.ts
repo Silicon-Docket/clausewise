@@ -23,6 +23,8 @@ import {
   FAILURE_FACTORS,
   type FailureKind as EvalFailureKind,
 } from "../../../../evals/src/parol/score.js";
+import { PAGE_RULE_KEY } from "../../src/evaluations/document.js";
+import { RULE_KEY_PATTERN } from "../../src/store/schemas.js";
 import {
   DECISION_LABEL,
   DECISION_OUTCOMES,
@@ -87,6 +89,15 @@ describe("the words and lists copied from the evaluation", () => {
 
   it("have the same splits", () => {
     expect([...SPLIT_NAMES]).toEqual([...SPLITS]);
+  });
+
+  it("have the alphabet of a rule key that the application stores, so no playbook it accepts is refused", () => {
+    expect(PAGE_RULE_KEY.source).toBe(RULE_KEY_PATTERN.source);
+    expect(PAGE_RULE_KEY.flags).toBe(RULE_KEY_PATTERN.flags);
+    for (const key of ["dur-1", "Non_solicit.2", "A", `A${"x".repeat(63)}`])
+      expect(PAGE_RULE_KEY.test(key), key).toBe(true);
+    for (const key of ["", "a b", "-dur", `A${"x".repeat(64)}`])
+      expect(PAGE_RULE_KEY.test(key), key).toBe(false);
   });
 
   it("list every mode of a run", () => {

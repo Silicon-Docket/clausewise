@@ -124,7 +124,14 @@ const measure = z.number().min(-1e12).max(1e12);
 const paragraph = z.number().int().min(0).max(100_000);
 const offset = z.number().int().min(0).max(10_000_000);
 const caseKey = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/);
-const ruleKey = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
+/**
+ * A playbook rule key, in the alphabet the application stores it in (`RULE_KEY_PATTERN` of
+ * `store/schemas.ts`). It is copied and not imported, because this folder imports nothing from the
+ * store; `test/evaluations/pins.test.ts` fails when the two differ. A narrower alphabet would make
+ * a comparison of a playbook that the application accepts impossible to publish.
+ */
+export const PAGE_RULE_KEY = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+const ruleKey = z.string().regex(PAGE_RULE_KEY);
 const checkId = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
 /** A file's base name: no path. */
 const baseName = z.string().regex(/^[^/\\]{1,200}$/);

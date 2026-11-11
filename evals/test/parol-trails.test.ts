@@ -829,6 +829,18 @@ describe("parseResults", () => {
     expect(parseResults(v2Text).trails).toEqual(v2.trails);
   });
 
+  it.each(["Non_solicit.2", "Dur-1", `A${"x".repeat(63)}`])(
+    "accepts a rule key as the application stores a playbook's keys: %s",
+    (key) => {
+      const parsed = parseResults(
+        edit((t) => {
+          t.items[0].ruleKey = key;
+        }),
+      );
+      expect(parsed.trails?.items[0]?.ruleKey).toBe(key);
+    },
+  );
+
   it.each([
     ["an unknown role", (t: Loose) => (t.items[0].cited[0].role = "decisive")],
     ["an unknown document label", (t: Loose) => (t.items[0].cited[0].doc = "D9")],

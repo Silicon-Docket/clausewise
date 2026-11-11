@@ -198,6 +198,10 @@ describe("the strict schema refuses", () => {
         trail.candidate.repeats[0]!.cited[0]!.start = -1;
       },
     ],
+    [
+      "a rule key with a space in it, which is a sentence and not a key",
+      (b) => void (b.sections[0]!.changes[0]!.ruleKey = "Duration of confidentiality"),
+    ],
     ["a wrong format", (b) => void ((b as unknown as { format: number }).format = 2)],
     ["a wrong kind", (b) => void ((b as unknown as { kind: string }).kind = "parol-eval-results")],
   ];
@@ -206,6 +210,26 @@ describe("the strict schema refuses", () => {
     it(name, () => {
       expect(problemOf(change)).toBe("not_a_comparison");
     });
+});
+
+describe("a rule key", () => {
+  // The alphabet the application stores a playbook's rule keys in, so that a comparison of any
+  // playbook it accepts can be published.
+  it.each(["dur-1", "Non_solicit.2", "A", `A${"x".repeat(63)}`])(
+    "is accepted as the application stores it: %s",
+    (key) => {
+      expect(problemOf((b) => void (b.sections[0]!.changes[0]!.ruleKey = key))).toBeNull();
+    },
+  );
+
+  it.each(["", `A${"x".repeat(64)}`, "a b", "-dur", ".dur", "dur/1", "dur\n1", "<b>"])(
+    "is refused when it is not a key: %j",
+    (key) => {
+      expect(problemOf((b) => void (b.sections[0]!.changes[0]!.ruleKey = key))).toBe(
+        "not_a_comparison",
+      );
+    },
+  );
 });
 
 describe("the reader names the first thing wrong", () => {
