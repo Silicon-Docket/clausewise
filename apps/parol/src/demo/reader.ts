@@ -8,6 +8,13 @@ import type {
 } from "../contracts.js";
 import { fold, type PromptView, type ShownClause } from "./prompt-view.js";
 import {
+  PLANTED_EXPLANATION,
+  PLANTED_PASSAGE,
+  PLANTED_RULE_KEY,
+  TRAINING_TITLE_MARKER,
+  isTrainingNote,
+} from "./training-example.js";
+import {
   DURATION,
   EXTRACT_TABLE,
   IDENTITY_NAMES,
@@ -79,12 +86,50 @@ export function locate(view: PromptView, id: PassageId): ShownClause | undefined
 }
 
 /**
- * Whether the clauses shown are from the worked example, which is all the reader can read: every
- * one of them is a paragraph of it, and the two parties are named among them.
+ * Whether the clauses shown are the worked example's paragraphs and the instruction paragraph of
+ * the training matter, and the instruction paragraph is there. It is a property of the block and
+ * of nothing else: it does not make the reader read an NDA that holds the paragraph and anything
+ * it does not know (`isKnownClause` is the same as ever, and the instruction paragraph is not in
+ * `KNOWN_PARAGRAPHS`).
+ */
+export function isTrainingBlock(view: PromptView): boolean {
+  return (
+    view.clauses.length > 0 &&
+    view.clauses.every((clause) => isKnownClause(clause) || isTrainingNote(clause)) &&
+    view.clauses.some(isTrainingNote)
+  );
+}
+
+/**
+ * Whether the clauses shown are from the documents the reader can read, which are the worked
+ * example and the training matter T01 (the worked example with one instruction paragraph added to
+ * the NDA): every one of them is a paragraph of one or the other, and the two parties are named
+ * among them. One changed word of either, or one added paragraph, makes the block unknown.
  */
 export function isWorkedExample(view: PromptView): boolean {
   const shown = view.clauses.map((clause) => clause.text).join("\n");
-  return isKnownBlock(view) && IDENTITY_NAMES.every((name) => shown.includes(name));
+  return (
+    (isKnownBlock(view) || isTrainingBlock(view)) &&
+    IDENTITY_NAMES.every((name) => shown.includes(name))
+  );
+}
+
+/**
+ * T01 and nothing else: the training block, in a request whose first document is the NDA and is
+ * titled with the marker. The marker is a second condition, independent of the paragraphs, so a
+ * copy of the T01 files in an ordinary matter under another title is read as the worked example
+ * and gets no planted answer.
+ */
+export function isTrainingMatter(view: PromptView): boolean {
+  return (
+    isTrainingBlock(view) &&
+    view.documents.some(
+      (document) =>
+        document.label === "D1" &&
+        document.kind === "nda" &&
+        document.title?.includes(TRAINING_TITLE_MARKER) === true,
+    )
+  );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -298,6 +343,16 @@ function readKnown(view: PromptView): AnalysisAnswer {
 
 export function answerAnalyze(view: PromptView): AnalysisAnswer {
   if (!isWorkedExample(view)) return abstain(NOT_THE_EXAMPLE.reason);
+  // The one wrong answer of the training matter (training-example.ts), and only there. If the
+  // clause it cites is not among those shown, the reader reads the rule as it reads it anywhere.
+  if (view.ruleId === PLANTED_RULE_KEY && isTrainingMatter(view)) {
+    const clause = locate(view, PLANTED_PASSAGE);
+    if (clause !== undefined)
+      return answer("compliant", {
+        evidence: [cite(clause, PLANTED_PASSAGE, "governing")],
+        explanation: PLANTED_EXPLANATION,
+      });
+  }
   return readKnown(view);
 }
 

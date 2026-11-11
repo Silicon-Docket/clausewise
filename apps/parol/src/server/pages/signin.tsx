@@ -32,6 +32,9 @@ export function SignInPage(props: SignInPageProps) {
           This server was started without the demo identity, so nobody can sign in. Whoever runs the
           server can turn it on by starting it with <code>PAROL_DEMO_IDENTITY=1</code>.
         </p>
+        <p>
+          New here? <a href={urls.quickstart()}>Read the quickstart</a>.
+        </p>
       </Layout>
     );
   }
@@ -41,6 +44,9 @@ export function SignInPage(props: SignInPageProps) {
       <p class="lead">
         This is a demonstration. There are no passwords: pick a person to act as. It is not
         authentication, and it must never be used with a real client's documents.
+      </p>
+      <p>
+        New here? <a href={urls.quickstart()}>Read the quickstart</a>.
       </p>
       {props.users.length === 0 ? (
         <p class="empty">No demo identities have been set up.</p>

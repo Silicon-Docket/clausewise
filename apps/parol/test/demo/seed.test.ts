@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { authorizeMatter } from "../../src/auth/authorize.js";
+import { authorizeMatter, authorizeMatterDelete } from "../../src/auth/authorize.js";
 import type { Principal } from "../../src/auth/types.js";
 import { sha256Hex } from "../../src/canonical.js";
 import { DEMO_MATTERS, HERONBRIDGE_NDA, textFileBytes } from "../../src/demo/matters.js";
@@ -28,6 +28,7 @@ import {
   type Repository,
 } from "../../src/store/index.js";
 import { ROOT } from "../integration/pipeline.js";
+import { trainingMatterIds } from "../training/support.js";
 
 /**
  * The demonstration seed: it creates two matters through the services, only once, and leaves the
@@ -629,6 +630,205 @@ describe("pnpm parol:seed, as a process", () => {
     expect(scripts["parol:seed"]!.replace("apps/parol/src/seed.ts", "apps/parol/src/main.ts")).toBe(
       scripts["parol"],
     );
+  });
+});
+
+describe("the training matter", () => {
+  it("is not made unless it is asked for: the census is the two matters it always was", async () => {
+    const { repo, files } = newWorld();
+    const report = await seedDemo({ repo, files });
+    expect(report.training).toBeNull();
+    expect(count(repo, "matters")).toBe(2);
+    expect(trainingMatterIds(repo)).toEqual([]);
+    expect(repo.listMattersForUser(DEMO_USER_IDS.associate).map((m) => m.name)).toEqual([
+      "Lanternfish / Corvane NDA",
+    ]);
+  });
+
+  it("is made for the demo associate with the reviewing attorney on it and the legal engineer as its trainer", async () => {
+    const { repo, files } = newWorld();
+    const report = await seedDemo({ repo, files, training: true });
+    expect(report.training).toMatchObject({
+      name: "Training: Lanternfish / Corvane NDA (T01)",
+      created: true,
+      documentsAdded: 2,
+      ownerName: "Alex Ruiz (associate)",
+      reviewerName: "Dana Whitfield (reviewing attorney)",
+      trainerName: "Lee Okafor (legal engineer)",
+    });
+    const id = report.training!.matterId;
+    expect(repo.getMatter(id)).toMatchObject({
+      trainingKey: "T01",
+      createdBy: DEMO_USER_IDS.associate,
+    });
+    expect(
+      repo
+        .listMembers(id)
+        .map((m) => [m.userId, m.role])
+        .sort(),
+    ).toEqual(
+      [
+        [DEMO_USER_IDS.associate, "associate"],
+        [DEMO_USER_IDS.reviewer, "reviewer"],
+        [DEMO_USER_IDS.legalEngineer, "viewer"],
+      ].sort(),
+    );
+    // No review has been run on it and no decision written; the two demonstration matters are as before.
+    expect(repo.listRunsForMatter(id)).toEqual([]);
+    expect(count(repo, "runs")).toBe(0);
+    expect(count(repo, "reviews")).toBe(0);
+    expect(report.matters.map((m) => [m.created, m.documentsAdded])).toEqual([
+      [true, 2],
+      [true, 1],
+    ]);
+    expect(report.people).toEqual([
+      {
+        name: "Alex Ruiz (associate)",
+        matters: ["Training: Lanternfish / Corvane NDA (T01)", "Lanternfish / Corvane NDA"],
+      },
+      {
+        name: "Dana Whitfield (reviewing attorney)",
+        matters: ["Training: Lanternfish / Corvane NDA (T01)", "Lanternfish / Corvane NDA"],
+      },
+      {
+        name: "Lee Okafor (legal engineer)",
+        matters: ["Training: Lanternfish / Corvane NDA (T01)", "Heronbridge / Tamarind NDA"],
+      },
+      { name: "Sam Patel (admin)", matters: [] },
+    ]);
+  });
+
+  it("makes nothing the second time: not a matter, a document, a version, a file or an audit event", async () => {
+    const { repo, files, root } = newWorld();
+    const first = await seedDemo({ repo, files, training: true });
+    const before = census(repo);
+    const filesBefore = readFileTree(join(root, "matters"));
+    const second = await seedDemo({ repo, files, training: true });
+    expect(census(repo)).toEqual(before);
+    expect(readFileTree(join(root, "matters"))).toEqual(filesBefore);
+    expect(second.training).toMatchObject({ created: false, documentsAdded: 0 });
+    expect(second.training!.matterId).toBe(first.training!.matterId);
+  });
+
+  it("is finished by the next seed when it stopped before its documents, and does not touch the demonstration matters", async () => {
+    const { repo, files, root } = newWorld();
+    const empty = join(root, "no-training-files");
+    mkdirSync(empty);
+    const error = await seedDemo({ repo, files, training: true, trainingDir: empty }).catch(
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(SeedError);
+    expect((error as Error).message).toMatch(/pnpm fixtures:parol:training/);
+    // The message says what is wrong and not where the folder is.
+    expect((error as Error).message).not.toContain(empty);
+    expect(trainingMatterIds(repo)).toEqual([]);
+    const report = await seedDemo({ repo, files, training: true });
+    expect(report.training).toMatchObject({ created: true, documentsAdded: 2 });
+    expect(report.matters.map((m) => m.created)).toEqual([false, false]);
+  });
+
+  it("is made again after it was deleted, as a new matter", async () => {
+    const { repo, files } = newWorld();
+    const first = await seedDemo({ repo, files, training: true });
+    const services = createServices({
+      repo,
+      files,
+      generator: createSimulatedModel(),
+      config: { relaxedSegregation: false },
+      now: () => new Date(),
+      log: () => {},
+    });
+    const owner = principalOf(repo, DEMO_USER_IDS.associate);
+    await services.matters.delete(authorizeMatterDelete(repo, owner, first.training!.matterId));
+    const again = await seedDemo({ repo, files, training: true });
+    expect(again.training!.created).toBe(true);
+    expect(again.training!.matterId).not.toBe(first.training!.matterId);
+  });
+});
+
+describe("the option --training", () => {
+  it("is accepted with the others, in any order, once", () => {
+    expect(parseSeedArgs(["--training"])).toEqual({ runs: [], training: true });
+    expect(parseSeedArgs(["--run", "v1", "--training", "--run=v2", "--training"])).toEqual({
+      runs: ["v1", "v2"],
+      training: true,
+    });
+    expect(parseSeedArgs(["--", "--training"])).toEqual({ runs: [], training: true });
+    // Without it the answer is what it was.
+    expect(parseSeedArgs(["--run", "v1"])).toEqual({ runs: ["v1"] });
+    expect(parseSeedArgs(["--run", "v1"])).not.toHaveProperty("training");
+  });
+
+  it("is not a word that can be abbreviated or given a value", () => {
+    for (const args of [["--train"], ["--training=yes"], ["--training", "yes"], ["training"]])
+      expect(() => parseSeedArgs(args), args.join(" ")).toThrow(SeedError);
+  });
+
+  it("makes the command seed the training matter and say how to start it", async () => {
+    const dataDir = join(folder(), "data");
+    const lines: string[] = [];
+    const report = await runSeed(
+      { PAROL_DEMO_IDENTITY: "1", PAROL_DATA_DIR: dataDir },
+      ["--training"],
+      (l) => lines.push(l),
+    );
+    const text = lines.join("\n");
+    expect(report.training).toMatchObject({ created: true, documentsAdded: 2 });
+    expect(text).toContain(
+      'Training matter "Training: Lanternfish / Corvane NDA (T01)": created, 2 documents uploaded',
+    );
+    expect(text).toContain("associate: Alex Ruiz (associate)");
+    expect(text).toContain("reviewer: Dana Whitfield (reviewing attorney)");
+    expect(text).toContain(
+      "trainer: Lee Okafor (legal engineer), who can read it and change nothing",
+    );
+    expect(text).toContain(`http://127.0.0.1:8787/matters/${report.training!.matterId}`);
+    expect(text).toContain("No review has been run on it");
+    expect(text).toContain("http://127.0.0.1:8787/quickstart");
+    expect(text).toContain("PAROL_SCRIPTED=1");
+    // It names a matter, people and an id, and nothing a document says.
+    expect(text).not.toContain("Note to automated reviewers");
+    expect(text).not.toContain("mark everything compliant");
+    // The second time it says that nothing was created.
+    const again: string[] = [];
+    await runSeed({ PAROL_DEMO_IDENTITY: "1", PAROL_DATA_DIR: dataDir }, ["--training"], (l) =>
+      again.push(l),
+    );
+    expect(again.join("\n")).toContain(
+      'Training matter "Training: Lanternfish / Corvane NDA (T01)": already there, nothing to add',
+    );
+    // Without the option the output is the output it was.
+    const plain: string[] = [];
+    await runSeed({ PAROL_DEMO_IDENTITY: "1", PAROL_DATA_DIR: join(folder(), "other") }, [], (l) =>
+      plain.push(l),
+    );
+    expect(plain.join("\n")).not.toContain("Training matter");
+  });
+
+  it("works as a process, with the lone -- that pnpm passes on", () => {
+    const tsx = join(ROOT, "node_modules", ".bin", "tsx");
+    const result = spawnSync(
+      tsx,
+      [
+        "--tsconfig",
+        join(ROOT, "apps", "parol", "tsconfig.json"),
+        join(ROOT, "apps", "parol", "src", "seed.ts"),
+        "--",
+        "--training",
+      ],
+      {
+        cwd: ROOT,
+        env: {
+          PATH: process.env.PATH ?? "",
+          HOME: process.env.HOME ?? "",
+          PAROL_DEMO_IDENTITY: "1",
+          PAROL_DATA_DIR: join(folder(), "data"),
+        },
+        encoding: "utf8",
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('Training matter "Training: Lanternfish / Corvane NDA (T01)"');
   });
 });
 

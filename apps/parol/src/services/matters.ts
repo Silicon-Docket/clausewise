@@ -14,6 +14,7 @@ import { startReadiness } from "./readiness.js";
 import type { Uploads } from "./uploads.js";
 import type { MatterService } from "./types.js";
 import type { MatterRole } from "../contracts.js";
+import { trainingProgress } from "../training/progress.js";
 import type { MatterSummary, MatterView, RetentionView, WorkflowOption } from "./views.js";
 
 const DAY_MS = 86_400_000;
@@ -84,6 +85,10 @@ export function createMatterService(
       segregationRelaxed: config.relaxedSegregation,
       workflows: workflowOptions(),
       retention: retentionView(matter),
+      // Read from this matter's own rows after the role check above, and only for a matter made
+      // for the training exercise. Null for every other matter, so the page reads a field that is
+      // always there.
+      training: matter.trainingKey === null ? null : trainingProgress(repo, matter.id),
     };
   }
 
@@ -117,6 +122,9 @@ export function createMatterService(
           // Only when given: the store's default (30 days) applies to an absent value, and an
           // explicit undefined is not the same thing under exactOptionalPropertyTypes.
           ...(input.retainDays === undefined ? {} : { retainDays: input.retainDays }),
+          // Only the training start (training/start.ts) passes a key. No route does: the
+          // request schemas of the matter forms have no field for it.
+          ...(input.training === undefined ? {} : { trainingKey: input.training }),
         });
         if (input.playbookVersionId !== null)
           repo.setPlaybookVersion(created.id, input.playbookVersionId, {

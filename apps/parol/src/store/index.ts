@@ -64,6 +64,7 @@ export {
   DEMO_USER_IDS,
   INPUT_CHANGE_REASONS,
   MAX_RETAIN_DAYS,
+  NOT_TRAINING_SQL,
   inputsDigestOf,
   type InputsParts,
 } from "./repo-matters.js";

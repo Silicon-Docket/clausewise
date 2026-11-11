@@ -121,6 +121,9 @@ export function MattersPage(props: MattersPageProps) {
   return (
     <Layout title="Matters" chrome={chrome}>
       <h1>Matters</h1>
+      <p class="lead">
+        New to Parol? <a href={urls.quickstart()}>Read the quickstart</a>.
+      </p>
       <Section
         id="matter-list"
         title="Your matters"
@@ -155,6 +158,14 @@ export function MattersPage(props: MattersPageProps) {
                           {" "}
                           <Chip tone="warn" shape="triangle">
                             Not marked synthetic
+                          </Chip>
+                        </>
+                      )}
+                      {matter.training === undefined || matter.training === null ? null : (
+                        <>
+                          {" "}
+                          <Chip tone="info" shape="square">
+                            Training
                           </Chip>
                         </>
                       )}

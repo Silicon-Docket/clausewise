@@ -36,6 +36,7 @@ import type {
   NewVersionInput,
   OperativeDocument,
   StoredSpan,
+  TrainingKey,
   UserRow,
 } from "./types.js";
 
@@ -97,6 +98,17 @@ function assertRetainDays(value: unknown): asserts value is number {
     );
 }
 
+/**
+ * The condition that keeps training matters out of a count, for a query in which the matters table
+ * is called `matters`. Every query that counts matters, runs, findings, decisions, memos or people
+ * for a measure adds it with AND. A training matter is made by the person doing the exercise, so a
+ * measure that counted it would count practice as use (docs/parol/08).
+ */
+export const NOT_TRAINING_SQL = "matters.training_key IS NULL";
+
+/** The training keys that exist. The type says so too; this is for a caller that got around it. */
+const TRAINING_KEYS: readonly TrainingKey[] = ["T01"];
+
 /** Why the inputs changed. Stored as a finding's `stale_reason`, so it is a code and never text. */
 export const INPUT_CHANGE_REASONS = {
   documentChanged: "document_changed",
@@ -130,6 +142,7 @@ interface RawMatter {
   created_at: string;
   retain_until: string;
   deleted_at: string | null;
+  training_key: TrainingKey | null;
 }
 interface RawMember {
   matter_id: string;
@@ -195,7 +208,8 @@ const toMatter = (r: RawMatter): MatterRow => ({
   createdAt: r.created_at,
   retainUntil: r.retain_until,
   deletedAt: r.deleted_at,
-  trainingKey: null, // STUB(W2.8): reads matters.training_key once migration 007 adds the column.
+  // A row of a database that has not got the column yet reads as an ordinary matter.
+  trainingKey: r.training_key ?? null,
 });
 const toMember = (r: RawMember): MemberRow => ({
   matterId: r.matter_id,
@@ -349,21 +363,26 @@ export function createMattersApi(ctx: Ctx) {
     createdBy: string;
     synthetic?: boolean;
     retainDays?: number;
+    /** Makes this the person's training matter. Set at creation and never changed. */
+    trainingKey?: TrainingKey;
   }): MatterRow {
     const name = cleanLabel("matter name", input.name);
     const clientLegalName = cleanLabel("client legal name", input.clientLegalName);
     const retainDays = input.retainDays ?? DEFAULT_RETAIN_DAYS;
     assertRetainDays(retainDays);
+    const trainingKey = input.trainingKey ?? null;
+    // A programming error and not a refusal: no request can carry a key, so there is no phrase for it.
+    if (trainingKey !== null && !TRAINING_KEYS.includes(trainingKey))
+      throw new TypeError("the training key is not one that exists");
     return tx(() => {
       requireUser(input.createdBy);
       const id = newId("mat");
       const now = ctx.now();
       const retainUntil = new Date(Date.parse(now) + retainDays * 86_400_000).toISOString();
-      run(
-        `INSERT INTO matters
-           (id, name, client_legal_name, playbook_version_id, status, current_inputs_sha256,
-            synthetic, created_by, created_at, retain_until, deleted_at)
-         VALUES (?, ?, ?, NULL, 'draft', NULL, ?, ?, ?, ?, NULL)`,
+      // An ordinary matter is written by the statement it always was, without the column that
+      // migration 7 added, so it is made the same way on a database that has not got it yet. Only
+      // a training matter names the column.
+      const fields = [
         id,
         name,
         clientLegalName,
@@ -371,7 +390,24 @@ export function createMattersApi(ctx: Ctx) {
         input.createdBy,
         now,
         retainUntil,
-      );
+      ] as const;
+      if (trainingKey === null)
+        run(
+          `INSERT INTO matters
+             (id, name, client_legal_name, playbook_version_id, status, current_inputs_sha256,
+              synthetic, created_by, created_at, retain_until, deleted_at)
+           VALUES (?, ?, ?, NULL, 'draft', NULL, ?, ?, ?, ?, NULL)`,
+          ...fields,
+        );
+      else
+        run(
+          `INSERT INTO matters
+             (id, name, client_legal_name, playbook_version_id, status, current_inputs_sha256,
+              synthetic, created_by, created_at, retain_until, deleted_at, training_key)
+           VALUES (?, ?, ?, NULL, 'draft', NULL, ?, ?, ?, ?, NULL, ?)`,
+          ...fields,
+          trainingKey,
+        );
       run(
         `INSERT INTO matter_members (matter_id, user_id, role, granted_by, granted_at)
          VALUES (?, ?, 'associate', ?, ?)`,
@@ -386,7 +422,11 @@ export function createMattersApi(ctx: Ctx) {
         action: "matter.create",
         targetType: "matter",
         targetId: id,
-        detail: { synthetic: input.synthetic ?? true, retainUntil },
+        detail: {
+          synthetic: input.synthetic ?? true,
+          retainUntil,
+          ...(trainingKey === null ? {} : { training: trainingKey }),
+        },
       });
       ctx.audit({
         actorId: input.createdBy,

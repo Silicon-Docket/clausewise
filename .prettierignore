@@ -4,3 +4,4 @@ dist
 node_modules
 fixtures/*.docx
 fixtures/parol/files
+apps/parol/training
