@@ -12,10 +12,14 @@ import {
   PLAYBOOK_YAML,
   RULES,
   WORKFLOW_MANIFEST,
+  addMatter,
   makeClock,
   makeWorld,
   reviewable,
+  saveAll,
   seedPrompts,
+  startRun,
+  succeed,
   type World,
 } from "./fixtures.js";
 
@@ -23,8 +27,11 @@ import {
  * Migration 006, the part of the reason code and the minor-edit mark (package W2.6a, slice A).
  * A decision records why it was an edit or a reject, and whether an edit was minor, in two columns
  * of its own row; the database refuses a new decision that breaks the rules, whoever writes it, and
- * decisions made before the migration keep the two columns empty. The later slices add the tests of
- * their parts below.
+ * decisions made before the migration keep the two columns empty.
+ *
+ * Slice B adds the second part of the same migration: the rule and the location of a missed issue,
+ * the shape of each kind of feedback, one rating for each person and matter, and a table that is
+ * written once. Its tests are the second half of this file.
  */
 
 const REVIEW_MESSAGE = /an edit or reject carries a reason code, and an edit a minor-edit mark/;
@@ -451,5 +458,512 @@ describe("migration 006, the part of the reason code", () => {
         .run(accepted.id, r.m.id, ACTORS.reviewer, accepted.contentSha256, at),
     ).toThrow(REVIEW_MESSAGE);
     upgraded.close();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Part 2 (slice B): the shape of each kind of feedback
+// ---------------------------------------------------------------------------------------------
+
+const SHAPE_MESSAGE = /feedback does not have the shape of its kind/;
+const IMMUTABLE_MESSAGE = /feedback is never edited/;
+const REPLACED_MESSAGE = /feedback is never replaced/;
+
+/** A matter reviewed, its run, its first finding, and a second run of another matter. */
+function feedbackWorld() {
+  const r = reviewable(w);
+  const other = reviewable(w, { name: "Another matter" });
+  return {
+    matterId: r.m.id,
+    runId: r.run.id,
+    findingId: r.findings[0]!.id,
+    otherMatterId: other.m.id,
+    otherRunId: other.run.id,
+    otherFindingId: other.findings[0]!.id,
+  };
+}
+
+let serial = 0;
+/**
+ * Writes a feedback row by hand, as code that bypasses the repository would, and returns a function
+ * so that a test can say what it expects of it. `over` changes the columns of the row.
+ */
+function insertFeedback(over: Record<string, SQLInputValue>) {
+  serial += 1;
+  const row: Record<string, SQLInputValue> = {
+    id: `fbk_by_hand_${serial}`,
+    matter_id: "unset",
+    run_id: null,
+    finding_id: null,
+    user_id: ACTORS.reviewer,
+    kind: "comment",
+    reason_code: null,
+    rating: null,
+    text: "A remark.",
+    rule_key: null,
+    location: null,
+    created_at: "2026-11-02T10:00:00.000Z",
+    ...over,
+  };
+  const columns = Object.keys(row);
+  return () =>
+    w.db
+      .prepare(
+        `INSERT INTO feedback (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+      )
+      .run(...columns.map((c) => row[c] as SQLInputValue));
+}
+
+describe("feedback, at the database: the shape of a missed issue", () => {
+  it("needs a run, a text, and no finding and no reason code, whoever writes the row", () => {
+    const f = feedbackWorld();
+    const base = { matter_id: f.matterId, kind: "missed_issue", run_id: f.runId };
+    expect(insertFeedback({ ...base, text: "The review missed a clause." })).not.toThrow();
+    // No run: a report is about a review.
+    expect(insertFeedback({ ...base, run_id: null, text: "x" })).toThrow(SHAPE_MESSAGE);
+    // No text, or text that is only spaces.
+    expect(insertFeedback({ ...base, text: null })).toThrow(SHAPE_MESSAGE);
+    expect(insertFeedback({ ...base, text: "   " })).toThrow(SHAPE_MESSAGE);
+    // A finding, or a reason code, belongs to other kinds.
+    expect(insertFeedback({ ...base, text: "x", finding_id: f.findingId })).toThrow(SHAPE_MESSAGE);
+    expect(insertFeedback({ ...base, text: "x", reason_code: "other" })).toThrow(SHAPE_MESSAGE);
+    // A rating belongs to the rating.
+    expect(insertFeedback({ ...base, text: "x", rating: 3 })).toThrow(SHAPE_MESSAGE);
+  });
+
+  it("names a rule of the playbook of its run, or none, and never the rule of a playbook it was not made with", () => {
+    const f = feedbackWorld();
+    const base = {
+      matter_id: f.matterId,
+      kind: "missed_issue",
+      run_id: f.runId,
+      text: "The review missed a clause.",
+    };
+    // No rule at all is "not covered by any rule".
+    expect(insertFeedback({ ...base, rule_key: null })).not.toThrow();
+    for (const key of ["pty-1", "dur-1", "gov-1"])
+      expect(insertFeedback({ ...base, rule_key: key }), key).not.toThrow();
+    // A key that is no rule of the playbook is refused, and so is a key with other letters.
+    for (const key of ["zzz-9", "DUR-1", "dur-1 "])
+      expect(insertFeedback({ ...base, rule_key: key }), key).toThrow(SHAPE_MESSAGE);
+    // The rule of another playbook is not a rule of this run's: the match is on the run's own.
+    const other = w.repo.approvePlaybookVersion(
+      w.repo.importPlaybookDraft(
+        {
+          slug: "other-playbook",
+          version: "1.0.0",
+          yaml: `${PLAYBOOK_YAML}# other\n`,
+          sha256: sha256Hex(`${PLAYBOOK_YAML}# other\n`),
+          rules: RULES.map((rule) => ({ ...rule, key: `o${rule.key}` })),
+        },
+        { actorId: ACTORS.legalEngineer },
+      ).id,
+      { actorId: ACTORS.admin },
+    );
+    expect(w.repo.listRules(other.id).map((rule) => rule.key)).toContain("odur-1");
+    expect(insertFeedback({ ...base, rule_key: "odur-1" })).toThrow(SHAPE_MESSAGE);
+    // A run of another matter is not this matter's run: the older trigger of 002 still holds.
+    expect(insertFeedback({ ...base, run_id: f.otherRunId })).toThrow(/its own matter/);
+  });
+
+  it("holds the length of the rule and of the location with a CHECK, and the text with the shape", () => {
+    const f = feedbackWorld();
+    const base = {
+      matter_id: f.matterId,
+      kind: "missed_issue",
+      run_id: f.runId,
+      text: "The review missed a clause.",
+    };
+    expect(insertFeedback({ ...base, location: "x".repeat(200) })).not.toThrow();
+    expect(insertFeedback({ ...base, location: "x".repeat(201) })).toThrow(/CHECK constraint/);
+    expect(insertFeedback({ ...base, location: "" })).toThrow(/CHECK constraint/);
+    // A rule key of the wrong length is refused too. The shape trigger answers first (it runs
+    // before the constraints and matches the key against the playbook), so it names the shape.
+    expect(insertFeedback({ ...base, rule_key: "" })).toThrow();
+    expect(insertFeedback({ ...base, rule_key: "x".repeat(65) })).toThrow();
+    // The text is held to its 4,000 characters, and exactly 4,000 goes in.
+    expect(insertFeedback({ ...base, text: "t".repeat(4000) })).not.toThrow();
+    expect(insertFeedback({ ...base, text: "t".repeat(4001) })).toThrow(SHAPE_MESSAGE);
+  });
+});
+
+describe("feedback, at the database: the other kinds", () => {
+  it("keeps the rule and the location to a missed issue, and the rating to a rating", () => {
+    const f = feedbackWorld();
+    const comment = { matter_id: f.matterId, kind: "comment", text: "A remark." };
+    expect(insertFeedback(comment)).not.toThrow();
+    // A note on a finding is a comment with a finding and a run, and keeps its old shape.
+    expect(insertFeedback({ ...comment, finding_id: f.findingId, run_id: f.runId })).not.toThrow();
+    expect(insertFeedback({ ...comment, rule_key: "dur-1" })).toThrow(SHAPE_MESSAGE);
+    expect(insertFeedback({ ...comment, location: "Section 6.1" })).toThrow(SHAPE_MESSAGE);
+    expect(insertFeedback({ ...comment, rating: 4 })).toThrow(SHAPE_MESSAGE);
+    // A rating needs its number, and takes no finding, no reason code, no rule and no location.
+    const rating = { matter_id: f.matterId, kind: "rating", text: null, rating: 4 };
+    expect(insertFeedback(rating)).not.toThrow();
+    expect(insertFeedback({ ...rating, user_id: ACTORS.associate, rating: null })).toThrow(
+      SHAPE_MESSAGE,
+    );
+    expect(
+      insertFeedback({ ...rating, user_id: ACTORS.associate, finding_id: f.findingId }),
+    ).toThrow(SHAPE_MESSAGE);
+    expect(insertFeedback({ ...rating, user_id: ACTORS.associate, reason_code: "other" })).toThrow(
+      SHAPE_MESSAGE,
+    );
+    expect(insertFeedback({ ...rating, user_id: ACTORS.associate, location: "x" })).toThrow(
+      SHAPE_MESSAGE,
+    );
+    expect(insertFeedback({ ...rating, user_id: ACTORS.associate, rule_key: "dur-1" })).toThrow(
+      SHAPE_MESSAGE,
+    );
+    // The reserved kind keeps the shape it had.
+    expect(
+      insertFeedback({
+        matter_id: f.matterId,
+        kind: "finding_reason",
+        finding_id: f.findingId,
+        run_id: f.runId,
+        reason_code: "wrong_evidence",
+        text: null,
+      }),
+    ).not.toThrow();
+  });
+
+  it("allows one rating for each person and matter, and any number of the rest", () => {
+    const f = feedbackWorld();
+    const rating = (over: Record<string, SQLInputValue>) =>
+      insertFeedback({ kind: "rating", text: null, rating: 4, matter_id: f.matterId, ...over });
+    expect(rating({})).not.toThrow();
+    // The same person on the same matter, whatever the number: refused by the index.
+    expect(rating({ rating: 5 })).toThrow(/UNIQUE constraint failed/);
+    expect(rating({ run_id: f.runId })).toThrow(/UNIQUE constraint failed/);
+    // Another person on that matter, and that person on another matter, may rate.
+    expect(rating({ user_id: ACTORS.associate })).not.toThrow();
+    expect(rating({ matter_id: f.otherMatterId })).not.toThrow();
+    // The index is for ratings: a person writes as many reports and comments as the application lets them.
+    for (let i = 0; i < 3; i += 1) {
+      expect(
+        insertFeedback({ matter_id: f.matterId, kind: "comment", text: `A remark ${i}.` }),
+      ).not.toThrow();
+      expect(
+        insertFeedback({
+          matter_id: f.matterId,
+          kind: "missed_issue",
+          run_id: f.runId,
+          text: `A miss ${i}.`,
+        }),
+      ).not.toThrow();
+    }
+  });
+});
+
+describe("feedback, at the database: a table that is written once", () => {
+  it("never changes a row, whatever column is named, and says so", () => {
+    const f = feedbackWorld();
+    const write = insertFeedback({
+      id: "fbk_fixed",
+      matter_id: f.matterId,
+      kind: "missed_issue",
+      run_id: f.runId,
+      text: "The review missed a clause.",
+      rule_key: "dur-1",
+      location: "NDA section 6.1",
+    });
+    write();
+    for (const set of [
+      "text = 'rewritten'",
+      "location = 'elsewhere'",
+      "rule_key = NULL",
+      "rule_key = 'gov-1'",
+      "user_id = 'usr_other'",
+      "matter_id = 'mat_other'",
+      "run_id = NULL",
+      "kind = 'comment'",
+      "created_at = '2030-01-01T00:00:00.000Z'",
+      "id = 'fbk_renamed'",
+    ])
+      expect(
+        () => w.db.prepare(`UPDATE feedback SET ${set} WHERE id = 'fbk_fixed'`).run(),
+        set,
+      ).toThrow(IMMUTABLE_MESSAGE);
+    // A statement that changes no row is not a change, and the row is what it was.
+    expect(
+      w.db.prepare("SELECT text, rule_key, location FROM feedback WHERE id = 'fbk_fixed'").get(),
+    ).toEqual({
+      text: "The review missed a clause.",
+      rule_key: "dur-1",
+      location: "NDA section 6.1",
+    });
+  });
+
+  it("never replaces a row: not by id, and not with INSERT OR REPLACE", () => {
+    const f = feedbackWorld();
+    const row = {
+      id: "fbk_once",
+      matter_id: f.matterId,
+      kind: "comment",
+      text: "Said once.",
+    };
+    insertFeedback(row)();
+    expect(insertFeedback({ ...row, text: "Said again." })).toThrow(REPLACED_MESSAGE);
+    expect(() =>
+      w.db
+        .prepare(
+          `INSERT OR REPLACE INTO feedback (id, matter_id, user_id, kind, text, created_at)
+           VALUES ('fbk_once', ?, ?, 'comment', 'Replaced.', '2026-11-02T10:00:00.000Z')`,
+        )
+        .run(f.matterId, ACTORS.reviewer),
+    ).toThrow(REPLACED_MESSAGE);
+    expect(w.db.prepare("SELECT text FROM feedback WHERE id = 'fbk_once'").get()).toEqual({
+      text: "Said once.",
+    });
+  });
+
+  it("still lets the matter go with all of its feedback, and leaves the feedback of another", () => {
+    const f = feedbackWorld();
+    for (const matter of [f.matterId, f.otherMatterId])
+      insertFeedback({
+        matter_id: matter,
+        kind: "comment",
+        text: `A remark on ${matter}.`,
+      })();
+    const count = (id: string): number =>
+      (
+        w.db.prepare("SELECT COUNT(*) AS n FROM feedback WHERE matter_id = ?").get(id) as {
+          n: number;
+        }
+      ).n;
+    expect([count(f.matterId), count(f.otherMatterId)]).toEqual([1, 1]);
+    w.repo.deleteMatter(f.matterId, { actorId: ACTORS.associate });
+    expect([count(f.matterId), count(f.otherMatterId)]).toEqual([0, 1]);
+  });
+
+  it("has the columns, the three indexes and the three triggers, beside the ones of 002", () => {
+    const columns = (w.db.prepare("PRAGMA table_info(feedback)").all() as { name: string }[]).map(
+      (c) => c.name,
+    );
+    expect(columns).toEqual(expect.arrayContaining(["rule_key", "location"]));
+    const indexes = (
+      w.db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'feedback'")
+        .all() as { name: string }[]
+    ).map((i) => i.name);
+    for (const name of [
+      "feedback_by_matter",
+      "feedback_one_rating_per_user",
+      "feedback_by_run",
+      "feedback_by_finding",
+    ])
+      expect(indexes, name).toContain(name);
+    const triggers = (
+      w.db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'feedback'")
+        .all() as { name: string }[]
+    ).map((t) => t.name);
+    expect(triggers.sort()).toEqual([
+      "feedback_immutable",
+      "feedback_no_replace",
+      "feedback_same_matter",
+      "feedback_shape",
+    ]);
+  });
+});
+
+describe("migration 006, the part of the feedback table", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "parol-feedback-shape-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("upgrades a database made at version 5 with every old kind of feedback, and keeps them as they were", () => {
+    const old = join(dir, "migrations-to-5");
+    mkdirSync(old);
+    for (const name of [
+      "001_init.sql",
+      "002_integrity.sql",
+      "003_ingest_warnings.sql",
+      "004_usage_settled.sql",
+      "005_retention.sql",
+    ])
+      copyFileSync(
+        fileURLToPath(new URL(`../../migrations/${name}`, import.meta.url)),
+        join(old, name),
+      );
+    const location = join(dir, "old.sqlite");
+    const atFive = openDatabase(location, { migrationsDir: old });
+    const clock = makeClock();
+    const repo = createRepository(atFive, { now: clock.now });
+    repo.seedDemoUsers();
+    const playbook = repo.approvePlaybookVersion(
+      repo.importPlaybookDraft(
+        {
+          slug: "test-playbook",
+          version: "1.0.0",
+          yaml: PLAYBOOK_YAML,
+          sha256: sha256Hex(PLAYBOOK_YAML),
+          rules: RULES,
+        },
+        { actorId: ACTORS.legalEngineer },
+      ).id,
+      { actorId: ACTORS.admin },
+    );
+    seedPrompts(repo);
+    const workflow = repo.upsertWorkflowVersion({
+      manifest: WORKFLOW_MANIFEST,
+      sha256: hashOf(WORKFLOW_MANIFEST),
+    });
+    const world = { db: atFive, repo, clock, playbook, workflow } as unknown as World;
+    const m = addMatter(world);
+    const run = startRun(world, m);
+    saveAll(world, m, run);
+    succeed(world, m, run);
+    const columnsBefore = (
+      atFive.prepare("PRAGMA table_info(feedback)").all() as { name: string }[]
+    ).map((c) => c.name);
+    expect(columnsBefore).not.toContain("rule_key");
+
+    // Feedback as the code before this migration wrote it, including a missed issue with no run
+    // and a rating with text, which could not be written the same way now.
+    const insert = atFive.prepare(
+      `INSERT INTO feedback (id, matter_id, run_id, finding_id, user_id, kind, reason_code, rating, text, created_at)
+       VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, ?, '2026-11-02T10:00:00.000Z')`,
+    );
+    insert.run("fbk_old_missed", m.id, null, ACTORS.reviewer, "missed_issue", null, "No run.");
+    insert.run("fbk_old_rating_1", m.id, null, ACTORS.reviewer, "rating", 3, null);
+    insert.run("fbk_old_rating_2", m.id, run.id, ACTORS.associate, "rating", 5, "Again.");
+    insert.run("fbk_old_comment", m.id, null, ACTORS.associate, "comment", null, "A remark.");
+    atFive.close();
+
+    const upgraded = openDatabase(location);
+    expect(
+      upgraded
+        .prepare(
+          "SELECT id, kind, run_id, rating, text, rule_key, location FROM feedback ORDER BY id",
+        )
+        .all(),
+    ).toEqual([
+      {
+        id: "fbk_old_comment",
+        kind: "comment",
+        run_id: null,
+        rating: null,
+        text: "A remark.",
+        rule_key: null,
+        location: null,
+      },
+      {
+        id: "fbk_old_missed",
+        kind: "missed_issue",
+        run_id: null,
+        rating: null,
+        text: "No run.",
+        rule_key: null,
+        location: null,
+      },
+      {
+        id: "fbk_old_rating_1",
+        kind: "rating",
+        run_id: null,
+        rating: 3,
+        text: null,
+        rule_key: null,
+        location: null,
+      },
+      {
+        id: "fbk_old_rating_2",
+        kind: "rating",
+        run_id: run.id,
+        rating: 5,
+        text: "Again.",
+        rule_key: null,
+        location: null,
+      },
+    ]);
+    // The application reads the old rows with the new columns empty.
+    const after = createRepository(upgraded, { now: clock.now });
+    expect(after.listFeedback(m.id).map((row) => [row.id, row.ruleKey, row.location])).toEqual([
+      ["fbk_old_missed", null, null],
+      ["fbk_old_rating_1", null, null],
+      ["fbk_old_rating_2", null, null],
+      ["fbk_old_comment", null, null],
+    ]);
+    // An old row cannot be changed or replaced now, and a new row has to have its kind's shape.
+    expect(() =>
+      upgraded.prepare("UPDATE feedback SET text = 'x' WHERE id = 'fbk_old_comment'").run(),
+    ).toThrow(IMMUTABLE_MESSAGE);
+    expect(() =>
+      after.addFeedback(m.id, { userId: ACTORS.reviewer, kind: "missed_issue", text: "No run." }),
+    ).toThrow(/reported against a run/);
+    expect(() =>
+      upgraded
+        .prepare(
+          `INSERT INTO feedback (id, matter_id, user_id, kind, text, created_at)
+           VALUES ('fbk_new_bad', ?, ?, 'missed_issue', 'No run.', '2026-11-03T10:00:00.000Z')`,
+        )
+        .run(m.id, ACTORS.reviewer),
+    ).toThrow(SHAPE_MESSAGE);
+    expect(
+      after.addFeedback(m.id, {
+        userId: ACTORS.reviewer,
+        kind: "missed_issue",
+        runId: run.id,
+        ruleKey: "dur-1",
+        location: "NDA section 6.1",
+        text: "A new one.",
+      }),
+    ).toMatchObject({ ruleKey: "dur-1", location: "NDA section 6.1", runId: run.id });
+    // One more rating by a person who has rated is refused from now on.
+    expect(() =>
+      after.addFeedback(m.id, { userId: ACTORS.reviewer, kind: "rating", rating: 4 }),
+    ).toThrow(/UNIQUE constraint failed/);
+    upgraded.close();
+  });
+
+  it("is refused as a whole by a database that holds two ratings by one person for one matter, and leaves it at version 5", () => {
+    // Nothing in the application could write that (it had no route to a rating), so this is a
+    // database that someone changed by hand. The migration does not delete a row to make room for
+    // its index: it stops, the file is left as it was, and the old code can still open it.
+    const old = join(dir, "migrations-to-5");
+    mkdirSync(old);
+    for (const name of [
+      "001_init.sql",
+      "002_integrity.sql",
+      "003_ingest_warnings.sql",
+      "004_usage_settled.sql",
+      "005_retention.sql",
+    ])
+      copyFileSync(
+        fileURLToPath(new URL(`../../migrations/${name}`, import.meta.url)),
+        join(old, name),
+      );
+    const location = join(dir, "twice.sqlite");
+    const atFive = openDatabase(location, { migrationsDir: old });
+    const repo = createRepository(atFive, { now: makeClock().now });
+    repo.seedDemoUsers();
+    const matter = repo.createMatter({
+      name: "A matter",
+      clientLegalName: "A Client, Inc.",
+      createdBy: ACTORS.associate,
+    });
+    const insert = atFive.prepare(
+      `INSERT INTO feedback (id, matter_id, user_id, kind, rating, created_at)
+       VALUES (?, ?, ?, 'rating', ?, '2026-11-02T10:00:00.000Z')`,
+    );
+    insert.run("fbk_twice_1", matter.id, ACTORS.reviewer, 3);
+    insert.run("fbk_twice_2", matter.id, ACTORS.reviewer, 5);
+    atFive.close();
+
+    expect(() => openDatabase(location)).toThrow(/UNIQUE constraint failed/);
+    const again = openDatabase(location, { migrationsDir: old });
+    const columns = (again.prepare("PRAGMA table_info(feedback)").all() as { name: string }[]).map(
+      (c) => c.name,
+    );
+    expect(columns).not.toContain("rule_key");
+    expect(columns).not.toContain("location");
+    expect((again.prepare("SELECT COUNT(*) AS n FROM feedback").get() as { n: number }).n).toBe(2);
+    expect(
+      (again.prepare("SELECT MAX(version) AS v FROM schema_migrations").get() as { v: number }).v,
+    ).toBe(5);
+    again.close();
   });
 });

@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { REASON_CODES } from "../../src/contracts.js";
-import { FIELDS, MINOR_EDIT_VALUE } from "../../src/server/pages/forms.js";
+import { FIELDS, MINOR_EDIT_VALUE, NOT_COVERED_VALUE } from "../../src/server/pages/forms.js";
 import { urls } from "../../src/server/urls.js";
 import { REASON_CODE_LABEL } from "../../src/server/views/feedback.js";
 import type { FindingView, IssueRow } from "../../src/services/views.js";
-import { all, first, hasClass, readable } from "../pages/html.js";
+import { all, attr, byId, first, hasClass, readable } from "../pages/html.js";
 import {
   IDS,
+  VIEWER,
   checkPage,
   cleanup,
   makeSite,
@@ -23,6 +24,9 @@ import {
  * another as a minor edit, both through the form, and accepts the rest. A marker is typed into every
  * free-text field; the codes are in the decisions and in the audit trail, and the marker is in the
  * decisions only. This is a script and not a measurement of any model; every name is synthetic.
+ *
+ * Slice B adds a second story below: the report of a missed issue, from the review page to the
+ * deletion of the matter. The later slices add theirs.
  */
 
 afterAll(cleanup);
@@ -230,5 +234,195 @@ describe("a reviewer's reasons, through HTTP only", () => {
     // Still on record with their codes, and out of date: a measure that counts current decisions
     // does not count them.
     expect(after).toEqual([{ validity: "stale", n: 2 }]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Slice B: a missed issue, from the review page to the deletion of the matter
+// ---------------------------------------------------------------------------------------------
+
+const NOTE_MARK = "ZQ-E2E-NOTE-6021";
+const PLACE_MARK = "ZQ-E2E-PLACE-6022";
+
+describe("a missed issue, through HTTP only", () => {
+  let site: Site;
+  let associate: Browser;
+  let reviewer: Browser;
+  let viewer: Browser;
+  let ids: Prepared;
+  const runUrl = (runId = ids.runId): string => urls.run(ids.matterId, runId);
+  const listed = (root: ReturnType<typeof byId>): string[][] =>
+    all(root!, (el) => el.name === "tr")
+      .filter((tr) => all(tr, (el) => el.name === "td").length > 0)
+      .map((tr) => all(tr, (el) => el.name === "td").map(readable));
+
+  beforeAll(async () => {
+    site = makeSite();
+    associate = await site.as(IDS.associate);
+    reviewer = await site.as(IDS.reviewer);
+    viewer = await site.as(VIEWER);
+    ids = await prepareMatter(site, { exported: false });
+  });
+
+  it("is reported by the reviewer through the form on the review page, and read back in the list", async () => {
+    const page = await reviewer.page(runUrl());
+    checkPage(site, page);
+    // The link at the top leads to the section, which is on the page.
+    const jump = first(page.root, (el) => el.name === "a" && attr(el, "href") === "#missed-issue");
+    expect(readable(jump)).toBe("Report a missed issue");
+    const saved = await reviewer.submit(page, urls.missedIssues(ids.matterId, ids.runId), {
+      set: {
+        [FIELDS.ruleKey]: "dur-1",
+        [FIELDS.location]: `Amendment No. 1, paragraph 2 ${PLACE_MARK}`,
+        [FIELDS.note]: `Section 6.1 is deleted and the review says it stands. ${NOTE_MARK}`,
+      },
+    });
+    expect(saved.status).toBe(303);
+    const landed = await reviewer.page(saved.headers.get("location")!);
+    checkPage(site, landed);
+    expect(readable(first(landed.root, (el) => attr(el, "role") === "status"))).toContain(
+      "Your report was saved.",
+    );
+    const rows = listed(byId(landed.root, "missed-issue"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]![0]).toContain("dur-1");
+    expect(rows[0]![2]).toContain(NOTE_MARK);
+  });
+
+  it("is reported by the associate as not covered, and by the viewer in JSON, and all three read the same list", async () => {
+    const page = await associate.page(runUrl());
+    const saved = await associate.submit(page, urls.missedIssues(ids.matterId, ids.runId), {
+      set: {
+        [FIELDS.ruleKey]: NOT_COVERED_VALUE,
+        [FIELDS.note]: `No rule covers a non-solicitation clause. ${NOTE_MARK}`,
+      },
+    });
+    expect(saved.status).toBe(303);
+    const viaJson = await viewer.api(
+      "POST",
+      `/api/matters/${ids.matterId}/runs/${ids.runId}/missed-issues`,
+      {
+        ruleKey: "gov-1",
+        location: null,
+        note: `The court named is outside the list. ${NOTE_MARK}`,
+      },
+    );
+    expect(viaJson.status).toBe(201);
+    for (const who of [associate, reviewer, viewer]) {
+      const root = byId((await who.page(runUrl())).root, "missed-issue");
+      expect(listed(root).map((row) => row[3])).toEqual([
+        site.w.repo.getUser(IDS.reviewer)?.displayName,
+        site.w.repo.getUser(IDS.associate)?.displayName,
+        site.w.repo.getUser(VIEWER)?.displayName,
+      ]);
+    }
+  });
+
+  it("changes nothing the review is waiting on: the findings can be decided and the memo exported", async () => {
+    const am = site.w.grant(site.w.reviewer, ids.matterId);
+    for (const issue of site.w.services.runs.issues(am, ids.runId)) {
+      const view = site.w.services.runs.finding(am, issue.findingId);
+      const ok =
+        view.issue.verificationState === "verified" && view.issue.status !== "undetermined";
+      site.w.services.reviews.decide(am, issue.findingId, {
+        decision: ok ? "accept" : "escalate",
+        findingContentSha256: view.contentSha256,
+        edits: null,
+        reason: ok ? null : "The workflow could not settle this rule.",
+      });
+    }
+    const memos = await reviewer.page(urls.memos(ids.matterId));
+    const exported = await reviewer.submit(memos, urls.memos(ids.matterId), { set: {} });
+    expect(exported.status).toBe(303);
+    const memo = site.w.repo.listMemos(ids.matterId)[0]!;
+    const file = await reviewer.send("GET", `/api/matters/${ids.matterId}/memos/${memo.id}/file`);
+    const JSZip = (await import("jszip")).default;
+    const xml = await (
+      await JSZip.loadAsync(Buffer.from(await file.arrayBuffer()))
+    )
+      .file("word/document.xml")!
+      .async("string");
+    // The reports are for the people who run the pilot, and are not part of the memo.
+    expect(xml).not.toContain(NOTE_MARK);
+    expect(xml).not.toContain(PLACE_MARK);
+  });
+
+  it("keeps the words in the feedback table only, and the rule and the flags in the audit trail", () => {
+    const db = site.w.repo.db;
+    const where = (table: string, column: string, mark: string): number =>
+      (
+        db
+          .prepare(`SELECT count(*) AS n FROM ${table} WHERE instr(CAST(${column} AS TEXT), ?) > 0`)
+          .get(mark) as { n: number }
+      ).n;
+    expect(where("feedback", "text", NOTE_MARK)).toBe(3);
+    expect(where("feedback", "location", PLACE_MARK)).toBe(1);
+    expect(where("audit_events", "detail_json", NOTE_MARK)).toBe(0);
+    expect(where("audit_events", "detail_json", PLACE_MARK)).toBe(0);
+    expect(site.logs.join("\n")).not.toContain("ZQ-E2E");
+    expect(site.w.logs.join("\n")).not.toContain("ZQ-E2E");
+    const events = site.w.repo.listAuditEvents({ matterId: ids.matterId, action: "feedback.add" });
+    expect(events.map((e) => [e.detail["ruleKey"], e.detail["hasLocation"], e.actorId])).toEqual([
+      ["dur-1", true, IDS.reviewer],
+      [null, false, IDS.associate],
+      ["gov-1", false, VIEWER],
+    ]);
+  });
+
+  it("stays with the review it was made about: a new review has none, and the old one still lists them", async () => {
+    // A new version of the amendment makes the review out of date, and a new review is started.
+    const fixed = await associate.apiUpload(
+      `/api/matters/${ids.matterId}/documents/${ids.lastDocumentId}/versions`,
+      {},
+      {
+        name: "amendment-corrected.txt",
+        bytes: new TextEncoder().encode(
+          "AMENDMENT NO. 1 TO MUTUAL NONDISCLOSURE AGREEMENT\n\n2. A corrected paragraph of synthetic text.\n",
+        ),
+      },
+    );
+    expect(fixed.status).toBe(201);
+    const started = await associate.api("POST", `/api/matters/${ids.matterId}/runs`, {
+      workflow: "v2",
+    });
+    expect(started.status).toBe(202);
+    const next = ((await started.json()) as { id: string }).id;
+    await site.w.services.runs.idle();
+    expect(next).not.toBe(ids.runId);
+
+    const fresh = await reviewer.page(runUrl(next));
+    expect(listed(byId(fresh.root, "missed-issue"))).toEqual([]);
+    const old = await reviewer.page(runUrl());
+    expect(listed(byId(old.root, "missed-issue"))).toHaveLength(3);
+    expect(readable(first(old.root, (el) => hasClass(el, "banner-stale")))).toContain(
+      "out of date",
+    );
+  });
+
+  it("goes with the matter when it is deleted, and the audit trail keeps the events without the words", async () => {
+    const db = site.w.repo.db;
+    const count = (sql: string): number => (db.prepare(sql).get(ids.matterId) as { n: number }).n;
+    expect(count("SELECT count(*) AS n FROM feedback WHERE matter_id = ?")).toBe(3);
+    const page = await associate.page(urls.matter(ids.matterId));
+    const deleted = await associate.submit(page, urls.matterDelete(ids.matterId), {
+      set: { [FIELDS.confirm]: "yes" },
+    });
+    expect(deleted.status).toBe(303);
+    expect(count("SELECT count(*) AS n FROM feedback WHERE matter_id = ?")).toBe(0);
+    expect(
+      count(
+        "SELECT count(*) AS n FROM audit_events WHERE matter_id = ? AND action = 'feedback.add'",
+      ),
+    ).toBe(3);
+    expect(
+      (
+        db
+          .prepare("SELECT count(*) AS n FROM audit_events WHERE instr(detail_json, ?) > 0")
+          .get(NOTE_MARK) as {
+          n: number;
+        }
+      ).n,
+    ).toBe(0);
+    expect(site.w.repo.verifyAuditChain().ok).toBe(true);
   });
 });

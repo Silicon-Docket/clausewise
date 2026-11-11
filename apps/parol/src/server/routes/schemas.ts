@@ -35,6 +35,10 @@ export const MAX_NAME = 200;
 export const MAX_CLIENT_NAME = 300;
 export const MAX_REASON = 4000;
 export const MAX_EDIT_TEXT = 8000;
+/** The longest note, report or comment of the feedback capture (package W2.6a). */
+export const MAX_FEEDBACK_TEXT = 4000;
+/** The longest place a person can give for a missed issue. */
+export const MAX_LOCATION = 200;
 /** Most evidence passages one finding has; a decision naming more is not one of ours. */
 export const MAX_ROLE_EDITS = 64;
 
@@ -149,3 +153,19 @@ export const DecisionBody = z.strictObject({
 export type DecisionBody = z.infer<typeof DecisionBody>;
 
 export const FINDING_HASH = sha256;
+
+/**
+ * `POST /api/matters/:id/runs/:runId/missed-issues` (package W2.6a). The run is the path's. The body
+ * is checked here for its shape only: no key but these three, and each of the type it has. What a
+ * value may be (a rule chosen, a note that says something, a note and a place that are not too
+ * long) is checked by `missedIssueFromBody` (feedback.ts), the function the form shares its rules
+ * with, so that a script is refused with the same codes as a person at the form. `ruleKey` is a rule
+ * key of the review's playbook, or `null` for "not covered by any rule"; leaving it out is not
+ * choosing, and is refused as the form refuses it.
+ */
+export const MissedIssueBody = z.strictObject({
+  ruleKey: z.string().nullable().optional(),
+  location: z.string().nullable().optional(),
+  note: z.string().optional(),
+});
+export type MissedIssueBody = z.infer<typeof MissedIssueBody>;

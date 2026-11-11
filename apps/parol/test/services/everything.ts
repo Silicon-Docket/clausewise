@@ -13,7 +13,8 @@ import { baseWorld, decisionFor, type World } from "./support.js";
  * A marker, `ZQ-TRACE-<name>-<random hex>`, is written into every kind of text that a person can
  * supply: the matter's name, the client's name, a document's title, the words of a document and of
  * a paragraph that reads like an instruction (so that the upload warnings table has a row), a
- * reviewer's reason and edit, and the free text of feedback. The exported memo and the stages' own
+ * reviewer's reason and edit, and the free text of feedback (the note and the place of a missed
+ * issue, a comment, the words of a rating). The exported memo and the stages' own
  * output carry it on from there. After the matter is deleted, the marker is nowhere.
  *
  * THIS FUNCTION IS THE ONE EXTENSION POINT FOR A NEW TABLE. A package that adds a table with a
@@ -177,11 +178,12 @@ export async function everything(w: World, name: string): Promise<Everything> {
     findingId: first.findingId,
     reasonCode: "unclear",
   });
-  w.repo.addFeedback(matterId, {
-    userId: reviewer,
-    kind: "missed_issue",
-    runId: run.id,
-    text: `A clause the review missed. ${marker}`,
+  // A missed issue is reported through its service, which names the rule of the run's playbook and
+  // the place, both typed by a person and so both carrying the marker (`feedback.location`).
+  w.services.feedback.reportMissedIssue(reviewerAm, run.id, {
+    ruleKey: first.ruleKey,
+    location: `NDA section 6.1 ${marker}`,
+    note: `A clause the review missed. ${marker}`,
   });
   w.repo.addFeedback(matterId, {
     userId: reviewer,

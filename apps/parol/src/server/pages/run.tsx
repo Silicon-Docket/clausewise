@@ -5,11 +5,14 @@ import type {
   FindingView,
   IssueRow,
   MatterSummary,
+  MissedIssueView,
+  RuleChoice,
   RunSummary,
   UploadWarningView,
   UsageSummary,
 } from "../../services/views.js";
 import { urls } from "../urls.js";
+import { MISSED_ISSUE_JUMP } from "../views/feedback.js";
 import { modelLine, plural } from "../views/format.js";
 import {
   SEVERITY_ORDER,
@@ -35,6 +38,7 @@ import {
   Time,
   decisionValidity,
 } from "./components.js";
+import { MissedIssueSection, type MissedIssueDraft } from "./feedback.js";
 import { FindingPane } from "./finding.js";
 import { WordsHelp } from "./help.js";
 import { Layout, type Chrome } from "./layout.js";
@@ -60,6 +64,18 @@ export interface RunPageProps {
   warnings?: UploadWarningView[] | undefined;
   /** For naming the document a warning is about. */
   documents?: readonly { label: string; title: string }[] | undefined;
+  /**
+   * What the report of a missed issue needs (package W2.6a): the rules of the review's playbook,
+   * the reports already made against it, and what was typed when a report was refused. Without it
+   * the page has no such section, which is what a page built before the capture existed gets.
+   */
+  feedback?:
+    | {
+        rules: readonly RuleChoice[];
+        items: readonly MissedIssueView[];
+        draft?: MissedIssueDraft | undefined;
+      }
+    | undefined;
 }
 
 /** A current finding with no decision that still counts: none made, or the one made is out of date. */
@@ -404,6 +420,11 @@ export function RunPage(props: RunPageProps) {
               <a href="#inspector">Go to the evidence inspector</a>
             </p>
           )}
+          {props.feedback === undefined || issues.length === 0 ? null : (
+            <p class="jump">
+              <a href="#missed-issue">{MISSED_ISSUE_JUMP}</a>
+            </p>
+          )}
           <div class="run-layout">
             <div class="run-table">
               {rows.length === 0 ? (
@@ -470,6 +491,17 @@ export function RunPage(props: RunPageProps) {
               )}
             </aside>
           </div>
+          {props.feedback === undefined ? null : (
+            <MissedIssueSection
+              chrome={chrome}
+              matterId={matter.id}
+              runId={run.id}
+              rules={props.feedback.rules}
+              items={props.feedback.items}
+              hasFindings={issues.length > 0}
+              draft={props.feedback.draft}
+            />
+          )}
         </>
       )}
 

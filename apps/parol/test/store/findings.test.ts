@@ -927,6 +927,7 @@ describe("feedback", () => {
     const missed = w.repo.addFeedback(m.id, {
       userId: ACTORS.associate,
       kind: "missed_issue",
+      runId: run.id,
       text: "FEEDBACK-SECRET about a clause",
     });
     w.repo.addFeedback(m.id, { userId: ACTORS.associate, kind: "comment", text: "Looks right." });

@@ -7,6 +7,7 @@ import { loadPlaybook } from "../playbooks/load.js";
 import { settlementReason } from "../settlement.js";
 import {
   INPUT_CHANGE_REASONS,
+  type FeedbackRow,
   type FindingRecord,
   type MatterRow,
   type MemoRow,
@@ -32,7 +33,10 @@ import type {
   MatterSummary,
   MemberView,
   MemoSummary,
+  MissedIssueView,
+  NoteView,
   PlaybookOption,
+  RatingView,
   ReviewHistoryItem,
   RunProgress,
   RunSummary,
@@ -411,6 +415,49 @@ export function createPresenter(
     };
   }
 
+  // --- feedback (package W2.6a) ---------------------------------------------------------------
+  // What a person typed is carried through as it was stored; the pages show it through
+  // `RevealedText`. Who wrote it is a name looked up now, as the name of a reviewer is.
+
+  /**
+   * A missed issue, with the title its rule has in the playbook of the run it was reported against.
+   * `ruleTitles` maps a rule key to that title; a key it does not know (a playbook that no longer
+   * lists it) is shown by its key and no title.
+   */
+  function missedIssueView(
+    row: FeedbackRow,
+    ruleTitles: ReadonlyMap<string, string>,
+  ): MissedIssueView {
+    return {
+      feedbackId: row.id,
+      runId: row.runId ?? "",
+      ruleKey: row.ruleKey,
+      ruleTitle: row.ruleKey === null ? null : (ruleTitles.get(row.ruleKey) ?? null),
+      location: row.location,
+      note: row.text ?? "",
+      reporterName: userName(row.userId),
+      at: row.createdAt,
+    };
+  }
+
+  /** A note on a finding. */
+  function noteView(row: FeedbackRow): NoteView {
+    return {
+      feedbackId: row.id,
+      findingId: row.findingId ?? "",
+      note: row.text ?? "",
+      authorName: userName(row.userId),
+      at: row.createdAt,
+    };
+  }
+
+  /** A rating; null for a row that is not a rating of 1 to 5 (the database does not let one in). */
+  function ratingView(row: FeedbackRow): RatingView | null {
+    const rating = row.rating;
+    if (rating !== 1 && rating !== 2 && rating !== 3 && rating !== 4 && rating !== 5) return null;
+    return { feedbackId: row.id, rating, comment: row.text, at: row.createdAt };
+  }
+
   return {
     userName,
     playbookName,
@@ -426,6 +473,9 @@ export function createPresenter(
     findingView,
     memoFileName,
     memoSummary,
+    missedIssueView,
+    noteView,
+    ratingView,
   };
 }
 

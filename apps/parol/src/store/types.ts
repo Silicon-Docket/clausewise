@@ -325,6 +325,14 @@ export interface FeedbackRow {
   reasonCode: string | null;
   rating: number | null;
   text: string | null;
+  /**
+   * A missed issue only: the rule of the run's playbook that should have applied. Null on a missed
+   * issue means it was reported as not covered by any rule; it is null on every other kind
+   * (package W2.6a).
+   */
+  ruleKey: string | null;
+  /** A missed issue only: where in the documents, in the reporter's words. Null when not given. */
+  location: string | null;
   createdAt: string;
 }
 

@@ -14,8 +14,12 @@ afterAll(cleanup);
  * The memo is the file that leaves the system, and what a reviewer says about why a finding was
  * edited or rejected is for the people who measure the pilot, not for the client (package W2.6a).
  * So the reason code and the minor-edit mark of a decision never reach the file: not through the
- * decision the memo prints, and not through the records the builder is handed along with it. The
- * later slices add the same test for a note, a missed issue and a rating below.
+ * decision the memo prints, and not through the records the builder is handed along with it.
+ *
+ * Slice B: the same holds for the report of a missed issue. What a member says the review left out
+ * is for the people who run the pilot; it is not part of the memo, so the memo input, the file built
+ * from it and the words in the file are the same with reports and without. The later slices add the
+ * same test for a note and a rating below.
  */
 
 /**
@@ -163,5 +167,54 @@ describe("the memo of a review whose decisions carry codes", () => {
       });
     }
     expect(readiness()).toMatchObject({ ready: true, blockers: [] });
+  });
+});
+
+describe("the memo of a review that has reports of missed issues", () => {
+  it("is built from the same input, byte for byte, with the reports as without them, and says none of their words", async () => {
+    const w = makeWorld();
+    const { matterId, am, reviewerAm, runId } = await reviewed(w);
+    for (const issue of w.services.runs.issues(am, runId)) {
+      const view = w.services.runs.finding(reviewerAm, issue.findingId);
+      w.services.reviews.decide(reviewerAm, issue.findingId, decisionFor(view));
+    }
+    const run = w.repo.getCurrentRun(matterId)!;
+    const inputOf = () =>
+      buildMemoInput({
+        repo: w.repo,
+        matterId,
+        run,
+        exporterId: reviewerAm.principal.userId,
+        exportedAt: "2026-11-04T09:00:00.000Z",
+      }).input;
+
+    const before = inputOf();
+    const fileBefore = await buildMemo(before);
+
+    const note = "ZQ-MEMO-NOTE a clause the review did not flag";
+    const place = "ZQ-MEMO-PLACE section 6.1";
+    w.services.feedback.reportMissedIssue(reviewerAm, runId, {
+      ruleKey: "dur-1",
+      location: place,
+      note,
+    });
+    w.services.feedback.reportMissedIssue(am, runId, {
+      ruleKey: null,
+      location: null,
+      note: "ZQ-MEMO-NOTE-2 nothing covers it",
+    });
+    // The reports are in the store, so the check below is not an empty one.
+    expect(w.repo.listFeedback(matterId, { kind: "missed_issue" })).toHaveLength(2);
+
+    const after = inputOf();
+    expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+    const fileAfter = await buildMemo(after);
+    expect(Buffer.from(fileAfter).equals(Buffer.from(fileBefore))).toBe(true);
+
+    // The file the service exports, with the reports on record, says none of it.
+    const memo = await w.services.reviews.exportMemo(reviewerAm);
+    const text = await textOfMemo((await w.services.reviews.memoFile(am, memo.memoId)).bytes);
+    for (const word of ["ZQ-MEMO", "missed issue", "Missed issue", place])
+      expect(text, word).not.toContain(word);
   });
 });

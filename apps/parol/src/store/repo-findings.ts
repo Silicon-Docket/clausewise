@@ -21,6 +21,7 @@ import {
   assertShortCode,
   assertStoragePath,
   assertStoragePathFree,
+  cleanLabel,
   cleanProse,
   parseWith,
   type Ctx,
@@ -39,7 +40,7 @@ import type { MattersApi } from "./repo-matters.js";
 import { toStoredRule } from "./repo-playbooks.js";
 import type { PlaybooksApi } from "./repo-playbooks.js";
 import type { RunsApi } from "./repo-runs.js";
-import { ReviewEditsSchema, VerifiedFindingSchema } from "./schemas.js";
+import { RULE_KEY_PATTERN, ReviewEditsSchema, VerifiedFindingSchema } from "./schemas.js";
 import type {
   ExportReadiness,
   FeedbackRow,
@@ -128,6 +129,8 @@ interface RawFeedback {
   reason_code: string | null;
   rating: number | null;
   text: string | null;
+  rule_key: string | null;
+  location: string | null;
   created_at: string;
 }
 
@@ -168,6 +171,8 @@ const toFeedback = (r: RawFeedback): FeedbackRow => ({
   reasonCode: r.reason_code,
   rating: r.rating,
   text: r.text,
+  ruleKey: r.rule_key,
+  location: r.location,
   createdAt: r.created_at,
 });
 
@@ -1008,6 +1013,25 @@ export function createFindingsApi(
 
   // --- feedback -----------------------------------------------------------------------------
 
+  /** How many missed issues one person may report against one run. */
+  const MAX_MISSED_ISSUES_PER_RUN = 50;
+  const MAX_LOCATION = 200;
+  const UNKNOWN_RULE_MESSAGE = "the rule is not in this review's playbook";
+
+  /**
+   * Adds a piece of feedback. The kinds have a shape each, held here and by the database
+   * (`feedback_shape`, migration 006):
+   *
+   * - `missed_issue` is about a run: it needs the run and a text, may name the rule of the run's
+   *   playbook that should have applied (`ruleKey`, null for "not covered by any rule") and say
+   *   where (`location`), and carries no finding and no reason code. A rule that is not in the
+   *   run's playbook is refused (`unknown_rule`), and one person may report 50 against a run
+   *   (`feedback_limit`).
+   * - `rule` and `location` belong to a missed issue and to no other kind.
+   *
+   * Every message names a rule and never what the caller sent. The audit event holds ids, codes and
+   * flags: the text and the location are never in it, only whether they were given.
+   */
   function addFeedback(
     matterId: string,
     input: {
@@ -1018,6 +1042,8 @@ export function createFindingsApi(
       reasonCode?: string | null;
       rating?: number | null;
       text?: string | null;
+      ruleKey?: string | null;
+      location?: string | null;
     },
   ): FeedbackRow {
     if (!["finding_reason", "missed_issue", "rating", "comment"].includes(input.kind))
@@ -1039,18 +1065,60 @@ export function createFindingsApi(
     if (input.kind === "finding_reason" && !input.findingId)
       throw new ValidationError("finding_required", "finding_reason feedback names a finding");
 
+    // The rule and the location are a missed issue's. Checked before anything is looked up.
+    const ruleKey = input.ruleKey ?? null;
+    const given = input.location ?? null;
+    if (input.kind !== "missed_issue" && (ruleKey !== null || given !== null))
+      throw new ValidationError(
+        "field_not_allowed",
+        "a rule and a location belong to a missed issue only",
+      );
+    if (input.kind === "missed_issue") {
+      if (input.runId === undefined || input.runId === null)
+        throw new ValidationError("run_required", "a missed issue is reported against a run");
+      if (input.findingId !== undefined && input.findingId !== null)
+        throw new ValidationError("finding_not_allowed", "a missed issue names no finding");
+      if (reasonCode !== null)
+        throw new ValidationError("field_not_allowed", "a missed issue carries no reason code");
+      // What cannot be a rule key at all is as unknown as a key that is no rule of the playbook,
+      // and is answered in the same words.
+      if (ruleKey !== null && !RULE_KEY_PATTERN.test(ruleKey))
+        throw new ValidationError("unknown_rule", UNKNOWN_RULE_MESSAGE);
+    }
+    const location = given === null ? null : cleanLabel("location", given, MAX_LOCATION);
+
     return tx(() => {
       requireMatter(matterId);
       requireUser(input.userId);
       const runId = input.runId ?? null;
       const findingId = input.findingId ?? null;
-      if (runId !== null) requireRun(matterId, runId);
+      const target = runId === null ? undefined : requireRun(matterId, runId);
       if (findingId !== null && !getFinding(matterId, findingId))
         throw new NotFoundError("finding");
+      if (input.kind === "missed_issue" && target !== undefined) {
+        // The rule must be one of the playbook this run was made with: a key from another playbook,
+        // or one that was never a rule, is not a rule of this review.
+        if (
+          ruleKey !== null &&
+          !playbooks.listRules(target.playbookVersionId).some((rule) => rule.key === ruleKey)
+        )
+          throw new ValidationError("unknown_rule", UNKNOWN_RULE_MESSAGE);
+        const reported = get<{ n: number }>(
+          "SELECT COUNT(*) AS n FROM feedback WHERE matter_id = ? AND run_id = ? AND user_id = ? AND kind = 'missed_issue'",
+          matterId,
+          target.id,
+          input.userId,
+        );
+        if ((reported?.n ?? 0) >= MAX_MISSED_ISSUES_PER_RUN)
+          throw new ConflictError(
+            "feedback_limit",
+            "the most missed issues that one person can report on a review have been reported",
+          );
+      }
       const id = newId("fbk");
       run(
-        `INSERT INTO feedback (id, matter_id, run_id, finding_id, user_id, kind, reason_code, rating, text, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO feedback (id, matter_id, run_id, finding_id, user_id, kind, reason_code, rating, text, rule_key, location, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id,
         matterId,
         runId,
@@ -1060,25 +1128,58 @@ export function createFindingsApi(
         reasonCode,
         rating,
         text,
+        ruleKey,
+        location,
         ctx.now(),
       );
-      // The text itself is not audited: the audit log holds ids and codes only.
+      // The text and the location are not audited: the audit log holds ids, codes and flags only.
       ctx.audit({
         actorId: input.userId,
         matterId,
         action: "feedback.add",
         targetType: "feedback",
         targetId: id,
-        detail: { kind: input.kind, reasonCode, rating, hasText: text !== null, findingId, runId },
+        detail: {
+          kind: input.kind,
+          reasonCode,
+          rating,
+          hasText: text !== null,
+          hasLocation: location !== null,
+          ruleKey,
+          findingId,
+          runId,
+        },
       });
       return toFeedback(get<RawFeedback>("SELECT * FROM feedback WHERE id = ?", id) as RawFeedback);
     });
   }
 
-  const listFeedback = (matterId: string): FeedbackRow[] =>
+  /**
+   * The feedback of a matter, oldest first. Every filter is optional and they are ANDed; the query
+   * is anchored on the matter whatever the filter says, so an id of another matter finds nothing.
+   */
+  const listFeedback = (
+    matterId: string,
+    filter: {
+      kind?: FeedbackRow["kind"];
+      runId?: string;
+      findingId?: string;
+      userId?: string;
+    } = {},
+  ): FeedbackRow[] =>
     all<RawFeedback>(
-      "SELECT * FROM feedback WHERE matter_id = ? ORDER BY created_at, rowid",
+      `SELECT * FROM feedback
+       WHERE matter_id = ?1
+         AND (?2 IS NULL OR kind = ?2)
+         AND (?3 IS NULL OR run_id = ?3)
+         AND (?4 IS NULL OR finding_id = ?4)
+         AND (?5 IS NULL OR user_id = ?5)
+       ORDER BY created_at, rowid`,
       matterId,
+      filter.kind ?? null,
+      filter.runId ?? null,
+      filter.findingId ?? null,
+      filter.userId ?? null,
     ).map(toFeedback);
 
   return {

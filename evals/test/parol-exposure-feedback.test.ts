@@ -1,21 +1,35 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  missedIssueFromBody,
+  missedIssueFromForm,
+} from "../../apps/parol/src/server/routes/feedback.js";
 import type { FindingView } from "../../apps/parol/src/services/views.js";
+import type { Dataset } from "../src/parol/dataset.js";
 import { decisionFor } from "../src/parol/exposure/review.js";
-import { probeKey, type Scratch } from "../src/parol/exposure/probe-kit.js";
+import { probeKey, type ProbeBody, type Scratch } from "../src/parol/exposure/probe-kit.js";
 import {
   EFFECT_KEYS,
   FORGED_BODY_KEYS,
+  FORGED_PROBES,
   MATTER_PROBES,
+  NO_RECORD,
   effectOf,
+  noRecordIds,
 } from "../src/parol/exposure/probes.js";
+import { OUTSIDER, runWith } from "./parol-authz-support.js";
+import { completeDataset } from "./parol-exposure-support.js";
 
 /**
  * The exposure suite and the reason code (package W2.6a, slice A). The suite's own reviewer accepts
  * what is verified and escalates the rest, and neither carries a reason code, so the review routes
  * keep their probe rows, their forged-id bodies and their effect bodies as they were. This test
  * pins that dependency: the day the suite's reviewer edits or rejects, its decision needs a code,
- * and this fails before the effect bodies start answering 400 for the wrong reason. The later
- * slices add the probe rows of a missed issue, a note and the rating below.
+ * and this fails before the effect bodies start answering 400 for the wrong reason.
+ *
+ * Slice B adds the two probe rows of the report of a missed issue (the form and the JSON), each with
+ * its forged-id body and its effect body, and proves on the real application that the effect body
+ * writes when a let-in caller sends it and is seen when a hole lets a refused caller send it. The
+ * later slices add the probe rows of a note and the rating below.
  */
 
 const REVIEW_ROUTES = [
@@ -94,5 +108,160 @@ describe("the review routes in the probe tables", () => {
       expect(Object.keys(fields), key).not.toContain("reasonCode");
       expect(Object.keys(fields), key).not.toContain("minorEdit");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Slice B: the report of a missed issue
+// ---------------------------------------------------------------------------------------------
+
+const REPORT_ROUTES = [
+  "POST /matters/:matterId/runs/:runId/missed-issues",
+  "POST /api/matters/:matterId/runs/:runId/missed-issues",
+] as const;
+
+/** What a body carries, as the fields a route reads. */
+const fieldsOf = (body: ProbeBody): Record<string, unknown> =>
+  body.kind === "form"
+    ? body.fields
+    : body.kind === "json"
+      ? (body.json as Record<string, unknown>)
+      : {};
+
+/** Runs the application's own reading of a body, so that a body that it refuses is found here. */
+const parses = (key: (typeof REPORT_ROUTES)[number], body: ProbeBody): void => {
+  if (body.kind === "form") missedIssueFromForm(body.fields);
+  else if (body.kind === "json") missedIssueFromBody(body.json);
+  else throw new Error(`${key} has a body that is neither a form nor JSON`);
+};
+
+describe("the report of a missed issue in the probe tables", () => {
+  const scratch: Scratch = {
+    matterId: "mat_1",
+    documentId: "doc_1",
+    versionId: "ver_1",
+    earlierVersionId: "ver_0",
+    amendmentId: "doc_2",
+    invitee: "usr_1",
+    workflow: "v2",
+    runId: "run_1",
+    findingId: "fnd_1",
+  };
+
+  it("has a row for the form and one for the JSON, for the action every role holds, reaching 400 with its own empty body", () => {
+    for (const key of REPORT_ROUTES) {
+      const probe = MATTER_PROBES.find((p) => probeKey(p) === key);
+      expect(probe, key).toBeDefined();
+      expect(probe).toMatchObject({ action: "feedback.add", reaches: 400, method: "POST" });
+      expect(probe!.fresh, key).toBeUndefined();
+      expect(probe!.body.kind, key).toBe(key.includes("/api/") ? "json" : "form");
+      expect(Object.keys(fieldsOf(probe!.body)), key).toEqual([]);
+      // The empty body is refused by the application itself: no rule was chosen.
+      expect(() => parses(key, probe!.body), key).toThrow();
+    }
+  });
+
+  it("forges the run in the path, once for each route, with a body that gets past every check on the body", () => {
+    for (const key of REPORT_ROUTES) {
+      expect(FORGED_BODY_KEYS, key).toContain(key);
+      const forged = FORGED_PROBES.filter((p) => `${p.method} ${p.template}` === key);
+      expect(
+        forged.map((p) => [p.position, p.via, p.reaches]),
+        key,
+      ).toEqual([["run", "path", 404]]);
+      const request = forged[0]!.request(noRecordIds("mat_1"), NO_RECORD);
+      // The id is the borrowed one, in the place under test, and the matter is the caller's own.
+      expect(request.path, key).toContain(`/runs/${NO_RECORD.runId}/missed-issues`);
+      expect(request.path, key).toContain("mat_1");
+      // The body is one the application accepts, so only the lookup of the run can answer it with 404.
+      expect(() => parses(key, request.body), key).not.toThrow();
+    }
+  });
+
+  it("has an effect body for each, on a reviewed scratch matter, that the application accepts and the probe's own is not", () => {
+    for (const key of REPORT_ROUTES) {
+      const probe = MATTER_PROBES.find((p) => probeKey(p) === key)!;
+      expect(EFFECT_KEYS, key).toContain(key);
+      const effect = effectOf(probe, scratch)!;
+      expect(effect.target, key).toBe("scratch");
+      expect(effect.needs, key).toBe("run");
+      expect(JSON.stringify(effect.body), key).not.toBe(JSON.stringify(probe.body));
+      // It is aimed at the scratch matter's review, not at ids of no record.
+      const ids = effect.ids(scratch, noRecordIds("mat_other"));
+      expect(ids.matterId, key).toBe("mat_1");
+      expect(ids.runId, key).toBe("run_1");
+      expect(() => parses(key, effect.body), key).not.toThrow();
+      // And it is not the forged body: the two prove different things.
+      const forged = FORGED_PROBES.find((p) => `${p.method} ${p.template}` === key)!;
+      expect(JSON.stringify(effect.body), key).not.toBe(
+        JSON.stringify(forged.request(noRecordIds("mat_1"), NO_RECORD).body),
+      );
+    }
+  });
+
+  it("send no field that names a person, a matter or a review in the body: those are the session's and the path's", () => {
+    for (const key of REPORT_ROUTES) {
+      const probe = MATTER_PROBES.find((p) => probeKey(p) === key)!;
+      const names = [
+        ...Object.keys(fieldsOf(effectOf(probe, scratch)!.body)),
+        ...Object.keys(
+          fieldsOf(
+            FORGED_PROBES.find((p) => `${p.method} ${p.template}` === key)!.request(
+              noRecordIds(),
+              NO_RECORD,
+            ).body,
+          ),
+        ),
+      ];
+      for (const forbidden of ["userId", "matterId", "runId", "role", "kind"])
+        expect(names, key).not.toContain(forbidden);
+    }
+  });
+});
+
+describe("the report of a missed issue on the real application", () => {
+  let dataset: Dataset;
+  beforeAll(async () => {
+    dataset = await completeDataset();
+  });
+  vi.setConfig({ testTimeout: 180_000, hookTimeout: 180_000 });
+  const run = runWith(() => dataset);
+
+  it("is shown to change the store for a caller who is let in, and is clean when the guard is whole", async () => {
+    const result = await run({}, ["matrix", "effects", "forged"]);
+    // Every cell reached the handler it was written to test, and none of the refused got data.
+    expect(result.mismatches).toBe(0);
+    expect(result.letInNotReached).toBe(0);
+    expect(result.probesAnsweredWithData).toBe(0);
+    expect(result.writesUnproven).toBe(0);
+    expect([...result.writesWithoutBody].sort()).toEqual([
+      "POST /api/matters/:matterId/runs/:runId/cancel",
+      "POST /api/matters/:matterId/runs/:runId/resume",
+      "POST /matters/:matterId/runs/:runId/cancel",
+      "POST /matters/:matterId/runs/:runId/resume",
+    ]);
+    expect(result.byReason.changed_state).toBe(0);
+    for (const key of REPORT_ROUTES) expect(result.writesWithoutBody, key).not.toContain(key);
+    expect(result.writesWithEffect).toBe(result.writeRoutes - result.writesWithoutBody.length);
+  });
+
+  it("is seen when a hole lets a person with no part in the matter report: the cells of both routes are exposures", async () => {
+    // A guard that takes the outsider for a viewer, which may add feedback: the hole the effect body is for.
+    const result = await run(
+      {
+        beforeRoutes: (_app, deps) => {
+          const real = deps.repo.getMember;
+          (deps.repo as { getMember: unknown }).getMember = (matterId: string, userId: string) =>
+            userId === OUTSIDER
+              ? { matterId, userId, role: "viewer", addedAt: "2026-11-01T00:00:00.000Z" }
+              : real(matterId, userId);
+        },
+      },
+      ["matrix", "effects"],
+    );
+    // The outsider is a viewer in the planted guard, and the one write a viewer may make is this
+    // one: its effect body, sent by the outsider on each route in each mode, changed the store.
+    expect(result.byReason.changed_state).toBe(REPORT_ROUTES.length * 2);
+    expect(result.probesAnsweredWithData).toBeGreaterThan(0);
   });
 });

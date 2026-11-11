@@ -15,31 +15,41 @@ import { completeDataset } from "./parol-exposure-support.js";
  * needs would be refused for another reason than the one it was written to test, and the clean
  * count of that route would mean nothing.
  *
- * The fragment of the feedback package is replaced here by one probe, written as that package will
- * write it, and its route is planted through the suite's hooks.
+ * The fragment of the feedback package gets one more probe here, written as that package will
+ * write it (the other probes of the fragment are the package's own), and its route is planted
+ * through the suite's hooks.
  */
 
-vi.mock("../src/parol/exposure/probes-feedback.js", () => ({
-  MATTER_PROBES_FEEDBACK: [
-    {
-      method: "POST",
-      template: "/matters/:matterId/rating",
-      action: "feedback.add",
-      body: { kind: "form", fields: {} },
-      reaches: 400,
+vi.mock("../src/parol/exposure/probes-feedback.js", async (importOriginal) => {
+  // The routes the package has already built keep their real probes, so that every route of the
+  // application has one; the rating, which is not built yet, is the one probe written here.
+  const real = await importOriginal<typeof import("../src/parol/exposure/probes-feedback.js")>();
+  return {
+    ...real,
+    MATTER_PROBES_FEEDBACK: [
+      ...real.MATTER_PROBES_FEEDBACK,
+      {
+        method: "POST",
+        template: "/matters/:matterId/rating",
+        action: "feedback.add",
+        body: { kind: "form", fields: {} },
+        reaches: 400,
+      },
+    ],
+    EFFECTS_FEEDBACK: {
+      ...real.EFFECTS_FEEDBACK,
+      "POST /matters/:matterId/rating": () => ({
+        target: "scratch",
+        needs: "exported",
+        ids: (scratch: { matterId: string }, own: object) => ({
+          ...own,
+          matterId: scratch.matterId,
+        }),
+        body: { kind: "form", fields: { rating: "4", comment: "" } },
+      }),
     },
-  ],
-  OTHER_PROBES_FEEDBACK: [],
-  FORGED_BODIES_FEEDBACK: {},
-  EFFECTS_FEEDBACK: {
-    "POST /matters/:matterId/rating": () => ({
-      target: "scratch",
-      needs: "exported",
-      ids: (scratch: { matterId: string }, own: object) => ({ ...own, matterId: scratch.matterId }),
-      body: { kind: "form", fields: { rating: "4", comment: "" } },
-    }),
-  },
-}));
+  };
+});
 
 vi.setConfig({ testTimeout: 180_000, hookTimeout: 180_000 });
 

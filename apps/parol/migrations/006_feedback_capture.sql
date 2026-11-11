@@ -10,6 +10,13 @@
 -- of `feedback`, so that a decision, its code and its mark are committed together, are bound to the
 -- same finding content hash (`finding_content_sha256`), go stale together, and can be required by
 -- the database and not only by the application.
+--
+-- Part 2 (slice B, missed issue, with the guards of the other kinds): a missed issue names the rule
+-- of its run's playbook that should have applied, and says where, in two new columns of `feedback`.
+-- The same part gives every kind of feedback its shape, makes a rating one per person and matter,
+-- and makes the table append-only. The rating and the note are written by the slices that follow,
+-- but their shape is held here with the others, so the table never has a window in which a kind can
+-- be written in a shape that no slice means.
 
 -- 1. Decisions -------------------------------------------------------------------------------------
 -- NULL means: not an edit or a reject (a code), not an edit (a mark), or a decision made before this
@@ -45,3 +52,45 @@ WHEN NEW.id IS NOT OLD.id OR NEW.finding_id IS NOT OLD.finding_id
   OR NEW.supersedes_review_id IS NOT OLD.supersedes_review_id
   OR NEW.created_at IS NOT OLD.created_at
 BEGIN SELECT RAISE(ABORT, 'parol: reviews are immutable except for validity'); END;
+
+-- 2. Feedback --------------------------------------------------------------------------------------
+-- `rule_key` is NULL for a missed issue reported as "not covered by any rule"; the application never
+-- lets a person leave the choice blank, so a NULL is a choice and not an omission. `location` is
+-- free text typed by a person, and is as sensitive as `text`: it goes with the matter.
+ALTER TABLE feedback ADD COLUMN rule_key TEXT
+  CHECK (rule_key IS NULL OR length(rule_key) BETWEEN 1 AND 64);
+ALTER TABLE feedback ADD COLUMN location TEXT
+  CHECK (location IS NULL OR length(location) BETWEEN 1 AND 200);
+
+-- One rating per person per matter.
+CREATE UNIQUE INDEX feedback_one_rating_per_user ON feedback (matter_id, user_id) WHERE kind = 'rating';
+-- The child sides of the two foreign keys, so that deleting a run or a finding does not scan the
+-- table (as 002 does for the others).
+CREATE INDEX feedback_by_run ON feedback (run_id) WHERE run_id IS NOT NULL;
+CREATE INDEX feedback_by_finding ON feedback (finding_id) WHERE finding_id IS NOT NULL;
+
+-- The shape of each kind. `finding_reason` (reserved, unused by the application) and `comment` (the
+-- note on a finding, and the comments the store tests make) keep the shape they had, apart from the
+-- fields that belong to other kinds. A missed issue needs a run, text, and a rule that belongs to
+-- the playbook of that run, or no rule at all.
+CREATE TRIGGER feedback_shape BEFORE INSERT ON feedback
+WHEN (NEW.text IS NOT NULL AND length(NEW.text) > 4000)
+  OR (NEW.kind <> 'missed_issue' AND (NEW.rule_key IS NOT NULL OR NEW.location IS NOT NULL))
+  OR (NEW.kind <> 'rating' AND NEW.rating IS NOT NULL)
+  OR (NEW.kind = 'rating'
+      AND (NEW.rating IS NULL OR NEW.finding_id IS NOT NULL OR NEW.reason_code IS NOT NULL))
+  OR (NEW.kind = 'missed_issue'
+      AND (NEW.run_id IS NULL OR NEW.finding_id IS NOT NULL OR NEW.reason_code IS NOT NULL
+           OR NEW.text IS NULL OR trim(NEW.text) = ''))
+  OR (NEW.kind = 'missed_issue' AND NEW.rule_key IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM runs r JOIN playbook_rules p ON p.playbook_version_id = r.playbook_version_id
+        WHERE r.id = NEW.run_id AND p.rule_key = NEW.rule_key))
+BEGIN SELECT RAISE(ABORT, 'parol: feedback does not have the shape of its kind'); END;
+
+-- Feedback is written once. Deleting a matter removes its rows with DELETE, which these two do not
+-- touch.
+CREATE TRIGGER feedback_immutable BEFORE UPDATE ON feedback
+BEGIN SELECT RAISE(ABORT, 'parol: feedback is never edited'); END;
+CREATE TRIGGER feedback_no_replace BEFORE INSERT ON feedback
+WHEN NEW.id IS NULL OR EXISTS (SELECT 1 FROM feedback WHERE id = NEW.id)
+BEGIN SELECT RAISE(ABORT, 'parol: feedback is never replaced'); END;

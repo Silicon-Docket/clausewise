@@ -126,6 +126,9 @@ describe("the audit log", () => {
     w.repo.addFeedback(matter.id, {
       userId: ACTORS.reviewer,
       kind: "missed_issue",
+      runId: run.id,
+      ruleKey: "dur-1",
+      location: `Location ${MARK}`,
       text: `Missed ${MARK}`,
     });
     w.repo.insertModelCalls(matter.id, run.id, [

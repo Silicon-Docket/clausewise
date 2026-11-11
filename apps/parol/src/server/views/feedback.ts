@@ -2,7 +2,8 @@ import type { ReasonCode } from "../../contracts.js";
 
 /**
  * The words the feedback panes use (package W2.6a): the reason codes and the minor-edit mark on a
- * decision. They are project-authored guidance, not a quotation of the pilot documents, and the
+ * decision, and the report of a missed issue. They are project-authored guidance, not a quotation of
+ * the pilot documents, and the
  * wording is to be agreed with the reviewing attorneys before a pilot: a change of wording during a
  * pilot changes what the counts mean.
  *
@@ -44,3 +45,35 @@ export const MINOR_EDIT_HINT =
   "Tick it when the finding was right in substance and you corrected a detail or changed wording. A change of status is never minor. Used only when you choose Edit.";
 /** Said in the history of an edit that was marked minor. */
 export const MINOR_EDIT_MARKED = "Marked as a minor edit.";
+
+// ---------------------------------------------------------------------------------------------
+// Report a missed issue (slice B)
+// ---------------------------------------------------------------------------------------------
+
+export const MISSED_ISSUE_HEADING = "Report a missed issue";
+export const MISSED_ISSUE_INTRO =
+  "Tell us about something in these documents that the review should have flagged and did not. A report does not change any finding or decision. Do not paste long passages; say where they are.";
+/** The last choice of the rule list, for a miss that no rule of the playbook covers. */
+export const NOT_COVERED_LABEL = "Not covered by any rule";
+export const MISSED_ISSUE_RULE_LABEL = "Rule";
+export const MISSED_ISSUE_RULE_HINT =
+  "The rule of the playbook that should have flagged it, or Not covered by any rule.";
+export const MISSED_ISSUE_RULE_PLACEHOLDER = "Choose a rule";
+export const MISSED_ISSUE_LOCATION_LABEL = "Location";
+export const MISSED_ISSUE_LOCATION_HINT =
+  "Where in the documents, for example NDA Section 6.1 or D2-p3. Leave it empty if the issue is something that is missing.";
+export const MISSED_ISSUE_NOTE_LABEL = "Note";
+export const MISSED_ISSUE_NOTE_HINT = "What the review should have flagged, in your own words.";
+export const MISSED_ISSUE_BUTTON = "Report missed issue";
+export const MISSED_ISSUE_LIST_HEADING = "Missed issues reported on this review";
+export const MISSED_ISSUE_EMPTY = "Nobody has reported a missed issue on this review.";
+/** Shown in place of the form for a review that produced no findings. */
+export const MISSED_ISSUE_NO_FINDINGS =
+  "This review has no findings, so there is nothing to report a miss against.";
+/** The link at the top of the review page that leads to the report. */
+export const MISSED_ISSUE_JUMP = "Report a missed issue";
+/** The cell of a report that gave no location. */
+export const MISSED_ISSUE_NO_LOCATION = "Not given";
+
+/** The text of one rule in the list: its key, then its title in the playbook. */
+export const ruleChoiceLabel = (ruleKey: string, title: string): string => `${ruleKey}, ${title}`;
