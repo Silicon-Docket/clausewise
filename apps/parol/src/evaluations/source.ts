@@ -66,6 +66,11 @@ interface Read {
   size: number;
   mtimeMs: number;
   entry: SourceEntry;
+  /**
+   * True when the file could not be opened or read, which says nothing about what it holds. Such a
+   * result is returned and never cached: the file is tried again on the next request.
+   */
+  transient?: true;
 }
 
 const publishedAtOf = (mtimeMs: number): string => {
@@ -92,6 +97,12 @@ export function createComparisonSource(
     entry: { ok: false, name, problem },
   });
 
+  /** A file that could not be opened or read this time. What it holds is not known. */
+  const failed = (name: string, size: number, mtimeMs: number): Read => ({
+    ...unusable(name, "unreadable", size, mtimeMs),
+    transient: true,
+  });
+
   /** The state of one file without following a link; null when it is gone, and "unreadable" otherwise. */
   function statOf(name: string): Stats | "unreadable" | null {
     try {
@@ -115,7 +126,8 @@ export function createComparisonSource(
     if (!stat.isFile()) return unusable(name, "unreadable", stat.size, stat.mtimeMs);
     if (stat.size > maxBytes) return unusable(name, "too_large", stat.size, stat.mtimeMs);
     const result = parseFile(name, stat.size, stat.mtimeMs);
-    if (cachedBytes + result.size <= CACHE_BYTES) {
+    // Only a page that parsed and a problem that the content decides are kept.
+    if (result.transient === undefined && cachedBytes + result.size <= CACHE_BYTES) {
       cache.set(name, result);
       cachedBytes += result.size;
     }
@@ -132,7 +144,7 @@ export function createComparisonSource(
         constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
       );
       const opened = fstatSync(fd);
-      if (!opened.isFile()) return unusable(name, "unreadable", size, mtimeMs);
+      if (!opened.isFile()) return failed(name, size, mtimeMs);
       if (opened.size > maxBytes) return unusable(name, "too_large", size, mtimeMs);
       const bytes = readFileSync(fd);
       let text: string;
@@ -154,7 +166,8 @@ export function createComparisonSource(
         },
       };
     } catch {
-      return unusable(name, "unreadable", size, mtimeMs);
+      // No code, no message and nothing of the file: the entry carries a fixed problem only.
+      return failed(name, size, mtimeMs);
     } finally {
       if (fd !== null) closeSync(fd);
     }

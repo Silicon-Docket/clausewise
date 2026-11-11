@@ -520,6 +520,81 @@ describe("--open-heldout-trails (a SIMULATED baseline and a SELFTEST candidate o
     expect(page.heldoutTrailsOpened).toBe(true);
     expect(page.sections[0]!.changes.every((change) => !("sealed" in change.trail))).toBe(true);
     expect(Object.keys(page.cases)).toEqual(["PAROL-H01"]);
+    // The warning is about a file that is in the folder, so it comes with the report of the write.
+    expect(out.stderr.indexOf("HELD-OUT TRAILS OPENED")).toBeLessThan(
+      out.stderr.indexOf("Published comparison"),
+    );
+  });
+
+  it("does not warn of an opened held-out set for a comparison without a held-out split, and records none", async () => {
+    // Two SIMULATED dev runs and the flag: the document has no held-out section.
+    const data = fresh();
+    const out = await compareFiles(["--publish", data, "--open-heldout-trails"]);
+    expect(out.code, out.stderr).toBe(0);
+    expect(out.stderr).not.toContain("HELD-OUT TRAILS OPENED");
+    expect(out.stderr).not.toContain("contaminated");
+    const { page } = await onlyPage(data);
+    expect(page.sections.map((section) => section.split)).toEqual(["dev"]);
+    expect(page.heldoutTrailsOpened).toBe(false);
+  });
+
+  it("does not warn when the held-out runs agree on every slot, so that nothing of the split is in the file", async () => {
+    // The same SIMULATED held-out run on both sides: no slot changed, so no key, passage or trail.
+    const data = fresh();
+    const out = await cli(
+      ["--baseline", heldSim, "--candidate", heldSim, "--publish", data, "--open-heldout-trails"],
+      { generatorFactory: forbidden },
+    );
+    expect(out.code, out.stderr).toBe(0);
+    expect(out.stderr).not.toContain("HELD-OUT TRAILS OPENED");
+    const { page } = await onlyPage(data);
+    expect(page.sections.map((section) => section.split)).toEqual(["heldout"]);
+    expect(page.sections[0]!.changes).toEqual([]);
+    expect(page.cases).toEqual({});
+    expect(page.heldoutTrailsOpened).toBe(false);
+  });
+
+  it("does not warn when the page could not be written", async () => {
+    // A file where the data folder should be: the page is built and nothing can be written.
+    const notAFolder = join(dir, `file-${++n}`);
+    await writeFile(notAFolder, "x");
+    const out = await held(["--publish", notAFolder, "--open-heldout-trails"]);
+    expect(out.code).toBe(1);
+    expect(out.stderr).toContain("could not be made (ENOTDIR)");
+    expect(out.stderr).not.toContain("HELD-OUT TRAILS OPENED");
+  });
+
+  it("does not warn when the page cannot be built, and writes nothing", async () => {
+    const base = fresh();
+    const root = await copyRoot(base);
+    // FABRICATED FOR A TEST: a copy of the dataset whose key for one slot has another note, with its
+    // hashes brought up to date so that it loads. The runs were made with the other key, so the
+    // page is refused after the flag was read and before any held-out material could be written.
+    await changeKey(root, (keys) => {
+      keys.cases.find((entry) => entry.case === "PAROL-H01")!.expect["dur-1"]!.note += " Changed.";
+    });
+    await rehash(root);
+    const data = join(base, "data");
+    const out = await cli(
+      [
+        "--baseline",
+        heldSim,
+        "--candidate",
+        heldSelf,
+        "--allow-differences",
+        HELDOUT_ALLOW.join(","),
+        "--publish",
+        data,
+        "--open-heldout-trails",
+      ],
+      { generatorFactory: forbidden, root },
+    );
+    expect(out.code).toBe(1);
+    expect(out.stderr).toContain(
+      "answer keys on disk are not the ones the baseline run was made with",
+    );
+    expect(out.stderr).not.toContain("HELD-OUT TRAILS OPENED");
+    await expect(stat(data)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 

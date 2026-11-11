@@ -788,9 +788,14 @@ export async function buildComparisonPage(input: PageInput): Promise<ComparisonP
       40,
       "notes",
     ),
-    // Opened means that material of the held-out split is in the document.
-    heldoutTrailsOpened:
-      input.openHeldoutTrails && sections.some((section) => section.split === "heldout"),
+    // Opened means that material of the held-out split is in the document: a held-out slot whose
+    // trail was not left sealed. A held-out section with no changed slot has none, whatever the
+    // caller asked for, and the flag is then not recorded.
+    heldoutTrailsOpened: sections.some(
+      (section) =>
+        section.split === "heldout" &&
+        section.changes.some((change) => !("sealed" in change.trail)),
+    ),
     sections,
     cases,
   };

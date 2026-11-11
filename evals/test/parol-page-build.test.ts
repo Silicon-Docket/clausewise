@@ -887,6 +887,25 @@ describe("the sealed held-out split (a SIMULATED baseline against a SELFTEST can
     expect(parseComparisonPage(text, pageFileName(page.id)).ok).toBe(true);
   });
 
+  it("does not say the held-out trails were opened when no held-out slot changed, so nothing of the split is in the file", async () => {
+    // The same SIMULATED held-out run on both sides: every slot agrees, so no slot is listed, no
+    // key or passage is read and no case is in the document, whatever the caller opened.
+    const same = heldoutInput({
+      candidate: { file: "held-sim.json", results: held.sim },
+      comparison: compared(held.sim, held.sim),
+      openHeldoutTrails: true,
+    });
+    const page = await buildComparisonPage(same);
+    expect(page.sections.map((section) => section.split)).toEqual(["heldout"]);
+    expect(page.sections[0]!.changes).toEqual([]);
+    expect(page.cases).toEqual({});
+    expect(page.heldoutTrailsOpened).toBe(false);
+    // The record follows what is in the file: with a changed slot, the same flag does record it.
+    const changed = await buildComparisonPage(heldoutInput({ openHeldoutTrails: true }));
+    expect(changed.sections[0]!.changes.length).toBeGreaterThan(0);
+    expect(changed.heldoutTrailsOpened).toBe(true);
+  });
+
   it("does not seal the dev split, and does not say the held-out trails were opened when there is no such split", async () => {
     const page = await buildComparisonPage(input({ openHeldoutTrails: true }));
     expect(page.heldoutTrailsOpened).toBe(false);
