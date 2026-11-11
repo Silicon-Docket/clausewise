@@ -245,8 +245,12 @@ export interface IssueRow {
   evidenceCount: number;
   /** The current decision, or null. */
   review: ReviewSummary | null;
-  /** How many notes the finding carries. Optional so that a row built before it existed still fits. Package W2.6a, slice D. */
-  noteCount?: number;
+  /**
+   * How many notes the finding carries, from every member. Left out when there are none, so that
+   * the row of a finding nobody has written about is the row it was before notes existed; optional,
+   * so that a row built before it existed still fits. Package W2.6a, slice D.
+   */
+  noteCount?: number | undefined;
 }
 
 export interface EvidenceView {

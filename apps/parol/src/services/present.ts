@@ -19,6 +19,7 @@ import {
 import { summarizeUsage } from "../usage/summary.js";
 import type { ServiceConfig } from "./deps.js";
 import {
+  CANNOT_ADD_NOTE,
   CANNOT_DECIDE,
   UNKNOWN_USER_NAME,
   WARNING_ORDER,
@@ -267,6 +268,11 @@ export function createPresenter(
 
   // --- findings -----------------------------------------------------------------------------
 
+  /** The notes a finding carries, from every member. */
+  const notesOf = (f: FindingRecord): FeedbackRow[] =>
+    repo.listFeedback(f.matterId, { kind: "comment", findingId: f.id });
+  const noteCountOf = (f: FindingRecord): number => notesOf(f).length;
+
   function issueRow(f: FindingRecord): IssueRow {
     const review = f.currentReview ?? f.reviews[f.reviews.length - 1] ?? null;
     return {
@@ -285,6 +291,10 @@ export function createPresenter(
       verificationState: f.verificationState,
       escalations: f.escalations,
       evidenceCount: f.evidence.length,
+      // Every member's notes, not only the caller's: the number says how much there is to read.
+      // Left out when there are none, as a status nothing settled is, so that a row of a finding
+      // nobody has written about is the row it was before notes existed.
+      noteCount: noteCountOf(f) || undefined,
       review:
         review === null
           ? null
@@ -327,6 +337,24 @@ export function createPresenter(
     // The store refuses it too (`decision_conflict`); a form that cannot work is not offered.
     if (f.currentReview !== null && f.currentReview.reviewerId !== am.principal.userId)
       return deny(CANNOT_DECIDE.decidedByAnother);
+    return { allowed: true, reason: null };
+  }
+
+  /**
+   * Whether a note can be added to the finding now, restated for a page that shows or hides the
+   * form. The service function that adds it decides again. It follows `canDecide` for the role and
+   * for the state of the finding (the finding is current and its review has not been replaced) and
+   * not for the state of the matter, because a note is not a decision.
+   */
+  function canAddNote(
+    am: AuthorizedMatter,
+    f: FindingRecord,
+    run: RunRow | undefined,
+  ): NonNullable<FindingView["canAddNote"]> {
+    if (!roleAllows(am.role, "feedback.add"))
+      return { allowed: false, reason: CANNOT_ADD_NOTE.role };
+    if (f.validity !== "current" || run === undefined || run.status === "superseded")
+      return { allowed: false, reason: CANNOT_ADD_NOTE.stale };
     return { allowed: true, reason: null };
   }
 
@@ -380,6 +408,9 @@ export function createPresenter(
       reviews,
       contentSha256: f.contentSha256,
       canDecide: canDecide(am, f, matter, run),
+      // The notes of every member, oldest first.
+      notes: notesOf(f).map(noteView),
+      canAddNote: canAddNote(am, f, run),
     };
   }
 

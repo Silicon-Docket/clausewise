@@ -1015,6 +1015,8 @@ export function createFindingsApi(
 
   /** How many missed issues one person may report against one run. */
   const MAX_MISSED_ISSUES_PER_RUN = 50;
+  /** How many notes one person may add to one finding. */
+  const MAX_NOTES_PER_FINDING = 20;
   const MAX_LOCATION = 200;
   const UNKNOWN_RULE_MESSAGE = "the rule is not in this review's playbook";
 
@@ -1028,6 +1030,11 @@ export function createFindingsApi(
    *   run's playbook is refused (`unknown_rule`), and one person may report 50 against a run
    *   (`feedback_limit`).
    * - `rule` and `location` belong to a missed issue and to no other kind.
+   * - `comment` that names a finding is a note on it. It carries the words and nothing else (no
+   *   reason code, no rule, no place, no mark), and it is stored with the run of the finding: if it
+   *   names a run, that must be the finding's own, and if it names none it is given the finding's.
+   *   A note belongs to a finding as the finding stood in its own review. One person
+   *   may add 20 to one finding (`feedback_limit`). A comment that names no finding stays valid.
    * - `rating` is a person's mark of a whole matter: it needs the mark (1 to 5), may carry words of
    *   the person's own, and names no finding and carries no reason code. A person rates a matter
    *   once and the rating is final (`already_rated`; the unique index
@@ -1094,6 +1101,8 @@ export function createFindingsApi(
       if (ruleKey !== null && !RULE_KEY_PATTERN.test(ruleKey))
         throw new ValidationError("unknown_rule", UNKNOWN_RULE_MESSAGE);
     }
+    if (input.kind === "comment" && input.findingId && reasonCode !== null)
+      throw new ValidationError("field_not_allowed", "a note carries no reason code");
     if (input.kind === "rating") {
       // A rating is about the matter. It names no finding, and a reason code is a decision's.
       if (input.findingId !== undefined && input.findingId !== null)
@@ -1106,11 +1115,30 @@ export function createFindingsApi(
     return tx(() => {
       requireMatter(matterId);
       requireUser(input.userId);
-      const runId = input.runId ?? null;
+      let runId = input.runId ?? null;
       const findingId = input.findingId ?? null;
       const target = runId === null ? undefined : requireRun(matterId, runId);
-      if (findingId !== null && !getFinding(matterId, findingId))
-        throw new NotFoundError("finding");
+      const finding = findingId === null ? undefined : getFinding(matterId, findingId);
+      if (findingId !== null && finding === undefined) throw new NotFoundError("finding");
+      if (input.kind === "comment" && finding !== undefined) {
+        // A note is on a finding of a review, and says which review: the finding's own, and no
+        // other, so that the run and the finding it names cannot disagree. A note that names only
+        // the finding is given its review.
+        if (runId !== null && finding.runId !== runId)
+          throw new ValidationError("run_mismatch", "the finding does not belong to that review");
+        runId = finding.runId;
+        const added = get<{ n: number }>(
+          "SELECT COUNT(*) AS n FROM feedback WHERE matter_id = ? AND finding_id = ? AND user_id = ? AND kind = 'comment'",
+          matterId,
+          finding.id,
+          input.userId,
+        );
+        if ((added?.n ?? 0) >= MAX_NOTES_PER_FINDING)
+          throw new ConflictError(
+            "feedback_limit",
+            "the most notes that one person can add to a finding have been added",
+          );
+      }
       if (input.kind === "missed_issue" && target !== undefined) {
         // The rule must be one of the playbook this run was made with: a key from another playbook,
         // or one that was never a rule, is not a rule of this review.

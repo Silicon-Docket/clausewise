@@ -3,6 +3,8 @@ import { MATTER_ACTIONS } from "../../src/auth/actions.js";
 import type { AuthorizedMatter } from "../../src/auth/types.js";
 import type { MatterRole } from "../../src/contracts.js";
 import { REASON_CODES } from "../../src/contracts.js";
+import { CANNOT_ADD_NOTE } from "../../src/services/phrases.js";
+import { createPresenter } from "../../src/services/present.js";
 import { DEMO_USER_IDS } from "../../src/store/index.js";
 import {
   cleanup,
@@ -27,8 +29,10 @@ afterAll(cleanup);
  * everything the caller may read of the matter's feedback, are read here too.
  *
  * Slice C: the rating of a matter. Any member may rate once the matter has a memo, once, for good,
- * and reads only their own; it changes nothing about the review. The later slice adds the tests of a
- * note below.
+ * and reads only their own; it changes nothing about the review.
+ *
+ * Slice D: the note on a finding. Any member may add one to a finding that is current, every member
+ * reads every note beside the finding, and a note changes nothing about the review.
  */
 
 const errorOf = (fn: () => unknown): unknown => {
@@ -392,14 +396,8 @@ describe("list", () => {
       location: null,
       note: "ZQ-SECOND",
     });
-    // A note is written through the store: its service is the later slice's.
-    w.repo.addFeedback(matterId, {
-      userId: w.associate.userId,
-      kind: "comment",
-      runId,
-      findingId: dur.findingId,
-      text: "ZQ-NOTE",
-    });
+    // A note is written through its service.
+    w.services.feedback.addNote(am, dur.findingId, { note: "ZQ-NOTE" });
     // The matter is exported, and two of its members rate it.
     decideAll(w, reviewerAm, w.services.runs.issues(am, runId));
     await w.services.reviews.exportMemo(reviewerAm);
@@ -643,5 +641,313 @@ describe("myRating", () => {
       name: "ForbiddenError",
       action: "memo.read",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Slice D: a note on a finding
+// ---------------------------------------------------------------------------------------------
+
+const REMARK = "I read Section 9.3 differently: it keeps only the Section 4 duties in force.";
+
+describe("addNote", () => {
+  it("lets an associate, a reviewer and a viewer each add a note, as themselves, and nobody else", async () => {
+    const { w, am, reviewerAm, viewerAm, matterId, runId, dur } = await openWithViewer();
+    const by: Record<MatterRole, AuthorizedMatter> = {
+      associate: am,
+      reviewer: reviewerAm,
+      viewer: viewerAm,
+    };
+    // The roles that may are the roles of the table, so a change of the table shows up here.
+    expect(Object.keys(by).sort()).toEqual([...MATTER_ACTIONS["feedback.add"]].sort());
+    for (const role of MATTER_ACTIONS["feedback.add"]) {
+      const caller = by[role];
+      const view = w.services.feedback.addNote(caller, dur.findingId, {
+        note: `${REMARK} (the ${role})`,
+      });
+      expect(view).toMatchObject({
+        findingId: dur.findingId,
+        note: `${REMARK} (the ${role})`,
+        authorName: w.repo.getUser(caller.principal.userId)?.displayName,
+      });
+      expect(view.at).toMatch(/^\d{4}-\d\d-\d\dT/);
+      expect(view.feedbackId).toMatch(/^fbk_/);
+    }
+    // Each is stored for the signed-in person, as a comment on the finding, in the finding's own run.
+    const stored = w.repo.listFeedback(matterId, { kind: "comment" });
+    expect(stored.map((f) => f.userId).sort()).toEqual(
+      [am, reviewerAm, viewerAm].map((x) => x.principal.userId).sort(),
+    );
+    for (const row of stored)
+      expect(row).toMatchObject({
+        matterId,
+        runId,
+        findingId: dur.findingId,
+        rating: null,
+        reasonCode: null,
+        ruleKey: null,
+        location: null,
+      });
+    // A caller whose role the table does not list is refused by the service itself.
+    const nobody = { ...am, role: "nobody" } as unknown as AuthorizedMatter;
+    expect(
+      errorOf(() => w.services.feedback.addNote(nobody, dur.findingId, { note: REMARK })),
+    ).toMatchObject({ name: "ForbiddenError", action: "feedback.add" });
+    expect(w.repo.listFeedback(matterId, { kind: "comment" })).toHaveLength(3);
+  });
+
+  it("is a 404 for a finding of another matter and for a finding that is nowhere, in the same words", async () => {
+    const r = await open();
+    const other = await reviewed(r.w);
+    const foreign = r.w.services.runs.issues(other.am, other.runId)[0]!;
+    const asked = (id: string) =>
+      errorOf(() => r.w.services.feedback.addNote(r.am, id, { note: REMARK }));
+    expect(asked(foreign.findingId)).toMatchObject({ name: "NotFoundError" });
+    expect(asked("fnd_nowhere")).toMatchObject({ name: "NotFoundError" });
+    expect((asked(foreign.findingId) as Error).message).toBe(
+      (asked("fnd_nowhere") as Error).message,
+    );
+    expect(r.w.repo.listFeedback(r.matterId)).toEqual([]);
+    expect(r.w.repo.listFeedback(other.matterId)).toEqual([]);
+    // And the matter's own finding works.
+    expect(r.w.services.feedback.addNote(r.am, r.dur.findingId, { note: REMARK }).findingId).toBe(
+      r.dur.findingId,
+    );
+  });
+
+  it("is a 409 finding_not_current once the documents changed, and once a newer review replaced the finding's", async () => {
+    // The documents changed after the review.
+    const changed = await open();
+    const amendment = changed.w.services.matters.view(changed.am).documents[1]!;
+    changed.w.services.matters.setStatedDate(
+      changed.am,
+      amendment.versions[0]!.versionId,
+      "2026-09-16",
+    );
+    expect(
+      errorOf(() =>
+        changed.w.services.feedback.addNote(changed.am, changed.dur.findingId, { note: REMARK }),
+      ),
+    ).toMatchObject({ name: "ConflictError", code: "finding_not_current" });
+    expect(changed.w.repo.listFeedback(changed.matterId)).toEqual([]);
+    // A newer review replaced it with nothing edited.
+    const replaced = await open();
+    replaced.w.services.runs.start(replaced.am, { workflowLabel: "v2" });
+    await replaced.w.services.runs.idle();
+    expect(
+      errorOf(() =>
+        replaced.w.services.feedback.addNote(replaced.am, replaced.dur.findingId, {
+          note: REMARK,
+        }),
+      ),
+    ).toMatchObject({ name: "ConflictError", code: "finding_not_current" });
+    expect(replaced.w.repo.listFeedback(replaced.matterId)).toEqual([]);
+    expect(
+      replaced.w.repo.listAuditEvents({ matterId: replaced.matterId, action: "feedback.add" }),
+    ).toEqual([]);
+    // The finding of the new review takes a note.
+    const fresh = replaced.w.services.runs
+      .issues(replaced.am, replaced.w.services.matters.view(replaced.am).currentRun!.id)
+      .find((i) => i.ruleKey === "dur-1")!;
+    expect(
+      replaced.w.services.feedback.addNote(replaced.am, fresh.findingId, { note: REMARK })
+        .findingId,
+    ).toBe(fresh.findingId);
+  });
+
+  it("says in words what the message of the refusal is, and repeats nothing that was sent", async () => {
+    const r = await open();
+    r.w.services.runs.start(r.am, { workflowLabel: "v2" });
+    await r.w.services.runs.idle();
+    const sent = "ZQ-SENT-NOTE";
+    const error = errorOf(() =>
+      r.w.services.feedback.addNote(r.am, r.dur.findingId, { note: sent }),
+    ) as Error;
+    expect(error.message).toBe(
+      "this finding is out of date, so notes can no longer be added to it",
+    );
+    expect(error.message).not.toContain(sent);
+  });
+
+  it("is still allowed once the matter is exported: a note is not a decision", async () => {
+    const { w, am, reviewerAm, runId, dur } = await open();
+    decideAll(w, reviewerAm, w.services.runs.issues(am, runId));
+    await w.services.reviews.exportMemo(reviewerAm);
+    expect(w.services.matters.view(am).matter.status).toBe("exported");
+    expect(w.services.feedback.addNote(am, dur.findingId, { note: REMARK }).note).toBe(REMARK);
+    // And the decision of that finding is closed, which a note does not open.
+    expect(w.services.runs.finding(reviewerAm, dur.findingId).canDecide.allowed).toBe(false);
+  });
+
+  it("shows on the finding, oldest first, with the answer to whether another can be added, for every role", async () => {
+    const { w, am, reviewerAm, viewerAm, dur } = await openWithViewer();
+    w.services.feedback.addNote(am, dur.findingId, { note: "ZQ-FIRST" });
+    w.services.feedback.addNote(reviewerAm, dur.findingId, { note: "ZQ-SECOND" });
+    w.services.feedback.addNote(viewerAm, dur.findingId, { note: "ZQ-THIRD" });
+    for (const caller of [am, reviewerAm, viewerAm]) {
+      const view = w.services.runs.finding(caller, dur.findingId);
+      expect(view.notes?.map((n) => n.note)).toEqual(["ZQ-FIRST", "ZQ-SECOND", "ZQ-THIRD"]);
+      expect(view.notes?.map((n) => n.authorName)).toEqual(
+        [am, reviewerAm, viewerAm].map((x) => w.repo.getUser(x.principal.userId)?.displayName),
+      );
+      expect(view.canAddNote).toEqual({ allowed: true, reason: null });
+    }
+    // The notes of one finding are not on another.
+    const other = w.services.runs.issues(am).find((i) => i.findingId !== dur.findingId)!;
+    expect(w.services.runs.finding(am, other.findingId).notes).toEqual([]);
+  });
+
+  it("counts the notes of every member on the issue row, and leaves the row as it was for a finding with none", async () => {
+    const { w, am, reviewerAm, runId, dur, issues } = await open();
+    expect(issues.every((i) => i.noteCount === undefined)).toBe(true);
+    expect(w.services.runs.finding(am, dur.findingId).issue.noteCount).toBeUndefined();
+    w.services.feedback.addNote(am, dur.findingId, { note: "ZQ-ONE" });
+    w.services.feedback.addNote(reviewerAm, dur.findingId, { note: "ZQ-TWO" });
+    w.services.feedback.addNote(reviewerAm, dur.findingId, { note: "ZQ-THREE" });
+    const table = w.services.runs.issues(am, runId);
+    expect(table.find((i) => i.findingId === dur.findingId)?.noteCount).toBe(3);
+    expect(
+      table.filter((i) => i.findingId !== dur.findingId).every((i) => i.noteCount === undefined),
+    ).toBe(true);
+    expect(w.services.runs.finding(am, dur.findingId).issue.noteCount).toBe(3);
+    // The count is of every member's notes, whoever reads it.
+    expect(
+      w.services.runs.issues(reviewerAm, runId).find((i) => i.findingId === dur.findingId)
+        ?.noteCount,
+    ).toBe(3);
+  });
+
+  it("says why a note cannot be added when it cannot: a role the table does not list, a finding out of date", async () => {
+    const r = await open();
+    expect(r.w.services.runs.finding(r.am, r.dur.findingId).canAddNote).toEqual({
+      allowed: true,
+      reason: null,
+    });
+    // Every real role holds the action, so the role phrase is reached through the presenter with a
+    // role the table does not list: the page restates the rule from the same table the service uses.
+    const present = createPresenter(r.w.repo, { relaxedSegregation: false }, () => undefined);
+    const record = r.w.repo.getFinding(r.matterId, r.dur.findingId)!;
+    const nobody = { ...r.am, role: "nobody" } as unknown as AuthorizedMatter;
+    expect(present.findingView(nobody, record).canAddNote).toEqual({
+      allowed: false,
+      reason: CANNOT_ADD_NOTE.role,
+    });
+    // A finding that went out of date says so, with the fixed phrase.
+    r.w.services.runs.start(r.am, { workflowLabel: "v2" });
+    await r.w.services.runs.idle();
+    expect(r.w.services.runs.finding(r.am, r.dur.findingId).canAddNote).toEqual({
+      allowed: false,
+      reason: CANNOT_ADD_NOTE.stale,
+    });
+  });
+
+  it("keeps the notes that a finding had when it goes out of date, and shows them", async () => {
+    const r = await open();
+    r.w.services.feedback.addNote(r.am, r.dur.findingId, { note: "ZQ-BEFORE" });
+    r.w.services.runs.start(r.am, { workflowLabel: "v2" });
+    await r.w.services.runs.idle();
+    const old = r.w.services.runs.finding(r.am, r.dur.findingId);
+    expect(old.issue.validity).toBe("stale");
+    expect(old.notes?.map((n) => n.note)).toEqual(["ZQ-BEFORE"]);
+    expect(old.issue.noteCount).toBe(1);
+    // The new finding of the same rule starts with none: notes are not carried across.
+    const fresh = r.w.services.runs
+      .issues(r.am, r.w.services.matters.view(r.am).currentRun!.id)
+      .find((i) => i.ruleKey === "dur-1")!;
+    expect(fresh.noteCount).toBeUndefined();
+    expect(r.w.services.runs.finding(r.am, fresh.findingId).notes).toEqual([]);
+  });
+
+  it("holds at most 20 for one person on one finding, and not for another person or another finding", async () => {
+    const { w, am, reviewerAm, matterId, issues, dur } = await open();
+    for (let i = 0; i < 20; i += 1)
+      w.services.feedback.addNote(am, dur.findingId, { note: `Note ${i}.` });
+    const refused = errorOf(() =>
+      w.services.feedback.addNote(am, dur.findingId, { note: "One more." }),
+    );
+    expect(refused).toMatchObject({ name: "ConflictError", code: "feedback_limit" });
+    expect((refused as Error).message).not.toMatch(/[0-9]/);
+    expect(
+      w.repo.listFeedback(matterId, { kind: "comment", userId: am.principal.userId }),
+    ).toHaveLength(20);
+    expect(w.repo.listAuditEvents({ matterId, action: "feedback.add" })).toHaveLength(20);
+    // Another person, and the same person on another finding, are not held to the count.
+    expect(w.services.feedback.addNote(reviewerAm, dur.findingId, { note: "Mine." }).note).toBe(
+      "Mine.",
+    );
+    const elsewhere = issues.find((i) => i.findingId !== dur.findingId)!;
+    expect(w.services.feedback.addNote(am, elsewhere.findingId, { note: "Here." }).note).toBe(
+      "Here.",
+    );
+  });
+
+  it("changes no finding, no decision, no status of the matter and nothing the export waits for", async () => {
+    const { w, am, reviewerAm, matterId, runId } = await open();
+    const issues = w.services.runs.issues(am, runId);
+    const strip = <T>(value: T): unknown =>
+      // The notes are shown beside the finding; the rest of what the finding is must not move.
+      JSON.parse(
+        JSON.stringify(value, (key, v: unknown) =>
+          key === "notes" || key === "noteCount" ? undefined : v,
+        ),
+      );
+    const snapshot = () =>
+      JSON.stringify(
+        strip({
+          matter: w.services.matters.view(am),
+          issues: w.services.runs.issues(am, runId),
+          findings: issues.map((i) => w.services.runs.finding(reviewerAm, i.findingId)),
+          readiness: w.repo.getExportReadiness(matterId, runId),
+          memos: w.services.reviews.listMemos(reviewerAm),
+          hashes: w.repo.listFindings(matterId, runId).map((f) => f.contentSha256),
+        }),
+      );
+    const before = snapshot();
+    for (const issue of issues)
+      w.services.feedback.addNote(reviewerAm, issue.findingId, { note: "ZQ-NOTHING-CHANGES" });
+    expect(snapshot()).toBe(before);
+    // The review can still be decided and exported: nothing was waiting on the notes.
+    for (const issue of issues) {
+      const view = w.services.runs.finding(reviewerAm, issue.findingId);
+      w.services.reviews.decide(reviewerAm, issue.findingId, decisionFor(view));
+    }
+    expect(w.repo.getExportReadiness(matterId, runId).ready).toBe(true);
+  });
+
+  it("writes the audit event with ids and flags, and the words nowhere in it", async () => {
+    const { w, am, matterId, runId, dur } = await open();
+    const words = "ZQ-NOTE-SERVICE-WORDS and what they say";
+    const view = w.services.feedback.addNote(am, dur.findingId, { note: words });
+    const [event] = w.repo.listAuditEvents({ matterId, action: "feedback.add" });
+    expect(event).toMatchObject({
+      actorId: am.principal.userId,
+      targetType: "feedback",
+      targetId: view.feedbackId,
+      detail: {
+        kind: "comment",
+        findingId: dur.findingId,
+        runId,
+        hasText: true,
+        hasLocation: false,
+        ruleKey: null,
+        reasonCode: null,
+        rating: null,
+      },
+    });
+    expect(JSON.stringify(event)).not.toContain("ZQ-");
+    expect(w.logs.join("\n")).not.toContain("ZQ-");
+  });
+
+  it("appears in what the caller may read of the matter's feedback, with the author, and in no other matter's", async () => {
+    const { w, am, reviewerAm, dur } = await open();
+    const other = await reviewed(w);
+    const otherFinding = w.services.runs.issues(other.am, other.runId)[0]!;
+    w.services.feedback.addNote(am, dur.findingId, { note: "ZQ-HERE" });
+    w.services.feedback.addNote(other.am, otherFinding.findingId, { note: "ZQ-ELSEWHERE" });
+    const seen = w.services.feedback.list(reviewerAm);
+    expect(seen.notes.map((n) => [n.note, n.findingId, n.authorName])).toEqual([
+      ["ZQ-HERE", dur.findingId, w.repo.getUser(am.principal.userId)?.displayName],
+    ]);
+    expect(JSON.stringify(seen)).not.toContain("ZQ-ELSEWHERE");
   });
 });

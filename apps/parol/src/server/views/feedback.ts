@@ -119,3 +119,23 @@ export function ratingLabel(mark: number): string {
     ? UNKNOWN_MARK
     : RATING_LABEL[mark as RatingMark];
 }
+
+// ---------------------------------------------------------------------------------------------
+// Notes on a finding (slice D)
+// ---------------------------------------------------------------------------------------------
+
+export const NOTES_HEADING = "Notes on this finding";
+export const NOTES_INTRO =
+  "Anyone on the matter can leave a note for the reviewer, for example where you disagree. A note is not part of the decision and is not printed in the memo.";
+export const NOTES_EMPTY = "No notes on this finding.";
+export const NOTE_LABEL = "Your note";
+export const NOTE_HINT = "What the reviewer should know about this finding, in your own words.";
+export const NOTE_BUTTON = "Add note";
+/** The link in the header of a finding that leads to its notes. */
+export const NOTES_JUMP = "Go to the notes";
+/** Said when the service gave no reason for not offering the form, so that a person is never left with none. */
+export const NOTE_CANNOT_ADD = "You cannot add a note to this finding.";
+
+/** How many notes a finding carries, as a row of the issue table says it. */
+export const noteCountLabel = (count: number): string =>
+  `${count} ${count === 1 ? "note" : "notes"}`;

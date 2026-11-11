@@ -11,8 +11,12 @@ import { ACTORS, makeWorld, reviewable, type World } from "./fixtures.js";
  *
  * Slice B: a missed issue is a row of `feedback` with the rule, the place and the note a person
  * typed. It goes with its matter, the place and the note are cleared from the file by the
- * compaction, and the audit trail keeps the event with ids, the rule key and flags only. The later
- * slices add what a note and a rating leave behind below.
+ * compaction, and the audit trail keeps the event with ids, the rule key and flags only.
+ *
+ * Slice D: a note on a finding names the finding with a foreign key that has no cascade, so the
+ * deletion of a matter has to remove its feedback before its findings. A note goes with its matter,
+ * its words are cleared from the file by the compaction, and the audit trail keeps the event with
+ * the ids of the finding and the review and a flag that there were words, and not the words.
  */
 
 let dir: string;
@@ -257,6 +261,107 @@ describe("the audit trail, with missed issues", () => {
     const after = w.repo.listAuditEvents({ matterId: doomed.m.id, action: "feedback.add" });
     expect(after).toEqual(before);
     expect(JSON.stringify(after)).not.toContain("ZQ-TRAIL-MARKER-8801");
+    expect(w.repo.verifyAuditChain().ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Slice D: a note on a finding
+// ---------------------------------------------------------------------------------------------
+
+/** A matter with notes by two people on two findings, each carrying `marker`. */
+function noted(marker: string) {
+  const r = reviewable(w, { name: `Matter ${marker}` });
+  const note = (finding: (typeof r.findings)[0], userId: string, text: string) =>
+    w.repo.addFeedback(r.m.id, {
+      userId,
+      kind: "comment",
+      runId: r.run.id,
+      findingId: finding.id,
+      text: `${text} ${marker}`,
+    });
+  const rows = [
+    note(r.findings[0]!, ACTORS.reviewer, "A first note."),
+    note(r.findings[0]!, ACTORS.associate, "A reply."),
+    note(r.findings[1]!, ACTORS.associate, "A note on another finding."),
+  ];
+  return { ...r, rows };
+}
+
+describe("deleting a matter, with notes on its findings", () => {
+  it("removes its notes with the matter, and leaves the notes of another matter as they were", () => {
+    const doomed = noted("ZQ-DOOMED-0001");
+    const kept = noted("ZQ-KEPT-0002");
+    const held = (matterId: string) =>
+      count(
+        "SELECT count(*) AS n FROM feedback WHERE matter_id = ? AND kind = 'comment'",
+        matterId,
+      );
+    expect([held(doomed.m.id), held(kept.m.id)]).toEqual([3, 3]);
+    const keptNotes = w.repo.listFeedback(kept.m.id, { kind: "comment" });
+
+    w.repo.deleteMatter(doomed.m.id, { actorId: ACTORS.associate });
+
+    expect(held(doomed.m.id)).toBe(0);
+    for (const row of doomed.rows)
+      expect(count("SELECT count(*) AS n FROM feedback WHERE id = ?", row.id)).toBe(0);
+    expect(w.repo.listFeedback(kept.m.id, { kind: "comment" })).toEqual(keptNotes);
+    expect(
+      w.repo.listFeedback(kept.m.id, { findingId: kept.findings[0]!.id }).map((n) => n.userId),
+    ).toEqual([ACTORS.reviewer, ACTORS.associate]);
+    expect(
+      w.repo.listAuditEvents({ matterId: doomed.m.id, action: "matter.delete" })[0]?.detail,
+    ).toMatchObject({ feedback: 3 });
+  });
+
+  it("has to remove the notes before the findings they name, which the database holds to", () => {
+    const doomed = noted("ZQ-ORDER-0003");
+    const finding = doomed.findings[0]!;
+    // A finding that a note names cannot be deleted first: this is what the order of `deleteMatter`
+    // is for, and what a deletion that went findings-first would run into.
+    expect(() => w.db.prepare("DELETE FROM findings WHERE id = ?").run(finding.id)).toThrow(
+      /FOREIGN KEY constraint failed/,
+    );
+    expect(() => w.repo.deleteMatter(doomed.m.id, { actorId: ACTORS.associate })).not.toThrow();
+    expect(count("SELECT count(*) AS n FROM findings WHERE matter_id = ?", doomed.m.id)).toBe(0);
+  });
+
+  it("leaves no word of a note in the database file once it is compacted", () => {
+    const doomed = noted("ZQ-DOOMED-MARKER-6120");
+    const raw = (): string => readFileSync(join(dir, "parol.sqlite")).toString("latin1");
+    w.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    expect(raw()).toContain("ZQ-DOOMED-MARKER-6120");
+
+    w.repo.deleteMatter(doomed.m.id, { actorId: ACTORS.associate });
+    w.repo.compact();
+    w.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+
+    expect(raw()).not.toContain("ZQ-DOOMED-MARKER-6120");
+    expect(
+      count(
+        "SELECT count(*) AS n FROM feedback WHERE instr(CAST(text AS TEXT), ?) > 0",
+        "ZQ-DOOMED-MARKER-6120",
+      ),
+    ).toBe(0);
+  });
+
+  it("keeps the audit events of the notes, with ids and a flag and not the words", () => {
+    const doomed = noted("ZQ-TRAIL-MARKER-3377");
+    const before = w.repo.listAuditEvents({ matterId: doomed.m.id, action: "feedback.add" });
+    expect(
+      before.map((e) => [e.detail["kind"], e.detail["findingId"], e.detail["hasText"]]),
+    ).toEqual([
+      ["comment", doomed.findings[0]!.id, true],
+      ["comment", doomed.findings[0]!.id, true],
+      ["comment", doomed.findings[1]!.id, true],
+    ]);
+    expect(before.every((e) => e.detail["runId"] === doomed.run.id)).toBe(true);
+
+    w.repo.deleteMatter(doomed.m.id, { actorId: ACTORS.associate });
+
+    const after = w.repo.listAuditEvents({ matterId: doomed.m.id, action: "feedback.add" });
+    expect(after).toEqual(before);
+    expect(JSON.stringify(after)).not.toContain("ZQ-TRAIL-MARKER-3377");
     expect(w.repo.verifyAuditChain().ok).toBe(true);
   });
 });

@@ -7,6 +7,9 @@ import {
   missedIssueDraftFromForm,
   missedIssueFromBody,
   missedIssueFromForm,
+  noteDraftFromForm,
+  noteFromBody,
+  noteFromForm,
   ratingDraftFromForm,
   ratingFromBody,
   ratingFromForm,
@@ -19,23 +22,24 @@ const param = (c: Context, name: string): string => c.req.param(name) ?? "";
 
 /**
  * Where the routes of the capture of feedback are registered (work package W2.6a): the report of a
- * missed issue (slice B) and the rating of a matter (slice C), each as a form and as JSON, and the
- * read of what the caller may see of a matter's feedback. Every route goes through
- * `defineMatterRoute`, so a
- * write needs the CSRF token and a role that holds `feedback.add`, and a person with no part in the
- * matter is answered exactly as for a matter that does not exist. The pages are built by the
- * renderers of page-renderers.ts, so a refused form is answered with the page it was posted from.
+ * missed issue (slice B), the rating of a matter (slice C) and the note on a finding (slice D), each
+ * as a form and as JSON, and the read of what the caller may see of a matter's feedback. Every route
+ * goes through `defineMatterRoute`, so a write needs the CSRF token and a role that holds
+ * `feedback.add`, and a person with no part in the matter is answered exactly as for a matter that
+ * does not exist. The pages are built by the renderers of page-renderers.ts, so a refused form is
+ * answered with the page it was posted from.
  *
  * In each write the order is fixed: the guard, then the id in the path is looked up in the caller's
- * matter (a run of another matter is a 404 before the body is read), then the body is read and
- * checked (400), then the state is checked (409). Nothing in a body names a person, a matter or a
- * run: the person is the signed-in one and the run is the path's. The rating takes no id at all:
- * the matter is the path's and the review it is recorded against is the newest memo's.
+ * matter (a run or a finding of another matter is a 404 before the body is read), then the body is
+ * read and checked (400), then the state is checked (409). Nothing in a body names a person, a
+ * matter, a run or a finding: the person is the signed-in one and the run or the finding is the
+ * path's. The rating takes no id at all: the matter is the path's and the review it is recorded
+ * against is the newest memo's.
  */
 export function registerFeedbackRoutes(app: Hono, deps: AppDeps): void {
   const { services } = deps;
-  const { runs, feedback } = services;
-  const { runPage, memosPage } = createPageRenderers(deps);
+  const { runs, feedback, matters } = services;
+  const { runPage, findingPage, memosPage } = createPageRenderers(deps);
 
   defineMatterRoute(app, {
     method: "POST",
@@ -70,6 +74,50 @@ export function registerFeedbackRoutes(app: Hono, deps: AppDeps): void {
       const run = runs.get(am, param(c, "runId"));
       const input = missedIssueFromBody(await readJsonBody(c));
       return c.json(feedback.reportMissedIssue(am, run.id, input), 201);
+    },
+  });
+
+  // --- a note on a finding ------------------------------------------------------------------
+
+  defineMatterRoute(app, {
+    method: "POST",
+    path: "/matters/:matterId/findings/:findingId/notes",
+    action: "feedback.add",
+    handler: async (c, am) => {
+      const findingId = param(c, "findingId");
+      // A finding of another matter, or none at all, ends here as a 404, before the form is looked at.
+      runs.finding(am, findingId);
+      const form = await readForm(c);
+      // A note the person can mend is answered on the finding itself, with what they typed.
+      return answerRefusal(
+        () => {
+          feedback.addNote(am, findingId, noteFromForm(form));
+          // Back to the table the person was reading, with this finding selected, as a decision does.
+          // A note can be added only to a finding of a review that has not been replaced.
+          const current = matters.view(am).currentRun;
+          const back =
+            current === null
+              ? urls.finding(am.matterId, findingId)
+              : urls.run(am.matterId, current.id, findingId);
+          return redirectWithNotice(c, am.principal, back, "note-saved");
+        },
+        (refusal) =>
+          findingPage(c, am, findingId, refusal, undefined, {
+            noteDraft: noteDraftFromForm(form),
+          }),
+      );
+    },
+  });
+
+  defineMatterRoute(app, {
+    method: "POST",
+    path: "/api/matters/:matterId/findings/:findingId/notes",
+    action: "feedback.add",
+    handler: async (c, am) => {
+      const findingId = param(c, "findingId");
+      runs.finding(am, findingId);
+      const input = noteFromBody(await readJsonBody(c));
+      return c.json(feedback.addNote(am, findingId, input), 201);
     },
   });
 

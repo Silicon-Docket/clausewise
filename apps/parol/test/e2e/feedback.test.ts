@@ -5,7 +5,7 @@ import { urls } from "../../src/server/urls.js";
 import { REASON_CODE_LABEL } from "../../src/server/views/feedback.js";
 import type { MatterFeedbackView } from "../../src/services/views.js";
 import type { FindingView, IssueRow } from "../../src/services/views.js";
-import { all, attr, byId, first, hasClass, readable } from "../pages/html.js";
+import { all, attr, byId, first, hasAttr, hasClass, readable } from "../pages/html.js";
 import {
   IDS,
   VIEWER,
@@ -28,7 +28,8 @@ import {
  *
  * Slice B adds a second story below: the report of a missed issue, from the review page to the
  * deletion of the matter. Slice C adds a third: the rating of a matter, from the memos page to the
- * deletion of the matter. The later slice adds its own.
+ * deletion of the matter. Slice D adds a fourth: the note on a finding, from the inspector of the
+ * review page to the deletion of the matter.
  */
 
 afterAll(cleanup);
@@ -608,6 +609,227 @@ describe("the rating of a matter, through HTTP only", () => {
         db
           .prepare("SELECT count(*) AS n FROM audit_events WHERE instr(detail_json, ?) > 0")
           .get(WORDS_MARK) as { n: number }
+      ).n,
+    ).toBe(0);
+    expect(site.w.repo.verifyAuditChain().ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Slice D: the note on a finding, from the inspector of the review page to the deletion of the matter
+// ---------------------------------------------------------------------------------------------
+
+const NOTE_WORDS = "ZQ-E2E-NOTE-2285";
+
+describe("the note on a finding, through HTTP only", () => {
+  let site: Site;
+  let associate: Browser;
+  let reviewer: Browser;
+  let viewer: Browser;
+  let ids: Prepared;
+  const selected = (findingId = ids.findingId, runId = ids.runId): string =>
+    urls.run(ids.matterId, runId, findingId);
+  const counts = (root: Parameters<typeof all>[0]): string[] =>
+    all(root, (el) => hasAttr(el, "data-note-count")).map(readable);
+
+  beforeAll(async () => {
+    site = makeSite();
+    associate = await site.as(IDS.associate);
+    reviewer = await site.as(IDS.reviewer);
+    viewer = await site.as(VIEWER);
+    ids = await prepareMatter(site, { exported: false });
+  });
+
+  it("is written by the reviewer in the inspector, and the table and the inspector then show it", async () => {
+    const page = await reviewer.page(selected());
+    checkPage(site, page);
+    expect(counts(page.root)).toEqual([]);
+    expect(readable(byId(page.root, "notes")!)).toContain("No notes on this finding.");
+    // The link in the header of the pane leads to the section.
+    const jump = first(
+      page.root,
+      (el) =>
+        el.name === "a" && attr(el, "href") === "#notes" && readable(el) === "Go to the notes",
+    );
+    expect(jump).toBeDefined();
+    const saved = await reviewer.submit(page, urls.notes(ids.matterId, ids.findingId), {
+      set: { [FIELDS.note]: `The amendment may not reach Section 4. ${NOTE_WORDS}` },
+    });
+    expect(saved.status).toBe(303);
+    const landed = await reviewer.page(saved.headers.get("location")!);
+    checkPage(site, landed);
+    expect(readable(first(landed.root, (el) => attr(el, "role") === "status"))).toContain(
+      "Your note was added to the finding.",
+    );
+    expect(readable(byId(landed.root, "notes")!)).toContain(NOTE_WORDS);
+    expect(counts(landed.root)).toEqual(["1 note"]);
+  });
+
+  it("is read by every member, answered in JSON and on the page, and a reply makes the count three", async () => {
+    const page = await associate.page(urls.finding(ids.matterId, ids.findingId));
+    checkPage(site, page);
+    expect(readable(byId(page.root, "notes")!)).toContain(NOTE_WORDS);
+    const reply = await associate.submit(page, urls.notes(ids.matterId, ids.findingId), {
+      set: { [FIELDS.note]: `Agreed, and the dates differ. ${NOTE_WORDS}` },
+    });
+    expect(reply.status).toBe(303);
+    const json = await viewer.api(
+      "POST",
+      `/api/matters/${ids.matterId}/findings/${ids.findingId}/notes`,
+      {
+        note: `One more thing from the viewer. ${NOTE_WORDS}`,
+      },
+    );
+    expect(json.status).toBe(201);
+    for (const who of [associate, reviewer, viewer]) {
+      const seen = await who.page(selected());
+      checkPage(site, seen);
+      expect(all(byId(seen.root, "notes")!, (el) => el.name === "li")).toHaveLength(3);
+      expect(counts(seen.root)).toEqual(["3 notes"]);
+      const read = (await (
+        await who.api("GET", `/api/matters/${ids.matterId}/feedback`)
+      ).json()) as MatterFeedbackView;
+      expect(read.notes.map((n) => n.findingId)).toEqual([
+        ids.findingId,
+        ids.findingId,
+        ids.findingId,
+      ]);
+    }
+  });
+
+  it("changes nothing the review is waiting on: the findings can be decided and the memo exported without a word of it", async () => {
+    const am = site.w.grant(site.w.reviewer, ids.matterId);
+    expect(site.w.repo.getExportReadiness(ids.matterId, ids.runId).ready).toBe(false);
+    for (const issue of site.w.services.runs.issues(am, ids.runId)) {
+      const finding = await reviewer.page(urls.finding(ids.matterId, issue.findingId));
+      const decided = await reviewer.submit(finding, urls.review(ids.matterId, issue.findingId), {
+        set: {
+          [FIELDS.decision]: issue.status === "undetermined" ? "escalate" : "accept",
+          [FIELDS.reason]: "Read.",
+        },
+      });
+      expect(decided.status).toBe(303);
+    }
+    expect(site.w.repo.getExportReadiness(ids.matterId, ids.runId).ready).toBe(true);
+    const memos = await reviewer.page(urls.memos(ids.matterId));
+    const exported = await reviewer.submit(memos, urls.memos(ids.matterId));
+    expect(exported.status).toBe(303);
+    const memo = site.w.repo.listMemos(ids.matterId)[0]!;
+    const file = await site.w.services.reviews.memoFile(
+      site.w.grant(site.w.reviewer, ids.matterId),
+      memo.id,
+    );
+    expect(Buffer.from(file.bytes).toString("latin1")).not.toContain(NOTE_WORDS);
+    // The notes are still where they were, and still on the finding after the export.
+    const after = await reviewer.page(selected());
+    expect(all(byId(after.root, "notes")!, (el) => el.name === "li")).toHaveLength(3);
+  });
+
+  it("stays with the finding it was made about: a new review has none, and the old finding still lists them without a form", async () => {
+    // A new version of the amendment makes the review out of date, and a new review is started.
+    const fixed = await associate.apiUpload(
+      `/api/matters/${ids.matterId}/documents/${ids.lastDocumentId}/versions`,
+      {},
+      {
+        name: "amendment-corrected.txt",
+        bytes: new TextEncoder().encode(
+          "AMENDMENT NO. 1 TO MUTUAL NONDISCLOSURE AGREEMENT\n\n2. A corrected paragraph of synthetic text.\n",
+        ),
+      },
+    );
+    expect(fixed.status).toBe(201);
+    const started = await associate.api("POST", `/api/matters/${ids.matterId}/runs`, {
+      workflow: "v2",
+    });
+    expect(started.status).toBe(202);
+    const next = ((await started.json()) as { id: string }).id;
+    await site.w.services.runs.idle();
+
+    // The old finding is out of date: it still lists its notes, and offers no form.
+    const old = await reviewer.page(urls.finding(ids.matterId, ids.findingId));
+    expect(all(byId(old.root, "notes")!, (el) => el.name === "li")).toHaveLength(3);
+    expect(reviewer.hasForm(old, urls.notes(ids.matterId, ids.findingId))).toBe(false);
+    expect(readable(first(byId(old.root, "notes")!, (el) => attr(el, "role") === "note"))).toBe(
+      "This finding is out of date, so notes can no longer be added to it.",
+    );
+    const refused = await reviewer.api(
+      "POST",
+      `/api/matters/${ids.matterId}/findings/${ids.findingId}/notes`,
+      { note: "Too late." },
+    );
+    expect(refused.status).toBe(409);
+    // The same rule of the new review starts with no note, and takes one.
+    const table = (await (
+      await reviewer.api("GET", `/api/matters/${ids.matterId}/runs/${next}/findings`)
+    ).json()) as { findings: IssueRow[] };
+    const fresh = table.findings.find((row) => row.ruleKey === "dur-1")!;
+    expect(fresh.noteCount).toBeUndefined();
+    const page = await reviewer.page(selected(fresh.findingId, next));
+    checkPage(site, page);
+    expect(readable(byId(page.root, "notes")!)).toContain("No notes on this finding.");
+    const added = await reviewer.submit(page, urls.notes(ids.matterId, fresh.findingId), {
+      set: { [FIELDS.note]: "A note on the new finding." },
+    });
+    expect(added.status).toBe(303);
+  });
+
+  it("keeps the words in the feedback table only, and ids and flags in the audit trail", () => {
+    const db = site.w.repo.db;
+    const holding = (needle: string): string[] => {
+      const found: string[] = [];
+      const tables = db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        .all() as { name: string }[];
+      for (const { name } of tables) {
+        const columns = db.prepare(`PRAGMA table_info("${name}")`).all() as { name: string }[];
+        for (const column of columns) {
+          const n = (
+            db
+              .prepare(
+                `SELECT count(*) AS n FROM "${name}" WHERE instr(CAST("${column.name}" AS TEXT), ?) > 0`,
+              )
+              .get(needle) as { n: number }
+          ).n;
+          if (n > 0) found.push(`${name}.${column.name}`);
+        }
+      }
+      return found;
+    };
+    expect(holding(NOTE_WORDS)).toEqual(["feedback.text"]);
+    const events = site.w.repo.listAuditEvents({ matterId: ids.matterId, action: "feedback.add" });
+    expect(events.length).toBeGreaterThanOrEqual(4);
+    for (const event of events) {
+      expect(event.detail["kind"]).toBe("comment");
+      expect(event.detail["hasText"]).toBe(true);
+      expect(typeof event.detail["findingId"]).toBe("string");
+    }
+    expect(JSON.stringify(events)).not.toContain(NOTE_WORDS);
+    expect(site.logs.join("\n")).not.toContain(NOTE_WORDS);
+  });
+
+  it("goes with the matter when it is deleted, and the audit trail keeps the events without the words", async () => {
+    const db = site.w.repo.db;
+    const count = (sql: string): number => (db.prepare(sql).get(ids.matterId) as { n: number }).n;
+    const notes = count(
+      "SELECT count(*) AS n FROM feedback WHERE matter_id = ? AND kind = 'comment'",
+    );
+    expect(notes).toBe(4);
+    const page = await associate.page(urls.matter(ids.matterId));
+    const deleted = await associate.submit(page, urls.matterDelete(ids.matterId), {
+      set: { [FIELDS.confirm]: "yes" },
+    });
+    expect(deleted.status).toBe(303);
+    expect(count("SELECT count(*) AS n FROM feedback WHERE matter_id = ?")).toBe(0);
+    expect(
+      count(
+        "SELECT count(*) AS n FROM audit_events WHERE matter_id = ? AND action = 'feedback.add'",
+      ),
+    ).toBe(notes);
+    expect(
+      (
+        db
+          .prepare("SELECT count(*) AS n FROM audit_events WHERE instr(detail_json, ?) > 0")
+          .get(NOTE_WORDS) as { n: number }
       ).n,
     ).toBe(0);
     expect(site.w.repo.verifyAuditChain().ok).toBe(true);

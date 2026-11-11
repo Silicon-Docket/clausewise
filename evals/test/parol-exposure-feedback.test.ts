@@ -2,6 +2,8 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   missedIssueFromBody,
   missedIssueFromForm,
+  noteFromBody,
+  noteFromForm,
   ratingFromBody,
   ratingFromForm,
 } from "../../apps/parol/src/server/routes/feedback.js";
@@ -19,7 +21,7 @@ import {
   effectOf,
   noRecordIds,
 } from "../src/parol/exposure/probes.js";
-import { OUTSIDER, runWith } from "./parol-authz-support.js";
+import { OUTSIDER, ownerOf, runWith } from "./parol-authz-support.js";
 import { completeDataset } from "./parol-exposure-support.js";
 
 /**
@@ -35,8 +37,14 @@ import { completeDataset } from "./parol-exposure-support.js";
  *
  * Slice C adds the rating (a form and JSON, each with an effect body that needs a scratch matter
  * with a memo) and the read of a matter's feedback. The rating takes no id in its path, so it has
- * no forged-id body; the read changes nothing, so it has no effect body. The later slice (a note)
- * adds its probe rows below.
+ * no forged-id body; the read changes nothing, so it has no effect body.
+ *
+ * Slice D adds the note on a finding (a form and JSON): each names a finding in the path, so each has
+ * a forged-id body and an effect body aimed at a finding of a reviewed scratch matter. The real
+ * application is shown to refuse a finding of another matter, to change the store when a caller who
+ * is let in sends the effect body, and to be seen when a finding is looked up by its own id and not
+ * by the caller's matter. The effect cells of the notes are counted with the other writes' in the
+ * planted hole of slice B's test, where a person with no part in the matter is taken for a viewer.
  */
 
 const REVIEW_ROUTES = [
@@ -268,8 +276,11 @@ describe("the report of a missed issue on the real application", () => {
     );
     // The outsider is a viewer in the planted guard, and the writes a viewer may make are these: its
     // effect body, sent by the outsider on each route in each mode, changed the store. The reports
-    // are two routes and the rating two more, the rating on a scratch matter that has a memo.
-    expect(result.byReason.changed_state).toBe((REPORT_ROUTES.length + RATING_ROUTES.length) * 2);
+    // are two routes, the notes two more, and the rating two more, the rating on a scratch matter
+    // that has a memo.
+    expect(result.byReason.changed_state).toBe(
+      (REPORT_ROUTES.length + NOTE_ROUTES.length + RATING_ROUTES.length) * 2,
+    );
     expect(result.probesAnsweredWithData).toBeGreaterThan(0);
   });
 });
@@ -407,5 +418,153 @@ describe("the rating on the real application", () => {
     const holed = await run(answers, ["matrix"]);
     expect(holed.byReason.handler_answered).toBe(4 * 2);
     expect(holed.exposed.every((cell) => cell.probe === FEEDBACK_READ)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Slice D: the note on a finding
+// ---------------------------------------------------------------------------------------------
+
+const NOTE_ROUTES = [
+  "POST /matters/:matterId/findings/:findingId/notes",
+  "POST /api/matters/:matterId/findings/:findingId/notes",
+] as const;
+
+/** Runs the application's own reading of a note body, so that a body it refuses is found here. */
+const readsAsNote = (key: (typeof NOTE_ROUTES)[number], body: ProbeBody): void => {
+  if (body.kind === "form") noteFromForm(body.fields);
+  else if (body.kind === "json") noteFromBody(body.json);
+  else throw new Error(`${key} has a body that is neither a form nor JSON`);
+};
+
+describe("the note on a finding in the probe tables", () => {
+  const scratch: Scratch = {
+    matterId: "mat_1",
+    documentId: "doc_1",
+    versionId: "ver_1",
+    earlierVersionId: "ver_0",
+    amendmentId: "doc_2",
+    invitee: "usr_1",
+    workflow: "v2",
+    runId: "run_1",
+    findingId: "fnd_1",
+  };
+
+  it("has a row for the form and one for the JSON, for the action every role holds, reaching 400 with its own empty body", () => {
+    for (const key of NOTE_ROUTES) {
+      const probe = MATTER_PROBES.find((p) => probeKey(p) === key);
+      expect(probe, key).toBeDefined();
+      expect(probe).toMatchObject({ action: "feedback.add", reaches: 400, method: "POST" });
+      expect(probe!.fresh, key).toBeUndefined();
+      expect(probe!.body.kind, key).toBe(key.includes("/api/") ? "json" : "form");
+      expect(Object.keys(fieldsOf(probe!.body)), key).toEqual([]);
+      // The empty body is refused by the application itself: the note is empty.
+      expect(() => readsAsNote(key, probe!.body), key).toThrow();
+    }
+  });
+
+  it("forges the finding in the path, once for each route, with a body that gets past every check on the body", () => {
+    for (const key of NOTE_ROUTES) {
+      expect(FORGED_BODY_KEYS, key).toContain(key);
+      const forged = FORGED_PROBES.filter((p) => `${p.method} ${p.template}` === key);
+      expect(
+        forged.map((p) => [p.position, p.via, p.reaches]),
+        key,
+      ).toEqual([["finding", "path", 404]]);
+      const request = forged[0]!.request(noRecordIds("mat_1"), NO_RECORD);
+      // The id is the borrowed one, in the place under test, and the matter is the caller's own.
+      expect(request.path, key).toContain(`/findings/${NO_RECORD.findingId}/notes`);
+      expect(request.path, key).toContain("mat_1");
+      // The body is one the application accepts, so only the lookup of the finding can answer it with 404.
+      expect(() => readsAsNote(key, request.body), key).not.toThrow();
+    }
+  });
+
+  it("has an effect body for each, on a reviewed scratch matter, that the application accepts and the probe's own is not", () => {
+    for (const key of NOTE_ROUTES) {
+      const probe = MATTER_PROBES.find((p) => probeKey(p) === key)!;
+      expect(EFFECT_KEYS, key).toContain(key);
+      const effect = effectOf(probe, scratch)!;
+      expect(effect.target, key).toBe("scratch");
+      // A note is added to a current finding, which a matter with a finished review has.
+      expect(effect.needs, key).toBe("run");
+      expect(JSON.stringify(effect.body), key).not.toBe(JSON.stringify(probe.body));
+      // It is aimed at the scratch matter's finding, not at ids of no record.
+      const ids = effect.ids(scratch, noRecordIds("mat_other"));
+      expect(ids.matterId, key).toBe("mat_1");
+      expect(ids.findingId, key).toBe("fnd_1");
+      expect(() => readsAsNote(key, effect.body), key).not.toThrow();
+      // And it is not the forged body: the two prove different things.
+      const forged = FORGED_PROBES.find((p) => `${p.method} ${p.template}` === key)!;
+      expect(JSON.stringify(effect.body), key).not.toBe(
+        JSON.stringify(forged.request(noRecordIds("mat_1"), NO_RECORD).body),
+      );
+    }
+  });
+
+  it("send only the note: no field that names a person, a matter, a review or a finding, those are the session's and the path's", () => {
+    for (const key of NOTE_ROUTES) {
+      const probe = MATTER_PROBES.find((p) => probeKey(p) === key)!;
+      const forged = FORGED_PROBES.find((p) => `${p.method} ${p.template}` === key)!;
+      for (const body of [
+        effectOf(probe, scratch)!.body,
+        forged.request(noRecordIds(), NO_RECORD).body,
+      ])
+        expect(Object.keys(fieldsOf(body)), key).toEqual(["note"]);
+    }
+  });
+});
+
+describe("the note on a finding on the real application", () => {
+  let dataset: Dataset;
+  beforeAll(async () => {
+    dataset = await completeDataset();
+  });
+  vi.setConfig({ testTimeout: 180_000, hookTimeout: 180_000 });
+  const run = runWith(() => dataset);
+
+  it("is shown to change the store for the caller who is let in, and the forged finding of both routes is a 404, when the guard is whole", async () => {
+    const result = await run({}, ["matrix", "effects", "forged"]);
+    expect(result.mismatches).toBe(0);
+    expect(result.letInNotReached).toBe(0);
+    expect(result.probesAnsweredWithData).toBe(0);
+    expect(result.writesUnproven).toBe(0);
+    expect(result.byReason.changed_state).toBe(0);
+    for (const key of NOTE_ROUTES) expect(result.writesWithoutBody, key).not.toContain(key);
+    // The routes without an effect body are still the four the base tables leave, and none is new.
+    expect([...result.writesWithoutBody].sort()).toEqual([
+      "POST /api/matters/:matterId/runs/:runId/cancel",
+      "POST /api/matters/:matterId/runs/:runId/resume",
+      "POST /matters/:matterId/runs/:runId/cancel",
+      "POST /matters/:matterId/runs/:runId/resume",
+    ]);
+    expect(result.writesWithEffect).toBe(result.writeRoutes - result.writesWithoutBody.length);
+  });
+
+  it("sees a finding looked up by its own id and not the caller's matter's: the forged cells of both routes are exposures, in both modes", async () => {
+    // The hole the forged-id body is for: the finding in the path is found by its own id whatever
+    // matter the request is in, so a note is written, or refused, for a finding of another matter.
+    const hole: SiteHooks = {
+      beforeRoutes: (_app, deps) => {
+        const owner = ownerOf(deps);
+        const repo = deps.repo as unknown as Record<string, (...a: unknown[]) => unknown>;
+        const real = repo["getFinding"]!.bind(deps.repo);
+        repo["getFinding"] = (matterId, findingId, ...rest) =>
+          real(owner("findings", findingId as string) ?? matterId, findingId, ...rest);
+      },
+    };
+    const whole = await run({}, ["forged"]);
+    const holed = await run(hole, ["forged"]);
+    // A forged cell is named for its route and the place of the forged id.
+    const noteCells = (r: typeof whole) =>
+      r.exposed.filter((cell) => NOTE_ROUTES.some((route) => cell.probe.startsWith(`${route} (`)));
+    expect(noteCells(whole)).toEqual([]);
+    // Each route is exposed in both modes of the suite: the answer is not the answer for no record.
+    expect(
+      noteCells(holed)
+        .map((cell) => cell.probe.replace(/ \(.*$/, ""))
+        .sort(),
+    ).toEqual([...NOTE_ROUTES, ...NOTE_ROUTES].sort());
+    expect(new Set(noteCells(holed).map((cell) => cell.relaxed))).toEqual(new Set([false, true]));
   });
 });

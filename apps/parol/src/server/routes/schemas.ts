@@ -171,6 +171,18 @@ export const MissedIssueBody = z.strictObject({
 export type MissedIssueBody = z.infer<typeof MissedIssueBody>;
 
 /**
+ * `POST /api/matters/:id/findings/:findingId/notes` (package W2.6a, slice D). The finding is the
+ * path's and the person the session's. The body is checked here for its shape only: no key but
+ * `note`, and it a string. What the note may be (it says something, it is not too long) is checked
+ * by `noteFromBody` (feedback.ts), the function the form shares its rules with, so that a script is
+ * refused with the same codes as a person at the form. A note that is left out is `finding_note_required`.
+ */
+export const NoteBody = z.strictObject({
+  note: z.string().nullable().optional(),
+});
+export type NoteBody = z.infer<typeof NoteBody>;
+
+/**
  * `POST /api/matters/:id/rating` (package W2.6a). The matter is the path's and the person the
  * session's. The body is checked here for its shape only: no key but these two, and each of the
  * type it has. What a value may be (a mark that is a whole number from 1 to 5, a comment that is not

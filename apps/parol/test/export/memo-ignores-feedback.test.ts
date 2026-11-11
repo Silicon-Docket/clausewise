@@ -23,7 +23,12 @@ afterAll(cleanup);
  * Slice C: the same holds for the rating of a matter. A rating is given after the memo is exported,
  * so the check is made both ways: a memo exported with ratings on record is the file it would have
  * been without them, and a memo exported again after members have rated is built from the same
- * input as before. The later slice adds the same test for a note below.
+ * input as before.
+ *
+ * Slice D: the same holds for a note on a finding. A note is for the reviewer who reads it, and is
+ * not part of the decision or of the memo, so the memo input, the file built from it and the words
+ * in the file are the same with notes and without, whether the notes come before the export or
+ * after it.
  */
 
 /**
@@ -265,5 +270,72 @@ describe("the memo of a matter that has been rated", () => {
       expect(firstText, word).not.toContain(word);
     // And the ratings did not make the memo stale or its export ready or not ready.
     expect(w.services.reviews.listMemos(am).map((m) => m.status)).toEqual(["current"]);
+  });
+});
+
+describe("the memo of a review whose findings carry notes", () => {
+  it("is built from the same input, byte for byte, with the notes as without them, and says none of their words", async () => {
+    const w = makeWorld();
+    const { matterId, am, reviewerAm, runId } = await reviewed(w);
+    const issues = w.services.runs.issues(am, runId);
+    for (const issue of issues) {
+      const view = w.services.runs.finding(reviewerAm, issue.findingId);
+      w.services.reviews.decide(reviewerAm, issue.findingId, decisionFor(view));
+    }
+    const run = w.repo.getCurrentRun(matterId)!;
+    const inputOf = () =>
+      buildMemoInput({
+        repo: w.repo,
+        matterId,
+        run,
+        exporterId: reviewerAm.principal.userId,
+        exportedAt: "2026-11-04T09:00:00.000Z",
+      }).input;
+
+    const before = inputOf();
+    const fileBefore = await buildMemo(before);
+
+    const words = "ZQ-MEMO-NOTE I read Section 9.3 differently";
+    w.services.feedback.addNote(am, issues[0]!.findingId, { note: words });
+    w.services.feedback.addNote(reviewerAm, issues[0]!.findingId, {
+      note: "ZQ-MEMO-NOTE-2 a reply to it",
+    });
+    w.services.feedback.addNote(am, issues[1]!.findingId, { note: "ZQ-MEMO-NOTE-3 elsewhere" });
+    // The notes are in the store and on the findings the memo is built from, so the check below is
+    // not an empty one.
+    expect(w.repo.listFeedback(matterId, { kind: "comment" })).toHaveLength(3);
+    expect(w.services.runs.finding(am, issues[0]!.findingId).notes).toHaveLength(2);
+
+    const after = inputOf();
+    expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+    expect(JSON.stringify(after)).not.toContain("ZQ-MEMO");
+    const fileAfter = await buildMemo(after);
+    expect(Buffer.from(fileAfter).equals(Buffer.from(fileBefore))).toBe(true);
+
+    // The file the service exports, with the notes on record, says none of it, and a note made
+    // after the export leaves the file on record as it was.
+    const memo = await w.services.reviews.exportMemo(reviewerAm);
+    const text = await textOfMemo((await w.services.reviews.memoFile(am, memo.memoId)).bytes);
+    for (const word of ["ZQ-MEMO", "Section 9.3 differently", "note for the reviewer"])
+      expect(text, word).not.toContain(word);
+    w.services.feedback.addNote(reviewerAm, issues[2]!.findingId, { note: "ZQ-MEMO-NOTE-4 late" });
+    const again = await w.services.reviews.memoFile(am, memo.memoId);
+    expect(await textOfMemo(again.bytes)).toBe(text);
+    expect(w.services.reviews.listMemos(am).map((m) => m.status)).toEqual(["current"]);
+  });
+
+  it("is ready to export on the same terms as before: a note is not a gate", async () => {
+    const w = makeWorld();
+    const { matterId, am, reviewerAm, runId } = await reviewed(w);
+    const issues = w.services.runs.issues(am, runId);
+    for (const issue of issues)
+      w.services.feedback.addNote(am, issue.findingId, { note: "I disagree with this one." });
+    // Notes on every finding and no decision: the review is exactly as unready as without them.
+    expect(w.repo.getExportReadiness(matterId, runId).ready).toBe(false);
+    for (const issue of issues) {
+      const view = w.services.runs.finding(reviewerAm, issue.findingId);
+      w.services.reviews.decide(reviewerAm, issue.findingId, decisionFor(view));
+    }
+    expect(w.repo.getExportReadiness(matterId, runId)).toMatchObject({ ready: true, blockers: [] });
   });
 });

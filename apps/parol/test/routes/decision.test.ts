@@ -301,9 +301,25 @@ describe("the decision form", () => {
     expect(readable(asAssociate.root)).toContain(
       "Only the reviewing attorney can record a decision.",
     );
-    expect(all(asAssociate.root, (el) => el.name === "textarea" && hasAttr(el, "name"))).toEqual(
-      [],
-    );
+    // No decision form and none of its controls. The one box the page has to type in is the note's,
+    // which any member may write and which decides nothing.
+    expect(
+      all(asAssociate.root, (el) => el.name === "form" && hasAttr(el, "data-decision-form")),
+    ).toEqual([]);
+    expect(
+      all(asAssociate.root, (el) => el.name === "textarea" && hasAttr(el, "name")).map((el) =>
+        attr(el, "name"),
+      ),
+    ).toEqual([FIELDS.note]);
+    const decisionControls: readonly string[] = [FIELDS.decision, FIELDS.reason, FIELDS.reasonCode];
+    expect(
+      all(
+        asAssociate.root,
+        (el) =>
+          ["input", "select"].includes(el.name) &&
+          decisionControls.includes(attr(el, "name") ?? ""),
+      ),
+    ).toEqual([]);
     const posted = await associate.send("POST", urls.review(ids.matterId, dur.issue.findingId), {
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({

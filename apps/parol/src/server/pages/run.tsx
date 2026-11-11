@@ -12,7 +12,7 @@ import type {
   UsageSummary,
 } from "../../services/views.js";
 import { urls } from "../urls.js";
-import { MISSED_ISSUE_JUMP } from "../views/feedback.js";
+import { MISSED_ISSUE_JUMP, noteCountLabel } from "../views/feedback.js";
 import { modelLine, plural } from "../views/format.js";
 import {
   SEVERITY_ORDER,
@@ -225,6 +225,11 @@ function IssueTable(props: {
                     decision={row.review?.decision ?? null}
                     validity={decisionValidity(row)}
                   />
+                  {row.noteCount === undefined || row.noteCount === 0 ? null : (
+                    <span class="row-sub" data-note-count="">
+                      {noteCountLabel(row.noteCount)}
+                    </span>
+                  )}
                 </td>
                 <td>
                   {row.escalations.length === 0 ? (

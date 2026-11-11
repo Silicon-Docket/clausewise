@@ -2,8 +2,14 @@ import { ValidationError } from "../../store/errors.js";
 import { RULE_KEY_PATTERN } from "../../store/schemas.js";
 import { formString, type FormFields } from "../http.js";
 import { FIELDS, NOT_COVERED_VALUE, normalizeNewlines } from "../pages/forms.js";
-import type { MissedIssueDraft, RatingDraft } from "../pages/feedback.js";
-import { MAX_FEEDBACK_TEXT, MAX_LOCATION, MissedIssueBody, RatingBody } from "./schemas.js";
+import type { MissedIssueDraft, NoteDraft, RatingDraft } from "../pages/feedback.js";
+import {
+  MAX_FEEDBACK_TEXT,
+  MAX_LOCATION,
+  MissedIssueBody,
+  NoteBody,
+  RatingBody,
+} from "./schemas.js";
 
 /**
  * Reading what the feedback forms and the feedback JSON carry (package W2.6a), parallel to
@@ -116,6 +122,59 @@ export function missedIssueFromBody(body: unknown): MissedIssueInput {
     location: locationOf(parsed.location ?? undefined),
     note: noteOf(parsed.note),
   };
+}
+
+// ---------------------------------------------------------------------------------------------
+// A note on a finding (slice D)
+// ---------------------------------------------------------------------------------------------
+
+/** What a note on a finding is made of, as the service takes it. */
+export interface NoteInput {
+  /** What the person wants the reviewer to read. Never empty. */
+  note: string;
+}
+
+/**
+ * The note: it must say something, and not more than the store keeps. A note has codes of its own
+ * (`finding_note_required`, `finding_note_too_long`), apart from the report's `note_required` and
+ * `note_too_long`, because the two notes are different controls on different pages and a refusal
+ * must lead to the control that is wrong.
+ */
+function findingNoteOf(posted: string | null | undefined): string {
+  if (posted === undefined || posted === null || blank(posted))
+    throw new ValidationError("finding_note_required", "the note is empty");
+  if (posted.length > MAX_FEEDBACK_TEXT)
+    throw new ValidationError("finding_note_too_long", "the note is too long");
+  return posted;
+}
+
+/** The note form. The text goes through `normalizeNewlines` first (a browser posts a line break as CR LF). */
+export function noteFromForm(form: FormFields): NoteInput {
+  const posted = formString(form, FIELDS.note);
+  return { note: findingNoteOf(posted === undefined ? undefined : normalizeNewlines(posted)) };
+}
+
+/**
+ * What had been typed in the note form, to show it again when the note was refused, so that a long
+ * note is not lost. It is cut to twice what the store accepts, so that a note that was too long is
+ * shown to be and a crafted post cannot put more on the page than the form could have held. The text
+ * is the person's own, returned to the person who typed it, and goes through the same escaping as
+ * every other text on the page. It is never logged or stored.
+ */
+export function noteDraftFromForm(form: FormFields): NoteDraft {
+  const posted = formString(form, FIELDS.note);
+  return posted === undefined
+    ? {}
+    : { note: normalizeNewlines(posted).slice(0, MAX_FEEDBACK_TEXT * 2) };
+}
+
+/**
+ * The note as JSON. The body is a strict object (an unknown key or a wrong type is a `ZodError`,
+ * which the shell answers with 400), and past that it is refused for the same reasons as the form,
+ * with the same codes.
+ */
+export function noteFromBody(body: unknown): NoteInput {
+  return { note: findingNoteOf(NoteBody.parse(body).note) };
 }
 
 // ---------------------------------------------------------------------------------------------

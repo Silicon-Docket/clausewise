@@ -25,7 +25,7 @@ import type {
  * declared in `services/views.ts`.
  *
  * Slice B (a missed issue) fills `reportMissedIssue`, `ruleChoices` and `list`. Slice C (the rating)
- * fills `rate` and `myRating`. `addNote` (slice D) is still the stub of the contract commit.
+ * fills `rate` and `myRating`. Slice D (a note on a finding) fills `addNote`.
  */
 export interface FeedbackService {
   /** A missed issue against one run of the matter. 404 for a run of another matter; 409 run_has_no_findings. */
@@ -54,6 +54,14 @@ export interface FeedbackService {
  * changes no finding, no decision and no gate of the export, and it is not part of the memo. It is
  * bound to a run and not to a content hash, so it stays true of the run it was made about, which is
  * shown as out of date when the documents change.
+ *
+ * What a note is: a remark by anyone on the matter about one finding, for the reviewer to read, for
+ * example where the author disagrees. It is stored as feedback of the kind `comment` that names the
+ * finding and the review the finding belongs to, and is read by every member of the matter next to
+ * the finding. It changes no finding, no decision and no gate of the export, and it is not part of
+ * the memo. It is bound to the finding's id and not to a content hash, because a finding's content
+ * never changes: after a new review the new findings have no notes, and the old notes stay with the
+ * old findings, which are shown as out of date.
  *
  * What a rating is: a person's mark, from 1 to 5, of how far they agree that they would use the
  * review for their next NDA, with words of their own if they choose. It is given once the matter has
@@ -100,8 +108,31 @@ export function createFeedbackService(deps: ServiceDeps, present: Presenter): Fe
       return present.missedIssueView(row, titlesOf(run.playbookVersionId));
     },
 
-    addNote() {
-      throw new Error("stub: W2.6a"); // STUB(W2.6a)
+    addNote(am, findingId, input) {
+      requireRole(am, "feedback.add", config);
+      // A finding of another matter, or none at all, ends here as a 404, the same for both.
+      const finding = repo.getFinding(am.matterId, findingId);
+      if (finding === undefined) throw new NotFoundError("finding");
+      // A note is about a finding as it stands in the review that made it. Once the documents or the
+      // playbook have changed, or a newer review has replaced that one, the finding is out of date and
+      // a note on it would be read against a review that no longer applies. Nothing else stops a
+      // note: the matter may be in review or exported, because a note is not a decision.
+      const run = repo.getRun(am.matterId, finding.runId);
+      if (finding.validity !== "current" || run === undefined || run.status === "superseded")
+        throw new ConflictError(
+          "finding_not_current",
+          "this finding is out of date, so notes can no longer be added to it",
+        );
+      const row = repo.addFeedback(am.matterId, {
+        // The person is the signed-in one; nothing in the request names anyone.
+        userId: am.principal.userId,
+        kind: "comment",
+        // The finding's own review, whatever else the request might have said.
+        runId: finding.runId,
+        findingId: finding.id,
+        text: input.note,
+      });
+      return present.noteView(row);
     },
 
     rate(am, input) {

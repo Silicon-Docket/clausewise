@@ -1,3 +1,4 @@
+import { CANNOT_ADD_NOTE } from "../../src/services/phrases.js";
 import {
   decisionPane,
   decision,
@@ -5,17 +6,21 @@ import {
   editWith,
   feedbackProps,
   memosPageWith,
+  noteOf,
+  notesPane,
   paneOf,
   ratingGiven,
   ratingProps,
   ratingSectionOf,
   refusedFindingPage,
   refusedMemosPage,
+  refusedNotePage,
   refusedRunPage,
   report,
   runPageWith,
+  runPageWithNotes,
 } from "./feedback-support.js";
-import { buildRunSummary } from "./support.js";
+import { buildFindingView, buildRunSummary } from "./support.js";
 import type { Variant } from "./variants.js";
 
 /**
@@ -31,8 +36,15 @@ import type { Variant } from "./variants.js";
  * Slice B (a missed issue): the review page with the section of reports, with nothing reported, with
  * reports of every shape (a rule named, not covered, no place, text a hostile document could hold),
  * with the form as it was typed when a report was refused, with the page that answers each refusal,
- * with a review that has no findings, and with a review that is out of date. The later slices (a
- * note, the rating) add their states below.
+ * with a review that has no findings, and with a review that is out of date.
+ *
+ * Slice C (the rating): the memos page in the four states of the rating, the section alone, and the
+ * page that answers each refusal of a rating.
+ *
+ * Slice D (the notes on a finding): the pane with no note, with notes of every shape, with text a
+ * hostile document could hold, with a note kept after a refusal and with the form replaced by the
+ * reason a note cannot be added; the finding page that answers each refusal of a note; and the
+ * review page with the notes in the inspector and their counts in the issue table.
  */
 export const VARIANTS_FEEDBACK: Variant[] = [
   ["pane, decision form, nothing chosen", () => decisionPane(), { fragment: true }],
@@ -320,5 +332,107 @@ export const VARIANTS_FEEDBACK: Variant[] = [
           rating: { hasMemo: false, runId: null },
         },
       ),
+  ],
+
+  // --- the notes on a finding (slice D) --------------------------------------------------------
+  ["pane, notes, none written yet, the form", () => notesPane([]), { fragment: true }],
+  [
+    "pane, notes, three notes and the form",
+    () =>
+      notesPane([
+        noteOf(),
+        noteOf({
+          feedbackId: "fbk_0201",
+          note: "The amendment is dated after the NDA.\nSo Section 9.3 may not reach it.",
+          authorName: "D. Whitfield",
+          at: "2026-11-03T14:40:00Z",
+        }),
+        noteOf({
+          feedbackId: "fbk_0202",
+          note: "Agreed, I will look at the dates.",
+          authorName: "R. Okoye",
+          at: "2026-11-04T08:12:00Z",
+        }),
+      ]),
+    { fragment: true },
+  ],
+  [
+    "pane, notes, text a hostile document could hold",
+    () =>
+      notesPane([
+        noteOf({
+          note: "pay \u202e1000\u202c now, con\u200bfi\u200ddential </textarea><script>window.pwned = 1</script>",
+          authorName: "<b>Mallory</b>",
+        }),
+      ]),
+    { fragment: true },
+  ],
+  [
+    "pane, notes, a note kept after a refusal",
+    () =>
+      notesPane([noteOf()], {
+        noteDraft: { note: "I kept my words.\nThey were not lost to the refusal." },
+      }),
+    { fragment: true },
+  ],
+  [
+    "pane, notes, a long note kept after a refusal",
+    () => notesPane([], { noteDraft: { note: "A long note. ".repeat(500) } }),
+    { fragment: true },
+  ],
+  [
+    "pane, notes, the finding is out of date: the reason in place of the form",
+    () =>
+      notesPane([noteOf()], {
+        canAddNote: { allowed: false, reason: CANNOT_ADD_NOTE.stale },
+        finding: buildFindingView({ issue: { ...buildFindingView().issue, validity: "stale" } }),
+      }),
+    { fragment: true },
+  ],
+  [
+    "pane, notes, a role that cannot add: the reason in place of the form",
+    () => notesPane([], { canAddNote: { allowed: false, reason: CANNOT_ADD_NOTE.role } }),
+    { fragment: true },
+  ],
+  [
+    "pane, notes, no reason given: the general sentence in place of the form",
+    () => notesPane([], { canAddNote: { allowed: false, reason: null } }),
+    { fragment: true },
+  ],
+  [
+    "finding page, note refused: empty",
+    () => refusedNotePage("finding_note_required", { note: "   " }),
+  ],
+  [
+    "finding page, note refused: too long",
+    () => refusedNotePage("finding_note_too_long", { note: "n".repeat(4001) }),
+  ],
+  [
+    "finding page, note refused: this person has written the most they may",
+    () => refusedNotePage("feedback_limit", { note: "One more." }, { status: "conflict" }),
+  ],
+  [
+    "finding page, note refused: the finding is out of date",
+    () =>
+      refusedNotePage(
+        "finding_not_current",
+        { note: "Too late." },
+        { status: "conflict", canAddNote: { allowed: false, reason: CANNOT_ADD_NOTE.stale } },
+      ),
+  ],
+  [
+    "run page, the inspector with notes and the counts in the issue table",
+    () =>
+      runPageWithNotes([noteOf(), noteOf({ feedbackId: "fbk_0201", authorName: "R. Okoye" })], {
+        counts: { "dur-1": 2, "exc-1": 1 },
+      }),
+  ],
+  [
+    "run page, the inspector on a finding that is out of date, with its notes",
+    () =>
+      runPageWithNotes([noteOf()], {
+        counts: { "dur-1": 1 },
+        canAddNote: { allowed: false, reason: CANNOT_ADD_NOTE.stale },
+      }),
   ],
 ];

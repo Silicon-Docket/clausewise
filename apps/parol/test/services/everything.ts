@@ -188,6 +188,12 @@ export async function everything(w: World, name: string): Promise<Everything> {
   // The rating is given through its service, which needs the memo exported above and records the
   // review the memo was made from; its words, typed by a person, carry the marker.
   w.services.feedback.rate(reviewerAm, { rating: 4, comment: `Useful. ${marker}` });
+  // A note on a finding is added through its service, which gives it the finding's own review. Its
+  // words, typed by a person, carry the marker (`feedback.text`), and the finding it names has to be
+  // removed after it by the deletion of the matter.
+  w.services.feedback.addNote(reviewerAm, first.findingId, {
+    note: `A note on a finding. ${marker}`,
+  });
   w.repo.addFeedback(matterId, {
     userId: reviewer,
     kind: "comment",

@@ -41,6 +41,21 @@ import type { RefusalFragment } from "./notices.js";
  * and the JSON body (routes/feedback.ts), `bad_rating` also by the service, `not_exported` and
  * `already_rated` as conflicts by the service and the store.
  *
+ * Slice D (a note on a finding). The form is the section `#notes` of the finding pane, on the
+ * finding's own page and in the inspector of the review page. A note that is empty or too long is
+ * fixed at the note, so `finding_note_required` and `finding_note_too_long` jump to `#note-text`.
+ * They are codes of their own and not the report's `note_required` and `note_too_long`, because the
+ * report's note is another control on another page and a jump must lead to the control that is
+ * wrong (the same reason the rating's comment has `comment_too_long`). `finding_not_current` is
+ * about the finding and not about a control: the page shows the sentence in place of the form, so
+ * there is nothing to jump to. `feedback_limit` is the report's code again, for the same reason as
+ * there: more than one form raises it, so it has no jump; its phrase fits a note as it fits a
+ * report. The two codes of the note are raised by the parsers of the note form and the JSON body
+ * (routes/feedback.ts), in the order the body is read before the state, and `finding_not_current`
+ * and `feedback_limit` by the service and the store, as conflicts. The page of a refused note drops
+ * the link when the form is not on it (a note posted by hand to a finding that has since gone out of
+ * date), because a link to a control that is not there leads nowhere.
+ *
  * `rule_required`, `note_required`, `note_too_long` and `location_too_long` are raised by the
  * parsers of the report form and the JSON body (routes/feedback.ts); `unknown_rule` by the store
  * when the rule is not one of the run's playbook (and by the parser when what was posted cannot be a
@@ -72,6 +87,11 @@ export const REFUSALS_FEEDBACK = {
     rating_required: "No rating was chosen. Choose a rating from 1 to 5.",
     bad_rating: "That is not a rating the form offers. Choose a rating from 1 to 5.",
     comment_too_long: "The comment is longer than 4,000 characters. Shorten it.",
+    finding_note_required:
+      "The note is empty. Write what the reviewer should know about this finding.",
+    finding_note_too_long: "The note is longer than 4,000 characters. Shorten it.",
+    finding_not_current:
+      "This finding is out of date, so notes can no longer be added to it. Open the current review to add a note.",
     already_rated:
       "You have already rated this matter, and a rating cannot be changed. To say more, report a missed issue on a review.",
     not_exported:
@@ -93,6 +113,9 @@ export const REFUSALS_FEEDBACK = {
     rating_required: "Choose a rating from 1 to 5.",
     bad_rating: "Choose a rating from 1 to 5.",
     comment_too_long: "Shorten it.",
+    finding_note_required: "Write what the reviewer should know about this finding.",
+    finding_note_too_long: "Shorten it.",
+    finding_not_current: "Open the current review to add a note.",
     already_rated: "To say more, report a missed issue on a review.",
     not_exported: "Ask a reviewer to export the memo, then rate the matter.",
   },
@@ -109,9 +132,12 @@ export const REFUSALS_FEEDBACK = {
     rating_required: { href: "#rating-choice", label: "Go to the rating" },
     bad_rating: { href: "#rating-choice", label: "Go to the rating" },
     comment_too_long: { href: "#rating-comment", label: "Go to the comment" },
+    finding_note_required: { href: "#note-text", label: "Go to the note" },
+    finding_note_too_long: { href: "#note-text", label: "Go to the note" },
   },
   notices: {
     "missed-issue-saved": "Your report was saved. It does not change any finding or decision.",
+    "note-saved": "Your note was added to the finding.",
     "rating-saved": "Your rating was saved. Thank you.",
   },
 } as const satisfies RefusalFragment;

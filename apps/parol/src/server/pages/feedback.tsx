@@ -1,5 +1,5 @@
 import { REASON_CODES, type ReasonCode } from "../../contracts.js";
-import type { MissedIssueView, RatingView, RuleChoice } from "../../services/views.js";
+import type { FindingView, MissedIssueView, RatingView, RuleChoice } from "../../services/views.js";
 import { urls } from "../urls.js";
 import {
   MINOR_EDIT_HINT,
@@ -18,7 +18,14 @@ import {
   MISSED_ISSUE_RULE_HINT,
   MISSED_ISSUE_RULE_LABEL,
   MISSED_ISSUE_RULE_PLACEHOLDER,
+  NOTE_BUTTON,
+  NOTE_CANNOT_ADD,
+  NOTE_HINT,
+  NOTE_LABEL,
   NOT_COVERED_LABEL,
+  NOTES_EMPTY,
+  NOTES_HEADING,
+  NOTES_INTRO,
   RATING_BUTTON,
   RATING_COMMENT_HINT,
   RATING_COMMENT_LABEL,
@@ -35,7 +42,15 @@ import {
   ratingLabel,
   ruleChoiceLabel,
 } from "../views/feedback.js";
-import { RevealedText, ScrollBox, Section, Time, textareaValue, Field } from "./components.js";
+import {
+  Field,
+  Heading,
+  RevealedText,
+  ScrollBox,
+  Section,
+  Time,
+  textareaValue,
+} from "./components.js";
 import { FIELDS, MINOR_EDIT_VALUE, NOT_COVERED_VALUE } from "./forms.js";
 import { csrfField, type Chrome } from "./layout.js";
 
@@ -408,5 +423,95 @@ export function RatingSection(props: RatingSectionProps) {
         </p>
       ) : null}
     </Section>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Notes on a finding (slice D)
+// ---------------------------------------------------------------------------------------------
+
+/** What the person had typed in the note form when it was refused. */
+export interface NoteDraft {
+  note?: string | undefined;
+}
+
+export interface NotesSectionProps {
+  chrome: Chrome;
+  matterId: string;
+  finding: FindingView;
+  /** The level of the section's title: the pane's sections all sit one level under the pane's title. */
+  level: 1 | 2 | 3 | 4 | 5 | 6;
+  draft?: NoteDraft | undefined;
+}
+
+/**
+ * The notes on one finding and the form that adds one. Every member of the matter reads every note.
+ * The form is offered when the service says a note can be added now; otherwise its reason is said in
+ * words, in place of the form, and the notes already made are still listed. A finding made before
+ * notes existed (a view with neither the notes nor the answer) has no such section: the page then
+ * says nothing it does not know.
+ *
+ * Every control is a native one with a label: the note, then the button. The text of a note is shown
+ * through `RevealedText` and nowhere as markup.
+ */
+export function NotesSection(props: NotesSectionProps) {
+  const { chrome, matterId, finding, draft } = props;
+  const { notes, canAddNote } = finding;
+  if (notes === undefined && canAddNote === undefined) return null;
+  const given = canAddNote?.reason;
+  return (
+    <section class="pane-section" id="notes" aria-labelledby="notes-heading">
+      <Heading level={props.level} id="notes-heading">
+        {NOTES_HEADING}
+      </Heading>
+      <p>{NOTES_INTRO}</p>
+      {notes === undefined || notes.length === 0 ? (
+        <p class="empty">{NOTES_EMPTY}</p>
+      ) : (
+        <ol class="feedback-list">
+          {notes.map((note) => (
+            <li>
+              <p class="muted">
+                <RevealedText value={note.authorName} />, <Time value={note.at} />
+              </p>
+              <div class="doc-text">
+                <RevealedText value={note.note} />
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+      {canAddNote?.allowed === true ? (
+        <form method="post" action={urls.notes(matterId, finding.issue.findingId)} class="stack">
+          {csrfField(chrome.csrfToken)}
+          <Field id="note-text" label={NOTE_LABEL} hint={NOTE_HINT}>
+            <textarea
+              id="note-text"
+              name={FIELDS.note}
+              rows={4}
+              maxlength={4000}
+              required
+              aria-describedby="note-text-hint"
+            >
+              {textareaValue(draft?.note ?? "")}
+            </textarea>
+          </Field>
+          <div class="actions">
+            <button type="submit" class="button">
+              {NOTE_BUTTON}
+            </button>
+          </div>
+        </form>
+      ) : (
+        // The box the decision uses to say "not here, and why"; the page has no other class for it.
+        <p class="decision-blocked" role="note">
+          <RevealedText
+            value={
+              given !== null && given !== undefined && given.trim() !== "" ? given : NOTE_CANNOT_ADD
+            }
+          />
+        </p>
+      )}
+    </section>
   );
 }

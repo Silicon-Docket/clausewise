@@ -34,7 +34,12 @@ import {
  * they choose. The store checks its shape before it writes anything (no finding, no reason code, no
  * rule, no place), refuses a second rating by the same person on the same matter (the database
  * refuses it too, in `feedback-migration.test.ts`), and audits the mark and whether there were
- * words and never the words. The later slice adds the tests of a note below.
+ * words and never the words.
+ *
+ * Slice D: a note is a comment that names a finding. The store checks that the finding is the
+ * matter's and that the run, if one is named, is the finding's own, holds a note to the words and
+ * nothing else, and allows 20 of them to one person on one finding (the database does not count,
+ * so the cap is held here). It is audited by ids and flags and never by the words.
  */
 
 let w: World;
@@ -872,5 +877,247 @@ describe("the rating of a matter", () => {
     expect(() => rate(m.id)).toThrow(ConflictError);
     expect(ratings(m.id)).toHaveLength(1);
     expect(auditOf(m.id)).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Slice D: a note on a finding
+// ---------------------------------------------------------------------------------------------
+
+const note = (
+  matterId: string,
+  finding: { id: string; runId: string },
+  over: Record<string, unknown> = {},
+) =>
+  w.repo.addFeedback(matterId, {
+    userId: ACTORS.reviewer,
+    kind: "comment",
+    runId: finding.runId,
+    findingId: finding.id,
+    text: "I read Section 9.3 differently.",
+    ...over,
+  } as never);
+
+describe("a note on a finding", () => {
+  it("is a comment on the finding, in the finding's own run, read back, and found by the finding", () => {
+    const { m, run, findings } = setup();
+    const f = findings[0]!;
+    w.clock.tick();
+    const added = note(m.id, f, { text: "Line one.\nLine two." });
+    expect(added).toMatchObject({
+      kind: "comment",
+      matterId: m.id,
+      runId: run.id,
+      findingId: f.id,
+      userId: ACTORS.reviewer,
+      text: "Line one.\nLine two.",
+      reasonCode: null,
+      rating: null,
+      ruleKey: null,
+      location: null,
+    });
+    expect(added.runId).toBe(f.runId);
+    w.clock.tick();
+    const other = note(m.id, findings[1]!, { userId: ACTORS.associate, text: "Another finding." });
+    expect(w.repo.listFeedback(m.id, { kind: "comment", findingId: f.id })).toEqual([added]);
+    expect(w.repo.listFeedback(m.id, { findingId: findings[1]!.id })).toEqual([other]);
+    expect(w.repo.listFeedback(m.id, { kind: "comment" }).map((n) => n.id)).toEqual([
+      added.id,
+      other.id,
+    ]);
+  });
+
+  it("is given the finding's run when it names none, and one that it names must be the finding's", () => {
+    const { m, run, findings } = setup();
+    const f = findings[0]!;
+    // Left out: the store takes the finding's own review.
+    expect(note(m.id, f, { runId: undefined })).toMatchObject({ runId: run.id, findingId: f.id });
+    expect(note(m.id, f, { runId: null }).runId).toBe(run.id);
+    // Named and right.
+    expect(note(m.id, f, { runId: run.id }).runId).toBe(run.id);
+    // Named, and the run of another matter: not found, as for a missed issue.
+    const second = setup();
+    expect(() => note(m.id, f, { runId: second.run.id })).toThrow(NotFoundError);
+    // Named, in the matter, and not the finding's: refused. The documents change, which lets a
+    // second review start, and the first review's finding is not that review's.
+    w.repo.setStatedDate(m.id, m.nda.versionId, "2026-06-30", { actorId: ACTORS.associate });
+    const again = startRun(w, m);
+    expect(again.id).not.toBe(run.id);
+    expect(codeOf(() => note(m.id, f, { runId: again.id }))).toBe("run_mismatch");
+    expect(messageOf(() => note(m.id, f, { runId: again.id }))).toBe(
+      "the finding does not belong to that review",
+    );
+    expect(w.repo.listFeedback(m.id, { kind: "comment" })).toHaveLength(3);
+  });
+
+  it("is audited by ids and flags, and never by the words", () => {
+    const { m, run, findings } = setup();
+    const f = findings[0]!;
+    const words = "ZQ-NOTE-WORDS the clause says something else.";
+    const added = note(m.id, f, { text: words });
+    const events = w.repo.listAuditEvents({ matterId: m.id, action: "feedback.add" });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      actorId: ACTORS.reviewer,
+      targetType: "feedback",
+      targetId: added.id,
+      detail: {
+        kind: "comment",
+        findingId: f.id,
+        runId: run.id,
+        hasText: true,
+        hasLocation: false,
+        ruleKey: null,
+        reasonCode: null,
+        rating: null,
+      },
+    });
+    expect(JSON.stringify(events)).not.toContain("ZQ-NOTE-WORDS");
+    expect(w.repo.verifyAuditChain().ok).toBe(true);
+  });
+
+  it("needs a finding of the matter, and a finding of another matter is not found as one that is not there", () => {
+    const { m, findings } = setup();
+    const other = setup();
+    const foreign = other.findings[0]!;
+    // Written against the right run so only the finding is wrong.
+    expect(() => note(m.id, { id: foreign.id, runId: findings[0]!.runId })).toThrow(NotFoundError);
+    expect(() => note(m.id, { id: "fnd_nowhere", runId: findings[0]!.runId })).toThrow(
+      NotFoundError,
+    );
+    expect(messageOf(() => note(m.id, { id: foreign.id, runId: findings[0]!.runId }))).toBe(
+      messageOf(() => note(m.id, { id: "fnd_nowhere", runId: findings[0]!.runId })),
+    );
+    expect(() => note("mat_does_not_exist", findings[0]!)).toThrow(NotFoundError);
+    expect(() => note(m.id, findings[0]!, { userId: "usr_nobody" })).toThrow(NotFoundError);
+    expect(w.repo.listFeedback(m.id)).toEqual([]);
+    expect(w.repo.listFeedback(other.m.id)).toEqual([]);
+  });
+
+  it("needs words, keeps them as typed up to 4000 characters, and refuses control characters", () => {
+    const { m, findings } = setup();
+    const f = findings[0]!;
+    for (const text of [undefined, null, "", "   ", "\n\t "])
+      expect(
+        codeOf(() => note(m.id, f, { text })),
+        JSON.stringify(text),
+      ).toBe("text_required");
+    expect(codeOf(() => note(m.id, f, { text: "t".repeat(4001) }))).toBe("bad_text");
+    expect(codeOf(() => note(m.id, f, { text: "a\u0007b" }))).toBe("bad_text");
+    expect(note(m.id, f, { text: "t".repeat(4000) }).text).toHaveLength(4000);
+    expect(w.repo.listFeedback(m.id)).toHaveLength(1);
+  });
+
+  it("carries the words and nothing else: no reason code, no rule, no place, no mark", () => {
+    const { m, findings } = setup();
+    const f = findings[0]!;
+    const refused: [Record<string, unknown>, string][] = [
+      [{ reasonCode: "other" }, "field_not_allowed"],
+      [{ ruleKey: "dur-1" }, "field_not_allowed"],
+      [{ location: "Section 6.1" }, "field_not_allowed"],
+      [{ rating: 4 }, "field_not_allowed"],
+    ];
+    for (const [over, code] of refused)
+      expect(
+        codeOf(() => note(m.id, f, over)),
+        JSON.stringify(over),
+      ).toBe(code);
+    expect(w.repo.listFeedback(m.id)).toEqual([]);
+    expect(w.repo.listAuditEvents({ matterId: m.id, action: "feedback.add" })).toEqual([]);
+  });
+
+  it("is refused in words that say the rule and never repeat what was sent", () => {
+    const { m, findings } = setup();
+    const f = findings[0]!;
+    const second = setup();
+    const sent = "ZQ-SENT-VALUE";
+    const messages = [
+      messageOf(() => note(m.id, f, { text: sent.repeat(400) })),
+      messageOf(() => note(m.id, f, { text: `${sent}\u0007` })),
+      messageOf(() => note(m.id, f, { reasonCode: sent })),
+      messageOf(() => note(m.id, f, { runId: second.run.id })),
+      messageOf(() => note(m.id, { id: `fnd_${sent}`, runId: f.runId })),
+    ];
+    for (const message of messages) {
+      expect(message).not.toContain(sent);
+      expect(message).not.toBe("");
+    }
+    for (let i = 0; i < 20; i += 1) note(m.id, f, { text: `Note ${i}.` });
+    expect(messageOf(() => note(m.id, f))).not.toMatch(/[0-9]|ZQ-/);
+  });
+
+  it("is limited to 20 for one person on one finding, and the limit is for that person and that finding", () => {
+    const { m, findings } = setup();
+    const f = findings[0]!;
+    for (let i = 0; i < 20; i += 1) note(m.id, f, { text: `Note number ${i}.` });
+    const refused = (() => {
+      try {
+        note(m.id, f);
+      } catch (error) {
+        return error;
+      }
+      return undefined;
+    })();
+    expect(refused).toBeInstanceOf(ConflictError);
+    expect((refused as ConflictError).code).toBe("feedback_limit");
+    expect((refused as ConflictError).message).not.toMatch(/[0-9]/);
+    expect(w.repo.listFeedback(m.id, { findingId: f.id, userId: ACTORS.reviewer })).toHaveLength(
+      20,
+    );
+    expect(w.repo.listAuditEvents({ matterId: m.id, action: "feedback.add" })).toHaveLength(20);
+    // Another person, another finding, a comment that names no finding and a report are not held to
+    // the first person's count on the first finding.
+    expect(note(m.id, f, { userId: ACTORS.associate })).toMatchObject({
+      userId: ACTORS.associate,
+    });
+    expect(note(m.id, findings[1]!)).toMatchObject({ findingId: findings[1]!.id });
+    expect(
+      w.repo.addFeedback(m.id, { userId: ACTORS.reviewer, kind: "comment", text: "A remark." }),
+    ).toMatchObject({ kind: "comment", findingId: null });
+    expect(report(m.id, f.runId)).toMatchObject({ kind: "missed_issue" });
+    // Nor is the count of one matter another's: the same person has their 20 on a finding of each.
+    const second = setup();
+    for (let i = 0; i < 20; i += 1) note(second.m.id, second.findings[0]!, { text: `Note ${i}.` });
+    expect(() => note(second.m.id, second.findings[0]!)).toThrow(ConflictError);
+  });
+
+  it("does not count the comments that name no finding against the 20, nor the notes of other people", () => {
+    const { m, findings } = setup();
+    const f = findings[0]!;
+    for (let i = 0; i < 25; i += 1)
+      w.repo.addFeedback(m.id, {
+        userId: ACTORS.reviewer,
+        kind: "comment",
+        text: `A remark about the matter ${i}.`,
+      });
+    for (let i = 0; i < 20; i += 1) note(m.id, f, { userId: ACTORS.associate, text: `Mine ${i}.` });
+    // Twenty notes by the associate and twenty-five loose comments by the reviewer: the reviewer
+    // has written no note on the finding, so the first is theirs to write.
+    expect(note(m.id, f, { text: "The reviewer's first." }).userId).toBe(ACTORS.reviewer);
+  });
+
+  it("is written with its audit event or not at all, and a note refused for the cap adds no event", () => {
+    const { m, findings } = setup();
+    const f = findings[0]!;
+    w.db.exec(`CREATE TRIGGER zz_refuse_audit BEFORE INSERT ON audit_events
+      WHEN NEW.action = 'feedback.add'
+      BEGIN SELECT RAISE(ABORT, 'parol-test: audit event refused'); END`);
+    expect(() => note(m.id, f)).toThrow(/audit event refused/);
+    expect(w.repo.listFeedback(m.id)).toEqual([]);
+    w.db.exec("DROP TRIGGER zz_refuse_audit");
+    for (let i = 0; i < 20; i += 1) note(m.id, f, { text: `Note ${i}.` });
+    const events = w.repo.listAuditEvents({ matterId: m.id, action: "feedback.add" }).length;
+    expect(() => note(m.id, f)).toThrow(ConflictError);
+    expect(w.repo.listAuditEvents({ matterId: m.id, action: "feedback.add" })).toHaveLength(events);
+    expect(w.repo.listFeedback(m.id, { findingId: f.id })).toHaveLength(20);
+  });
+
+  it("is written once, and never changed or replaced by code that goes round the store", () => {
+    const { m, findings } = setup();
+    const added = note(m.id, findings[0]!);
+    expect(() =>
+      w.db.prepare("UPDATE feedback SET text = 'changed' WHERE id = ?").run(added.id),
+    ).toThrow(/never edited/);
+    expect(w.repo.listFeedback(m.id)[0]?.text).toBe("I read Section 9.3 differently.");
   });
 });

@@ -6,7 +6,7 @@ import {
   RunPage,
   render,
 } from "../../src/server/pages/index.js";
-import type { MissedIssueDraft, RatingDraft } from "../../src/server/pages/feedback.js";
+import type { MissedIssueDraft, NoteDraft, RatingDraft } from "../../src/server/pages/feedback.js";
 import type { MemosPageProps } from "../../src/server/pages/memos.js";
 import type { DecisionDraft } from "../../src/server/pages/finding.js";
 import type { Chrome } from "../../src/server/pages/layout.js";
@@ -20,6 +20,7 @@ import type {
   IssueRow,
   MemoSummary,
   MissedIssueView,
+  NoteView,
   RatingView,
   ReviewHistoryItem,
   RuleChoice,
@@ -45,8 +46,8 @@ import {
  * answers a refused decision. `test/pages/support.ts` is not edited by this package, so the finding
  * is built from its builders with the optional fields set. Everything here is synthetic.
  *
- * Slice B adds the review page with the section of reports of missed issues, and slice C the memos
- * page with the section that rates the matter, below.
+ * Slice B adds the review page with the section of reports of missed issues, slice C the memos
+ * page with the section that rates the matter, and slice D the notes on a finding, below.
  */
 
 /** A decision history item as the review service now makes it. */
@@ -325,4 +326,109 @@ export function expectAccessibleExceptTheMemoList(
   const rating = byId(root, "rating");
   if (rating !== undefined) expectAccessible(rating, { fragment: true });
   return root;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The notes on a finding (slice D)
+// ---------------------------------------------------------------------------------------------
+
+/** A note as the feedback service makes it. */
+export function noteOf(over: Partial<NoteView> = {}): NoteView {
+  return {
+    feedbackId: "fbk_0200",
+    findingId: IDS.finding,
+    note: "I do not think Section 9.3 keeps Section 4 alive. Please check the amendment.",
+    authorName: "A. Ruiz",
+    at: "2026-11-03T14:05:00Z",
+    ...over,
+  };
+}
+
+/** What the service says when a note can be added now. */
+export const CAN_ADD: NonNullable<FindingView["canAddNote"]> = { allowed: true, reason: null };
+
+/** `finding` as the service now makes it: with its notes and the answer to whether one can be added. */
+export function withNotes(
+  finding: FindingView,
+  notes: NoteView[],
+  canAddNote: NonNullable<FindingView["canAddNote"]> = CAN_ADD,
+): FindingView {
+  return { ...finding, notes, canAddNote };
+}
+
+/** The finding pane of the worked example with its notes, as a fragment. */
+export const notesPane = (
+  notes: NoteView[],
+  options: {
+    canAddNote?: NonNullable<FindingView["canAddNote"]>;
+    noteDraft?: NoteDraft;
+    finding?: FindingView;
+  } = {},
+): string =>
+  render(
+    FindingPane({
+      chrome: buildChrome(),
+      matterId: IDS.matter,
+      finding: withNotes(options.finding ?? buildFindingView(), notes, options.canAddNote),
+      noteDraft: options.noteDraft,
+    }),
+  );
+
+/**
+ * The finding page that answers a refused note: the store's or the parser's own refusal turned into
+ * the notice by the route's own function, so the words, the todo and the jump are the ones a person
+ * is shown.
+ */
+export function refusedNotePage(
+  code: string,
+  draft?: NoteDraft,
+  options: {
+    status?: "conflict" | "validation";
+    canAddNote?: NonNullable<FindingView["canAddNote"]>;
+    notes?: NoteView[];
+  } = {},
+): string {
+  const error =
+    options.status === "conflict"
+      ? new ConflictError(code, "refused")
+      : new ValidationError(code, "refused");
+  const refusal = refusalOf(error);
+  if (refusal === null) throw new Error(`${code} is not a refusal the form can answer`);
+  return render(
+    FindingPage({
+      chrome: buildChrome({ notice: refusal.notice }),
+      matterId: IDS.matter,
+      matterName: "Lanternfish / Corvane NDA",
+      finding: withNotes(buildFindingView(), options.notes ?? [], options.canAddNote),
+      noteDraft: draft,
+    }),
+  );
+}
+
+/**
+ * The review page of the worked example with the inspector on a finding that has notes, and the
+ * issue table's rows carrying the counts the service gives them (`counts` by rule key).
+ */
+export function runPageWithNotes(
+  notes: NoteView[],
+  options: {
+    counts?: Record<string, number>;
+    canAddNote?: NonNullable<FindingView["canAddNote"]>;
+  } = {},
+): string {
+  const issues = buildIssueRows().map((row) => {
+    const count = options.counts?.[row.ruleKey];
+    return count === undefined ? row : { ...row, noteCount: count };
+  });
+  return render(
+    RunPage({
+      chrome: buildChrome(),
+      matter: buildMatterSummary(),
+      run: buildRunSummary(),
+      issues,
+      selected: withNotes(buildFindingView(), notes, options.canAddNote),
+      warnings: undefined,
+      documents: buildDocuments(),
+    }),
+  );
 }

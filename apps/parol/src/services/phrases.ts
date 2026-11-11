@@ -50,6 +50,16 @@ export const CANNOT_DECIDE = {
 } as const;
 
 /**
+ * Why a note cannot be added to a finding (package W2.6a, slice D), as the finding page restates
+ * what the service function decides again. Only the role and the finding's own state stop a note:
+ * the state of the matter does not, because a note is not a decision.
+ */
+export const CANNOT_ADD_NOTE = {
+  role: "Your role on this matter cannot add notes.",
+  stale: "This finding is out of date, so notes can no longer be added to it.",
+} as const;
+
+/**
  * What a person is told about an upload, naming the earlier version by its label and number. A
  * document's title is something a person typed, so it is not repeated here.
  */

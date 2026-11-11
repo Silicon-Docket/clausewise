@@ -628,6 +628,25 @@ describe("feedback, at the database: the other kinds", () => {
     ).not.toThrow();
   });
 
+  it("keeps a note on a finding to its own matter: a finding or a run of another matter is refused", () => {
+    const f = feedbackWorld();
+    const note = { matter_id: f.matterId, kind: "comment", text: "A note." };
+    // The shape of a note on a finding (slice D) is the comment's, with its finding and its run.
+    expect(insertFeedback({ ...note, finding_id: f.findingId, run_id: f.runId })).not.toThrow();
+    // Not another matter's finding, and not another matter's run, by the trigger of 002.
+    expect(insertFeedback({ ...note, finding_id: f.otherFindingId, run_id: f.runId })).toThrow(
+      /feedback must refer to its own matter/,
+    );
+    expect(insertFeedback({ ...note, finding_id: f.findingId, run_id: f.otherRunId })).toThrow(
+      /feedback must refer to its own matter/,
+    );
+    // Any number of them: the cap of twenty a person is the store's, not the database's.
+    for (let i = 0; i < 25; i += 1)
+      expect(
+        insertFeedback({ ...note, finding_id: f.findingId, run_id: f.runId, text: `Note ${i}.` }),
+      ).not.toThrow();
+  });
+
   it("allows one rating for each person and matter, and any number of the rest", () => {
     const f = feedbackWorld();
     const rating = (over: Record<string, SQLInputValue>) =>

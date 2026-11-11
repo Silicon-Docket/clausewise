@@ -3,6 +3,15 @@ import { REASON_CODES } from "../../src/contracts.js";
 import { FIELDS, MINOR_EDIT_VALUE, NOT_COVERED_VALUE } from "../../src/server/pages/forms.js";
 import { urls } from "../../src/server/urls.js";
 import {
+  NOTE_BUTTON,
+  NOTE_CANNOT_ADD,
+  NOTE_HINT,
+  NOTE_LABEL,
+  NOTES_EMPTY,
+  NOTES_HEADING,
+  NOTES_INTRO,
+  NOTES_JUMP,
+  noteCountLabel,
   MINOR_EDIT_HINT,
   MINOR_EDIT_LABEL,
   MINOR_EDIT_MARKED,
@@ -30,7 +39,8 @@ import {
   ruleChoiceLabel,
 } from "../../src/server/views/feedback.js";
 import { REFUSAL_PHRASES } from "../../src/server/routes/notices.js";
-import { expectAccessible } from "../a11y/rules.js";
+import { CANNOT_ADD_NOTE } from "../../src/services/phrases.js";
+import { expectAccessible, tabStops } from "../a11y/rules.js";
 import {
   RULE_CHOICES,
   decision,
@@ -40,15 +50,19 @@ import {
   expectAccessibleExceptTheMemoList,
   feedbackProps,
   memosPageWith,
+  noteOf,
+  notesPane,
   paneOf,
   ratingGiven,
   ratingProps,
   ratingSectionOf,
   refusedFindingPage,
   refusedMemosPage,
+  refusedNotePage,
   refusedRunPage,
   report,
   runPageWith,
+  runPageWithNotes,
 } from "./feedback-support.js";
 import { checkInvariants } from "./invariants.js";
 import {
@@ -75,7 +89,11 @@ import { VARIANTS_FEEDBACK } from "./variants-feedback.js";
  * the pages that answer each refusal of a report.
  *
  * Slice C: the section of the memos page that rates the matter, in the four states it has, and the
- * pages that answer each refusal of a rating. The later slice adds the tests of its pane below.
+ * pages that answer each refusal of a rating.
+ *
+ * Slice D: the notes on a finding, a section of the finding pane (on the finding's own page and in
+ * the inspector of the review page), in each state it has, the count of notes in the issue table,
+ * and the page that answers each refusal of a note.
  */
 
 const DASH = new RegExp("[" + String.fromCharCode(0x2013, 0x2014) + "]");
@@ -971,5 +989,337 @@ describe("the rating of a matter, in the page's own classes", () => {
     // One box for each mark, in the scale and in no other place.
     const scale = first(root, (el) => hasClass(el, "rating-scale"));
     expect(all(scale, (el) => hasClass(el, "check"))).toHaveLength(5);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Slice D: the notes on a finding
+// ---------------------------------------------------------------------------------------------
+
+const notesSection = (root: El): El => byId(root, "notes")!;
+const noteForm = (root: El): El =>
+  first(
+    notesSection(root),
+    (el) => el.name === "form" && attr(el, "action") === urls.notes(IDS.matter, IDS.finding),
+    "the note form",
+  );
+const SEVERAL = [
+  noteOf(),
+  noteOf({
+    feedbackId: "fbk_0201",
+    note: "The amendment is dated after the NDA.\nSo Section 9.3 may not reach it.",
+    authorName: "D. Whitfield",
+    at: "2026-11-03T14:40:00Z",
+  }),
+];
+const headingLevel = (el: El): number => Number(first(el, (x) => /^h[1-6]$/.test(x.name)).name[1]);
+
+describe("the notes on a finding, the form", () => {
+  const root = checkInvariants(notesPane([]), { fragment: true });
+
+  it("is a section of the pane with its own heading, after the decision and before the history", () => {
+    const section = notesSection(root);
+    expect(section.name).toBe("section");
+    expect(attr(section, "aria-labelledby")).toBe("notes-heading");
+    expect(readable(byId(root, "notes-heading")!)).toBe(NOTES_HEADING);
+    // One level under the pane's title, as every other section of the pane is.
+    expect(headingLevel(section)).toBe(headingLevel(byId(root, "decision")!));
+    const order = all(root, (el) => el.name === "section" && hasClass(el, "pane-section")).map(
+      (el) => attr(el, "id") ?? attr(el, "aria-labelledby"),
+    );
+    expect(order.indexOf("notes")).toBeGreaterThan(order.indexOf("decision"));
+    expect(order.indexOf("notes")).toBeLessThan(order.indexOf("history-heading"));
+    expect(order.filter((x) => x === "notes")).toHaveLength(1);
+  });
+
+  it("says who can write a note and that it is not part of the decision or the memo", () => {
+    expect(readable(notesSection(root))).toContain(NOTES_INTRO);
+    expect(NOTES_INTRO).toContain("is not part of the decision and is not printed in the memo");
+  });
+
+  it("posts to the finding's own address with the token, and nowhere else", () => {
+    const section = notesSection(root);
+    const forms = all(section, (el) => el.name === "form");
+    expect(forms).toHaveLength(1);
+    const f = noteForm(root);
+    expect(attr(f, "method")).toBe("post");
+    expect(
+      attr(
+        first(f, (el) => attr(el, "name") === "_csrf"),
+        "value",
+      ),
+    ).toBe(IDS.csrf);
+    // The finding is in the path, and no field of the form names a person, a matter or a finding.
+    const names = all(f, (el) => ["input", "select", "textarea"].includes(el.name)).map((el) =>
+      attr(el, "name"),
+    );
+    expect(names).toEqual(["_csrf", FIELDS.note]);
+  });
+
+  it("has a labelled note, required and limited to what the store keeps, tied to its hint, and a button that is not disabled", () => {
+    const textarea = control(noteForm(root), FIELDS.note);
+    expect(textarea.name).toBe("textarea");
+    expect(attr(textarea, "id")).toBe("note-text");
+    expect(readable(labelOf(root, "note-text"))).toBe(NOTE_LABEL);
+    expect(hasAttr(textarea, "required")).toBe(true);
+    expect(attr(textarea, "maxlength")).toBe("4000");
+    expect(attr(textarea, "aria-describedby")).toBe("note-text-hint");
+    expect(readable(byId(root, "note-text-hint")!)).toBe(NOTE_HINT);
+    const button = first(noteForm(root), (el) => el.name === "button");
+    expect(readable(button)).toBe(NOTE_BUTTON);
+    expect(attr(button, "type")).toBe("submit");
+    expect(hasAttr(button, "disabled")).toBe(false);
+    // The button does not read as the decision's or the report's.
+    expect(NOTE_BUTTON).toBe("Add note");
+  });
+
+  it("is in the tab order after the decision form, as the note and then the button", () => {
+    const stops = tabStops(notesSection(root)).map((el) => attr(el, "name") ?? el.name);
+    expect(stops.filter((n) => n !== "_csrf")).toEqual([FIELDS.note, "button"]);
+  });
+
+  it("says that nobody has written a note, and has no list, until somebody has", () => {
+    expect(readable(first(notesSection(root), (el) => hasClass(el, "empty")))).toBe(NOTES_EMPTY);
+    expect(all(notesSection(root), (el) => el.name === "ol")).toEqual([]);
+  });
+
+  it("is an empty box, with nothing in it, when nothing has been typed", () => {
+    expect(readable(control(noteForm(root), FIELDS.note))).toBe("");
+  });
+});
+
+describe("the notes on a finding, the list", () => {
+  const root = checkInvariants(notesPane(SEVERAL), { fragment: true });
+  const items = all(notesSection(root), (el) => el.name === "li");
+
+  it("is an ordered list in the order the notes were written, one item for each note", () => {
+    expect(all(notesSection(root), (el) => el.name === "ol")).toHaveLength(1);
+    expect(items).toHaveLength(2);
+    expect(readable(items[0]!)).toContain("A. Ruiz");
+    expect(readable(items[1]!)).toContain("D. Whitfield");
+    expect(
+      hasClass(
+        first(notesSection(root), (el) => el.name === "ol"),
+        "feedback-list",
+      ),
+    ).toBe(true);
+    // Something is there to read, so the sentence that says nobody has written is not.
+    expect(all(notesSection(root), (el) => hasClass(el, "empty"))).toEqual([]);
+  });
+
+  it("names the author and the time of each note, the time as a time", () => {
+    for (const [i, note] of SEVERAL.entries()) {
+      const time = first(items[i]!, (el) => el.name === "time");
+      expect(attr(time, "datetime")).toBe(note.at);
+      expect(readable(items[i]!)).toContain(note.authorName);
+    }
+  });
+
+  it("shows the words of a note as text that keeps its line breaks, in a quotation box", () => {
+    const box = first(items[1]!, (el) => hasClass(el, "doc-text"));
+    // The box holds the text as it was written, line break and all; the stylesheet keeps the break.
+    expect(box.children.map((c) => (c.type === "text" ? c.text : "")).join("")).toBe(
+      SEVERAL[1]!.note,
+    );
+    expect(readable(box)).toBe(SEVERAL[1]!.note.replace("\n", " "));
+  });
+
+  it("still lists the notes when the form is replaced by the reason a note cannot be added", () => {
+    const stale = checkInvariants(
+      notesPane(SEVERAL, { canAddNote: { allowed: false, reason: CANNOT_ADD_NOTE.stale } }),
+      { fragment: true },
+    );
+    expect(all(notesSection(stale), (el) => el.name === "li")).toHaveLength(2);
+    expect(all(notesSection(stale), (el) => el.name === "form")).toEqual([]);
+  });
+});
+
+describe("the notes on a finding, when a note cannot be added", () => {
+  it("says why in a note of its own, in place of the form: a finding out of date, a role that cannot", () => {
+    for (const reason of [CANNOT_ADD_NOTE.stale, CANNOT_ADD_NOTE.role]) {
+      const root = checkInvariants(notesPane([], { canAddNote: { allowed: false, reason } }), {
+        fragment: true,
+      });
+      const blocked = first(notesSection(root), (el) => attr(el, "role") === "note");
+      expect(readable(blocked)).toBe(reason);
+      expect(
+        all(notesSection(root), (el) => ["form", "textarea", "button"].includes(el.name)),
+      ).toEqual([]);
+    }
+    expect(CANNOT_ADD_NOTE.stale).toBe(
+      "This finding is out of date, so notes can no longer be added to it.",
+    );
+    // The page's phrase for a stale finding is the first sentence of the refusal's.
+    expect(REFUSAL_PHRASES["finding_not_current"]).toContain(CANNOT_ADD_NOTE.stale.slice(0, -1));
+  });
+
+  it("is never left without a reason: a blank or missing one gets the general sentence", () => {
+    for (const reason of [null, "", "   "]) {
+      const root = checkInvariants(notesPane([], { canAddNote: { allowed: false, reason } }), {
+        fragment: true,
+      });
+      expect(readable(first(notesSection(root), (el) => attr(el, "role") === "note"))).toBe(
+        NOTE_CANNOT_ADD,
+      );
+    }
+  });
+
+  it("is not there at all on a finding made before notes existed: the page says nothing it does not know", () => {
+    const root = checkInvariants(paneOf(buildFindingView()), { fragment: true });
+    expect(byId(root, "notes")).toBeUndefined();
+    expect(all(root, (el) => attr(el, "href") === "#notes")).toEqual([]);
+  });
+});
+
+describe("the notes on a finding, the link to them", () => {
+  it("leads from the header of the pane to the section, beside the link to the decision", () => {
+    const root = checkInvariants(notesPane([]), { fragment: true });
+    const header = first(root, (el) => el.name === "header" && hasClass(el, "pane-head"));
+    const links = all(header, (el) => el.name === "a").map((a) => [attr(a, "href"), readable(a)]);
+    expect(links).toEqual([
+      ["#decision", "Go to the decision"],
+      ["#notes", NOTES_JUMP],
+    ]);
+    expect(all(root, (el) => attr(el, "id") === "notes")).toHaveLength(1);
+  });
+
+  it("is there when the decision cannot be made, since the notes can still be read and written", () => {
+    const root = checkInvariants(
+      notesPane([], {
+        finding: buildFindingView({ canDecide: { allowed: false, reason: "Not yours." } }),
+      }),
+      { fragment: true },
+    );
+    const header = first(root, (el) => el.name === "header" && hasClass(el, "pane-head"));
+    expect(all(header, (el) => el.name === "a").map((a) => attr(a, "href"))).toEqual(["#notes"]);
+  });
+});
+
+describe("the notes on a finding, text a person typed", () => {
+  const hostile =
+    'pay \u202e1000\u202c now, con\u200bfi\u200ddential </textarea><script>window.pwned = 1</script> "quoted"';
+
+  it("is escaped where it is shown as a note, and its invisible characters are made visible", () => {
+    const html = notesPane([noteOf({ note: hostile, authorName: "<b>Mallory</b>" })]);
+    expect(html).not.toContain("<script>window.pwned");
+    expect(html).not.toContain("<b>Mallory</b>");
+    expect(html).not.toContain("\u202e");
+    expect(html).not.toContain("\u200b");
+    const root = expectAccessible(html, { fragment: true });
+    expect(readable(notesSection(root))).toContain("</textarea><script>window.pwned = 1</script>");
+    expect(readable(notesSection(root))).toContain("<b>Mallory</b>");
+    expect(withClass(notesSection(root), "invisible").length).toBeGreaterThanOrEqual(3);
+    expect(all(root, (el) => el.name === "script")).toEqual([]);
+  });
+
+  it("is escaped where it is put back in the form, which closes its own box only where the page does", () => {
+    const html = notesPane([], { noteDraft: { note: hostile } });
+    expect(html).not.toContain("<script>window.pwned");
+    const root = expectAccessible(html, { fragment: true });
+    // The text is the person's own, back in the box exactly as it was typed.
+    expect(readable(control(noteForm(root), FIELDS.note))).toBe(hostile);
+    expect(all(root, (el) => el.name === "script")).toEqual([]);
+  });
+});
+
+describe("the notes on a finding, after a refusal", () => {
+  it("shows again what was typed, with its line breaks, in the form", () => {
+    const root = expectAccessible(
+      refusedNotePage("finding_note_too_long", { note: "Line one.\nLine two." }),
+    );
+    const text = control(noteForm(root), FIELDS.note)
+      .children.map((c) => (c.type === "text" ? c.text : ""))
+      .join("");
+    // The textarea holds the note exactly: one line feed ahead of it, which a browser drops.
+    expect(text).toBe("\nLine one.\nLine two.");
+  });
+
+  it("answers each refusal of the note with its words, the sentence that says what to do marked, and a link to the note", () => {
+    for (const code of ["finding_note_required", "finding_note_too_long"] as const) {
+      const root = expectAccessible(refusedNotePage(code, { note: "A note." }));
+      const alert = first(root, (el) => attr(el, "role") === "alert");
+      expect(readable(alert), code).toContain(REFUSAL_PHRASES[code]);
+      expect(withClass(alert, "todo"), code).toHaveLength(1);
+      const link = first(alert, (el) => el.name === "a" && hasClass(el, "notice-jump"));
+      expect(attr(link, "href"), code).toBe("#note-text");
+      expect(byId(root, "note-text")?.name, code).toBe("textarea");
+    }
+  });
+
+  it("answers the cap and an out of date finding in words, and leads nowhere: no control mends them", () => {
+    for (const [code, options] of [
+      ["feedback_limit", { status: "conflict" }],
+      [
+        "finding_not_current",
+        {
+          status: "conflict",
+          canAddNote: { allowed: false, reason: CANNOT_ADD_NOTE.stale },
+        },
+      ],
+    ] as const) {
+      const root = expectAccessible(refusedNotePage(code, { note: "Late." }, options));
+      const alert = first(root, (el) => attr(el, "role") === "alert");
+      expect(readable(alert), code).toContain(REFUSAL_PHRASES[code]);
+      expect(withClass(alert, "todo"), code).toHaveLength(1);
+      expect(
+        all(alert, (el) => hasClass(el, "notice-jump")),
+        code,
+      ).toEqual([]);
+    }
+    // An out of date finding has no form for the sentence to point at.
+    const stale = expectAccessible(
+      refusedNotePage(
+        "finding_not_current",
+        { note: "Late." },
+        { status: "conflict", canAddNote: { allowed: false, reason: CANNOT_ADD_NOTE.stale } },
+      ),
+    );
+    expect(all(notesSection(stale), (el) => el.name === "form")).toEqual([]);
+  });
+});
+
+describe("the notes on a finding, in the inspector of the review page", () => {
+  const html = runPageWithNotes(SEVERAL, { counts: { "dur-1": 2, "exc-1": 1 } });
+  const root = expectAccessible(html);
+
+  it("are the section of the finding pane inside the inspector, and nowhere else on the page", () => {
+    const inspector = first(root, (el) => attr(el, "id") === "inspector");
+    expect(all(root, (el) => attr(el, "id") === "notes")).toHaveLength(1);
+    expect(byId(inspector, "notes")).toBeDefined();
+    expect(all(notesSection(root), (el) => el.name === "li")).toHaveLength(2);
+    expect(attr(noteForm(root), "action")).toBe(urls.notes(IDS.matter, IDS.finding));
+  });
+
+  it("says in the issue table how many notes a finding has, under the review chip, only when it has any", () => {
+    const rows = all(root, (el) => el.name === "tr" && hasAttr(el, "data-issue-row"));
+    const counted = rows
+      .map((row) => [
+        readable(first(row, (el) => hasClass(el, "rule-key"))),
+        all(row, (el) => hasAttr(el, "data-note-count")).map(readable),
+      ])
+      .filter(([, said]) => (said as string[]).length > 0);
+    expect(counted).toEqual([
+      ["dur-1", [noteCountLabel(2)]],
+      ["exc-1", [noteCountLabel(1)]],
+    ]);
+    expect(noteCountLabel(1)).toBe("1 note");
+    expect(noteCountLabel(2)).toBe("2 notes");
+    // The count is in the review cell, so a reader finds it where the decision is.
+    const cell = first(
+      rows.find((row) => readable(row).includes("dur-1"))!,
+      (el) => el.name === "td" && all(el, (x) => hasAttr(x, "data-note-count")).length > 0,
+    );
+    expect(readable(cell)).toContain("2 notes");
+  });
+
+  it("says nothing of notes on a row with none, or with a count of nothing", () => {
+    const none = expectAccessible(runPageWithNotes([], { counts: { "dur-1": 0 } }));
+    expect(all(none, (el) => hasAttr(el, "data-note-count"))).toEqual([]);
+    expect(readable(none)).not.toMatch(/\b0 notes\b/);
+  });
+
+  it("is a page of the inspector's own words when no finding is chosen: no notes section anywhere", () => {
+    const bare = expectAccessible(runPageWith(feedbackProps()));
+    expect(byId(bare, "notes")).toBeUndefined();
   });
 });

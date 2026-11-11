@@ -16,6 +16,7 @@ import {
   decisionPane,
   feedbackProps,
   memosPageWith,
+  notesPane,
   ratingProps,
   runPageWith,
 } from "../pages/feedback-support.js";
@@ -30,7 +31,11 @@ import {
  *
  * Slice C adds the codes of the rating of a matter: the mark and the comment have a link to their
  * controls, and the two conflicts (a rating already given, a matter not yet exported) are told in
- * words with the thing to do instead. The later slice adds the codes of a note below.
+ * words with the thing to do instead.
+ *
+ * Slice D adds the codes of a note on a finding: an empty or a too long note has a link to the note
+ * of the finding pane, and a finding that has gone out of date says so and leads nowhere. A note has
+ * codes of its own, apart from the report's, so that each link leads to the control that is wrong.
  */
 
 const SLICE_A = [
@@ -318,9 +323,17 @@ describe("the codes the capture can raise", () => {
         "bad_rating",
         "comment_too_long",
         "rating_required",
+        // The note on a finding (slice D).
+        "finding_note_required",
+        "finding_note_too_long",
       ].sort(),
     );
-    expect([...service].sort()).toEqual(["bad_rating", "not_exported", "run_has_no_findings"]);
+    expect([...service].sort()).toEqual([
+      "bad_rating",
+      "finding_not_current",
+      "not_exported",
+      "run_has_no_findings",
+    ]);
     const store = codesIn(addFeedbackText());
     // What the store raises that a person can mend has a phrase.
     for (const code of ["unknown_rule", "feedback_limit", "already_rated"]) {
@@ -341,6 +354,8 @@ describe("the codes the capture can raise", () => {
       "field_not_allowed",
       "finding_not_allowed",
       "finding_required",
+      // A note names the review its finding belongs to; the service gives the finding's own.
+      "run_mismatch",
       "run_required",
       "text_required",
     ];
@@ -443,6 +458,7 @@ describe("the fragment of the feedback package, the rating of a matter", () => {
   it("has a notice for a saved rating that is a success and thanks the person", () => {
     expect(Object.keys(REFUSALS_FEEDBACK.notices).sort()).toEqual([
       "missed-issue-saved",
+      "note-saved",
       "rating-saved",
     ]);
     expect(NOTICES["rating-saved"]).toEqual({
@@ -481,6 +497,131 @@ describe("the refusal of a rating the person is shown", () => {
     for (const code of SLICE_C) {
       const refusal = refusalOf(
         SLICE_C_CONFLICTS.includes(code)
+          ? new ConflictError(code, hostile)
+          : new ValidationError(code, hostile),
+      );
+      expect(JSON.stringify(refusal), code).not.toContain(hostile);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Slice D: a note on a finding
+// ---------------------------------------------------------------------------------------------
+
+/** The codes of the note that its control is to blame for, and the control each leads to. */
+const SLICE_D_FIELD = {
+  finding_note_required: "#note-text",
+  finding_note_too_long: "#note-text",
+} as const;
+/**
+ * The code that no control mends: the finding is out of date, so the page shows the sentence and
+ * not the form. `feedback_limit` is the report's code again (more than one form raises it, so it
+ * has no link, as the slice B tests pin).
+ */
+const SLICE_D_NO_JUMP = ["finding_not_current"] as const;
+const SLICE_D = [...Object.keys(SLICE_D_FIELD), ...SLICE_D_NO_JUMP] as (
+  keyof typeof SLICE_D_FIELD | (typeof SLICE_D_NO_JUMP)[number]
+)[];
+
+describe("the fragment of the feedback package, the note on a finding", () => {
+  it("defines each code once, with a phrase and a todo, in the merged tables and from this fragment alone", () => {
+    expect(SLICE_D).toHaveLength(3);
+    for (const code of SLICE_D) {
+      expect(Object.keys(REFUSALS_FEEDBACK.phrases), code).toContain(code);
+      expect(Object.keys(REFUSALS_FEEDBACK.todo), code).toContain(code);
+      expect(REFUSAL_PHRASES[code], code).toBe(REFUSALS_FEEDBACK.phrases[code]);
+      expect(REFUSAL_TODO[code], code).toBe(REFUSALS_FEEDBACK.todo[code]);
+    }
+  });
+
+  it("gives each phrase as plain sentences with the todo inside it as a sentence of its own", () => {
+    for (const code of SLICE_D) {
+      const phrase = REFUSAL_PHRASES[code]!;
+      const todo = REFUSAL_TODO[code]!;
+      expect(phrase, code).toMatch(/^[A-Z][^<>&"]*\.$/);
+      expect(phrase, code).toContain(todo);
+      expect(todo.length, code).toBeLessThan(phrase.length);
+      expect(todo, code).toMatch(/^[A-Z][^<>&"]*\.$/);
+      const at = phrase.indexOf(todo);
+      expect(at === 0 || /\.\s$/.test(phrase.slice(0, at)), `${code} starts a sentence`).toBe(true);
+      const end = at + todo.length;
+      expect(end === phrase.length || phrase[end] === " ", `${code} ends a sentence`).toBe(true);
+      expect(phrase, code).not.toMatch(DASH);
+      expect(todo, code).not.toMatch(DASH);
+    }
+  });
+
+  it("leads each code that the note is to blame for to the note, and the code of an out of date finding nowhere", () => {
+    for (const [code, href] of Object.entries(SLICE_D_FIELD)) {
+      const jump = REFUSAL_JUMP[code]!;
+      expect(jump.href, code).toBe(href);
+      expect(jump.label, code).toBe("Go to the note");
+      expect(REFUSALS_FEEDBACK.jump[code as keyof typeof SLICE_D_FIELD], code).toEqual(jump);
+    }
+    for (const code of SLICE_D_NO_JUMP) expect(REFUSAL_JUMP[code], code).toBeUndefined();
+    // The report's own note codes still lead to the report's note, not to this one.
+    expect(REFUSAL_JUMP["note_required"]?.href).toBe("#missed-issue-note");
+    expect(REFUSAL_JUMP["note_too_long"]?.href).toBe("#missed-issue-note");
+  });
+
+  it("leads to the textarea of the note form, by the id the link names, on the finding pane", () => {
+    const pane = parseHtml(notesPane([]));
+    for (const [code, href] of Object.entries(SLICE_D_FIELD))
+      expect(byId(pane, href.slice(1))?.name, code).toBe("textarea");
+  });
+
+  it("says what to do about the things it asks of the person", () => {
+    expect(REFUSAL_PHRASES["finding_note_required"]).toBe(
+      "The note is empty. Write what the reviewer should know about this finding.",
+    );
+    expect(REFUSAL_PHRASES["finding_note_too_long"]).toBe(
+      "The note is longer than 4,000 characters. Shorten it.",
+    );
+    expect(REFUSAL_PHRASES["finding_not_current"]).toBe(
+      "This finding is out of date, so notes can no longer be added to it. Open the current review to add a note.",
+    );
+    // The cap is the report's code: its phrase fits a note as it fits a report.
+    expect(REFUSAL_PHRASES["feedback_limit"]).toContain("The most that can be added here");
+  });
+
+  it("has a notice for a saved note that is a success and says what was done", () => {
+    expect(NOTICES["note-saved"]).toEqual({
+      kind: "success",
+      text: "Your note was added to the finding.",
+    });
+    expect(noticeFor("note-saved")).toEqual(NOTICES["note-saved"]);
+  });
+});
+
+describe("the refusal of a note the person is shown", () => {
+  it("is the phrase with its todo and its jump, with the status of the store's error: 400 for the note, 409 for the state", () => {
+    for (const code of SLICE_D) {
+      const conflict = code === "finding_not_current";
+      const refusal = refusalOf(
+        conflict
+          ? new ConflictError(code, "words the store wrote for itself")
+          : new ValidationError(code, "words the store wrote for itself"),
+      );
+      const jump = REFUSAL_JUMP[code];
+      expect(refusal, code).toEqual({
+        status: conflict ? 409 : 400,
+        code,
+        notice: {
+          kind: "error",
+          text: REFUSAL_PHRASES[code],
+          todo: REFUSAL_TODO[code],
+          ...(jump === undefined ? {} : { jump }),
+        },
+      });
+    }
+  });
+
+  it("never repeats what the store's message said, whatever it said", () => {
+    const hostile = "ZQ-WORDS-OF-THE-REQUEST";
+    for (const code of [...SLICE_D, "feedback_limit"]) {
+      const refusal = refusalOf(
+        code === "finding_not_current" || code === "feedback_limit"
           ? new ConflictError(code, hostile)
           : new ValidationError(code, hostile),
       );

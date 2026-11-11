@@ -7,14 +7,18 @@ import {
   expectAccessibleExceptTheMemoList,
   feedbackProps,
   memosPageWith,
+  noteOf,
+  notesPane,
   ratingGiven,
   ratingProps,
   ratingSectionOf,
   refusedFindingPage,
   refusedMemosPage,
+  refusedNotePage,
   refusedRunPage,
   report,
   runPageWith,
+  runPageWithNotes,
 } from "./feedback-support.js";
 import { all, ancestorsOf, attr, byId, first, hasAttr, hasClass, type El } from "./html.js";
 import { runPage } from "./render.js";
@@ -34,8 +38,12 @@ import { buildFindingView } from "./support.js";
  *
  * Slice C: the same for the rating of a matter, a section at the end of the memos page: the five
  * marks as one group that Tab visits once and the arrow keys move through, the comment and the
- * button, in that order, each named for what it is; and the links of a refused rating. The later
- * slice adds the order of its own controls below.
+ * button, in that order, each named for what it is; and the links of a refused rating.
+ *
+ * Slice D: the same for the notes on a finding, a section of the finding pane between the decision
+ * and the history: the note and the button after the decision form, each named for what it is, out
+ * of reach of the issue table's keys even in the inspector beside it; and the links that lead to the
+ * section and to the note.
  */
 
 const decisionForm = (root: El): El =>
@@ -521,5 +529,142 @@ describe("the keys of the issue table, and the rating of a matter", () => {
       }
     }
     expect(h.doc.querySelectorAll("tr.is-current")).toHaveLength(before);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Slice D: the notes on a finding
+// ---------------------------------------------------------------------------------------------
+
+const noteSection = (root: El): El => byId(root, "notes")!;
+const noteBox = (root: El): El => byId(root, "note-text")!;
+
+describe("the notes on a finding, by keyboard", () => {
+  const root = expectAccessible(notesPane([noteOf()]), { fragment: true });
+
+  it("takes Tab to the note and then to its button, after the whole of the decision form and its button", () => {
+    const all_ = tabStops(root);
+    const decisionButton = first(decisionForm(root), (el) => el.name === "button");
+    const noteButton = first(noteSection(root), (el) => el.name === "button");
+    expect(all_.indexOf(decisionButton)).toBeGreaterThan(-1);
+    expect(all_.indexOf(noteBox(root))).toBeGreaterThan(all_.indexOf(decisionButton));
+    expect(all_.indexOf(noteButton)).toBe(all_.indexOf(noteBox(root)) + 1);
+    // Nothing is between the two but the token, which takes no stop: the order of use is the order of Tab.
+    expect(
+      tabStops(noteSection(root))
+        .map((el) => attr(el, "name") ?? el.name)
+        .filter((n) => n !== "_csrf"),
+    ).toEqual([FIELDS.note, "button"]);
+    // And the history that follows holds no control for Tab to stop at: the button is the pane's last stop.
+    expect(byId(root, "history-heading")).toBeDefined();
+    expect(all_.at(-1)).toBe(noteButton);
+  });
+
+  it("gives each a name a person can say: the box is Your note, the button is Add note, the section is its heading", () => {
+    expect(accessibleName(root, noteBox(root))).toBe("Your note");
+    const button = first(noteSection(root), (el) => el.name === "button");
+    expect(accessibleName(root, button)).toBe("Add note");
+    expect(accessibleName(root, noteSection(root))).toBe("Notes on this finding");
+  });
+
+  it("uses native controls only: no positive tabindex, nothing removed from the order, no script handler", () => {
+    for (const el of all(noteSection(root), (x) =>
+      ["textarea", "button", "form"].includes(x.name),
+    )) {
+      expect(hasAttr(el, "tabindex"), el.name).toBe(false);
+      expect(hasAttr(el, "disabled"), el.name).toBe(false);
+      expect(hasAttr(el, "hidden"), el.name).toBe(false);
+      expect(
+        el.attrs.filter((a) => /^on/i.test(a.name)),
+        el.name,
+      ).toEqual([]);
+    }
+    expect(tabStops(root)).toContain(noteBox(root));
+    expect(all(root, (el) => Number(attr(el, "tabindex") ?? "0") > 0)).toEqual([]);
+  });
+
+  it("has the targets of its links once each: the section and the note", () => {
+    for (const [id, tag] of [
+      ["notes", "section"],
+      ["note-text", "textarea"],
+    ] as const) {
+      const found = all(root, (el) => attr(el, "id") === id);
+      expect(found, id).toHaveLength(1);
+      expect(found[0]!.name).toBe(tag);
+    }
+    const link = first(root, (el) => el.name === "a" && attr(el, "href") === "#notes");
+    // The link is in the header, ahead of everything the pane lets a person do: Tab reaches it
+    // right after the link to the decision, and before the first control of any form.
+    const stops_ = tabStops(root);
+    expect(stops_.slice(0, 2)).toEqual([
+      first(root, (el) => el.name === "a" && attr(el, "href") === "#decision"),
+      link,
+    ]);
+    expect(stops_.indexOf(link)).toBeLessThan(stops_.indexOf(noteBox(root)));
+  });
+
+  it("leaves nothing to tab to in the notes but the list's words when a note cannot be added", () => {
+    const blocked = expectAccessible(
+      notesPane([noteOf()], { canAddNote: { allowed: false, reason: "Not yours." } }),
+      { fragment: true },
+    );
+    expect(tabStops(noteSection(blocked))).toEqual([]);
+  });
+});
+
+describe("the links of a refused note", () => {
+  it("lead to the note, and are met by Tab before the form", () => {
+    for (const code of ["finding_note_required", "finding_note_too_long"] as const) {
+      const page = expectAccessible(refusedNotePage(code, { note: "x" }));
+      const stopsOfPage = tabStops(page);
+      const link = first(page, (el) => el.name === "a" && hasClass(el, "notice-jump"));
+      expect(attr(link, "href"), code).toBe("#note-text");
+      expect(stopsOfPage.indexOf(link), code).toBeGreaterThan(-1);
+      // The notice is above the finding: Tab meets the link before any control of the note form.
+      for (const stop of tabStops(noteSection(page)))
+        expect(stopsOfPage.indexOf(link), code).toBeLessThan(stopsOfPage.indexOf(stop));
+      expect(
+        all(page, (el) => attr(el, "id") === "note-text"),
+        code,
+      ).toHaveLength(1);
+    }
+  });
+});
+
+describe("the keys of the issue table, and the notes on a finding", () => {
+  it("do not reach the notes: they are in the inspector, outside the zone of the table", () => {
+    const page = expectAccessible(runPageWithNotes([noteOf()]));
+    const controls = [noteBox(page), first(noteSection(page), (el) => el.name === "button")];
+    for (const el of controls) {
+      const zones = ancestorsOf(page, el).filter((a) => attr(a, "data-zone") === "issues");
+      expect(zones, el.name).toEqual([]);
+      // They are in the inspector, which the script handles on its own and not by the table's keys.
+      expect(ancestorsOf(page, el).some((a) => attr(a, "id") === "inspector")).toBe(true);
+    }
+  });
+
+  it("do nothing when j, k, ? or Enter are typed into the note or its button, in the page or placed where the script listens", () => {
+    const h = runScript(runPageWithNotes([noteOf()]));
+    const zone = h.doc.querySelector('[data-zone="issues"]')!;
+    const before = h.doc.querySelectorAll("tr.is-current").length;
+    // The real controls of the page, wherever they are.
+    const real = [...h.doc.querySelectorAll("textarea"), ...h.doc.querySelectorAll("button")];
+    expect(real.length).toBeGreaterThanOrEqual(2);
+    for (const field of real)
+      for (const key of ["j", "k", "?", "Enter", " "]) {
+        const e = event("keydown", field, { key });
+        field.dispatch(e);
+        expect(e.defaultPrevented, `${field.tagName} ${key}`).toBe(false);
+      }
+    // And the same typed into a note box that is placed in the zone the script listens to.
+    const field = new FakeElement(h.doc, null, "textarea");
+    field.parent = zone;
+    for (const key of ["j", "k", "?", "Enter"]) {
+      const e = event("keydown", field, { key });
+      field.dispatch(e);
+      expect(e.defaultPrevented, `textarea ${key}`).toBe(false);
+    }
+    expect(h.doc.querySelectorAll("tr.is-current")).toHaveLength(before);
+    expect(h.fetchCalls).toEqual([]);
   });
 });

@@ -187,6 +187,7 @@ function actionsOf(r: Pick<Reviewed, "w" | "am" | "matterId">): Set<string> {
       ...d.versions.map((v) => urls.statedDate(m, v.versionId)),
     ]),
     ...issues.map((i) => urls.review(m, i.findingId)),
+    ...issues.map((i) => urls.notes(m, i.findingId)),
   ]);
 }
 
@@ -3144,6 +3145,7 @@ function decideEverything(r: Reviewed): void {
 /** Earlier ones change nothing the later ones rely on, so a page's forms can be taken in turn. */
 const ORDER = [
   /\/findings\/[^/]+\/reviews$/,
+  /\/findings\/[^/]+\/notes$/,
   /\/memos$/,
   /\/settings$/,
   /\/members$/,
@@ -3179,7 +3181,7 @@ function submitters(root: El, form: El): El[] {
 /** Does what the form would do, with the service it goes to. Throws what the service throws. */
 async function perform(scene: Scene, as: AuthorizedMatter, root: El, form: El): Promise<void> {
   const { w, matterId } = scene;
-  const { matters, runs, reviews } = w.services;
+  const { matters, runs, reviews, feedback } = w.services;
   const action = attr(form, "action") ?? "";
   const fields = Object.fromEntries(formFields(form, {}, root));
   const id = (pattern: RegExp): string => decodeURIComponent(pattern.exec(action)?.[1] ?? "");
@@ -3256,6 +3258,11 @@ async function perform(scene: Scene, as: AuthorizedMatter, root: El, form: El): 
       findingContentSha256: fields[FIELDS.findingContentSha256]!,
       edits: null,
       reason: ok ? null : "The workflow could not settle this rule.",
+    });
+  } else if (/\/findings\/[^/]+\/notes$/.test(action)) {
+    // A note is the person's own words; the page offers an empty box, so the sweep writes some.
+    feedback.addNote(as, id(/\/findings\/([^/]+)\/notes$/), {
+      note: fields[FIELDS.note] || "A note from the sweep.",
     });
   } else if (action === urls.session()) {
     // Signing out is the shell's.

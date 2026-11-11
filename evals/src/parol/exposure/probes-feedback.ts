@@ -35,6 +35,15 @@
  * the state of the matter. The read, `GET /api/matters/:matterId/feedback`, is held by `matter.read`
  * and sends nothing that changes the store, so it has no effect body; its answer holds the caller's
  * own rating and no other, which the application's tests prove.
+ *
+ * Slice D, the note on a finding, as a form and as JSON. Both name a finding in the path, and a
+ * finding of another matter must be answered as a finding that does not exist, so each has a
+ * forged-id body: a body that passes every check on the body, so that the forged request is stopped
+ * by the lookup of the finding and not by a refusal of the body. Each has an effect body aimed at a
+ * finding of a scratch matter's review (`needs: "run"`): sent by a caller who must be refused, it
+ * would add a row to `feedback` and an event to the audit log if the guard let it through. The
+ * probe's own body is empty and reaches the handler, which refuses it with 400 (the note is empty)
+ * whatever the state of the matter.
  */
 import {
   A,
@@ -64,6 +73,20 @@ export const MATTER_PROBES_FEEDBACK: readonly Probe[] = [
     body: json(),
     reaches: 400,
   },
+  {
+    method: "POST",
+    template: `${M}/findings/:findingId/notes`,
+    action: "feedback.add",
+    body: form(),
+    reaches: 400,
+  },
+  {
+    method: "POST",
+    template: `${A}/findings/:findingId/notes`,
+    action: "feedback.add",
+    body: json(),
+    reaches: 400,
+  },
   { method: "POST", template: `${M}/rating`, action: "feedback.add", body: form(), reaches: 400 },
   { method: "POST", template: `${A}/rating`, action: "feedback.add", body: json(), reaches: 400 },
   { method: "GET", template: `${A}/feedback`, action: "matter.read", body: NONE, reaches: 200 },
@@ -76,6 +99,8 @@ export const FORGED_BODIES_FEEDBACK: Readonly<Record<string, ForgedBody>> = {
     form({ ruleKey: "(none)", note: "A report written by a probe." }),
   [`POST ${A}/runs/:runId/missed-issues`]: () =>
     json({ ruleKey: null, note: "A report written by a probe." }),
+  [`POST ${M}/findings/:findingId/notes`]: () => form({ note: "A note written by a probe." }),
+  [`POST ${A}/findings/:findingId/notes`]: () => json({ note: "A note written by a probe." }),
 };
 
 export const EFFECTS_FEEDBACK: Readonly<Record<string, EffectOf>> = {
@@ -90,6 +115,18 @@ export const EFFECTS_FEEDBACK: Readonly<Record<string, EffectOf>> = {
     needs: "run",
     ids: onScratch,
     body: json({ ruleKey: null, location: null, note: "A missed issue written by a probe." }),
+  }),
+  [`POST ${M}/findings/:findingId/notes`]: () => ({
+    target: "scratch",
+    needs: "run",
+    ids: onScratch,
+    body: form({ note: "A note on a finding, written by a probe." }),
+  }),
+  [`POST ${A}/findings/:findingId/notes`]: () => ({
+    target: "scratch",
+    needs: "run",
+    ids: onScratch,
+    body: json({ note: "A note on a finding, written by a probe." }),
   }),
   [`POST ${M}/rating`]: () => ({
     target: "scratch",

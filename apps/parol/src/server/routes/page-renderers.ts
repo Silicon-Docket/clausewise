@@ -11,7 +11,7 @@ import {
   RunPage,
 } from "../pages/index.js";
 import type { Chrome, Notice } from "../pages/layout.js";
-import type { MissedIssueDraft, RatingDraft } from "../pages/feedback.js";
+import type { MissedIssueDraft, NoteDraft, RatingDraft } from "../pages/feedback.js";
 import type { DecisionDraft } from "../pages/finding.js";
 import { refusalOf, type Refusal } from "./notices.js";
 import { exportBlockedReason, mayDeleteMatter, pageChrome, sendPage } from "./shared.js";
@@ -34,6 +34,9 @@ function chromeFor(c: Context, principal: Principal, refusal: Refusal | undefine
   const chrome = pageChrome(c, principal);
   return refusal === undefined ? chrome : { ...chrome, notice: refusal.notice };
 }
+
+/** The place on the finding page that a refused note links to: its textarea. */
+const NOTE_CONTROL = "#note-text";
 
 /** The notice as it is, without its link to a place on the page. */
 function withoutJump(notice: Notice): Notice {
@@ -78,13 +81,17 @@ export interface PageRenderers {
     refusal?: Refusal,
     options?: { missedIssueDraft?: MissedIssueDraft },
   ): Response;
-  /** One finding and the decision form, with what was typed when a decision was refused. */
+  /**
+   * One finding and the decision form, with what was typed when a decision was refused. With the
+   * options of a refused note, it holds what was typed in the note form (package W2.6a).
+   */
   findingPage(
     c: Context,
     am: AuthorizedMatter,
     findingId: string,
     refusal?: Refusal,
     draft?: DecisionDraft,
+    options?: { noteDraft?: NoteDraft },
   ): Response;
   /**
    * The memos of a matter, the form that exports one and the section that rates the matter. With
@@ -169,18 +176,30 @@ export function createPageRenderers(deps: AppDeps): PageRenderers {
     );
   };
 
-  const findingPage: PageRenderers["findingPage"] = (c, am, findingId, refusal, draft) =>
-    sendPage(
+  const findingPage: PageRenderers["findingPage"] = (c, am, findingId, refusal, draft, options) => {
+    const finding = runs.finding(am, findingId);
+    // A refusal of the note form links to the note's control. A note posted by hand to a finding
+    // that has gone out of date is refused for its text before its state, and that page offers no
+    // form, so the link is dropped there: it would lead nowhere.
+    const shown =
+      refusal === undefined ||
+      refusal.notice.jump?.href !== NOTE_CONTROL ||
+      finding.canAddNote?.allowed === true
+        ? refusal
+        : { ...refusal, notice: withoutJump(refusal.notice) };
+    return sendPage(
       c,
       FindingPage({
-        chrome: chromeFor(c, am.principal, refusal),
+        chrome: chromeFor(c, am.principal, shown),
         matterId: am.matterId,
-        finding: runs.finding(am, findingId),
+        finding,
         matterName: matters.view(am).matter.name,
         draft,
+        noteDraft: options?.noteDraft,
       }),
       refusal?.status,
     );
+  };
 
   const memosPage: PageRenderers["memosPage"] = (c, am, refusal, options) => {
     const view = matters.view(am);
