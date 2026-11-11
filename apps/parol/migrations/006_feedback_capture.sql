@@ -1,0 +1,7 @@
+-- Parol schema, version 6: feedback capture (reason code, minor-edit mark, missed issue, rating, notes).
+--
+-- PLACEHOLDER (contract commit CC2). Owner: W2.6a. The body is a comment on purpose: the loader
+-- refuses a gap in the numbers and a changed file that was already applied, so the number is
+-- reserved now and the owner replaces this body with the real SQL. No database exists outside the
+-- tests, so editing the placeholder before release is safe. If the package is cut, this file stays
+-- as a no-op and the numbering never has a hole.

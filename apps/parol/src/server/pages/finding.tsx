@@ -46,6 +46,7 @@ import {
   textareaValue,
 } from "./components.js";
 import { FIELDS, evidenceRoleField } from "./forms.js";
+import { ContextHelp } from "./help.js";
 import { Layout, csrfField, type Chrome } from "./layout.js";
 
 /**
@@ -765,6 +766,7 @@ export function FindingPane(props: FindingPaneProps) {
           </p>
         ) : null}
       </header>
+      <ContextHelp finding={finding} />
       <EvidenceSection finding={finding} level={level} />
       <FindingSection finding={finding} level={level} />
       <ChecksSection checks={finding.checks} level={level} />

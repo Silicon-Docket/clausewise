@@ -101,6 +101,7 @@ export function createPresenter(
       retainUntil: matter.retainUntil,
       playbook: playbook === undefined ? null : { slug: playbook.slug, version: playbook.version },
       synthetic: matter.synthetic,
+      training: matter.trainingKey,
     };
   }
 
