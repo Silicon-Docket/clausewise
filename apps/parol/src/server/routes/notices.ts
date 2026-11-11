@@ -224,12 +224,17 @@ const CORE_PHRASES = {
     "That file is already in the matter, so it was not stored again and the stated date you entered was not applied. Change the date on the existing version.",
   run_model_changed:
     "This review was started on a different provider or model than the one now in use, so it cannot be resumed. Start a new review instead.",
+  // The store raises this for a note, a report, a location or a rating comment that is empty, too
+  // long or holds a control character (a pasted clause can). The code is raised for many fields, so
+  // it has no place on the page to jump to.
+  bad_text:
+    "The text cannot be kept as it is: it is empty, too long or has a control character in it. Check it and try again.",
 } as const satisfies Record<string, string>;
 
 /** The core fragment: the codes the application had before packages added their own. */
 const CORE = {
   phrases: CORE_PHRASES,
-  todo: {},
+  todo: { bad_text: "Check it and try again." },
   notices: CORE_NOTICES,
 } as const satisfies RefusalFragment;
 

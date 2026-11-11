@@ -11,7 +11,7 @@ import {
 } from "./components.js";
 import { FIELDS } from "./forms.js";
 import { Layout, csrfField, type Chrome } from "./layout.js";
-import { formatDate, plural } from "../views/format.js";
+import { formatDate, formatDateTime, plural } from "../views/format.js";
 import { globalRoleLabel, matterRoleLabel } from "../views/labels.js";
 import { FORM_RETAIN_DEFAULT_DAYS, FORM_RETAIN_MAX_DAYS } from "../views/retention.js";
 import { revealToString } from "../views/reveal.js";
@@ -190,7 +190,7 @@ export function MattersPage(props: MattersPageProps) {
                       <Time value={matter.createdAt} />
                     </td>
                     <td>
-                      {formatDate(matter.retainUntil)}
+                      {formatDateTime(matter.retainUntil)}
                       {matter.pastRetention === true ? (
                         <>
                           {" "}

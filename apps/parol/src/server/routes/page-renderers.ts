@@ -187,13 +187,15 @@ export function createPageRenderers(deps: AppDeps): PageRenderers {
       finding.canAddNote?.allowed === true
         ? refusal
         : { ...refusal, notice: withoutJump(refusal.notice) };
+    const matter = matters.view(am).matter;
     return sendPage(
       c,
       FindingPage({
         chrome: chromeFor(c, am.principal, shown),
         matterId: am.matterId,
         finding,
-        matterName: matters.view(am).matter.name,
+        matterName: matter.name,
+        training: matter.training,
         draft,
         noteDraft: options?.noteDraft,
       }),

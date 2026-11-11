@@ -49,7 +49,7 @@ export const QUICKSTART_STEPS: readonly QuickstartStep[] = [
   {
     n: 7,
     text: "**Leave notes** for your reviewer on anything you disagree with.",
-    availability: "not_built",
+    availability: "built",
   },
   {
     n: 8,
@@ -64,6 +64,6 @@ export const QUICKSTART_STEPS: readonly QuickstartStep[] = [
   {
     n: 10,
     text: "**Rate the matter** and use **Report a missed issue** for anything Parol did not catch.",
-    availability: "not_built",
+    availability: "built",
   },
 ];

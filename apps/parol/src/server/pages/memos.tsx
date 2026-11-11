@@ -4,6 +4,7 @@ import { shortHash } from "../views/format.js";
 import { Chip, Crumbs, RevealedText, ScrollBox, Section, Time } from "./components.js";
 import { RatingSection, type RatingDraft } from "./feedback.js";
 import { Layout, csrfField, type Chrome } from "./layout.js";
+import { TrainingBanner } from "./training.js";
 
 /**
  * The memos of a matter. The newest is current; one made before the documents or playbook changed
@@ -176,6 +177,7 @@ export function MemosPage(props: MemosPageProps) {
         ]}
       />
       <h1>Memos</h1>
+      <TrainingBanner compact training={props.matter.training} />
       <Section id="memo-list" title="Exported memos">
         <MemoList
           matterId={props.matter.id}

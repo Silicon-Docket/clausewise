@@ -362,8 +362,8 @@ export const DECISION_VERB: Record<ReviewDecision, string> = {
 
 export const DECISION_HINT: Record<ReviewDecision, string> = {
   accept: "The finding is right as shown.",
-  edit: "The finding needs changes. Use the fields below. A reason is required.",
-  reject: "The finding is wrong. A reason is required.",
+  edit: "The finding needs changes. Use the fields below. A reason and a reason code are required.",
+  reject: "The finding is wrong. A reason and a reason code are required.",
   escalate: "Send it to a partner, or leave it open in the memo. A reason is required.",
 };
 

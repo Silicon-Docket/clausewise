@@ -127,16 +127,16 @@ describe("the quickstart steps", () => {
     expect(QUICKSTART_STEPS[0]!.text).toContain("no passwords");
   });
 
-  it("mark steps 7 and 10 as not built, and no other", () => {
-    // When the notes (7) or the rating and the missed-issue report (10) are built, change
-    // `availability` in src/training/quickstart.ts, link the step, and change this list with it.
+  it("mark every step as built: the notes (7) and the rating and the missed-issue report (10) shipped with package W2.6a", () => {
+    // When a step is taken out of the application, change `availability` in
+    // src/training/quickstart.ts and this list together.
     const notBuilt = QUICKSTART_STEPS.filter((step) => step.availability === "not_built").map(
       (step) => step.n,
     );
     expect(
       notBuilt,
       "a step changed availability: change QUICKSTART_STEPS and this test together",
-    ).toEqual([7, 10]);
+    ).toEqual([]);
   });
 });
 

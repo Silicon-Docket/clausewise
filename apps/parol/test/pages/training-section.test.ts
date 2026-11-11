@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SIMULATED_PROVIDER } from "../../src/demo/simulated-model.js";
 import type { TrainingProgressView } from "../../src/services/views.js";
-import { render } from "../../src/server/pages/index.js";
+import { FindingPage, MemosPage, render } from "../../src/server/pages/index.js";
 import { TrainingBanner, TrainingSection } from "../../src/server/pages/training.js";
 import { urls } from "../../src/server/urls.js";
 import {
@@ -16,6 +16,8 @@ import { expectAccessible, tabStops } from "../a11y/rules.js";
 import { all, attr, byId, byTag, hasClass, readable, textOf, withClass, type El } from "./html.js";
 import { checkInvariants } from "./invariants.js";
 import { matterPage } from "./render.js";
+import { expectAccessibleExceptTheMemoList } from "./feedback-support.js";
+import { IDS, buildChrome, buildFindingView, buildMatterSummary, buildMemo } from "./support.js";
 import { progressWith, trainingMatterView, trainingRunHtml } from "./training-support.js";
 
 /**
@@ -313,4 +315,53 @@ describe("every page of a training matter says what reads it", () => {
     const stops = tabStops(root).map((el) => (el.name === "a" ? "link" : attr(el, "role")));
     expect(stops).toEqual(["link", "region"]);
   });
+});
+
+describe("the banner on the pages that hang off a training matter", () => {
+  const memos = (training: string | null): string =>
+    render(
+      MemosPage({
+        chrome: buildChrome(),
+        matter: buildMatterSummary({ training }),
+        memos: [buildMemo()],
+        canExport: true,
+        exportBlockedReason: null,
+      }),
+    );
+  const finding = (training: string | null): string =>
+    render(
+      FindingPage({
+        chrome: buildChrome(),
+        matterId: IDS.matter,
+        matterName: "Training matter",
+        finding: buildFindingView(),
+        training,
+      }),
+    );
+
+  // The memos page names two landmarks "Exported memos" until the polish sweep (W2.9-fix) renames
+  // one; the helper lets exactly that through and nothing else.
+  for (const [name, make, audit] of [
+    ["memos page", memos, expectAccessibleExceptTheMemoList],
+    ["finding page", finding, (html: string) => expectAccessible(html)],
+  ] as const) {
+    it(`the ${name} of a training matter carries the short banner, in the main region, before its other sections`, () => {
+      const root = audit(make("T01"));
+      const banners = withClass(root, "banner-training");
+      expect(banners).toHaveLength(1);
+      const text = readable(banners[0] as El);
+      expect(text).toContain(TRAINING_BANNER.compact);
+      expect(text).toContain("not a language model");
+      expect(attr(byTag(banners[0] as El, "a")[0] as El, "href")).toBe(urls.quickstart());
+      // It follows the page's one h1 and nothing says a finding is planted outside it.
+      const main = byTag(root, "main")[0] as El;
+      expect(all(main, (el) => el.name === "h1")).toHaveLength(1);
+      expect(outsideBanner(root).toLowerCase()).not.toMatch(/planted|deliberately|on purpose/);
+    });
+
+    it(`the ${name} of an ordinary matter has no banner`, () => {
+      const root = audit(make(null));
+      expect(withClass(root, "banner-training")).toHaveLength(0);
+    });
+  }
 });

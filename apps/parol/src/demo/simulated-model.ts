@@ -7,8 +7,9 @@ import { answerAnalyze, answerExtract, answerSupport } from "./reader.js";
  * model behind PAROL_SCRIPTED=1.
  *
  * It is a scripted demonstration. It is not a language model, it learns nothing, and what it says
- * is not a measurement of any model: for the worked example (docs/parol/04) it answers from a table
- * written in advance, and for any other document it declines. What it adds to the plain stand-in is
+ * is not a measurement of any model: for the worked example (docs/parol/04) and the training matter
+ * built from it (docs/parol/08) it answers from a table written in advance, and for any other
+ * document it declines. What it adds to the plain stand-in is
  * that it reads only the passages in the request it is given, so that what the workflow chooses to
  * show it decides what it concludes. That lets the baseline failure of docs/parol/05 and its fix
  * be seen on the screens without a key.

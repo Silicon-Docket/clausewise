@@ -67,7 +67,9 @@ function emptyOutput(
 /**
  * The extract output of a model that finds nothing in any category (or, with `degraded`, of a call
  * that failed). Retrieval then reads the whole document for every rule, which is the largest prompt
- * a rule can get, and that is why the spend planner assumes it.
+ * a rule can get while the whole document fits the context budget, and that is why the spend
+ * planner assumes it. Above the budget, a rule that shares its category with no other is planned at
+ * the largest selection of clauses that fits (`largestSelectionTokens` in usage/plan.ts).
  */
 export function emptyExtractOutput(
   ingest: IngestOutput,

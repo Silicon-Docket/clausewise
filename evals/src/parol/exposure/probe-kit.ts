@@ -121,8 +121,7 @@ export interface Scratch {
 /**
  * How far a scratch matter has been taken: documents only, `run` (reviewed), `decided` (every
  * finding decided, not exported) or `exported` (a memo exists). `makeScratch` of the authorization
- * suite builds the first three; a request that needs `exported` is refused by the suite with a
- * clear error until the package that probes a route which needs a memo adds the branch.
+ * suite builds all four.
  */
 export type ScratchLevel = "documents" | "run" | "decided" | "exported";
 

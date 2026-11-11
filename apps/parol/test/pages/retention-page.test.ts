@@ -260,9 +260,9 @@ describe("the chip in the list of matters", () => {
 
   it("marks a matter past its date with a chip that has a shape and a word, beside the date", () => {
     const cell = all(rows[0] as El, (el) => el.name === "td").find((td) =>
-      readable(td).includes("3 November 2026"),
+      readable(td).includes("3 November 2026, 12:00 UTC"),
     ) as El;
-    expect(readable(cell)).toBe("3 November 2026 Past");
+    expect(readable(cell)).toBe("3 November 2026, 12:00 UTC Past");
     const chip = all(cell, (el) => hasClass(el, "chip"))[0] as El;
     expect(hasClass(chip, "tone-warn")).toBe(true);
     expect(all(chip, (el) => hasClass(el, "shape-triangle"))).toHaveLength(1);

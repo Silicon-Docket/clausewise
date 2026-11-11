@@ -19,16 +19,28 @@
  */
 import { createScriptedGenerator } from "@clausewise/llm/testing";
 import { toJSONSchema } from "zod";
-import { CATEGORY_IDS } from "../../../apps/parol/src/contracts.js";
+import {
+  AnalysisSchema,
+  CATEGORY_IDS,
+  type AnalysisAnswer,
+  type ContextBundle,
+} from "../../../apps/parol/src/contracts.js";
 import type {
   LoadedPlaybook,
   RegisteredWorkflow,
 } from "../../../apps/parol/src/module-contracts.js";
 import { getPrompt, renderPrompt } from "../../../apps/parol/src/prompts/registry.js";
 import { renderContractBlock, renderRule } from "../../../apps/parol/src/prompts/render.js";
-import { runAnalyze } from "../../../apps/parol/src/stages/analyze.js";
+import {
+  buildAnalyzeRequest,
+  repairNote,
+  runAnalyze,
+  shownSpans,
+  validate,
+} from "../../../apps/parol/src/stages/analyze.js";
 import { runExtract } from "../../../apps/parol/src/stages/extract.js";
 import { buildBundles } from "../../../apps/parol/src/stages/retrieve.js";
+import { largestSelectionTokens } from "../../../apps/parol/src/usage/plan.js";
 import type { Split } from "../../../fixtures/parol/types.js";
 import { decide, int, plain, usd, type Decision } from "../guard.js";
 import { boundTokens, costCeiling, costUpperBound, type Plan } from "../plan.js";
@@ -45,7 +57,12 @@ export interface CasePlan {
   /** Clauses (spans) in the run. */
   spans: number;
   rules: number;
-  /** Rules too big for the workflow's context budget, which are not sent. */
+  /**
+   * Rules that are not sent: their bundle is over the workflow's context budget and they share a
+   * category with another rule (so they always read the whole document), or not one clause of the
+   * document fits. A rule over the budget that could be sent with a selection of clauses is planned,
+   * not counted here.
+   */
   rulesOverBudget: number;
   /** Model calls in one run, one attempt each and no repair. */
   calls: number;
@@ -199,21 +216,91 @@ export async function buildParolPlan(args: {
       }
     }
 
+    // A rule whose bundle is over the context budget is not sent with the whole document, but that
+    // does not leave it out of the bound. A rule that shares its category with another always reads
+    // the whole document (stages/retrieve.ts) and is never sent. Any other rule is sent with the
+    // clauses the real extract answer locates for it, whenever they fit, and the plan cannot know
+    // which: it is bounded by the largest selection that fits (`largestSelectionTokens`, which the
+    // application's planner uses too), and has no call when not one clause fits. A selection's
+    // contract block is counted apart, so its request is built with an empty block, in the first
+    // request, the repair request and the support call alike. A test holds this to the
+    // application's planner on documents over the budget (parol-app-plan-parity-long).
+    const analysable = bundles.filter((bundle) => !bundle.overBudget);
+    const rulesIn = new Map<string, number>();
+    for (const rule of playbook.rules)
+      rulesIn.set(rule.category, (rulesIn.get(rule.category) ?? 0) + 1);
+    const selected: { bundle: ContextBundle; block: number }[] = [];
+    for (const bundle of bundles) {
+      if (!bundle.overBudget || (rulesIn.get(bundle.category) ?? 0) > 1) continue;
+      const block = largestSelectionTokens(prepared.ingest.spans, bundle.rule, wm.budgetTokens);
+      if (block !== null) selected.push({ bundle, block });
+    }
+    if (selected.length > 0) {
+      const repairs = Number.isFinite(wm.repairAttempts)
+        ? Math.max(0, Math.floor(wm.repairAttempts)) >= 1
+        : false;
+      const analysisSchemaTokens = boundTokens(JSON.stringify(toJSONSchema(AnalysisSchema)));
+      for (const { bundle, block } of selected) {
+        const request = buildAnalyzeRequest({
+          bundle: { ...bundle, spans: [], fullDocument: false },
+          ingest: prepared.ingest,
+          manifest,
+          prompt: prompts.analyze,
+        });
+        const first =
+          boundTokens(request.system) + boundTokens(request.prompt) + block + analysisSchemaTokens;
+        let second = 0;
+        if (repairs) {
+          // The note lists the labels shown. The whole document's labels are the longest list a
+          // selection of it can have.
+          const shown = new Map(
+            shownSpans(bundle, prepared.ingest).map((span) => [span.modelLabel, span]),
+          );
+          const note = repairNote(
+            validate(
+              INVALID_FIRST_ANSWER as AnalysisAnswer,
+              shown,
+              bundle.rule,
+              prompts.analyze.definition.id,
+            ),
+            [...shown.keys()],
+            prompts.analyze.definition.id,
+          );
+          second =
+            boundTokens(request.system) +
+            boundTokens(`${request.prompt}\n\n${note}`) +
+            block +
+            analysisSchemaTokens;
+        }
+        calls += 1;
+        callsWithRepairs += repairs ? 2 : 1;
+        inputTokens += first;
+        inputTokensWithRepairs += first + second;
+      }
+    }
+
     // A workflow that pins a support prompt makes one more call per finding that has a verified
     // quote. What it cites is not known before the run, so each is bounded by a prompt that holds
-    // every clause of the run and a discrepancy as long as the output is assumed to be.
-    const analysable = bundles.filter((bundle) => !bundle.overBudget);
+    // every clause of the run (the largest selection, for a rule sent with a selection) and a
+    // discrepancy as long as the output is assumed to be.
     if (prompts.support !== null) {
       const schemaTokens = boundTokens(JSON.stringify(toJSONSchema(prompts.support.schema)));
-      for (const bundle of analysable) {
+      const sent = [
+        ...analysable.map((bundle) => ({ bundle, block: null as number | null })),
+        ...selected,
+      ];
+      for (const { bundle, block } of sent) {
         const text = renderPrompt(prompts.support.definition, {
-          contractBlock: renderContractBlock(prepared.ingest.spans),
+          contractBlock: renderContractBlock(block === null ? prepared.ingest.spans : []),
           rule: renderRule(bundle.rule),
           status: "deviation",
           discrepancy: "x".repeat(args.assumedOutputTokens * 3),
         });
         const tokens =
-          boundTokens(prompts.support.definition.system) + boundTokens(text) + schemaTokens;
+          boundTokens(prompts.support.definition.system) +
+          boundTokens(text) +
+          (block ?? 0) +
+          schemaTokens;
         calls += 1;
         callsWithRepairs += 1;
         inputTokens += tokens;
@@ -228,7 +315,7 @@ export async function buildParolPlan(args: {
       documents: prepared.manifest.documents.length,
       spans: prepared.ingest.spans.length,
       rules: bundles.length,
-      rulesOverBudget: bundles.length - analysable.length,
+      rulesOverBudget: bundles.length - analysable.length - selected.length,
       calls,
       callsWithRepairs,
       inputTokens,

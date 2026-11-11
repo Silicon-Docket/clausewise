@@ -47,8 +47,8 @@ export interface MatterRow {
   retainUntil: string;
   deletedAt: string | null;
   /**
-   * The training key, or null for every ordinary matter. Contract commit CC2: always null until
-   * W2.8 adds the column (migration 007) and reads it in `toMatter`.
+   * The training key, or null for every ordinary matter. Set when the matter is created for the
+   * training exercise and never changed (migration 7).
    */
   trainingKey: TrainingKey | null;
 }

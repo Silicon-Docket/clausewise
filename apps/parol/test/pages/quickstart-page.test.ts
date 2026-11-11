@@ -52,7 +52,7 @@ describe("the quickstart, for a visitor", () => {
     expectAccessible(html);
   });
 
-  it("lists the ten steps in order, with the bold of each, and says Not built yet on steps 7 and 10 only", () => {
+  it("lists the ten steps in order, with the bold of each, and says Not built yet on a step only when the list marks it so", () => {
     const list = withClass(root, "quickstart-steps")[0] as El;
     expect(list.name).toBe("ol");
     const items = byTag(list, "li");
@@ -70,7 +70,9 @@ describe("the quickstart, for a visitor", () => {
       items
         .map((item, i) => (readable(item).endsWith("Not built yet.") ? i + 1 : null))
         .filter(Boolean),
-    ).toEqual([7, 10]);
+    ).toEqual(
+      QUICKSTART_STEPS.filter((step) => step.availability === "not_built").map((step) => step.n),
+    );
   });
 
   it("lists the seven steps of the exercise with who does them, the task and what it teaches, each under a heading", () => {

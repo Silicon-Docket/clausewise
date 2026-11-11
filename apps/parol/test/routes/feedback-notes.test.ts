@@ -364,12 +364,12 @@ describe("a note that is refused on the page", () => {
     expect(notesOf(ids)[0]?.text).toHaveLength(4000);
   });
 
-  it("a control character in the words: 400 from the store, answered on the page with the general sentence of its status", async () => {
+  it("a control character in the words: 400 from the store, answered with the words of bad_text, its todo and no link", async () => {
     const ids = await open();
-    const before = stateOf();
-    const response = await byHand(associate, formAction(ids), { [FIELDS.note]: "a\u0007b" });
-    expect(response.status).toBe(400);
-    expect(stateOf()).toEqual(before);
+    await refused(associate, ids, { [FIELDS.note]: "a\u0007b" }, "bad_text", 400);
+    expect(REFUSAL_JUMP["bad_text"]).toBeUndefined();
+    expect(REFUSAL_TODO["bad_text"]).toBe("Check it and try again.");
+    expect(REFUSAL_PHRASES["bad_text"]).toContain(REFUSAL_TODO["bad_text"]);
     expect(notesOf(ids)).toEqual([]);
   });
 

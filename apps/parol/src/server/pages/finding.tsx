@@ -56,6 +56,7 @@ import { MinorEditField, NotesSection, ReasonCodeField, type NoteDraft } from ".
 import { FIELDS, evidenceRoleField } from "./forms.js";
 import { ContextHelp } from "./help.js";
 import { Layout, csrfField, type Chrome } from "./layout.js";
+import { TrainingBanner } from "./training.js";
 
 /**
  * What the reviewer had typed into the decision form when it was refused, so the page can show it
@@ -814,7 +815,13 @@ export function FindingPane(props: FindingPaneProps) {
 }
 
 /** The finding on a page of its own, for the finding URL. */
-export function FindingPage(props: FindingPaneProps & { matterName: string }) {
+export function FindingPage(
+  props: FindingPaneProps & {
+    matterName: string;
+    /** `MatterSummary.training`: the page of a training matter says what it is. Null or absent for any other. */
+    training?: string | null | undefined;
+  },
+) {
   return (
     <Layout title={props.finding.issue.ruleTitle} chrome={props.chrome}>
       <Crumbs
@@ -824,6 +831,7 @@ export function FindingPage(props: FindingPaneProps & { matterName: string }) {
           { label: props.finding.issue.ruleTitle },
         ]}
       />
+      <TrainingBanner compact training={props.training} />
       <FindingPane
         chrome={props.chrome}
         matterId={props.matterId}
